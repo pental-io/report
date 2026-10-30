@@ -1,0 +1,20 @@
+{
+  "name": "pental-report-server",
+  "version": "0.1.0",
+  "description": "Pental Report's server: the app, its database API, sign-in, files, live updates and the AI relay, in one container beside PostgreSQL.",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "keys": "node bin/keys.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1",
+    "ws": "^8.18.0"
+  }
+}

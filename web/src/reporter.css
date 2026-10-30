@@ -1,0 +1,89 @@
+/* Pental Report's own styles, beside the portal's (styles.css).
+   SPDX-License-Identifier: AGPL-3.0-only */
+.rp-center{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:32px 16px;box-sizing:border-box;background:var(--bg)}
+.rp-card{width:100%;max-width:440px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px 28px 24px;box-sizing:border-box;color:var(--text)}
+.rp-card .form-label{display:block;margin:14px 0 6px}
+.rp-card .form-input{width:100%;box-sizing:border-box}
+.rp-brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-size:15px;letter-spacing:.04em;color:var(--text);margin-bottom:18px}
+.rp-mark{flex:none}
+/* The lockup: PENTAL as the site writes it, and the product's name beside it. */
+.rp-word{font-family:'Orbitron',var(--font-display),sans-serif;font-weight:800;letter-spacing:.08em;font-size:15px;color:var(--text)}
+.rp-prod{font-weight:600;font-size:15px;color:var(--text-muted,var(--gray));padding-left:10px;margin-left:2px;border-left:1px solid var(--border)}
+.rp-h1{font-size:22px;line-height:1.25;margin:0 0 8px;color:var(--text)}
+.rp-note{font-size:14px;line-height:1.55;color:var(--gray);margin:0 0 6px}
+.rp-hint{font-size:12.5px;line-height:1.5;color:var(--gray);margin:6px 0 0}
+.rp-hint code,.rp-note code{font-family:var(--font-mono);font-size:12px}
+.rp-cmd{font-family:var(--font-mono);font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-all;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin:6px 0 0;color:var(--text);user-select:all}
+.rp-error{font-size:13.5px;line-height:1.5;color:var(--red-text);background:rgba(var(--red-rgb),.12);border:1px solid rgba(var(--red-rgb),.35);border-radius:8px;padding:9px 11px;margin:16px 0 0}
+.rp-wide{width:100%;margin-top:20px;justify-content:center}
+.rp-side-note{font-size:11.5px;line-height:1.5;color:var(--gray);padding:10px 16px 12px;border-top:1px solid var(--border)}
+.rp-side-note a{color:var(--text);text-decoration:underline;text-underline-offset:2px}
+.rp-side-note a.rp-ver{color:var(--gray);text-decoration:none}
+.rp-side-note a.rp-ver:hover{color:var(--text);text-decoration:underline}
+
+/* The paid parts' controls, hidden (see shell/70-paid-parts.js): switches
+   that share a section, finding or file with the client, the setup wizard
+   Pental runs for a new firm, letting clients export their findings, and a
+   new client's portal accounts. */
+label.tpl-toggle:has(> input[onchange*="Visibility("]),
+label.tpl-toggle[title*="client" i],
+label.tpl-toggle:has(> input.acreate-cv),
+div:has(> button[onclick^="openSetupWizard"]),
+div:has(> label > input#ff_export_clients),
+div:has(> label > input#ff_scanner_import),
+.pf-section:has(#cl_portal_rows){display:none !important}
+/* Settings, Assessment Sections: no Client column. */
+.sg-sm{--sg-cols:46px 44px minmax(0,1fr) 60px 60px 78px 158px 24px}
+.sg-sm.sg-head > :nth-child(6),
+.sg-sm.sg-box > .sg-ctl > :nth-child(3){display:none !important}
+/* Under the first-run page's button (shell/10-tenant.js). */
+.rp-after{text-align:center;margin-top:14px}
+/* The firm's name where it has no logo, on the pages around sign-in
+   (shell/80-own-server.js, _authLogo), as the sign-in page shows it. */
+.rp-auth-name{display:block;font-family:var(--font-display);font-size:1.4rem;font-weight:800;color:var(--accent);margin:0 0 1rem;text-align:center}
+.login-logo .rp-auth-name{margin:0}
+/* A comment is the team's own: no switch to show it to a client
+   (shell/70-paid-parts.js and the manifest's patches). */
+label.tpl-toggle-row:has(input[id^="newCommentVisible_"]),
+label:has(> label.tpl-toggle > input[id^="replyVisible_"]){display:none !important}
+/* Over plain HTTP, where a passkey would wait (shell/80-own-server.js). */
+.rp-keys-note{font-size:12.5px;line-height:1.55;color:var(--gray);margin:16px 0 0;text-align:center}
+/* The link an administrator passes on (shell/80-own-server.js). */
+.rp-linkbox{position:fixed;inset:0;z-index:10050;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.55)}
+.rp-linkbox-card{width:100%;max-width:560px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:14px;padding:24px;box-sizing:border-box}
+.rp-linkbox-row{display:flex;gap:8px;margin-top:16px}
+.rp-linkbox-row .form-input{flex:1;min-width:0;font-family:var(--font-mono);font-size:12.5px}
+.rp-linkbox-foot{display:flex;justify-content:flex-end;margin-top:14px}
+/* Move to Pental (shell/30-sidebar.js). */
+.rp-side-note{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.rp-move-btn{font:inherit;font-size:11.5px;font-weight:600;color:var(--text);background:none;border:1px solid var(--border);border-radius:999px;padding:4px 10px;cursor:pointer;white-space:nowrap}
+.rp-move-btn:hover{border-color:var(--accent);color:var(--accent)}
+.rp-move-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.rp-move-steps{margin:16px 0 0;padding-left:20px;display:grid;gap:12px;font-size:14px;line-height:1.5}
+.rp-move-steps li > div{margin-top:8px}
+/* What Pental adds, then the three steps: wider than the other dialogs, and
+   scrolled inside itself on a short screen. */
+.rp-linkbox-card--move{max-width:660px;max-height:calc(100vh - 32px);overflow:auto}
+.rp-move-adds{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 22px;font-size:13.5px;line-height:1.5;color:var(--gray)}
+.rp-move-adds li{padding-left:11px;border-left:2px solid var(--accent)}
+.rp-move-adds li:last-child{grid-column:1/-1}
+.rp-move-adds strong{display:block;color:var(--text)}
+@media(max-width:600px){.rp-move-adds{grid-template-columns:minmax(0,1fr)}}
+.rp-move-h{font-size:15px;font-weight:700;margin:22px 0 0;color:var(--text)}
+/* Settings, Login Page: sign-in is a password and an authenticator here, so
+   the emailed-code switch, its button text and single sign-on are left off. */
+div:has(> label > input#set_password_login_enabled),
+div:has(> input#set_login_button_text),
+label:has(> input#set_sso_google_enabled),
+label:has(> input#set_sso_microsoft_enabled),
+details:has(#set_sso_google_client_id){display:none !important}
+/* And the rest of what is about email, which Pental Report sends none of:
+   Branding's email font, and Security's box for emailing everyone a link to
+   set a password (an administrator makes those links from Team). */
+div:has(> select#set_email_font),
+div:has(> #pwAdoption){display:none !important}
+
+/* Every comment here is the team's (they are kept internal, so a move to
+   Pental never shows one to a client): none is marked out as internal. */
+.comment-internal{border-left:0;background:none;padding:0;border-radius:0}
+.comment-unread.comment-internal.comment-unread-clearing{border-left-color:transparent;border-left-width:0;background:transparent;padding-left:0}

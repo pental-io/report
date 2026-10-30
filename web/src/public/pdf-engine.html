@@ -1,0 +1,167 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Pental PDF engine</title>
+<!--
+  THE ENGINE RUNS IN ITS OWN DOCUMENT (1278).
+
+  [stated] Arian's console: `Uncaught EvalError: Evaluating a string as
+  JavaScript violates the following Content Security Policy directive because
+  'unsafe-eval' is not an allowed source of script`.
+
+  Emscripten's Embind builds its bindings with `new Function(...)`, so
+  LibreOffice cannot start under the portal's content policy - and loosening
+  that policy for the whole application, in a security product, to make a PDF,
+  is not a trade worth making. So the engine gets a document of its own: this
+  page is served with a policy that allows what the engine needs and nothing
+  else, and the portal's own policy stays exactly as tight as it was.
+
+  Nothing here talks to the network except the engine's own binaries. The
+  document arrives from the page above as bytes over postMessage and the PDF
+  goes back the same way.
+
+  1279: the policy this page is served with also allows `data:` and `blob:`
+  scripts, because the engine starts each of its threads by importing a
+  one-line `data:text/javascript` wrapper that pulls in our own helper. That is
+  its bootstrap, not a way in: the wrapper is written by the engine's own
+  loader, it is the same origin, and no other document on this deployment
+  allows either.
+-->
+<style>html,body{margin:0;background:transparent}#qtcanvas{position:fixed;left:-9999px;top:0;width:1024px;height:768px}</style>
+</head>
+<body>
+<!-- 1283: a REAL size, so the office lays out against a plausible device
+     rather than a 4x4 one. It stays off-screen. The
+     `QObject::connect(QWindow, QtFrame): invalid nullptr parameter` line on
+     the console is the headless VCL plugin talking to a window that has no
+     frame; it is noise, and it is unrelated to what the PDF looks like. -->
+<canvas id="qtcanvas" width="1024" height="768"></canvas>
+<script type="module">
+// 1332: LIBREOFFICE'S OWN STARTUP CHATTER, KEPT OUT OF THE CONSOLE.
+//
+// [stated] Arian has sent a console with these in it twice now, and the first
+// time asked whether they meant "some styling is broken". They do not. They are
+// the headless VCL plugin and Emscripten talking about a window with no frame
+// and a syscall the sandbox does not implement, and they arrive as console
+// ERRORS - red, with a count in the toolbar - on every single conversion.
+//
+// A console that cries wolf on every run is a console nobody reads, and this
+// one is inside an iframe a person cannot filter without knowing to look. The
+// four KNOWN lines are demoted to a single grouped debug line; anything else
+// LibreOffice says still comes through untouched, because the point is to make
+// a real message visible rather than to silence the engine.
+(function () {
+  var NOISE = [
+    // 1336: the same three, in the same order, as the two worker copies. The
+    // named-syscall line was redundant beside the general one and made the
+    // three lists differ, which is how three copies of a rule start to drift.
+    /^warning: unsupported syscall/,
+    /QObject::connect\(QWindow, QtFrame\): invalid nullptr parameter/,
+    /^QRect\(\d+,\d+ \d+x\d+\)/,
+  ];
+  var seen = 0;
+  ['error', 'warn', 'log'].forEach(function (level) {
+    var real = console[level] && console[level].bind(console);
+    if (!real) return;
+    console[level] = function () {
+      var first = arguments.length ? String(arguments[0]) : '';
+      for (var i = 0; i < NOISE.length; i++) {
+        if (NOISE[i].test(first)) {
+          seen++;
+          if (seen === 1) {
+            try { console.debug('[pdf engine] LibreOffice startup notices suppressed '
+              + '(headless window, unimplemented syscalls). They are unrelated to the PDF.'); } catch (e) {}
+          }
+          return;
+        }
+      }
+      return real.apply(console, arguments);
+    };
+  });
+})();
+const ORIGIN = location.origin;
+const params = new URLSearchParams(location.search);
+const base = params.get('base') || 'https://cdn.zetaoffice.net/zetaoffice_latest/';
+const waiting = {};
+let port = null;
+let helperRef = null;
+
+function tell(msg) { parent.postMessage(msg, ORIGIN); }
+
+// 1282: the document is written into the file system LibreOffice actually
+// reads - this page's, not the worker's; Emscripten proxies its file syscalls
+// here. The thread converts by path and the PDF is read back the same way.
+function fs() { return (helperRef && helperRef.FS) || window.FS; }
+
+window.addEventListener('message', function (ev) {
+  if (ev.origin !== ORIGIN) return;
+  const d = ev.data || {};
+  if (!d.pentalConvert || !port) return;
+  const inPath = '/tmp/pental-in-' + d.pentalConvert + '.docx';
+  const outPath = '/tmp/pental-out-' + d.pentalConvert + '.pdf';
+  try {
+    fs().writeFile(inPath, new Uint8Array(d.bytes));
+  } catch (e) {
+    tell({ pentalEngine: 'pdf', id: d.pentalConvert, ok: false, error: 'the document could not be handed to the engine: ' + ((e && e.message) || e) });
+    return;
+  }
+  waiting[d.pentalConvert] = { inPath: inPath, outPath: outPath };
+  port.postMessage({ pentalConvert: d.pentalConvert, inPath: inPath, outPath: outPath, filter: d.filter });
+});
+
+(async function () {
+  try {
+    if (typeof SharedArrayBuffer === 'undefined' || !self.crossOriginIsolated) {
+      throw new Error('this frame is not cross-origin isolated, which the engine needs');
+    }
+    const mod = await import('./zetaHelper.js');
+    const helper = new mod.ZetaHelperMain('/assets/lox-thread.js', { wasmPkg: 'url:' + base, blockPageScroll: false });
+    // 1280: NO data: BOOTSTRAP. The loader builds the wrapper each worker
+    // thread imports as a `data:text/javascript` URL, which a content policy
+    // has to allow explicitly. The same one line lives at /assets/lox-wrap.js,
+    // on this origin, so the engine's threads start without it.
+    try {
+      const scripts = (window.Module && window.Module.uno_scripts) || [];
+      for (let i = 0; i < scripts.length; i++) {
+        if (typeof scripts[i] === 'string' && scripts[i].slice(0, 5) === 'data:') {
+          scripts[i] = new URL('/assets/lox-wrap.js', location.origin).toString();
+        }
+      }
+    } catch (e) {}
+    helperRef = helper;
+    helper.start(function () {
+      port = helper.thrPort;
+      if (!port) { tell({ pentalEngine: 'error', error: 'the engine started without a port to talk on' }); return; }
+      port.onmessage = function (e) {
+        const d = e.data || {};
+        if (d.pentalReady) { tell({ pentalEngine: 'ready' }); try { port.postMessage({ pentalFonts: 1 }); } catch (e) {} return; }
+        // 1283: the engine's own font list, so the page can say which of the
+        // template's fonts LibreOffice had to substitute (the usual reason a
+        // converted page sits a line or two out).
+        if (d.pentalFontList) { tell({ pentalEngine: 'fonts', fonts: d.pentalFontList }); return; }
+        if (!d.pentalPdf) return;
+        const w = waiting[d.pentalPdf] || {};
+        delete waiting[d.pentalPdf];
+        try {
+          if (d.ok) {
+            const out = fs().readFile(w.outPath || d.outPath);
+            const buf = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
+            parent.postMessage({ pentalEngine: 'pdf', id: d.pentalPdf, ok: true, bytes: buf }, ORIGIN, [buf]);
+          } else {
+            tell({ pentalEngine: 'pdf', id: d.pentalPdf, ok: false, error: d.error });
+          }
+        } catch (e) {
+          tell({ pentalEngine: 'pdf', id: d.pentalPdf, ok: false, error: 'the PDF could not be read back: ' + ((e && e.message) || e) });
+        }
+        try { fs().unlink(w.inPath); } catch (e) {}
+        try { fs().unlink(w.outPath); } catch (e) {}
+      };
+    });
+  } catch (e) {
+    tell({ pentalEngine: 'error', error: String((e && e.message) || e) });
+  }
+})();
+</script>
+</body>
+</html>

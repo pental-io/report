@@ -1,0 +1,10 @@
+# HTTPS in front of Pental Report, for the domain setup was given.
+# Caddy fetches and renews the certificate itself; the domain's DNS must
+# point at this machine and ports 80 and 443 must reach it.
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy report:8080
+}

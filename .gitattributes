@@ -1,0 +1,16 @@
+# Unix line endings everywhere, Windows included: the database container runs
+# db/initdb's script, and Docker reads the rest. PowerShell takes them too.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.ico binary
+*.docx binary
+*.pdf binary
+
+# Not in the release download the installers fetch.
+/.github export-ignore
+/.gitattributes export-ignore

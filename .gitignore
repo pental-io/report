@@ -1,0 +1,10 @@
+# Made when it is built or run, not part of the source.
+node_modules/
+web/dist/
+.env
+.env.*
+!.env.example
+backups/
+*.log
+.DS_Store
+Thumbs.db

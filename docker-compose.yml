@@ -1,0 +1,81 @@
+# Pental Report, beside its own PostgreSQL.
+#
+# The installer does all of this for you (https://pental.io/report). By hand:
+#
+#   ./setup.sh               once, to make .env (setup.ps1 on Windows)
+#   docker compose up -d     then open the address setup printed
+#
+# With a domain given to setup, Caddy also runs (the "https" profile) and
+# fetches a certificate for it. Without one, Pental Report answers on
+# http://localhost:8080 on this machine only.
+#
+# The app's image is published for each release (ghcr.io/pental-io/report)
+# and built from this folder when it cannot be fetched.
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: pental-report
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./setup.sh first (setup.ps1 on Windows)}
+      REPORT_DB_PASSWORD: ${REPORT_DB_PASSWORD:?run ./setup.sh first (setup.ps1 on Windows)}
+    volumes:
+      - db:/var/lib/postgresql/data
+      - ./db/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d report"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  report:
+    image: ghcr.io/pental-io/report:${REPORT_VERSION:-0.1.0}
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://report:${REPORT_DB_PASSWORD}@db:5432/report
+      DATABASE_SSL: disable
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      JWT_SECRET: ${JWT_SECRET:?run ./setup.sh first (setup.ps1 on Windows)}
+      VAULT_KEY: ${VAULT_KEY:?run ./setup.sh first (setup.ps1 on Windows)}
+      SETUP_TOKEN: ${SETUP_TOKEN:?run ./setup.sh first (setup.ps1 on Windows)}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-postgres}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on:
+      - report
+    environment:
+      DOMAIN: ${DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  db:
+  caddy_data:
+  caddy_config:
