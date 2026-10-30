@@ -882,6 +882,60 @@ async function _coPhaseOp(table, id, phaseIdx, op, what) {
   if (!res.ok) { _coSaidUpdate(table, id, res, what); render(); return null; }
   return res;
 }
+async function _assessmentAddCrb(assessmentId, phaseIdx, templateId) {
+  if (!templateId) return;
+  var a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; });
+  if (!a) { toast('Assessment not found', 'error'); return; }
+  var phases = Array.isArray(a.phases) ? JSON.parse(JSON.stringify(a.phases)) : [];
+
+  if (!phases.length && phaseIdx === 0) {
+    phases = [{ phase_id: _newPhaseId(), type: a.type || 'Assessment', test_days: parseFloat(a.test_days) || 5, scope: a.scope || '' }];
+  }
+  if (!phases[phaseIdx]) { toast('Phase not found', 'error'); return; }
+  try {
+    var _legacy = !(Array.isArray(a.phases) && a.phases.length);
+    var r = await _coPhaseOp('assessments', assessmentId, _legacy ? null : phaseIdx, function (cur, at) {
+      if (_legacy) {
+        if (cur.length) return { refuse: 'The phases were changed by somebody else a moment ago. Nothing was changed; try again.' };
+        cur = [phases[0]];
+        at = 0;
+      }
+      if (at < 0) return null;
+      var ph = cur[at];
+      if (!ph.phase_id) ph.phase_id = _newPhaseId();
+      ph.checklist_runbook_ids = Array.isArray(ph.checklist_runbook_ids) ? ph.checklist_runbook_ids : [];
+      if (ph.checklist_runbook_ids.indexOf(templateId) === -1) ph.checklist_runbook_ids.push(templateId);
+      return cur;
+    }, 'The checklist');
+    if (!r) return;
+    render();
+  } catch (err) {
+    console.error('_assessmentAddCrb:', err);
+    toast('Error: ' + err.message, 'error');
+  }
+}
+window._assessmentAddCrb = _assessmentAddCrb;
+async function _crbAddForPhase(libKey, assessmentId, phaseIdx) {
+  var tpl = CHECKLIST_RUNBOOK_LIBRARY[libKey];
+  if (!tpl) { toast('Unknown template', 'error'); return; }
+  var row = (S.data.checklists_runbooks || []).find(function(t) { return t.source === tpl.source; });
+  if (!row) {
+    _showLoading();
+    try {
+      var res = await supabaseClient.from('checklists_runbooks').insert(_crbLibraryPayload(tpl)).select('*');
+      if (res.error) { toast('Could not add it: ' + _errMsg(res.error), 'error'); return; }
+      row = res.data && res.data[0];
+      if (!row) { toast('Could not add it', 'error'); return; }
+      S.data.checklists_runbooks = (S.data.checklists_runbooks || []).concat([row]);
+    } catch (err) {
+      console.error('_crbAddForPhase:', err);
+      toast('Error: ' + err.message, 'error');
+      return;
+    } finally { _hideLoading(); }
+  }
+  await _assessmentAddCrb(assessmentId, phaseIdx, row.id);
+}
+window._crbAddForPhase = _crbAddForPhase;
 function _toggleCaptureCreds() {
   var sel = document.getElementById('aPerspective');
   var row = document.getElementById('aCaptureCredsRow');
@@ -1345,6 +1399,29 @@ function _canRetestFinding(f, a) {
   if (!ph) return true;
   return _phaseRetestOn(ph);
 }
+async function _assessmentRemoveCrb(assessmentId, phaseIdx, templateId) {
+  var a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; });
+  if (!a) return;
+  var phases = Array.isArray(a.phases) ? JSON.parse(JSON.stringify(a.phases)) : [];
+  if (!phases[phaseIdx] || !Array.isArray(phases[phaseIdx].checklist_runbook_ids)) return;
+  try {
+    var r = await _coPhaseOp('assessments', assessmentId, phaseIdx, function (cur, at) {
+      if (at < 0) return null;
+      var ids = Array.isArray(cur[at].checklist_runbook_ids) ? cur[at].checklist_runbook_ids : [];
+      cur[at].checklist_runbook_ids = ids.filter(function (id) { return id !== templateId; });
+      return cur;
+    }, 'The checklist');
+    if (!r) return;
+    render();
+
+    var _t = (S.data.checklists_runbooks || []).find(function (x) { return x.id === templateId; });
+    toast('Detached ' + ((_t && _t.name) || 'it') + '. Click here to attach it again' + (_t && _t.kind === 'runbook' ? '.' : ', with its ticks.'), 'success', 8000, function () { _assessmentAddCrb(assessmentId, phaseIdx, templateId); });
+  } catch (err) {
+    console.error('_assessmentRemoveCrb:', err);
+    toast('Error: ' + err.message, 'error');
+  }
+}
+window._assessmentRemoveCrb = _assessmentRemoveCrb;
 function _assessmentAddPhase(assessmentId) {
   var a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; });
   if (!a) { toast('Assessment not found', 'error'); return; }
@@ -1406,6 +1483,339 @@ async function _assessmentRemovePhase(assessmentId, phaseIdx) {
   }
 }
 window._assessmentRemovePhase = _assessmentRemovePhase;
+function _toggleCrbAccordion(key) {
+  S._crbOpen = S._crbOpen || {};
+  S._crbOpen[key] = !S._crbOpen[key];
+  render();
+}
+window._toggleCrbAccordion = _toggleCrbAccordion;
+function _renderPhaseChecklistsPanel(assessment, phase, phaseIdx, isClient) {
+  var s = S.data.settings || {};
+  if (!checklistsEnabled()) return '';
+  var attachedIds = Array.isArray(phase.checklist_runbook_ids) ? phase.checklist_runbook_ids : [];
+  var allTemplates = (S.data.checklists_runbooks || []).filter(function(t) {
+    if (isClient && !t.client_visible) return false;
+    return true;
+  });
+  var canWrite = !isClient && canEdit();
+
+  var _phTypeLc = String(phase.type || '').toLowerCase();
+
+  var _phReal = Array.isArray(assessment.phases) ? !!assessment.phases[phaseIdx] : (phaseIdx === 0);
+  var libMatchKey = (canWrite && _phReal && _phTypeLc && typeof CHECKLIST_RUNBOOK_LIBRARY === 'object')
+    ? (Object.keys(CHECKLIST_RUNBOOK_LIBRARY).find(function(k) { return String(CHECKLIST_RUNBOOK_LIBRARY[k].phase_hint || '').toLowerCase() === _phTypeLc; }) || null)
+    : null;
+
+  if (!attachedIds.length && (!canWrite || (!allTemplates.length && !libMatchKey))) return '';
+
+  var templates = allTemplates.filter(function(t) { return attachedIds.indexOf(t.id) !== -1; });
+
+  if (isClient && !templates.length) return '';
+
+  var stateRows = S.data.assessment_phase_checklist_state || [];
+
+  function findState(tplId) {
+    var pid = phase.phase_id;
+    if (pid) {
+      var hit = stateRows.find(function(r) {
+        return r.assessment_id === assessment.id
+          && r.phase_id === pid
+          && r.checklist_runbook_id === tplId;
+      });
+      if (hit) return hit;
+    }
+    return stateRows.find(function(r) {
+      return r.assessment_id === assessment.id
+        && r.phase_index === phaseIdx
+        && !r.phase_id
+        && r.checklist_runbook_id === tplId;
+    });
+  }
+
+  var h = '<div class="card-body" style="border-top:1px solid var(--border)">';
+  h += '<div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--gray);font-weight:700;margin-bottom:0.5rem">Checklists &amp; Runbooks</div>';
+
+  templates.forEach(function(t) {
+    var state = findState(t.id);
+    var ticks = state && state.ticks ? state.ticks : {};
+    var items = t.items || [];
+    var canTick = !isClient && canEdit();
+    var accordionKey = assessment.id + '|' + phaseIdx + '|' + t.id;
+    var isOpen = !!(S._crbOpen && S._crbOpen[accordionKey]);
+
+    var ticked = 0;
+    items.forEach(function(it) { if (ticks[it.id]) ticked++; });
+    var pct = items.length ? Math.round((ticked / items.length) * 100) : 0;
+
+    h += '<div style="margin-bottom:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:8px;overflow:hidden">';
+
+    h += '<div class="crb-head" onclick="_toggleCrbAccordion(\'' + esc(accordionKey) + '\')" style="display:flex;align-items:center;gap:0.6rem;padding:0.55rem 0.85rem;cursor:pointer;user-select:none">';
+    h += '<span style="display:inline-block;width:10px;color:var(--gray);transition:transform 0.15s;transform:rotate(' + (isOpen ? '90deg' : '0deg') + ')">▸</span>';
+    h += '<span style="font-size:0.65rem;font-weight:600;padding:1px 6px;border-radius:10px;background:rgba(0,0,0,0.06);color:var(--gray);text-transform:uppercase;letter-spacing:0.04em">' + esc(t.kind) + '</span>';
+    h += '<span class="crb-name" style="font-weight:600;font-size:0.85rem;min-width:0;overflow-wrap:anywhere">' + esc(t.name) + '</span>';
+    
+    if (t.kind === 'checklist' && items.length) {
+      h += '<span style="font-size:0.72rem;color:var(--gray);white-space:nowrap">' + ticked + '/' + items.length + '</span>';
+      h += '<div style="width:60px;height:5px;background:rgba(0,0,0,0.08);border-radius:3px;overflow:hidden;flex-shrink:0"><div style="height:100%;width:' + pct + '%;background:var(--accent)"></div></div>';
+    }
+
+    if (canWrite) {
+      h += '<button type="button" class="btn btn-ghost btn-sm btn-danger crb-detach" data-crb-detach="' + esc(t.id) + '" onclick="event.stopPropagation();_assessmentRemoveCrb(\'' + esc(assessment.id) + '\',' + phaseIdx + ',\'' + esc(t.id) + '\')" title="' + (t.kind === 'runbook' ? 'Take this runbook off the phase.' : 'Take this checklist off the phase. Its ticks are kept if it is attached again.') + '">' + IC.x + ' Detach</button>';
+    }
+    h += '</div>';
+
+    if (isOpen) {
+      h += '<div style="padding:0 0.85rem 0.85rem 0.85rem;border-top:1px solid var(--border)">';
+
+      if (t.kind === 'checklist' && items.length && canTick && (ticked < items.length || ticked > 0)) {
+        h += '<div style="display:flex;gap:0.4rem;margin:0.5rem 0">';
+        if (ticked < items.length) {
+          h += '<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 8px" onclick="bulkChecklistTick(\'' + esc(assessment.id) + '\',' + phaseIdx + ',\'' + esc(phase.phase_id || '') + '\',\'' + esc(t.id) + '\',true)">Tick all</button>';
+        }
+        if (ticked > 0) {
+          h += '<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:2px 8px;color:var(--red-text)" onclick="bulkChecklistTick(\'' + esc(assessment.id) + '\',' + phaseIdx + ',\'' + esc(phase.phase_id || '') + '\',\'' + esc(t.id) + '\',false)">Clear all</button>';
+        }
+        h += '</div>';
+      }
+      if (t.description) {
+        h += '<div style="font-size:0.78rem;color:var(--gray);margin:0.5rem 0">' + esc(t.description) + '</div>';
+      }
+      if (t.source && t.source !== 'custom' && t.source_url) {
+
+        var _srcHost = '';
+        try { _srcHost = new URL(t.source_url).hostname.replace(/^www\./, ''); } catch (e) {}
+        h += '<div style="font-size:0.72rem;margin-bottom:0.5rem"><a href="' + esc(t.source_url) + '" target="_blank" rel="noopener" style="color:var(--accent)">Reference: ' + esc(_srcHost || t.source) + ' &rarr;</a></div>';
+      }
+
+    if (!items.length) {
+      h += '<div style="font-size:0.78rem;color:var(--gray);padding:0.5rem 0">No items in this template.</div>';
+    } else if (t.kind === 'checklist') {
+
+      h += '<div style="display:flex;flex-direction:column;gap:0.4rem">';
+      items.forEach(function(it) {
+        var tickVal = ticks[it.id];
+        var isTicked = !!tickVal;
+        var auditInfo = (t.audit_ticks && tickVal && typeof tickVal === 'object') ? tickVal : null;
+        var byName = auditInfo ? _userNameById(auditInfo.by) : null;
+        h += '<div style="display:flex;align-items:flex-start;gap:0.5rem;padding:0.5rem 0.6rem;background:var(--card);border:1px solid var(--border);border-radius:6px">';
+        if (canTick) {
+          h += '<input type="checkbox"' + (isTicked ? ' checked' : '') + ' onchange="setChecklistTick(\'' + esc(assessment.id) + '\',' + phaseIdx + ',\'' + esc(phase.phase_id || '') + '\',\'' + esc(t.id) + '\',\'' + esc(it.id) + '\',this.checked)" style="margin-top:3px;accent-color:var(--accent);cursor:pointer">';
+        } else {
+          h += '<input type="checkbox"' + (isTicked ? ' checked' : '') + ' disabled style="margin-top:3px;accent-color:var(--accent)">';
+        }
+        h += '<div style="flex:1;min-width:0">';
+        h += '<div style="font-size:0.85rem;font-weight:600' + (isTicked ? ';text-decoration:line-through;color:var(--gray)' : '') + '">' + esc(it.title || '') + '</div>';
+        if (it.description) h += '<div class="crb-rich" style="font-size:0.78rem;color:var(--gray);margin-top:2px">' + _crbDisplay(it.description) + '</div>';
+        if (it.ref_url) h += '<div style="font-size:0.72rem;margin-top:2px"><a href="' + esc(it.ref_url) + '" target="_blank" rel="noopener" style="color:var(--accent)">Reference &rarr;</a></div>';
+        if (auditInfo) {
+          var atDate = auditInfo.at ? new Date(auditInfo.at).toLocaleString('en-GB') : '';
+          h += '<div style="font-size:0.7rem;color:var(--gray);margin-top:3px;font-style:italic">Ticked by ' + esc(byName || 'Unknown') + (atDate ? ' on ' + esc(atDate) : '') + '</div>';
+        }
+        h += '</div></div>';
+      });
+      h += '</div>';
+    } else {
+
+      h += '<div style="display:flex;flex-direction:column;gap:0.6rem">';
+      items.forEach(function(it, idx) {
+        h += '<div style="padding:0.6rem 0.75rem;background:var(--card);border:1px solid var(--border);border-radius:6px">';
+        h += '<div style="display:flex;align-items:baseline;gap:0.5rem;margin-bottom:0.3rem">';
+        h += '<span style="font-size:0.7rem;color:var(--gray);font-weight:700">' + (idx + 1) + '.</span>';
+        h += '<span style="font-weight:600;font-size:0.85rem">' + esc(it.title || '') + '</span>';
+        h += '</div>';
+        if (it.body) h += '<div class="crb-rich" style="font-size:0.78rem;color:var(--text);margin-bottom:0.4rem">' + _crbDisplay(it.body) + '</div>';
+        if (Array.isArray(it.commands) && it.commands.length) {
+          it.commands.forEach(function(cmd) {
+            var cmdId = 'cmd_' + Math.random().toString(36).slice(2, 8);
+            h += '<div style="display:flex;align-items:flex-start;gap:0.4rem;margin-bottom:0.25rem">';
+            h += '<code id="' + cmdId + '" style="flex:1;font-family:Consolas,monospace;font-size:0.78rem;padding:0.35rem 0.55rem;background:rgba(0,0,0,0.05);border-radius:4px;display:block;overflow-x:auto;white-space:nowrap">' + esc(cmd) + '</code>';
+            if (canTick) h += '<button class="btn btn-sm" onclick="_copyRunbookCmd(\'' + cmdId + '\',this)" title="Copy command">Copy</button>';
+            h += '</div>';
+          });
+        }
+        if (it.expected_output) {
+          h += '<div style="font-size:0.72rem;color:var(--gray);margin-top:0.3rem;font-style:italic">Expected: ' + esc(it.expected_output) + '</div>';
+        }
+        h += '</div>';
+      });
+      h += '</div>';
+    }
+      h += '</div>';
+    }
+    h += '</div>';
+  });
+
+  if (canWrite) {
+
+    var _lib = libMatchKey ? CHECKLIST_RUNBOOK_LIBRARY[libMatchKey] : null;
+    var _showSuggest = !!_lib && !templates.some(function(t) { return t.source === _lib.source; });
+    if (_showSuggest) {
+      h += '<div data-crb-suggest="' + esc(libMatchKey) + '" style="display:flex;align-items:center;gap:0.6rem;margin-top:0.5rem;padding:0.5rem 0.75rem;background:var(--bg);border:1px dashed var(--border);border-radius:6px">';
+      h += '<div style="flex:1;min-width:0;font-size:0.78rem;color:var(--gray)">Suggested for this phase: <strong style="color:var(--text)">' + esc(_lib.name) + '</strong> &middot; ' + esc(_lib.kind) + ', ' + (_lib.items || []).length + (_lib.kind === 'runbook' ? ' steps' : ' items') + '</div>';
+      h += '<button class="btn btn-sm btn-primary" style="white-space:nowrap" onclick="_crbAddForPhase(\'' + esc(libMatchKey) + '\',\'' + esc(assessment.id) + '\',' + phaseIdx + ')">Add</button>';
+      h += '</div>';
+    }
+    var unattached = allTemplates.filter(function(t) { return attachedIds.indexOf(t.id) === -1; });
+    if (unattached.length) {
+      var phType = phase.type || '';
+      unattached.sort(function(a, b) {
+        var aMatch = a.phase_hint && phType && a.phase_hint.toLowerCase() === phType.toLowerCase();
+        var bMatch = b.phase_hint && phType && b.phase_hint.toLowerCase() === phType.toLowerCase();
+        if (aMatch !== bMatch) return aMatch ? -1 : 1;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+      h += '<div style="margin-top:0.5rem">';
+      h += '<select class="form-select" style="font-size:0.85rem" onchange="_assessmentAddCrb(\'' + esc(assessment.id) + '\',' + phaseIdx + ',this.value);this.value=\'\'">';
+      h += '<option value="" disabled selected>+ Attach a checklist or runbook...</option>';
+      unattached.forEach(function(t) {
+        var matchTag = (t.phase_hint && phType && t.phase_hint.toLowerCase() === phType.toLowerCase()) ? ' [phase match]' : '';
+        h += '<option value="' + esc(t.id) + '">' + esc(t.kind === 'runbook' ? '[Runbook] ' : '[Checklist] ') + esc(t.name) + matchTag + '</option>';
+      });
+      h += '</select>';
+      h += '</div>';
+    } else if (!templates.length && !_showSuggest) {
+
+      h += '<div style="font-size:0.78rem;color:var(--gray);padding:0.5rem 0.75rem;background:var(--bg);border:1px dashed var(--border);border-radius:6px">No templates yet. <a href="#" onclick="event.preventDefault();S.settingsTab=\'checklists\';S.page=\'settings\';render()" style="color:var(--accent)">Create one in Settings</a></div>';
+    }
+  }
+  h += '</div>';
+  return h;
+}
+function _userNameById(id) {
+  if (!id) return null;
+  var u = (S.data.users || []).find(function(u) { return u.id === id; });
+  return u ? (u.name || u.email || null) : null;
+}
+async function _copyRunbookCmd(elId, btn) {
+  var el = document.getElementById(elId);
+  if (!el) return;
+  var origText = btn.textContent;
+  var done = false;
+  try { await navigator.clipboard.writeText(el.textContent || ''); done = true; }
+  catch (e) {
+    var sel = window.getSelection();
+    var range = document.createRange();
+    range.selectNodeContents(el);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    try { done = document.execCommand('copy'); } catch (e2) {}
+    sel.removeAllRanges();
+  }
+  btn.textContent = done ? 'Copied' : 'Select and copy';
+  setTimeout(function() { btn.textContent = origText; }, 1200);
+}
+window._copyRunbookCmd = _copyRunbookCmd;
+function _clStateRow(assessmentId, phaseIdx, phaseId, templateId) {
+  var stateRows = S.data.assessment_phase_checklist_state || [];
+  var hit = phaseId ? stateRows.find(function(r) {
+    return r.assessment_id === assessmentId && r.phase_id === phaseId && r.checklist_runbook_id === templateId;
+  }) : null;
+
+  if (!hit) hit = stateRows.find(function(r) {
+    return r.assessment_id === assessmentId && r.phase_index === phaseIdx && !r.phase_id && r.checklist_runbook_id === templateId;
+  });
+  return hit || null;
+}
+function _clTicksOf(v) {
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = null; } }
+  return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+}
+function _clKeep(row) {
+  if (!row) return;
+  var rows = S.data.assessment_phase_checklist_state || [];
+  var i = rows.findIndex(function (r) { return r.id === row.id; });
+  if (i >= 0) rows[i] = row; else rows.push(row);
+  S.data.assessment_phase_checklist_state = rows;
+}
+async function _clTicksWrite(assessmentId, phaseIdx, phaseId, templateId, change) {
+  var existing = _clStateRow(assessmentId, phaseIdx, phaseId, templateId);
+  if (!existing) {
+    var t0 = {};
+    change(t0);
+    var ins = await supabaseClient.from('assessment_phase_checklist_state')
+      .insert({ assessment_id: assessmentId, phase_index: phaseIdx, phase_id: phaseId || null, checklist_runbook_id: templateId, ticks: t0 })
+      .select('*');
+    if (ins && !ins.error && ins.data && ins.data[0]) { _clKeep(ins.data[0]); return { ok: true }; }
+
+    var em = _errMsg(ins && ins.error);
+    if (!/duplicate key|unique|23505/i.test(em + ' ' + ((ins && ins.error && ins.error.code) || ''))) return { ok: false, error: ins && ins.error };
+    var q = supabaseClient.from('assessment_phase_checklist_state').select('*')
+      .eq('assessment_id', assessmentId).eq('checklist_runbook_id', templateId);
+    q = phaseId ? q.eq('phase_id', phaseId) : q.eq('phase_index', phaseIdx).is('phase_id', null);
+    var got = await q.limit(1);
+    if (!got || got.error || !got.data || !got.data[0]) return { ok: false, error: (got && got.error) || ins.error };
+    _clKeep(got.data[0]);
+    existing = got.data[0];
+  }
+  var res = await _coUpdate('assessment_phase_checklist_state', existing.id, function (row) {
+    var t = _coCopy(_clTicksOf(row.ticks));
+    change(t);
+    var patch = {};
+    if (!_coSame(t, _clTicksOf(row.ticks))) patch.ticks = t;
+
+    if (!row.phase_id && phaseId) patch.phase_id = phaseId;
+    return Object.keys(patch).length ? { patch: patch } : null;
+  });
+  if (!res.ok) return res;
+  return { ok: true };
+}
+async function setChecklistTick(assessmentId, phaseIdx, phaseId, templateId, itemId, checked) {
+  var template = (S.data.checklists_runbooks || []).find(function(t) { return t.id === templateId; });
+  if (!template) return;
+  try {
+    var res = await _clTicksWrite(assessmentId, phaseIdx, phaseId, templateId, function (ticks) {
+      if (checked) {
+        if (!ticks[itemId]) ticks[itemId] = template.audit_ticks
+          ? { by: S.profile ? S.profile.id : null, at: new Date().toISOString() }
+          : true;
+      } else {
+        delete ticks[itemId];
+      }
+    });
+    if (!res.ok) {
+      if (res.error) toast('Tick save failed: ' + _errMsg(res.error), 'error');
+      else _coSaidUpdate('assessment_phase_checklist_state', null, res, 'The tick');
+    }
+    render();
+  } catch (err) {
+    console.error('setChecklistTick:', err);
+    toast('Error: ' + err.message, 'error');
+    render();
+  }
+}
+window.setChecklistTick = setChecklistTick;
+async function bulkChecklistTick(assessmentId, phaseIdx, phaseId, templateId, tickAll) {
+  var template = (S.data.checklists_runbooks || []).find(function(t) { return t.id === templateId; });
+  if (!template) return;
+  var items = template.items || [];
+  if (!items.length) return;
+  var stamp = template.audit_ticks
+    ? { by: S.profile ? S.profile.id : null, at: new Date().toISOString() }
+    : true;
+
+  var _shown = _clTicksOf((_clStateRow(assessmentId, phaseIdx, phaseId, templateId) || {}).ticks);
+  var _left = 0;
+  try {
+    var res = await _clTicksWrite(assessmentId, phaseIdx, phaseId, templateId, function (ticks) {
+      _left = 0;
+      if (tickAll) items.forEach(function(it) { if (it.id && !ticks[it.id]) ticks[it.id] = stamp; });
+      else Object.keys(ticks).forEach(function (k) { if (_coHas(_shown, k)) delete ticks[k]; else if (ticks[k]) _left++; });
+    });
+    if (!res.ok) {
+      if (res.error) toast('Bulk update failed: ' + _errMsg(res.error), 'error');
+      else _coSaidUpdate('assessment_phase_checklist_state', null, res, 'That');
+      return;
+    }
+    toast(tickAll ? 'All items ticked'
+      : (_left ? 'Ticks cleared. ' + _left + (_left === 1 ? ' item was' : ' items were') + ' ticked by somebody else a moment ago, and left ticked.' : 'All ticks cleared'),
+      _left && !tickAll ? 'info' : 'success');
+    render();
+  } catch (err) {
+    console.error('bulkChecklistTick:', err);
+    toast('Error: ' + err.message, 'error');
+  }
+}
+window.bulkChecklistTick = bulkChecklistTick;
 function _phRetestChange(el) {
   var idx = parseInt(el.dataset.pidx, 10);
   if (!window._proposalPhases || !window._proposalPhases[idx]) return;
@@ -2173,6 +2583,131 @@ function _activeLogo(s) {
     : (st.logo_url || st.logo_url_light)) || null);
 }
 var SEV_DEFAULTS={critical:'#7c3aed',high:'#991b1b',medium:'#f59e0b',low:'#3b82f6',info:'#6b7280'};
+var CHECKLIST_RUNBOOK_LIBRARY = {
+  phase_web_v1: {
+    kind: 'checklist',
+    name: 'Web Application Testing (OWASP WSTG)',
+    description: 'Coverage tracker for a web application phase, across the OWASP Web Security Testing Guide categories and the OWASP API Security Top 10. Tick a category once its checks are covered; the code in each title points to the section in the guide.',
+    phase_hint: 'Web Application',
+    source: 'phase_web_v1',
+    source_url: 'https://owasp.org/www-project-web-security-testing-guide/',
+    items: [
+      { id: 'info', title: 'Information gathering (WSTG-INFO)', description: 'Confirm what the application exposes about itself, from public sources to error output, and record the attack surface. Done when the information-gathering checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
+      { id: 'config', title: 'Configuration and deployment management (WSTG-CONF)', description: 'Confirm platform, server and deployment configuration follow current hardening guidance. Done when the checks are covered and deviations recorded.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
+      { id: 'identity', title: 'Identity management (WSTG-IDNT)', description: 'Confirm roles, registration and account provisioning are handled safely. Done when the identity checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
+      { id: 'authn', title: 'Authentication (WSTG-ATHN)', description: 'Confirm credentials are transmitted and stored safely, lockout is enforced and the login flow resists bypass. Done when the authentication checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
+      { id: 'authz', title: 'Authorization (WSTG-ATHZ)', description: 'Confirm access controls hold across roles and objects, covering privilege escalation and insecure direct object reference. Done when the authorization checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
+      { id: 'session', title: 'Session management (WSTG-SESS)', description: 'Confirm session identifiers, attributes and lifecycle meet current guidance, covering fixation and cross-site request forgery. Done when the session checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
+      { id: 'input', title: 'Input validation (WSTG-INPV)', description: 'Confirm user-supplied input is validated, encoded and parameterised across all input vectors, covering the injection and cross-site scripting classes. Done when each in-scope input has been reviewed and results recorded.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
+      { id: 'errors', title: 'Error handling (WSTG-ERRH)', description: 'Confirm errors do not leak stack traces, internal detail or configuration. Done when the error-handling checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
+      { id: 'crypto', title: 'Cryptography (WSTG-CRYP)', description: 'Confirm transport and stored-data cryptography follow current standards. Done when the cryptography checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
+      { id: 'business', title: 'Business logic (WSTG-BUSLOGIC)', description: 'Confirm business workflows resist out-of-order, timing and value-manipulation abuse. Done when the business-logic checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
+      { id: 'client', title: 'Client-side (WSTG-CLNT)', description: 'Confirm client-side code, storage and framing are handled safely. Done when the client-side checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
+      { id: 'api', title: 'API testing (WSTG-APIT and OWASP API Top 10)', description: 'Confirm any application APIs are covered against the <strong>OWASP API Security Top 10</strong>, including object- and function-level authorisation. Done when the API checks are covered.', ref_url: 'https://owasp.org/www-project-api-security/' }
+    ]
+  },
+
+  phase_internal_v1: {
+    kind: 'checklist',
+    name: 'Internal Infrastructure Review',
+    description: 'Coverage tracker for an internal infrastructure phase, including Active Directory. Each item is confirmed against current hardening guidance, with deviations and exceptions recorded. For technique, follow the linked guidance.',
+    phase_hint: 'Internal Infrastructure',
+    source: 'phase_internal_v1',
+    source_url: 'https://csrc.nist.gov/publications/detail/sp/800-115/final',
+    items: [
+      { id: 'discovery', title: 'Host discovery coverage recorded', description: 'Live hosts across the in-scope ranges are enumerated and recorded. Done when coverage is complete.' },
+      { id: 'inventory', title: 'Service and version inventory', description: 'Open ports, services and versions are inventoried. Done when the inventory is recorded.' },
+      { id: 'patch', title: 'Patch level and end-of-life software review', description: 'Confirm software is supported and patched to current guidance. Done when gaps are recorded.' },
+      { id: 'creds', title: 'Default and weak credential review (authorised)', description: 'Confirm services do not retain vendor-default or weak credentials. Done when the review is recorded.' },
+      { id: 'shares', title: 'File-sharing and storage exposure review', description: 'Confirm shares and network storage are not over-exposed. Done when exposure is recorded.' },
+      { id: 'remote', title: 'Remote access hardening review (for example SSH and RDP)', description: 'Confirm remote-access services follow current hardening guidance. Done when the review is recorded.' },
+      { id: 'ad-privileged', title: 'Active Directory privileged access review (tiering)', description: 'Confirm privileged group membership is justified and a tiering model is enforced. Done when exceptions are recorded.', ref_url: 'https://learn.microsoft.com/en-us/security/privileged-access-workstations/overview' },
+      { id: 'ad-kerberos', title: 'Kerberos and delegation hardening review', description: 'Confirm Kerberos settings and delegation follow current hardening guidance. Done when exceptions are recorded.' },
+      { id: 'legacy', title: 'Legacy protocol review (for example NTLM and name-resolution fallbacks)', description: 'Confirm legacy authentication and name-resolution fallbacks are disabled or restricted per current guidance. Done when exceptions are recorded.' },
+      { id: 'segmentation', title: 'Segmentation and firewall ruleset review', description: 'Confirm network segmentation and rulesets match intent. Done when deviations are recorded.' },
+      { id: 'logging', title: 'Logging and detection coverage for privileged activity', description: 'Confirm security-relevant and privileged events are logged and monitored. Done when coverage is recorded.' }
+    ]
+  },
+
+  phase_external_v1: {
+    kind: 'checklist',
+    name: 'External Infrastructure Review',
+    description: 'Coverage tracker for an external, perimeter-facing phase. Each item is confirmed and recorded, with findings validated rather than taken from a scanner.',
+    phase_hint: 'External Infrastructure',
+    source: 'phase_external_v1',
+    source_url: 'https://csrc.nist.gov/publications/detail/sp/800-115/final',
+    items: [
+      { id: 'surface', title: 'External attack surface inventory', description: 'In-scope public hosts, domains and subdomains are inventoried from authorised sources. Done when the surface is recorded.' },
+      { id: 'services', title: 'Exposed service inventory', description: 'Internet-facing services and versions are inventoried. Done when the inventory is recorded.' },
+      { id: 'tls', title: 'TLS configuration review (protocols, ciphers, certificates)', description: 'Confirm transport security follows current standards. Done when deviations are recorded.', ref_url: 'https://www.cisecurity.org/cis-benchmarks' },
+      { id: 'email', title: 'Email security posture review (SPF, DKIM, DMARC)', description: 'Confirm sender-authentication records follow current guidance. Done when gaps are recorded.' },
+      { id: 'mgmt', title: 'Exposed management and remote-access review', description: 'Confirm admin and remote-access interfaces are not needlessly internet-facing. Done when exposure is recorded.' },
+      { id: 'creds', title: 'Default and weak credential review on exposed services (authorised)', description: 'Confirm exposed services retain no vendor-default or weak credentials. Done when the review is recorded.' },
+      { id: 'patch', title: 'Perimeter patch and end-of-life review', description: 'Confirm perimeter software is supported and patched. Done when gaps are recorded.' },
+      { id: 'validate', title: 'Known-issue validation (confirm, not scanner noise)', description: 'Confirm each candidate issue is real in this environment before reporting. Done when every reported issue is validated.' },
+      { id: 'exposure', title: 'Information-exposure review', description: 'Confirm the perimeter does not leak internal detail, credentials or sensitive files. Done when the review is recorded.' },
+      { id: 'authrate', title: 'Rate limiting and lockout on public authentication', description: 'Confirm public login surfaces resist automated guessing. Done when the review is recorded.' }
+    ]
+  },
+
+  phase_cloud_v1: {
+    kind: 'checklist',
+    name: 'Cloud Configuration Review',
+    description: 'Coverage tracker for a cloud phase. Baseline against the relevant CIS Benchmark or provider security guidance and record deviations.',
+    phase_hint: 'Cloud',
+    source: 'phase_cloud_v1',
+    source_url: 'https://www.cisecurity.org/cis-benchmarks',
+    items: [
+      { id: 'iam', title: 'IAM least-privilege review', description: 'Confirm identities and roles grant only what they need. Done when over-privilege is recorded.', ref_url: 'https://www.cisecurity.org/cis-benchmarks' },
+      { id: 'storage', title: 'Public storage exposure review', description: 'Confirm object and block storage are not unintentionally public. Done when exposure is recorded.' },
+      { id: 'network', title: 'Network exposure review (security groups and firewalls)', description: 'Confirm inbound exposure matches intent. Done when open paths are recorded.' },
+      { id: 'encryption', title: 'Encryption at rest and in transit', description: 'Confirm data is encrypted per current guidance. Done when gaps are recorded.' },
+      { id: 'secrets', title: 'Key and secret management', description: 'Confirm keys and secrets are stored and rotated safely. Done when the review is recorded.' },
+      { id: 'logging', title: 'Logging, monitoring and audit trail', description: 'Confirm an audit trail is enabled and retained. Done when coverage is recorded.' },
+      { id: 'backup', title: 'Backup and recovery configuration', description: 'Confirm backups exist and are protected. Done when the review is recorded.' },
+      { id: 'baseline', title: 'Baseline against the platform CIS Benchmark', description: 'Confirm configuration against the relevant CIS Benchmark. Done when deviations are recorded.', ref_url: 'https://www.cisecurity.org/cis-benchmarks' },
+      { id: 'mfa', title: 'MFA and federation on privileged accounts', description: 'Confirm privileged access requires strong authentication. Done when the review is recorded.' },
+      { id: 'inventory', title: 'Resource inventory and drift', description: 'Confirm resources are inventoried and drift from baseline is tracked. Done when the review is recorded.' }
+    ]
+  },
+
+  phase_mobile_v1: {
+    kind: 'checklist',
+    name: 'Mobile Application Testing (OWASP MASVS)',
+    description: 'Coverage tracker for a mobile phase, across the OWASP Mobile Application Security Verification Standard control groups. Tick each group once its controls are reviewed.',
+    phase_hint: 'Mobile',
+    source: 'phase_mobile_v1',
+    source_url: 'https://mas.owasp.org/MASVS/',
+    items: [
+      { id: 'storage', title: 'MASVS-STORAGE', description: 'Confirm sensitive data is stored and handled safely on the device. Done when storage controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
+      { id: 'crypto', title: 'MASVS-CRYPTO', description: 'Confirm cryptography uses current algorithms and sound key handling. Done when cryptography controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
+      { id: 'auth', title: 'MASVS-AUTH', description: 'Confirm authentication and authorisation are enforced correctly. Done when auth controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
+      { id: 'network', title: 'MASVS-NETWORK', description: 'Confirm network traffic is protected and certificates validated. Done when network controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
+      { id: 'platform', title: 'MASVS-PLATFORM', description: 'Confirm platform interactions and inter-app exposure are handled safely. Done when platform controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
+      { id: 'code', title: 'MASVS-CODE', description: 'Confirm the app is built with current defences and maintained dependencies. Done when code-quality controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
+      { id: 'resilience', title: 'MASVS-RESILIENCE', description: 'Confirm resilience controls match the risk profile of the app. Done when resilience controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
+      { id: 'privacy', title: 'MASVS-PRIVACY', description: 'Confirm personal-data handling meets the privacy commitments of the app. Done when privacy controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' }
+    ]
+  },
+  phase_wireless_v1: {
+    kind: 'checklist',
+    name: 'Wireless Review',
+    description: 'Coverage tracker for a wireless phase. Each item is confirmed against current guidance, with deviations recorded.',
+    phase_hint: 'Wireless',
+    source: 'phase_wireless_v1',
+    source_url: 'https://csrc.nist.gov/publications/detail/sp/800-115/final',
+    items: [
+      { id: 'inventory', title: 'SSID and network inventory', description: 'Record the in-scope wireless networks. Done when the inventory is complete.' },
+      { id: 'encryption', title: 'Encryption standard review (WPA2 or WPA3, no WEP or open)', description: 'Confirm networks use current encryption standards. Done when deviations are recorded.' },
+      { id: 'eap', title: 'Enterprise authentication (EAP) configuration review', description: 'Confirm enterprise authentication follows current guidance. Done when the review is recorded.' },
+      { id: 'guest', title: 'Guest network isolation', description: 'Confirm guest networks are isolated from internal resources. Done when isolation is confirmed.' },
+      { id: 'mfp', title: 'Management-frame protection', description: 'Confirm management-frame protection is enabled where supported. Done when the review is recorded.' },
+      { id: 'rogue', title: 'Rogue and unauthorised access point detection', description: 'Confirm coverage for detecting unauthorised access points. Done when the review is recorded.' },
+      { id: 'isolation', title: 'Client isolation', description: 'Confirm client-to-client isolation where expected. Done when the review is recorded.' },
+      { id: 'coverage', title: 'Signal leakage and coverage review', description: 'Confirm wireless coverage does not extend further than intended. Done when the review is recorded.' }
+    ]
+  },
+};
 var THEME_DEFAULTS={
   dark:{bg:'#0c0c0c',surface:'#000000',text:'#e4e4e7',muted:'#a1a1aa'},
   light:{bg:'#ebebef',surface:'#ffffff',text:'#09090b',muted:'#3f3f46'}
@@ -38060,7 +38595,7 @@ function renderSettings__portal() {
 
   var _crbEnabled = checklistsEnabled();
   h += '<div class="card mt-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="14" height="17" rx="2"/><path d="M7 9l2 2 4-4"/><path d="M7 15h6"/></svg> Checklists &amp; Runbooks</span></div><div class="card-body">';
-  h += '<p style="color:var(--gray);margin-bottom:1rem;font-size:0.85rem">Optional structured guidance for testers. Checklists track tickable test items; runbooks document step-by-step procedures with commands. Attach one or more to each phase of a proposal or assessment to guide your team.</p>';
+  h += '<p style="color:var(--gray);margin-bottom:1rem;font-size:0.85rem">Optional structured guidance for testers. Checklists track tickable test items; runbooks document step-by-step procedures with commands. Attach one or more to each phase of an assessment to guide your team.</p>';
 
   h += '<div style="margin-bottom:1.5rem;padding:0.85rem 1rem;background:var(--bg);border:1px solid var(--border);border-radius:8px">';
   h += '<label style="display:flex;align-items:flex-start;gap:0.6rem;cursor:pointer">';
@@ -38138,7 +38673,7 @@ function renderSettings__portal() {
         h += '<div style="flex:1;min-width:0">';
         h += '<div style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;font-weight:600">' + esc(t.name);
         h += '<span style="font-size:0.7rem;font-weight:500;padding:1px 6px;border-radius:10px;background:rgba(0,0,0,0.06);color:var(--gray);text-transform:uppercase;letter-spacing:0.04em">' + esc(t.kind) + '</span>';
-        if (t.client_visible) h += '<span style="font-size:0.7rem;font-weight:500;padding:1px 6px;border-radius:10px;background:rgba(34,197,94,0.1);color:#15803d">Client visible</span>';
+        
         if (t.audit_ticks) h += '<span style="font-size:0.7rem;font-weight:500;padding:1px 6px;border-radius:10px;background:rgba(59,130,246,0.1);color:#1d4ed8">Audited</span>';
         h += '</div>';
         var subBits = [];
@@ -39915,7 +40450,7 @@ function renderSettings__portal() {
   if (!S._embedSettings) {
 
   h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Back Up Your Data</span></div><div class="card-body">';
-  h += '<p class="set-p">Everything in one .zip: clients, assessments, findings, Library entries, user accounts, settings and branding, with every uploaded file (evidence, avatars, logos and templates). Your AI key is left out, and is entered again after a restore. Pental restores the same file, so this is also how your work moves to Pental.</p>';
+  h += '<p class="set-p">Everything in one .zip: clients, assessments, findings, Library entries, checklists and runbooks, user accounts, settings and branding, with every uploaded file (evidence, avatars, logos and templates). Your AI key is left out, and is entered again after a restore. Pental restores the same file, so this is also how your work moves to Pental.</p>';
   h += '<button class="btn btn-secondary" onclick="exportAllData()" id="btn_export_data"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download a Backup</button>';
   h += '</div></div>';
 
@@ -42072,6 +42607,155 @@ function _loaVisPick(id) {
   }
 }
 window._loaVisPick = _loaVisPick;
+async function saveChecklistFeatureToggle(enabled) {
+  var settings = S.data.settings || {};
+  var prev = checklistsEnabled();
+  if (prev === !!enabled) return;
+  try {
+    var result;
+    if (settings.id) {
+      result = await _setPut({ enable_checklists_runbooks: !!enabled }, settings.id, 'id');
+    } else {
+      result = await supabaseClient.from('settings').insert({ enable_checklists_runbooks: !!enabled }).select('id');
+    }
+    if (result.error) { toast('Error: ' + _errMsg(result.error), 'error'); return; }
+    if (result.data && result.data[0]) settings.id = result.data[0].id;
+    settings.enable_checklists_runbooks = !!enabled;
+    S.data.settings = settings;
+    render();
+    toast(enabled ? 'Checklists & runbooks enabled' : 'Checklists & runbooks disabled', 'success');
+  } catch (err) {
+    console.error('saveChecklistFeatureToggle:', err);
+    toast('Error: ' + err.message, 'error');
+  }
+}
+window.saveChecklistFeatureToggle = saveChecklistFeatureToggle;
+async function importCuratedChecklist(libraryKey) {
+  var tpl = CHECKLIST_RUNBOOK_LIBRARY[libraryKey];
+  if (!tpl) { toast('Unknown template', 'error'); return; }
+
+  var existing = (S.data.checklists_runbooks || []).find(function(t) { return t.source === tpl.source; });
+  if (existing) { toast('Already imported', 'info'); return; }
+  _showLoading();
+  try {
+
+    var payload = _crbLibraryPayload(tpl);
+    var res = await supabaseClient.from('checklists_runbooks').insert(payload).select('*');
+    if (res.error) { toast('Import failed: ' + _errMsg(res.error), 'error'); return; }
+    if (res.data && res.data[0]) {
+      S.data.checklists_runbooks.push(res.data[0]);
+    }
+    toast('Imported "' + tpl.name + '"', 'success');
+    render();
+  } catch (err) {
+    console.error('importCuratedChecklist:', err);
+    toast('Error: ' + err.message, 'error');
+  } finally { _hideLoading(); }
+}
+window.importCuratedChecklist = importCuratedChecklist;
+async function importAllCuratedChecklists() {
+  var keys = Object.keys(CHECKLIST_RUNBOOK_LIBRARY).filter(function(key) {
+    var tpl = CHECKLIST_RUNBOOK_LIBRARY[key];
+    return !(S.data.checklists_runbooks || []).some(function(t) { return t.source === tpl.source; });
+  });
+  if (!keys.length) { toast('Everything is already imported', 'info'); return; }
+  _showLoading();
+  var added = 0;
+  try {
+    for (var i = 0; i < keys.length; i++) {
+      var tpl = CHECKLIST_RUNBOOK_LIBRARY[keys[i]];
+      var res = await supabaseClient.from('checklists_runbooks').insert(_crbLibraryPayload(tpl)).select('*');
+      if (res.error) { toast('Import failed: ' + _errMsg(res.error), 'error'); break; }
+      if (res.data && res.data[0]) { S.data.checklists_runbooks.push(res.data[0]); added++; }
+    }
+    if (added) toast('Imported ' + added + ' template' + (added === 1 ? '' : 's'), 'success');
+    render();
+  } catch (err) {
+    console.error('importAllCuratedChecklists:', err);
+    toast('Error: ' + err.message, 'error');
+  } finally { _hideLoading(); }
+}
+window.importAllCuratedChecklists = importAllCuratedChecklists;
+async function deleteChecklistTemplate(id) {
+  var tpl = (S.data.checklists_runbooks || []).find(function(t) { return t.id === id; });
+  if (!tpl) return;
+
+  var inUse = (S.data.assessments || []).some(function(a) {
+    var phases = a.phases || [];
+    return phases.some(function(ph) {
+      return Array.isArray(ph.checklist_runbook_ids) && ph.checklist_runbook_ids.indexOf(id) !== -1;
+    });
+  });
+  var msg = inUse
+    ? 'Delete "' + tpl.name + '"? This template is in use on at least one assessment phase. Tick state will be lost.'
+    : 'Delete "' + tpl.name + '"?';
+  if (!(await confirmAsync(msg, { title: 'Delete this template?', confirmText: 'Delete', variant: 'danger' }))) return;
+  _showLoading();
+  try {
+    var res = await supabaseClient.from('checklists_runbooks').delete().eq('id', id);
+    if (res.error) { toast('Delete failed: ' + _errMsg(res.error), 'error'); return; }
+    S.data.checklists_runbooks = (S.data.checklists_runbooks || []).filter(function(t) { return t.id !== id; });
+    toast('Template deleted', 'success');
+    render();
+  } catch (err) {
+    console.error('deleteChecklistTemplate:', err);
+    toast('Error: ' + err.message, 'error');
+  } finally { _hideLoading(); }
+}
+window.deleteChecklistTemplate = deleteChecklistTemplate;
+async function duplicateChecklistTemplate(id) {
+  var src = (S.data.checklists_runbooks || []).find(function(t) { return t.id === id; });
+  if (!src) return;
+  _showLoading();
+  try {
+    var newItems = (src.items || []).map(function(it) {
+      var copy = Object.assign({}, it);
+      delete copy.id;
+      return _crbSanitiseItem(src.kind, copy);
+    });
+    var payload = {
+      kind: src.kind,
+      name: (src.name || 'Untitled') + ' (Copy)',
+      description: src.description || null,
+      phase_hint: src.phase_hint || null,
+      source: 'custom',
+      source_url: src.source_url || null,
+      client_visible: !!src.client_visible,
+      audit_ticks: !!src.audit_ticks,
+      items: newItems,
+      created_by: S.profile ? S.profile.id : null
+    };
+    var res = await supabaseClient.from('checklists_runbooks').insert(payload).select('*');
+    if (res.error) { toast('Duplicate failed: ' + _errMsg(res.error), 'error'); return; }
+    var row = res.data && res.data[0];
+    if (row) S.data.checklists_runbooks.push(row);
+    toast('Duplicated "' + src.name + '"', 'success');
+    render();
+  } catch (err) {
+    console.error('duplicateChecklistTemplate:', err);
+    toast('Error: ' + err.message, 'error');
+  } finally { _hideLoading(); }
+}
+window.duplicateChecklistTemplate = duplicateChecklistTemplate;
+function openChecklistEditor(id) {
+  var existing = id ? (S.data.checklists_runbooks || []).find(function(t) { return t.id === id; }) : null;
+
+  S._checklistDraft = existing ? JSON.parse(JSON.stringify(existing)) : {
+    id: null,
+    kind: 'checklist',
+    name: '',
+    description: '',
+    phase_hint: '',
+    source: 'custom',
+    source_url: '',
+    client_visible: false,
+    audit_ticks: false,
+    items: []
+  };
+  S.modal = { type: 'checklistEditor' };
+  render();
+}
+window.openChecklistEditor = openChecklistEditor;
 var defaultTemplates = {
 
   get vuln_report() {
@@ -44391,6 +45075,1393 @@ function renderKBModal() {
   h += '</div>';
   return h;
 }
+function renderChecklistEditorModal() {
+  var d = S._checklistDraft || {};
+  var isNew = !d.id;
+  var h = '<div class="modal-header"><h2 class="modal-title">' + (isNew ? 'New' : 'Edit') + ' ' + esc(d.kind || 'checklist') + '</h2><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
+  h += '<div class="modal-body">';
+
+  if (isNew) {
+    h += '<div class="form-group">';
+    h += '<label class="form-label">Type</label>';
+    h += '<div style="display:flex;gap:0.5rem">';
+    h += '<label style="flex:1;display:flex;align-items:center;gap:0.5rem;padding:0.6rem 0.85rem;background:var(--bg);border:1px solid ' + (d.kind === 'checklist' ? 'var(--accent)' : 'var(--border)') + ';border-radius:6px;cursor:pointer;font-size:0.85rem">';
+    h += '<input type="radio" name="crb_kind" value="checklist"' + (d.kind === 'checklist' ? ' checked' : '') + ' onchange="updateChecklistDraft(\'kind\', this.value)" style="accent-color:var(--accent)">';
+    h += '<span><strong>Checklist</strong> &middot; tickable items</span></label>';
+    h += '<label style="flex:1;display:flex;align-items:center;gap:0.5rem;padding:0.6rem 0.85rem;background:var(--bg);border:1px solid ' + (d.kind === 'runbook' ? 'var(--accent)' : 'var(--border)') + ';border-radius:6px;cursor:pointer;font-size:0.85rem">';
+    h += '<input type="radio" name="crb_kind" value="runbook"' + (d.kind === 'runbook' ? ' checked' : '') + ' onchange="updateChecklistDraft(\'kind\', this.value)" style="accent-color:var(--accent)">';
+    h += '<span><strong>Runbook</strong> &middot; step-by-step</span></label>';
+    h += '</div></div>';
+  }
+
+  h += '<div class="form-group">';
+  h += '<label class="form-label">Name</label>';
+  h += '<input class="form-input" id="crb_name" value="' + esc(d.name || '') + '" placeholder="e.g. Internal AD Pentest Checklist">';
+  h += '</div>';
+
+  h += '<div class="form-group">';
+  h += '<label class="form-label">Description (optional)</label>';
+  h += '<textarea class="form-input" id="crb_description" rows="2" placeholder="Short description of when to use this template">' + esc(d.description || '') + '</textarea>';
+  h += '</div>';
+
+  h += '<div class="form-group">';
+  h += '<label class="form-label">Phase hint (optional)</label>';
+  h += '<input class="form-input" id="crb_phase_hint" value="' + esc(d.phase_hint || '') + '" placeholder="e.g. Web Application, Internal Infrastructure">';
+  h += '<div style="font-size:0.72rem;color:var(--gray);margin-top:4px">If set, this template will be pre-suggested when adding to phases with a matching type.</div>';
+  h += '</div>';
+
+  h += '<div class="form-group" style="display:flex;gap:1rem;flex-wrap:wrap">';
+  h += '<label style="display:none"><input type="checkbox" id="crb_client_visible"' + (d.client_visible ? ' checked' : '') + ' style="accent-color:var(--accent)"> Visible to clients</label>';
+  h += '<label style="display:flex;align-items:center;gap:0.4rem;padding:0.5rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:0.85rem"><input type="checkbox" id="crb_audit_ticks"' + (d.audit_ticks ? ' checked' : '') + ' style="accent-color:var(--accent)"> Record who/when on tick (audit trail)</label>';
+  h += '</div>';
+
+  h += '<div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border)">';
+  h += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem">';
+  h += '<div style="font-weight:600;font-size:0.9rem">' + (d.kind === 'runbook' ? 'Steps' : 'Items') + '</div>';
+  h += '<button class="btn btn-sm" onclick="addChecklistDraftItem()">+ Add ' + (d.kind === 'runbook' ? 'step' : 'item') + '</button>';
+  h += '</div>';
+
+  var items = d.items || [];
+  if (!items.length) {
+    h += '<div style="padding:1rem;text-align:center;color:var(--gray);font-size:0.85rem;background:var(--bg);border:1px dashed var(--border);border-radius:6px">No ' + (d.kind === 'runbook' ? 'steps' : 'items') + ' yet. Click "Add" above to get started.</div>';
+  } else {
+    h += '<div style="display:flex;flex-direction:column;gap:0.6rem">';
+    items.forEach(function(item, idx) {
+      h += '<div style="padding:0.7rem 0.85rem;background:var(--bg);border:1px solid var(--border);border-radius:6px">';
+      h += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;gap:0.5rem">';
+      h += '<div style="font-size:0.72rem;color:var(--gray);font-weight:600">' + (d.kind === 'runbook' ? 'Step ' : 'Item ') + (idx + 1) + '</div>';
+      h += '<div style="display:flex;gap:0.3rem">';
+      if (idx > 0) h += '<button class="btn btn-sm" onclick="moveChecklistDraftItem(' + idx + ', -1)" title="Move up">&uarr;</button>';
+      if (idx < items.length - 1) h += '<button class="btn btn-sm" onclick="moveChecklistDraftItem(' + idx + ', 1)" title="Move down">&darr;</button>';
+      h += '<button class="btn btn-sm btn-danger" onclick="removeChecklistDraftItem(' + idx + ')">Remove</button>';
+      h += '</div></div>';
+      h += '<input class="form-input" placeholder="Title" value="' + esc(item.title || '') + '" oninput="updateChecklistDraftItem(' + idx + ', \'title\', this.value)" style="margin-bottom:0.4rem">';
+      if (d.kind === 'checklist') {
+        h += buildEditorToolbar('crb_desc_' + idx, false);
+        h += '<div class="rich-editor" id="crb_desc_' + idx + '" contenteditable="true" data-placeholder="Description (optional)" style="min-height:60px;margin-bottom:0.4rem" oninput="updateChecklistDraftItem(' + idx + ', \'description\', this.innerHTML)">' + _crbRichValue(item.description) + '</div>';
+        h += '<input class="form-input" placeholder="Reference URL (optional)" value="' + esc(item.ref_url || '') + '" oninput="updateChecklistDraftItem(' + idx + ', \'ref_url\', this.value)">';
+      } else {
+        h += buildEditorToolbar('crb_body_' + idx, false);
+        h += '<div class="rich-editor" id="crb_body_' + idx + '" contenteditable="true" data-placeholder="Step description / context" style="min-height:80px;margin-bottom:0.4rem" oninput="updateChecklistDraftItem(' + idx + ', \'body\', this.innerHTML)">' + _crbRichValue(item.body) + '</div>';
+        var commands = Array.isArray(item.commands) ? item.commands.join('\n') : (item.commands || '');
+        h += '<label style="font-size:0.72rem;color:var(--gray);font-weight:600;display:block;margin-bottom:2px">Commands (one per line)</label>';
+        h += '<textarea class="form-input" placeholder="One command per line (optional)" rows="3" oninput="updateChecklistDraftItem(' + idx + ', \'commands\', this.value.split(\'\\n\').map(function(s){return s.trim()}).filter(Boolean))" style="margin-bottom:0.4rem;font-family:Consolas,monospace;font-size:0.8rem">' + esc(commands) + '</textarea>';
+        h += '<input class="form-input" placeholder="Expected output (optional)" value="' + esc(item.expected_output || '') + '" oninput="updateChecklistDraftItem(' + idx + ', \'expected_output\', this.value)">';
+      }
+      h += '</div>';
+    });
+    h += '</div>';
+  }
+  h += '</div>';
+
+  h += '</div>';
+  h += _mFooter('saveChecklistTemplate()');
+  return h;
+}
+function updateChecklistDraft(field, value) {
+  if (!S._checklistDraft) return;
+  S._checklistDraft[field] = value;
+
+  if (field === 'kind') S._checklistDraft.items = [];
+  render();
+}
+window.updateChecklistDraft = updateChecklistDraft;
+function _genItemId() {
+
+  return 'i_' + Math.random().toString(36).slice(2, 10);
+}
+function addChecklistDraftItem() {
+  if (!S._checklistDraft) return;
+  S._checklistDraft.items = S._checklistDraft.items || [];
+  S._checklistDraft.items.push({ id: _genItemId(), title: '' });
+  render();
+}
+window.addChecklistDraftItem = addChecklistDraftItem;
+function _crbIsHtml(v) { return /<(p|div|br|ul|ol|li|h[1-6]|table|strong|em|b|i|u|a|blockquote|pre|span)\b/i.test(String(v || '')); }
+function _crbRichValue(v) {
+  var t = String(v == null ? '' : v);
+  if (!t.trim()) return '';
+  if (_crbIsHtml(t)) return sanitizeHtml(t);
+
+  return _escHtml(t).replace(/\r?\n/g, '<br>');
+}
+function _crbDisplay(v) {
+  var t = String(v == null ? '' : v);
+  if (!t.trim()) return '';
+
+  return _crbIsHtml(t) ? _figNumber(renderHtmlContent(t), 0) : _escHtml(t).replace(/\r?\n/g, '<br>');
+}
+function _crbSafeUrl(u) {
+  var s = String(u == null ? '' : u).trim();
+  if (!s) return '';
+  if (/^(https?:|mailto:)/i.test(s)) return s;
+  if (/^[\w.-]+\.[a-z]{2,}([\/?#]|$)/i.test(s)) return 'https://' + s;
+  return '';
+}
+function _crbCleanRich(v) {
+  var t = String(v == null ? '' : v);
+  if (!t.trim()) return '';
+  return _crbIsHtml(t) ? sanitizeHtml(t) : t;
+}
+function _crbSanitiseItem(kind, it) {
+  it = it || {};
+  var out = { id: it.id || _genItemId(), title: String(it.title == null ? '' : it.title).trim() };
+  if (kind === 'runbook') {
+    out.body = _crbCleanRich(it.body);
+    var cmds = Array.isArray(it.commands) ? it.commands : (it.commands ? String(it.commands).split('\n') : []);
+    cmds = cmds.map(function (c) { return String(c == null ? '' : c).trim(); }).filter(Boolean);
+    if (cmds.length) out.commands = cmds;
+    if (it.expected_output) out.expected_output = String(it.expected_output).trim();
+  } else {
+    out.description = _crbCleanRich(it.description);
+    var ru = _crbSafeUrl(it.ref_url);
+    if (ru) out.ref_url = ru;
+  }
+  return out;
+}
+function _crbSanitiseItems(kind, items) {
+  return (Array.isArray(items) ? items : []).map(function (it) { return _crbSanitiseItem(kind, it); });
+}
+function _crbLibraryPayload(tpl) {
+  return {
+    kind: tpl.kind,
+    name: tpl.name,
+    description: tpl.description || null,
+    phase_hint: tpl.phase_hint || null,
+    source: tpl.source,
+    source_url: _crbSafeUrl(tpl.source_url) || null,
+    client_visible: false,
+    audit_ticks: false,
+    items: _crbSanitiseItems(tpl.kind, tpl.items),
+    created_by: S.profile ? S.profile.id : null
+  };
+}
+function updateChecklistDraftItem(idx, field, value) {
+  if (!S._checklistDraft || !S._checklistDraft.items[idx]) return;
+  S._checklistDraft.items[idx][field] = value;
+
+}
+window.updateChecklistDraftItem = updateChecklistDraftItem;
+function removeChecklistDraftItem(idx) {
+  if (!S._checklistDraft) return;
+  S._checklistDraft.items.splice(idx, 1);
+  render();
+}
+window.removeChecklistDraftItem = removeChecklistDraftItem;
+function moveChecklistDraftItem(idx, dir) {
+  if (!S._checklistDraft) return;
+  var items = S._checklistDraft.items;
+  var target = idx + dir;
+  if (target < 0 || target >= items.length) return;
+  var tmp = items[idx];
+  items[idx] = items[target];
+  items[target] = tmp;
+  render();
+}
+window.moveChecklistDraftItem = moveChecklistDraftItem;
+function _syncChecklistDraftFromDom() {
+  var d = S._checklistDraft;
+  if (!d) return;
+  var nameEl = document.getElementById('crb_name');
+  if (nameEl) d.name = nameEl.value.trim();
+  var descEl = document.getElementById('crb_description');
+  if (descEl) d.description = descEl.value.trim();
+  var hintEl = document.getElementById('crb_phase_hint');
+  if (hintEl) d.phase_hint = hintEl.value.trim();
+  var cvEl = document.getElementById('crb_client_visible');
+  if (cvEl) d.client_visible = !!cvEl.checked;
+  var atEl = document.getElementById('crb_audit_ticks');
+  if (atEl) d.audit_ticks = !!atEl.checked;
+}
+async function saveChecklistTemplate() {
+  _syncChecklistDraftFromDom();
+  var d = S._checklistDraft;
+  if (!d) return;
+  if (!d.name) { toast('Name is required', 'error'); return; }
+  if (!d.kind || (d.kind !== 'checklist' && d.kind !== 'runbook')) { toast('Invalid kind', 'error'); return; }
+
+  var _crbHasText = function(v) { return !!_ffStripToText(String(v == null ? '' : v)); };
+  var items = (d.items || []).filter(function(it) { return (it.title || '').trim() || _crbHasText(it.body) || _crbHasText(it.description); });
+
+  items = _crbSanitiseItems(d.kind, items);
+  _showLoading();
+  try {
+    var payload = {
+      kind: d.kind,
+      name: d.name,
+      description: d.description || null,
+      phase_hint: d.phase_hint || null,
+      source: d.source || 'custom',
+      source_url: d.source_url || null,
+      client_visible: !!d.client_visible,
+      audit_ticks: !!d.audit_ticks,
+      items: items
+    };
+    if (!d.id) payload.created_by = S.profile ? S.profile.id : null;
+    var res;
+    if (d.id) {
+
+      var _seq = _setFailSeq;
+      var _r = await _coSave('checklists_runbooks', d.id, payload, {
+        write: function (data, cas) { return _coCas(supabaseClient.from('checklists_runbooks').update(data).eq('id', d.id), cas).select('*'); },
+      });
+      if (!_r.ok && _r.conflicts.length) {
+        _coShowConflict('checklists_runbooks', d.id, _r.conflicts, function (choice) {
+          if (choice === 'mine') return saveChecklistTemplate();
+        }, { by: _r.by });
+        return;
+      }
+      if (!_r.ok) { _coSaid('checklists_runbooks', d.id, _r, _seq); return; }
+      var _local = (S.data.checklists_runbooks || []).find(function (t) { return t.id === d.id; });
+      res = { data: [_r.row || Object.assign({}, _local || {}, payload)], error: null };
+
+      var _mrg = _r.row && Array.isArray(_r.row.items) && !_coSame(_r.row.items, items) ? _r.row.items : null;
+      if (_mrg) {
+        d.items = _coCopy(_mrg);
+        var _cb = _coBaseline('checklists_runbooks', d.id);
+        if (_cb) _cb.values.items = _coCopy(_mrg);
+      }
+    } else {
+      res = await supabaseClient.from('checklists_runbooks').insert(payload).select('*');
+    }
+    if (res.error) { toast('Save failed: ' + _errMsg(res.error), 'error'); return; }
+    var row = res.data && res.data[0];
+    if (row) {
+
+      var arr = S.data.checklists_runbooks || [];
+      var existingIdx = arr.findIndex(function(t) { return t.id === row.id; });
+      if (existingIdx >= 0) arr[existingIdx] = row; else arr.push(row);
+      S.data.checklists_runbooks = arr;
+    }
+
+    if (_mStayDone(d.id ? {} : { isNew: true,
+        own: row && row.id ? function () {
+          d.id = row.id;
+          try { var _k = document.querySelector('.modal-overlay input[name="crb_kind"]'), _g = _k && _k.closest('.form-group'); if (_g) _g.remove(); } catch (e) {}
+        } : undefined })) {
+      if (d.id && typeof _mrg !== 'undefined' && _mrg) { render(); toast('Saved. A colleague\u2019s changes to the items, made meanwhile, are kept too.', 'info'); }
+      return;
+    }
+    toast(d.id ? 'Template updated' : 'Template created', 'success');
+    closeM();
+  } catch (err) {
+    console.error('saveChecklistTemplate:', err);
+    toast('Error: ' + err.message, 'error');
+  } finally { _hideLoading(); }
+}
+window.saveChecklistTemplate = saveChecklistTemplate;
+var _CRBX_FORMAT = 'pental.checklists';
+var _CRBX_MAX = { lists: 200, items: 500, bytes: 10 * 1024 * 1024, unpacked: 50 * 1024 * 1024, text: 20000, title: 500, name: 200, commands: 100, url: 2048 };
+var _CRBX_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+var _CRBX_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+function _crbxOut(t) {
+  var kind = t && t.kind === 'runbook' ? 'runbook' : 'checklist';
+  return {
+    kind: kind,
+    name: String((t && t.name) || ''),
+    description: String((t && t.description) || ''),
+    phase_hint: String((t && t.phase_hint) || ''),
+    source: String((t && t.source) || 'custom'),
+    source_url: String((t && t.source_url) || ''),
+    client_visible: !!(t && t.client_visible),
+    audit_ticks: !!(t && t.audit_ticks),
+    items: (t && Array.isArray(t.items) ? t.items : []).map(function (it) {
+      it = it || {};
+      return kind === 'runbook'
+        ? { id: String(it.id || ''), title: String(it.title || ''), body: String(it.body || ''),
+            commands: Array.isArray(it.commands) ? it.commands.map(String) : [], expected_output: String(it.expected_output || '') }
+        : { id: String(it.id || ''), title: String(it.title || ''), description: String(it.description || ''), ref_url: String(it.ref_url || '') };
+    })
+  };
+}
+function _crbxPlain(t, exact) {
+  var s = String(t == null ? '' : t).replace(/\r\n?/g, '\n');
+  if (exact) return s;
+  return s.split('\n').map(function (l) { return l.replace(/[ \t\u00a0]+$/, ''); }).join('\n').replace(/^\n+|\n+$/g, '');
+}
+function _crbxNorm(t) {
+  return String(t == null ? '' : t).replace(/\r\n?/g, '\n').split('\n')
+    .map(function (l) { return l.replace(/[ \t\u00a0]+/g, ' ').trim(); })
+    .join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+function _crbxText(html) {
+  var s = String(html == null ? '' : html);
+  if (!s.trim()) return '';
+  if (!_crbIsHtml(s)) return _crbxNorm(s);
+  var body = new DOMParser().parseFromString('<!doctype html><html><body>' + s + '</body></html>', 'text/html').body;
+  Array.prototype.slice.call(body.querySelectorAll('script,style,template,img,svg,video,audio,iframe,object,embed')).forEach(function (n) { n.parentNode.removeChild(n); });
+  var walker = body.ownerDocument.createTreeWalker(body, 4, null);
+  var texts = [];
+  while (walker.nextNode()) texts.push(walker.currentNode);
+  texts.forEach(function (n) {
+    var inPre = false;
+    for (var p = n.parentNode; p && p !== body; p = p.parentNode) if (p.tagName === 'PRE') { inPre = true; break; }
+    if (!inPre) n.nodeValue = n.nodeValue.replace(/\s+/g, ' ');
+  });
+
+  Array.prototype.slice.call(body.querySelectorAll('li > p, li > div')).forEach(function (el) {
+    var frag = body.ownerDocument.createDocumentFragment();
+    if (el.previousSibling) frag.appendChild(body.ownerDocument.createElement('br'));
+    while (el.firstChild) frag.appendChild(el.firstChild);
+    el.parentNode.replaceChild(frag, el);
+  });
+  var mark = function (el, before, after) {
+    if (before) el.insertBefore(body.ownerDocument.createTextNode(before), el.firstChild);
+    if (after) el.appendChild(body.ownerDocument.createTextNode(after));
+  };
+  Array.prototype.slice.call(body.querySelectorAll('br')).forEach(function (n) { n.parentNode.replaceChild(body.ownerDocument.createTextNode('\n'), n); });
+  Array.prototype.slice.call(body.querySelectorAll('a[href]')).forEach(function (a) {
+    var href = String(a.getAttribute('href') || '').trim(), tx = (a.textContent || '').trim();
+    if (/^(https?:|mailto:)/i.test(href) && tx !== href && tx !== href.replace(/^mailto:/i, '')) mark(a, '', tx ? ' (' + href + ')' : href);
+  });
+  Array.prototype.slice.call(body.querySelectorAll('ol')).forEach(function (ol) {
+    var n = 1;
+    Array.prototype.slice.call(ol.children).forEach(function (li) { if (li.tagName === 'LI') mark(li, (n++) + '. ', ''); });
+  });
+  Array.prototype.slice.call(body.querySelectorAll('ul')).forEach(function (ul) {
+    Array.prototype.slice.call(ul.children).forEach(function (li) { if (li.tagName === 'LI') mark(li, '- ', ''); });
+  });
+  Array.prototype.slice.call(body.querySelectorAll('li,tr')).forEach(function (el) { mark(el, '\u0001', '\u0001'); });
+  Array.prototype.slice.call(body.querySelectorAll('td,th')).forEach(function (el) { mark(el, '', ' '); });
+  Array.prototype.slice.call(body.querySelectorAll('p,div,h1,h2,h3,h4,h5,h6,blockquote,pre,ul,ol,table,figure,figcaption,section,article,header,footer,hr')).forEach(function (el) { mark(el, '\u0002', '\u0002'); });
+
+  var t = (body.textContent || '').replace(/[\u0001\u0002]*\u0002[\u0001\u0002]*/g, '\n\n').replace(/\u0001+/g, '\n');
+  return _crbxNorm(t);
+}
+function _crbxHtml(text) {
+  var t = _crbxNorm(text);
+  if (!t) return '';
+  var inline = function (s) {
+    var out = '', last = 0, m, re = /https?:\/\/[^\s<>()"'`]*[^\s<>()"'`.,;:!?]/g;
+    while ((m = re.exec(s))) {
+      if (m.index > 0 && !/[\s(]/.test(s.charAt(m.index - 1))) continue;
+      out += _escHtml(s.slice(last, m.index)) + '<a href="' + _escHtml(m[0]) + '">' + _escHtml(m[0]) + '</a>';
+      last = m.index + m[0].length;
+    }
+    return out + _escHtml(s.slice(last));
+  };
+  return t.split(/\n{2,}/).map(function (para) {
+    var lines = para.split('\n');
+    if (lines.every(function (l) { return /^[-*\u2022]\s+\S/.test(l); })) {
+      return '<ul>' + lines.map(function (l) { return '<li>' + inline(l.replace(/^[-*\u2022]\s+/, '')) + '</li>'; }).join('') + '</ul>';
+    }
+    if (lines.every(function (l) { return /^\d{1,3}[.)]\s+\S/.test(l); })) {
+      return '<ol>' + lines.map(function (l) { return '<li>' + inline(l.replace(/^\d{1,3}[.)]\s+/, '')) + '</li>'; }).join('') + '</ol>';
+    }
+    return '<p>' + lines.map(inline).join('<br>') + '</p>';
+  }).join('');
+}
+function _crbxBool(v, dflt) {
+  if (v === true || v === false) return v;
+  var s = String(v == null ? '' : v).trim().toLowerCase();
+  if (!s) return dflt;
+  if (['yes', 'y', 'true', '1', 'x', 'on', '\u2713', '\u2714'].indexOf(s) >= 0) return true;
+  if (['no', 'n', 'false', '0', 'off', '-'].indexOf(s) >= 0) return false;
+  return null;
+}
+function _crbxKind(v) {
+  var s = String(v == null ? '' : v).toLowerCase().replace(/[^a-z]/g, '');
+  if (!s) return '';
+  if (s === 'checklist' || s === 'checklists') return 'checklist';
+  if (s === 'runbook' || s === 'runbooks') return 'runbook';
+  return null;
+}
+function _crbxNameKey(name) { return String(name == null ? '' : name).replace(/\s+/g, ' ').trim().toLowerCase(); }
+function _crbxKey(name, kind) { return kind + '\u0000' + _crbxNameKey(name); }
+function _crbxHas(o) {
+  for (var i = 1; i < arguments.length; i++) {
+    if (Object.prototype.hasOwnProperty.call(o, arguments[i]) && o[arguments[i]] !== undefined) return true;
+  }
+  return false;
+}
+var _CRBX_REFUSED = typeof WeakMap === 'function' ? new WeakMap() : null;
+function _crbxRefuse(l, why) { if (_CRBX_REFUSED && l && typeof l === 'object') _CRBX_REFUSED.set(l, why); return l; }
+function _crbxRefusal(l) { return _CRBX_REFUSED && l && typeof l === 'object' ? (_CRBX_REFUSED.get(l) || '') : ''; }
+function _crbxOr(words) { return words.length < 2 ? (words[0] || '') : words.slice(0, -1).join(', ') + ' or ' + words[words.length - 1]; }
+function _crbxIn(raw, textOnly, kindHint) {
+  var M = _CRBX_MAX;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'is not a checklist' };
+  var name = String(raw.name == null ? '' : raw.name).replace(/\s+/g, ' ').trim();
+  if (!name) return { error: 'has no name' };
+  if (name.length > M.name) return { error: 'has a name longer than ' + M.name + ' characters', name: name.slice(0, 60) + '\u2026' };
+  var kind = _crbxKind(raw.kind == null ? raw.type : raw.kind);
+  if (kind === null) return { error: 'is a "' + String(raw.kind == null ? raw.type : raw.kind).slice(0, 30) + '": the type is Checklist or Runbook', name: name };
+  kind = kind || kindHint || 'checklist';
+  var said = {
+    description: _crbxHas(raw, 'description'), phase_hint: _crbxHas(raw, 'phase_hint', 'phase'), source_url: _crbxHas(raw, 'source_url', 'reference'),
+    client_visible: _crbxHas(raw, 'client_visible'), audit_ticks: _crbxHas(raw, 'audit_ticks'),
+
+    items: Array.isArray(raw.items) && raw.items.length > 0
+  };
+  var cv = _crbxBool(said.client_visible ? raw.client_visible : '', false), at = _crbxBool(said.audit_ticks ? raw.audit_ticks : '', false);
+  if (cv === null) return { error: 'says "' + String(raw.client_visible).slice(0, 20) + '" for Visible to clients, where Yes or No is asked', name: name };
+  if (at === null) return { error: 'says "' + String(raw.audit_ticks).slice(0, 20) + '" for Record who ticked, where Yes or No is asked', name: name };
+  var descRaw = String(raw.description == null ? '' : raw.description);
+  if (descRaw.length > M.text) return { error: 'has a description longer than ' + M.text + ' characters', name: name };
+  var desc = _crbxPlain(descRaw, !textOnly);
+  var list = raw.items == null ? [] : raw.items;
+  if (!Array.isArray(list)) return { error: 'has items that are not a list', name: name };
+  if (list.length > M.items) return { error: 'has ' + list.length + ' items, and ' + M.items + ' is the most one holds', name: name };
+  var warnings = [], out = [];
+  for (var i = 0; i < list.length; i++) {
+    var it = list[i];
+    if (!it || typeof it !== 'object' || Array.isArray(it)) return { error: 'has an item (number ' + (i + 1) + ') that is not an item', name: name };
+
+    var richRaw = kind === 'runbook' ? (it.body != null && it.body !== '' ? it.body : it.description) : (it.description != null && it.description !== '' ? it.description : it.body);
+    richRaw = String(richRaw == null ? '' : richRaw);
+    var expRaw = String(it.expected_output == null ? '' : it.expected_output);
+    var titleRaw = String(it.title == null ? '' : it.title);
+    var cmdRaw = kind === 'runbook'
+      ? (Array.isArray(it.commands) ? it.commands.map(function (c) { return String(c == null ? '' : c); }) : String(it.commands == null ? '' : it.commands).split(/\r?\n/))
+      : [];
+    var linkRaw = kind === 'checklist' ? String(it.ref_url == null || it.ref_url === '' ? (it.link == null ? '' : it.link) : it.ref_url) : '';
+    if (richRaw.length > M.text || expRaw.length > M.text || cmdRaw.join('\n').length > M.text) return { error: 'has an item (number ' + (i + 1) + ') longer than ' + M.text + ' characters', name: name };
+    var title = titleRaw.length > M.text ? titleRaw : (textOnly ? titleRaw.replace(/\s+/g, ' ') : titleRaw.replace(/[\r\n]+/g, ' ')).trim();
+    if (title.length > M.title) return { error: 'has an item (number ' + (i + 1) + ') whose title is longer than ' + M.title + ' characters', name: name };
+    var cmds = cmdRaw.map(function (c) { return c.trim(); }).filter(Boolean);
+    if (cmds.length > M.commands) return { error: 'has a step (number ' + (i + 1) + ') with more than ' + M.commands + ' commands', name: name };
+    var exp = kind === 'runbook' ? _crbxPlain(expRaw, !textOnly) : '';
+    var link = linkRaw.trim();
+    var text = textOnly ? _crbxNorm(richRaw) : '';
+    if (!title && !(textOnly ? text : _crbxText(richRaw)) && !cmds.length && !exp.trim() && !link) continue;
+    if (link && (link.length > M.url || !_crbSafeUrl(link))) { warnings.push('item ' + (i + 1) + '\u2019s link is not a web address, so it is left out'); link = ''; }
+    var id = String(it.id == null ? '' : it.id).trim();
+    if (id && !/^[A-Za-z0-9_-]{1,64}$/.test(id)) id = '';
+    out.push({ id: id, title: title, rich: textOnly ? null : richRaw, text: text, commands: cmds, expected_output: exp, ref_url: link ? _crbSafeUrl(link) : '',
+      said: { title: _crbxHas(it, 'title'), desc: _crbxHas(it, 'description', 'body'), link: _crbxHas(it, 'ref_url', 'link'),
+              commands: _crbxHas(it, 'commands'), expected: _crbxHas(it, 'expected_output') } });
+  }
+  var srcUrl = String(raw.source_url == null ? (raw.reference == null ? '' : raw.reference) : raw.source_url).trim();
+  if (srcUrl && (srcUrl.length > M.url || !_crbSafeUrl(srcUrl))) { warnings.push('its reference is not a web address, so it is left out'); srcUrl = ''; }
+  var src = String(raw.source == null ? '' : raw.source).trim();
+  return { value: {
+    kind: kind, name: name, description: desc,
+    phase_hint: String(raw.phase_hint == null ? (raw.phase == null ? '' : raw.phase) : raw.phase_hint).replace(/\s+/g, ' ').trim().slice(0, 200),
+    source: /^[a-z0-9_]{1,64}$/.test(src) ? src : '',
+    source_url: srcUrl ? _crbSafeUrl(srcUrl) : '',
+    client_visible: cv, audit_ticks: at, items: out, said: said
+  }, warnings: warnings };
+}
+var _CRBX_FIELD_WORDS = { description: 'description', phase_hint: 'phase', source_url: 'reference', client_visible: 'Visible to clients', audit_ticks: 'Record who ticked' };
+function _crbxPlan(rawList, textOnly) {
+  var have = (S.data.checklists_runbooks || []).filter(Boolean);
+  var kindOf = function (t) { return t.kind === 'runbook' ? 'runbook' : 'checklist'; };
+  var refused = [], entries = [], seen = Object.create(null);
+  if (!Array.isArray(rawList)) rawList = [];
+  if (rawList.length > _CRBX_MAX.lists) {
+    refused.push({ name: 'The file', why: 'holds ' + rawList.length + ' checklists; ' + _CRBX_MAX.lists + ' at a time' });
+    return { entries: entries, refused: refused };
+  }
+  var refuse = function (name, why) {
+    if (!refused.some(function (r) { return r.name === name && r.why === why; })) refused.push({ name: name, why: why });
+  };
+  rawList.forEach(function (raw, n) {
+    var shown = raw && typeof raw === 'object' && String(raw.name == null ? '' : raw.name).trim() ? String(raw.name).replace(/\s+/g, ' ').trim().slice(0, 80) : 'Number ' + (n + 1);
+    var why = _crbxRefusal(raw);
+    if (why) { refuse(shown, why); return; }
+
+    var hint = '';
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && _crbxKind(raw.kind == null ? raw.type : raw.kind) === '') {
+      var nk = _crbxNameKey(raw.name), kinds = [];
+      have.forEach(function (t) { if (_crbxNameKey(t.name) === nk && kinds.indexOf(kindOf(t)) < 0) kinds.push(kindOf(t)); });
+      if (kinds.length > 1) { refuse(shown, 'is the name of a checklist and of a runbook here, and the file does not say which it is: give it a Type'); return; }
+      hint = kinds[0] || '';
+    }
+    var r = _crbxIn(raw, textOnly, hint);
+    if (r.error) { refuse(r.name || shown, r.error); return; }
+    var v = r.value, k = _crbxKey(v.name, v.kind);
+    if (seen[k]) { refuse(v.name, 'is in the file twice, and the first is the one imported'); return; }
+    seen[k] = true;
+    var exAll = have.filter(function (t) { return _crbxKey(t.name, kindOf(t)) === k; });
+    if (exAll.length > 1) {
+      refuse(v.name, 'is the name of ' + exAll.length + ' ' + (v.kind === 'runbook' ? 'runbooks' : 'checklists') + ' here, so which to update cannot be told: rename one of them first');
+      return;
+    }
+    var ex = exAll[0] || null;
+    var exItems = (ex && Array.isArray(ex.items) ? ex.items : []).filter(function (x) { return x && x.id; });
+    var warnings = (r.warnings || []).slice(), keep = [];
+    if (ex) {
+      var unsaid = Object.keys(_CRBX_FIELD_WORDS).filter(function (f) { return !v.said[f]; });
+      if (unsaid.length) {
+        keep = unsaid.slice();
+        warnings.push('the file does not give its ' + _crbxOr(unsaid.map(function (f) { return _CRBX_FIELD_WORDS[f]; })) + ', so '
+          + (unsaid.length === 1 ? 'that stays as it is' : 'those stay as they are'));
+      }
+    }
+    var items, kept = 0, added = 0, removed = 0;
+    if (ex && !v.said.items) {
+
+      keep.push('items');
+      items = Array.isArray(ex.items) ? ex.items : [];
+      kept = exItems.length;
+    } else {
+
+      var used = Object.create(null), ids = Object.create(null), matchOf = [];
+      v.items.forEach(function (it, i) {
+        matchOf[i] = null;
+        if (!it.id) return;
+        var m = exItems.find(function (x) { return x.id === it.id && !used[x.id]; });
+        if (m) { matchOf[i] = m; used[m.id] = true; }
+      });
+      v.items.forEach(function (it, i) {
+        if (matchOf[i] || !it.title) return;
+        var lc = it.title.replace(/\s+/g, ' ').trim().toLowerCase();
+        var m = exItems.find(function (x) { return !used[x.id] && String(x.title || '').replace(/\s+/g, ' ').trim().toLowerCase() === lc; });
+        if (m) { matchOf[i] = m; used[m.id] = true; }
+      });
+      var taken = function (id) { return ids[id] || exItems.some(function (x) { return x.id === id; }); };
+      items = v.items.map(function (it, i) {
+        var match = matchOf[i], id;
+        if (match) { id = match.id; kept++; }
+        else {
+
+          id = it.id && !taken(it.id) ? it.id : _genItemId();
+          while (taken(id)) id = _genItemId();
+          added++;
+        }
+        ids[id] = true;
+        var old = match ? String((v.kind === 'runbook' ? match.body : match.description) || '') : '';
+        var rich;
+        if (match && !it.said.desc) rich = old;
+
+        else if (it.rich != null) rich = String(it.rich).replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, '');
+        else rich = match && _crbxText(old) === it.text ? old : _crbxHtml(it.text);
+        var o = { id: id, title: match && !it.said.title ? String(match.title || '') : it.title };
+        if (v.kind === 'runbook') {
+          o.body = rich;
+          o.commands = match && !it.said.commands ? (Array.isArray(match.commands) ? match.commands : []) : it.commands;
+          o.expected_output = match && !it.said.expected ? String(match.expected_output || '') : it.expected_output;
+        } else {
+          o.description = rich;
+          o.ref_url = match && !it.said.link ? String(match.ref_url || '') : it.ref_url;
+        }
+        return _crbSanitiseItem(v.kind, o);
+      });
+      removed = exItems.filter(function (x) { return !used[x.id]; }).length;
+    }
+    var mine = function (f, val) { return ex && keep.indexOf(f) >= 0 ? ex[f] : val; };
+    entries.push({
+      action: ex ? 'update' : 'add', existing: ex, kept: kept, added: added, removed: removed, warnings: warnings, keep: keep,
+      row: {
+        kind: v.kind, name: v.name,
+        description: mine('description', v.description || null), phase_hint: mine('phase_hint', v.phase_hint || null),
+
+        source: ex ? (ex.source || 'custom') : (v.source || 'custom'),
+        source_url: mine('source_url', v.source_url || null),
+        client_visible: !!mine('client_visible', v.client_visible), audit_ticks: !!mine('audit_ticks', v.audit_ticks),
+        items: items
+      }
+    });
+  });
+  return { entries: entries, refused: refused };
+}
+async function _crbxApply(plan) {
+  var done = { added: 0, updated: 0, failed: [] };
+  var entries = (plan && plan.entries) || [];
+  for (var i = 0; i < entries.length; i++) {
+    var e = entries[i], payload = Object.assign({}, e.row), res = null;
+    try {
+      if (e.action === 'update' && e.existing && e.existing.id) {
+        (e.keep || []).forEach(function (f) { delete payload[f]; });
+        res = await supabaseClient.from('checklists_runbooks').update(payload).eq('id', e.existing.id).select('*');
+      } else {
+        payload.created_by = S.profile ? S.profile.id : null;
+        res = await supabaseClient.from('checklists_runbooks').insert(payload).select('*');
+      }
+    } catch (err) { res = { error: err }; }
+    var row = res && !res.error && res.data && res.data[0];
+    if (!row) {
+      done.failed.push({ name: e.row.name, why: res && res.error ? _errMsg(res.error) : 'your database did not keep it', entry: e });
+      continue;
+    }
+    if (!Array.isArray(S.data.checklists_runbooks)) S.data.checklists_runbooks = [];
+    var arr = S.data.checklists_runbooks;
+    var at = arr.findIndex(function (t) { return t.id === row.id; });
+    if (at >= 0) arr[at] = row; else arr.push(row);
+    if (e.action === 'update') done.updated++; else done.added++;
+  }
+  return done;
+}
+function _crbxJson(list) {
+  return JSON.stringify({ format: _CRBX_FORMAT, version: 1, exported_at: new Date().toISOString(),
+    from: (S.data.settings || {}).company_name || '', checklists: list }, null, 2) + '\n';
+}
+function _crbxReadJson(text) {
+  var data;
+  try { data = JSON.parse(String(text == null ? '' : text).replace(/^\ufeff/, '')); }
+  catch (e) { throw new Error(_forPeople('This is not a JSON file Pental can read: it breaks off or is not JSON.')); }
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object') {
+    if (Array.isArray(data.checklists)) return data.checklists;
+    if (data.name !== undefined || data.items !== undefined) return [data];
+  }
+  throw new Error(_forPeople('This JSON file holds no checklists. Pental writes them as {"format": "' + _CRBX_FORMAT + '", "checklists": [ ... ]}.'));
+}
+var _CRBX_COLS = {
+  name: ['name', 'checklistname', 'runbookname', 'templatename'],
+  list: ['checklist', 'runbook', 'checklistname', 'runbookname', 'checklistorrunbook', 'template', 'templatename'],
+  kind: ['type', 'kind'],
+  phase: ['phase', 'phasehint', 'phasetype'],
+  description: ['description', 'details', 'body', 'notes', 'guidance'],
+  link: ['referencelink', 'reference', 'link', 'url', 'referenceurl', 'sourceurl', 'reflink'],
+  client_visible: ['visibletoclients', 'clientvisible', 'visibletoclient', 'visible'],
+  audit_ticks: ['recordwhoticked', 'auditticks', 'audittrail', 'audited', 'audit'],
+  id: ['itemid', 'stepid', 'id'],
+  title: ['title', 'item', 'step', 'check', 'itemtitle', 'steptitle'],
+  commands: ['commands', 'command'],
+  expected_output: ['expectedoutput', 'expected', 'expectedresult']
+};
+function _crbxHead(t) { return String(t == null ? '' : t).toLowerCase().replace(/[^a-z]/g, ''); }
+function _crbxColsOf(heads, keys) {
+  var at = {};
+  keys.forEach(function (key) {
+    for (var c = 0; c < heads.length; c++) {
+      if (heads[c] != null && _CRBX_COLS[key].indexOf(_crbxHead(heads[c])) >= 0) { at[key] = c; return; }
+    }
+  });
+  return at;
+}
+function _crbxCell(v, wantLink) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number') return String(v);
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  if (v instanceof Date) return _isoDay(v);
+  if (typeof v === 'object') {
+    if (wantLink && typeof v.hyperlink === 'string' && v.hyperlink) return v.hyperlink;
+    if (Array.isArray(v.richText)) return v.richText.map(function (r) { return (r && r.text) || ''; }).join('');
+    if (v.text != null) return typeof v.text === 'string' ? v.text : _crbxCell(v.text);
+    if (v.result != null) return _crbxCell(v.result);
+    return '';
+  }
+  return String(v);
+}
+async function _crbxUnpackable(buf) {
+  await _loadDocxLibs();
+  var z;
+  try { z = new PizZip(buf); } catch (e) { return; }
+  var n = 0;
+  Object.keys(z.files).forEach(function (k) {
+    var d = z.files[k] && z.files[k]._data;
+    if (d && typeof d.uncompressedSize === 'number' && d.uncompressedSize > 0) n += d.uncompressedSize;
+  });
+  if (n > _CRBX_MAX.unpacked) throw new Error(_forPeople('This file unpacks to more than ' + Math.round(_CRBX_MAX.unpacked / 1048576) + ' MB, far more than checklists need, so it is not read.'));
+}
+async function _crbxReadXlsx(buf) {
+  await _crbxUnpackable(buf);
+  var ExcelJS = await _ensureExcelJs();
+  var wb = new ExcelJS.Workbook();
+  try { await wb.xlsx.load(buf); }
+  catch (e) { throw new Error(_forPeople('This is not an Excel workbook Pental can read.')); }
+  var lists = [], rows = [];
+  wb.eachSheet(function (ws) {
+    var sheet = String(ws.name || '').trim();
+    if (/^(how to use|read ?me|instructions|example\b.*)$/i.test(sheet)) return;
+    var heads = [];
+    ws.getRow(1).eachCell({ includeEmpty: true }, function (c, col) { heads[col] = _crbxCell(c.value); });
+    var hasTitle = heads.some(function (h) { return h != null && _CRBX_COLS.title.indexOf(_crbxHead(h)) >= 0; });
+
+    if (hasTitle) {
+      var at = _crbxColsOf(heads, ['list', 'kind', 'phase', 'id', 'title', 'description', 'link', 'commands', 'expected_output', 'client_visible', 'audit_ticks']);
+      ws.eachRow(function (row, n) {
+        if (n === 1) return;
+        var g = function (k) { return at[k] == null ? undefined : _crbxCell(row.getCell(at[k]).value, k === 'link'); };
+        rows.push({ list: at.list == null ? sheet : g('list'), kind: g('kind'), phase: g('phase'), client_visible: g('client_visible'), audit_ticks: g('audit_ticks'),
+          item: { id: g('id'), title: g('title'), description: g('description'), ref_url: g('link'), commands: g('commands'), expected_output: g('expected_output') } });
+      });
+    } else {
+      var at2 = _crbxColsOf(heads, ['name', 'kind', 'phase', 'description', 'link', 'client_visible', 'audit_ticks']);
+      if (at2.name == null) return;
+      ws.eachRow(function (row, n) {
+        if (n === 1) return;
+        var g = function (k) { return at2[k] == null ? undefined : _crbxCell(row.getCell(at2[k]).value, k === 'link'); };
+        if (!String(g('name') || '').trim()) return;
+        lists.push({ name: g('name'), kind: g('kind'), phase_hint: g('phase'), description: g('description'), source_url: g('link'),
+          client_visible: g('client_visible'), audit_ticks: g('audit_ticks'), items: [] });
+      });
+    }
+  });
+
+  var groups = Object.create(null), order = [];
+  var grp = function (name) {
+    var nk = _crbxNameKey(name);
+    if (!nk) return null;
+    if (!groups[nk]) { groups[nk] = { lists: [], rows: [] }; order.push(nk); }
+    return groups[nk];
+  };
+  lists.forEach(function (l) { var g = grp(l.name); if (g) g.lists.push(l); });
+  rows.forEach(function (r) { var g = grp(r.list); if (g) g.rows.push(r); });
+  var out = [];
+  var made = function (r, kind) {
+    return { name: r.list, kind: kind, phase_hint: r.phase, client_visible: r.client_visible, audit_ticks: r.audit_ticks, items: [] };
+  };
+  order.forEach(function (nk) {
+    var g = groups[nk];
+    var refuseAll = function (why) {
+      (g.lists.length ? g.lists : [{ name: g.rows[0].list, items: [] }]).forEach(function (l) { out.push(_crbxRefuse(l, why)); });
+    };
+    var bad = g.rows.filter(function (r) { return _crbxKind(r.kind) === null; })[0];
+    if (bad) { refuseAll('has an item whose Type is "' + String(bad.kind).slice(0, 30) + '": the type is Checklist or Runbook'); return; }
+    var said = [];
+    g.lists.concat(g.rows).forEach(function (x) { var kd = _crbxKind(x.kind); if (kd && said.indexOf(kd) < 0) said.push(kd); });
+    if (said.length < 2) {
+      if (g.lists.length > 1) { refuseAll('is on the Checklists sheet more than once, so which items are whose cannot be told: give each its own name'); return; }
+      var l = g.lists[0] || made(g.rows[0], said[0] || g.rows[0].kind);
+      if (!_crbxKind(l.kind) && said[0]) l.kind = said[0];
+      g.rows.forEach(function (r) { l.items.push(r.item); });
+      out.push(l);
+      return;
+    }
+    if (g.lists.concat(g.rows).some(function (x) { return !_crbxKind(x.kind); })) {
+      refuseAll('is the name of both a checklist and a runbook in this workbook, and not every row of it says which it is: fill in their Type');
+      return;
+    }
+    ['checklist', 'runbook'].forEach(function (kd) {
+      var ls = g.lists.filter(function (x) { return _crbxKind(x.kind) === kd; });
+      var rs = g.rows.filter(function (x) { return _crbxKind(x.kind) === kd; });
+      if (ls.length > 1) {
+        ls.forEach(function (x) { out.push(_crbxRefuse(x, 'is on the Checklists sheet more than once as a ' + kd + ', so which items are whose cannot be told: give each its own name')); });
+        return;
+      }
+      if (!ls.length && !rs.length) return;
+      var l2 = ls[0] || made(rs[0], kd);
+      rs.forEach(function (r) { l2.items.push(r.item); });
+      out.push(l2);
+    });
+  });
+  if (!out.length) throw new Error(_forPeople('No checklists found in this workbook. Pental reads a sheet with a Name column (a row for each checklist) and a sheet with Checklist and Title columns (a row for each item), as its own workbook has them.'));
+  return out;
+}
+async function _crbxXlsx(list, opts) {
+  opts = opts || {};
+  var ExcelJS = await _ensureExcelJs();
+  var wb = new ExcelJS.Workbook();
+  wb.creator = (S.data.settings || {}).company_name || 'Pental';
+  wb.created = new Date();
+  var acc = 'FF' + _crbxAccent();
+  var lists = [
+    { header: 'Name', key: 'name', width: 38 }, { header: 'Type', key: 'kind', width: 12 }, { header: 'Phase', key: 'phase', width: 24 },
+    { header: 'Description', key: 'description', width: 60 }, { header: 'Reference link', key: 'link', width: 40 },
+    { header: 'Visible to clients', key: 'client_visible', width: 18 }, { header: 'Record who ticked', key: 'audit_ticks', width: 18 }
+  ];
+  var items = [
+    { header: 'Checklist', key: 'list', width: 38 }, { header: 'Type', key: 'kind', width: 12 }, { header: 'Item ID', key: 'id', width: 14 }, { header: 'Title', key: 'title', width: 42 },
+    { header: 'Description', key: 'description', width: 70 }, { header: 'Reference link', key: 'link', width: 40 },
+    { header: 'Commands', key: 'commands', width: 40 }, { header: 'Expected output', key: 'expected_output', width: 40 }
+  ];
+  var sheet = function (title, cols, data) {
+    var ws = wb.addWorksheet(title, { views: [{ state: 'frozen', ySplit: 1 }] });
+    ws.columns = cols.map(function (c) { return { header: c.header, key: c.key, width: c.width }; });
+    var h = ws.getRow(1);
+    h.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    h.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: acc } };
+    h.alignment = { vertical: 'middle' };
+    h.height = 20;
+    data.forEach(function (r) { ws.addRow(r).alignment = { vertical: 'top', wrapText: true }; });
+    return ws;
+  };
+  var rowsOf = function (src) {
+    var a = [], b = [];
+    src.forEach(function (t) {
+      var rb = t.kind === 'runbook';
+      a.push({ name: t.name, kind: rb ? 'Runbook' : 'Checklist', phase: t.phase_hint || '', description: t.description || '', link: t.source_url || '',
+        client_visible: t.client_visible ? 'Yes' : 'No', audit_ticks: t.audit_ticks ? 'Yes' : 'No' });
+      (t.items || []).forEach(function (it) {
+        b.push({ list: t.name, kind: rb ? 'Runbook' : 'Checklist', id: it.id || '', title: it.title || '', description: _crbxText(rb ? it.body : it.description),
+          link: rb ? '' : (it.ref_url || ''), commands: rb ? (it.commands || []).join('\n') : '', expected_output: rb ? (it.expected_output || '') : '' });
+      });
+    });
+    return [a, b];
+  };
+  var main = rowsOf(list);
+  var wsL = sheet('Checklists', lists, main[0]);
+  var wsI = sheet('Items', items, main[1]);
+
+  var offer = function (ws, range, v) {
+    if (ws.dataValidations && typeof ws.dataValidations.add === 'function') { ws.dataValidations.add(range, v); return; }
+    var m = /^([A-Z])(\d+):[A-Z](\d+)$/.exec(range);
+    for (var r = +m[2]; r <= +m[3]; r++) ws.getCell(m[1] + r).dataValidation = v;
+  };
+  offer(wsL, 'B2:B1000', { type: 'list', allowBlank: true, formulae: ['"Checklist,Runbook"'] });
+  offer(wsL, 'F2:F1000', { type: 'list', allowBlank: true, formulae: ['"Yes,No"'] });
+  offer(wsL, 'G2:G1000', { type: 'list', allowBlank: true, formulae: ['"Yes,No"'] });
+  offer(wsI, 'A2:A1000', { type: 'list', allowBlank: true, formulae: ['Checklists!$A$2:$A$1000'], showErrorMessage: false });
+  offer(wsI, 'B2:B1000', { type: 'list', allowBlank: true, formulae: ['"Checklist,Runbook"'] });
+  if (opts.blank) {
+    var ex = rowsOf(_crbxExample());
+    sheet('Example checklists', lists, ex[0]);
+    sheet('Example items', items, ex[1]);
+  }
+  var how = wb.addWorksheet('How to use');
+  how.getColumn(1).width = 110;
+  _crbxHowTo().forEach(function (line, i) {
+    var row = how.addRow([line]);
+    row.alignment = { wrapText: true, vertical: 'top' };
+    if (i === 0) row.font = { bold: true, size: 13 };
+  });
+  return wb.xlsx.writeBuffer();
+}
+function _crbxHowTo() {
+  return [
+    'Checklists and runbooks, for Pental',
+    'Checklists sheet: a row for each checklist or runbook. Name and Type (Checklist or Runbook) are needed; the rest may be left blank.',
+    'Items sheet: a row for each item of a checklist, or each step of a runbook, in order. Checklist is the name of the one it belongs to, as on the Checklists sheet, and Type says which where a checklist and a runbook share that name.',
+    'Item ID: leave it as it is on an item Pental wrote, so the ticks already made on it are kept. Leave it empty on a new item.',
+    'Description: plain text. A blank line starts a new paragraph, and lines that begin "- " or "1. " are a list.',
+    'Reference link: a web address (https://...). Commands (one to a line) and Expected output are for a runbook\u2019s steps.',
+    'Visible to clients and Record who ticked: Yes or No.',
+    'A column left out changes nothing: what it would hold stays as it is on the ones already in Pental. One with no rows on the Items sheet keeps its items.',
+    'The Example sheets show both filled in. They are not imported.',
+    'To import: Checklists & Runbooks, Import and export, Choose a file. One whose name and type are already in Pental is updated, keeping its ticks; the rest are added. What will change is shown before anything is saved.'
+  ];
+}
+function _crbxAccent() {
+  try { _setDocxTheme(getTemplate('report') || {}); } catch (e) {}
+  return _draftAccent();
+}
+function _crbxLayoutBlob() {
+  var AC = _crbxAccent(), INK = '0F172A', MUTED = '64748B', LINE = 'E2E8F0', SHADE = 'F4F6F9';
+  var R = function (t, o) { return _draftRun(t, o || {}); };
+  var P = function (runs, o) {
+    o = o || {};
+    return '<w:p><w:pPr>' + (o.style ? '<w:pStyle w:val="' + o.style + '"/>' : '') + (o.keepNext ? '<w:keepNext/>' : '')
+      + '<w:spacing w:before="' + (o.before || 0) + '" w:after="' + (o.after == null ? 0 : o.after) + '"/></w:pPr>' + runs + '</w:p>';
+  };
+  var tc = function (w, runs, o) {
+    o = o || {};
+    return '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/>' + (o.fill ? '<w:shd w:val="clear" w:color="auto" w:fill="' + o.fill + '"/>' : '') + '</w:tcPr>'
+      + P(runs, { after: 40, before: 40 }) + '</w:tc>';
+  };
+  var table = function (widths, rows) {
+    return '<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="' + widths.reduce(function (a, b) { return a + b; }, 0) + '" w:type="dxa"/><w:tblLayout w:type="fixed"/>'
+      + '<w:tblBorders>' + ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(function (s) { return '<w:' + s + ' w:val="single" w:sz="4" w:space="0" w:color="' + LINE + '"/>'; }).join('') + '</w:tblBorders>'
+      + '</w:tblPr><w:tblGrid>' + widths.map(function (w) { return '<w:gridCol w:w="' + w + '"/>'; }).join('') + '</w:tblGrid>' + rows + '</w:tbl>';
+  };
+  var tr = function (cells, head) { return '<w:tr><w:trPr>' + (head ? '<w:tblHeader/>' : '') + '<w:cantSplit/></w:trPr>' + cells + '</w:tr>'; };
+  var label = function (t) { return R(t, { bold: true, color: MUTED, size: 18 }); };
+  var headCell = function (w, t) { return tc(w, R(t, { bold: true, color: 'FFFFFF', size: 18 }), { fill: AC }); };
+  var details = [['Name', '{name}'], ['Type', '{kind_label}'], ['Phase', '{phase}'], ['Description', '{description}'], ['Reference', '{reference}'],
+    ['Visible to clients', '{client_visible}'], ['Record who ticked', '{audit_ticks}']];
+  var detailRows = details.map(function (d) { return tr(tc(2600, label(d[0]), { fill: SHADE }) + tc(7038, R(d[1], { size: 19 }))); }).join('');
+  var cW = [500, 1150, 2600, 3788, 1600];
+  var checklistTable = table(cW,
+    tr(headCell(cW[0], '#') + headCell(cW[1], 'ID') + headCell(cW[2], 'Item') + headCell(cW[3], 'Description') + headCell(cW[4], 'Reference link'), true)
+    + tr(tc(cW[0], R('{#items}{n}', { color: MUTED, size: 18 })) + tc(cW[1], R('{id}', { color: MUTED, size: 16 })) + tc(cW[2], R('{title}', { bold: true, size: 19 }))
+      + tc(cW[3], R('{description}', { size: 19 })) + tc(cW[4], R('{link}{/items}', { color: AC, size: 17 }))));
+  var rW = [500, 1050, 2000, 2888, 1800, 1400];
+  var runbookTable = table(rW,
+    tr(headCell(rW[0], '#') + headCell(rW[1], 'ID') + headCell(rW[2], 'Step') + headCell(rW[3], 'Description') + headCell(rW[4], 'Commands') + headCell(rW[5], 'Expected output'), true)
+    + tr(tc(rW[0], R('{#items}{n}', { color: MUTED, size: 18 })) + tc(rW[1], R('{id}', { color: MUTED, size: 16 })) + tc(rW[2], R('{title}', { bold: true, size: 19 }))
+      + tc(rW[3], R('{description}', { size: 19 })) + tc(rW[4], R('{commands}', { font: 'Consolas', size: 16 })) + tc(rW[5], R('{expected_output}{/items}', { size: 18 }))));
+  var body = P(R('{document_title}'), { style: 'Title' })
+    + P(R('{company_name}') + R('   \u00b7   ', { color: 'CBD5E1' }) + R('{generated_on}'), { style: 'Subtitle', after: 240 })
+    + P(R('{#checklists}'))
+    + P(R('{name}'), { style: 'Heading1' })
+    + table([2600, 7038], detailRows)
+    + P('', { after: 200 })
+    + P(R('{#is_checklist}'))
+    + checklistTable
+    + P(R('{/is_checklist}'))
+    + P(R('{#is_runbook}'))
+    + runbookTable
+    + P(R('{/is_runbook}'))
+    + P(R('{#page_break}'))
+    + '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'
+    + P(R('{/page_break}'))
+    + P(R('{/checklists}'));
+  var header = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:pStyle w:val="Header"/>'
+    + '<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="8" w:color="' + LINE + '"/></w:pBdr></w:pPr>'
+    + R('{company_name}', { bold: true, caps: true, color: AC, track: 20, size: 14 }) + R('   /   ', { color: 'CBD5E1', size: 14 })
+    + R('{document_title}', { caps: true, color: MUTED, track: 20, size: 14 }) + '</w:p></w:hdr>';
+  return _buildMinimalDocx(body, header, _defaultFooterXml('checklist'), null, {});
+}
+async function _crbxLayoutBuf() {
+  await _ensurePdfTemplates();
+  if (_getDocxTemplateMeta('checklist')) {
+    var buf = await _fetchDocxTemplate('checklist');
+    if (!buf) throw new Error(_forPeople('Your Word layout could not be fetched. Upload it again, or go back to the built-in one.'));
+    return buf;
+  }
+  await _loadDocxLibs();
+  return await _crbxLayoutBlob().arrayBuffer();
+}
+function _crbxWordData(list, blank) {
+  var s = S.data.settings || {};
+  return {
+    company_name: s.company_name || '', company_ending: s.company_ending || '', company_website: s.company_website || '',
+    classification: '', client_name: '',
+    document_title: blank ? 'Checklists and runbooks to fill in' : (list.length === 1 ? list[0].name : 'Checklists and runbooks'),
+    generated_on: fmtDate(new Date()), count: String(list.length),
+    checklists: list.map(function (t, i) {
+      var rb = t.kind === 'runbook';
+      return {
+        name: t.name || '', kind_label: rb ? 'Runbook' : 'Checklist', is_checklist: !rb, is_runbook: rb,
+        phase: t.phase_hint || '', description: t.description || '', reference: t.source_url || '',
+        client_visible: t.client_visible ? 'Yes' : 'No', audit_ticks: t.audit_ticks ? 'Yes' : 'No',
+        item_count: String((t.items || []).length), page_break: i < list.length - 1,
+        items: (t.items || []).map(function (it, j) {
+          return { n: String(j + 1), id: it.id || '', title: it.title || '', description: _crbxText(rb ? it.body : it.description),
+            link: rb ? '' : (it.ref_url || ''), commands: rb ? (it.commands || []).join('\n') : '', expected_output: rb ? (it.expected_output || '') : '' };
+        })
+      };
+    })
+  };
+}
+async function _crbxDocx(list, blank, layoutBuf) {
+  await _loadDocxLibs();
+  var buf = layoutBuf || await _crbxLayoutBuf();
+  var zip = new PizZip(buf), doc;
+  var said = function (err) {
+    var errs = (err && err.properties && err.properties.errors) || [];
+    var parts = [];
+    errs.forEach(function (e) {
+      var p = (e && e.properties) || {};
+      var said = (p.explanation || (e && e.message) || 'a placeholder Word cannot fill') + (p.xtag ? ' [' + p.xtag + ']' : '');
+      if (parts.indexOf(said) < 0 && parts.length < 4) parts.push(said);
+    });
+    return new Error(_forPeople('This Word layout has placeholders that cannot be filled: ' + (parts.join('; ') || (err && err.message) || 'unknown') + '.'));
+  };
+  try {
+    doc = new window.docxtemplater(zip, _dtplOpts(zip, { paragraphLoop: true, linebreaks: true, nullGetter: function () { return ''; } }));
+    doc.render(_xmlSafeDeep(_crbxWordData(list, blank)));
+  } catch (e) {
+    if (e && /two kinds of placeholder/.test(e.message || '')) throw e;
+    throw said(e);
+  }
+  return doc.getZip().generate({ type: 'blob', mimeType: _CRBX_DOCX });
+}
+async function _crbxReadDocx(buf) {
+  await _crbxUnpackable(buf);
+  var zip;
+  try { zip = new PizZip(buf); } catch (e) { throw new Error(_forPeople('This is not a Word document Pental can read.')); }
+  var f = zip.file('word/document.xml');
+  if (!f) throw new Error(_forPeople('This is not a Word document Pental can read.'));
+  var xml = new DOMParser().parseFromString(f.asText(), 'application/xml');
+  if (xml.getElementsByTagName('parsererror').length) throw new Error(_forPeople('This Word document could not be read.'));
+  var W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  var isW = function (n, name) { return n && n.nodeType === 1 && n.namespaceURI === W && n.localName === name; };
+  var paraText = function (p) {
+    var t = '';
+    var walk = function (n) {
+      Array.prototype.forEach.call(n.childNodes, function (c) {
+        if (c.nodeType !== 1) return;
+        if (c.namespaceURI === W) {
+          if (c.localName === 't') t += c.textContent;
+          else if (c.localName === 'tab') t += ' ';
+          else if (c.localName === 'br' || c.localName === 'cr') { if (c.getAttributeNS(W, 'type') !== 'page') t += '\n'; }
+          else if (c.localName === 'del' || c.localName === 'delText' || c.localName === 'instrText' || c.localName === 'txbxContent') return;
+          else walk(c);
+        } else if (c.localName !== 'Fallback') walk(c);
+      });
+    };
+    walk(p);
+    return t;
+  };
+  var cellText = function (tc) {
+    var lines = [];
+    var visit = function (n) {
+      Array.prototype.forEach.call(n.childNodes, function (c) {
+        if (c.nodeType !== 1 || isW(c, 'tbl')) return;
+        if (isW(c, 'p')) lines.push(paraText(c)); else visit(c);
+      });
+    };
+    visit(tc);
+    return lines.join('\n');
+  };
+  var rowsOf = function (tbl) {
+    var rows = [];
+    var visit = function (n) {
+      Array.prototype.forEach.call(n.childNodes, function (c) {
+        if (c.nodeType !== 1 || isW(c, 'tbl')) return;
+        if (isW(c, 'tr')) {
+          var cells = [];
+          var cv = function (m) { Array.prototype.forEach.call(m.childNodes, function (d) { if (d.nodeType !== 1 || isW(d, 'tbl')) return; if (isW(d, 'tc')) cells.push(cellText(d)); else cv(d); }); };
+          cv(c);
+          rows.push(cells);
+        } else visit(c);
+      });
+    };
+    visit(tbl);
+    return rows;
+  };
+  var tables = Array.prototype.filter.call(xml.getElementsByTagNameNS(W, 'tbl'), function (t) {
+    for (var p = t.parentNode; p; p = p.parentNode) if (isW(p, 'tbl')) return false;
+    return true;
+  });
+  var lists = [], cur = null, orphan = 0;
+  tables.forEach(function (tbl) {
+    var rows = rowsOf(tbl).filter(function (r) { return r.length; });
+    if (!rows.length) return;
+    var labels = rows.map(function (r) { return _crbxHead(r[0]); });
+    if (rows.every(function (r) { return r.length >= 2; }) && labels.indexOf('name') >= 0 && (labels.indexOf('type') >= 0 || labels.indexOf('kind') >= 0)) {
+
+      var val = function (keys) {
+        for (var i = 0; i < rows.length; i++) if (keys.indexOf(labels[i]) >= 0) return rows[i].slice(1).join('\n');
+        return undefined;
+      };
+      cur = { name: val(['name']), kind: val(['type', 'kind']), phase_hint: val(_CRBX_COLS.phase), description: val(_CRBX_COLS.description),
+        source_url: val(_CRBX_COLS.link), client_visible: val(_CRBX_COLS.client_visible), audit_ticks: val(_CRBX_COLS.audit_ticks), items: [] };
+      lists.push(cur);
+      return;
+    }
+    var head = rows[0].map(_crbxHead);
+    var col = function (keys) { for (var i = 0; i < head.length; i++) if (keys.indexOf(head[i]) >= 0) return i; return -1; };
+    var tcol = col(_CRBX_COLS.title);
+    if (tcol < 0) return;
+    if (!cur) { orphan++; return; }
+    var c = { id: col(_CRBX_COLS.id), description: col(_CRBX_COLS.description), link: col(_CRBX_COLS.link), commands: col(_CRBX_COLS.commands), expected: col(_CRBX_COLS.expected_output) };
+    rows.slice(1).forEach(function (r) {
+      var g = function (i) { return i < 0 ? undefined : (i < r.length ? r[i] : ''); };
+      var t = function (v) { return v === undefined ? undefined : String(v).trim(); };
+      cur.items.push({ id: t(g(c.id)), title: g(tcol), description: g(c.description), ref_url: t(g(c.link)), commands: g(c.commands), expected_output: g(c.expected) });
+    });
+  });
+  var str = function (v) { return String(v == null ? '' : v).trim(); };
+  lists = lists.filter(function (l) {
+    return str(l.name) || l.items.some(function (it) { return str(it.title) || str(it.description); });
+  });
+  if (!lists.length) {
+    throw new Error(_forPeople('No checklists found in this document. Pental reads a details table (with Name and Type rows) and after it an items table'
+      + ' (with a Title, Item or Step column), as its own layout writes them' + (orphan ? '; this one has an items table with no details table before it' : '') + '.'));
+  }
+  return lists;
+}
+function _crbxExample() {
+  return [
+    { kind: 'checklist', name: 'Example: before testing starts', description: 'Confirms an engagement is ready to begin.', phase_hint: '', source: 'custom',
+      source_url: 'http://www.pentest-standard.org/index.php/Pre-engagement', client_visible: false, audit_ticks: true,
+      items: [
+        { id: '', title: 'Scope confirmed in writing', description: '<p>The targets, exclusions and testing window are agreed with the client and recorded.</p>', ref_url: 'http://www.pentest-standard.org/index.php/Pre-engagement' },
+        { id: '', title: 'Authorisation on file', description: '<p>Written authorisation from someone entitled to give it is held before any testing.</p>', ref_url: '' },
+        { id: '', title: 'Contacts agreed', description: '<p>Both sides know:</p><ul><li>who to call if testing affects a service</li><li>how testing is paused</li></ul>', ref_url: '' }
+      ] },
+    { kind: 'runbook', name: 'Example: pausing testing on request', description: 'What the team does when a client asks for testing to stop.', phase_hint: '', source: 'custom',
+      source_url: '', client_visible: false, audit_ticks: false,
+      items: [
+        { id: '', title: 'Stop starting new tests', body: '<p>Start nothing new and note the time the request came in.</p>', commands: [], expected_output: 'No new activity after the time noted.' },
+        { id: '', title: 'Confirm with the client contact', body: '<p>Tell the agreed contact testing is paused, and keep their reply.</p>', commands: [], expected_output: 'The pause acknowledged in writing.' }
+      ] }
+  ];
+}
+function _crbxBlankLists() {
+  var rows = function (n, rb) { var a = []; for (var i = 0; i < n; i++) a.push(rb ? { id: '', title: '', body: '', commands: [], expected_output: '' } : { id: '', title: '', description: '', ref_url: '' }); return a; };
+  return [
+    { kind: 'checklist', name: '', description: '', phase_hint: '', source_url: '', client_visible: false, audit_ticks: false, items: rows(6, false) },
+    { kind: 'runbook', name: '', description: '', phase_hint: '', source_url: '', client_visible: false, audit_ticks: false, items: rows(4, true) }
+  ];
+}
+function _crbxDownload(blob, name) {
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function () { URL.revokeObjectURL(url); if (a.parentNode) a.parentNode.removeChild(a); }, 1500);
+}
+function _crbxFileName(list, ext, blank) {
+  var base = blank ? 'Checklists to fill in' : (list.length === 1 ? list[0].name : 'Checklists and runbooks ' + _isoDay(new Date()));
+  base = String(base).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 120) || 'Checklists';
+  return base + '.' + ext;
+}
+function _crbxSorted() {
+  return (S.data.checklists_runbooks || []).slice().sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || '')); });
+}
+function openChecklistTransfer() {
+  var sel = {};
+  (S.data.checklists_runbooks || []).forEach(function (t) { sel[t.id] = true; });
+  S._crbx = { sel: sel, plan: null, file: '' };
+  S.modal = { type: 'crbTransfer' };
+  render();
+}
+window.openChecklistTransfer = openChecklistTransfer;
+function renderChecklistTransferModal() {
+  var x = S._crbx || { sel: {} };
+  var h = '<div class="modal-header"><h2 class="modal-title">Import and export</h2><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
+  h += '<div class="modal-body" id="crbxBody">';
+  var sect = function (title, sub) {
+    return '<div style="font-weight:600;font-size:0.88rem;margin:0 0 0.25rem">' + title + '</div>'
+      + (sub ? '<div style="font-size:0.76rem;color:var(--gray);margin-bottom:0.6rem;line-height:1.5">' + sub + '</div>' : '');
+  };
+  if (x.plan) {
+    var p = x.plan, nAdd = 0, nUpd = 0;
+    h += '<div data-crbx-plan>';
+    h += sect('From ' + esc(x.file || 'the file'), 'Nothing is saved until you press Import.');
+    if (p.entries.length) {
+      h += '<div style="display:flex;flex-direction:column;gap:0.45rem;margin-bottom:0.9rem">';
+      p.entries.forEach(function (e) {
+        var rb = e.row.kind === 'runbook', noun = rb ? 'step' : 'item';
+        var many = function (n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); };
+        if (e.action === 'update') nUpd++; else nAdd++;
+        var parts = [];
+        if (e.kept) parts.push(many(e.kept, noun) + (e.kept === 1 ? ' keeps its ticks' : ' keep their ticks'));
+        if (e.added) parts.push(many(e.added, 'new ' + noun));
+        if (e.removed) parts.push(many(e.removed, noun) + ' taken out');
+        var said = e.action === 'update'
+          ? 'Updates the one here' + (parts.length ? ': ' + parts.join(', ') : '')
+          : 'New, with ' + many(e.row.items.length, noun);
+        h += '<div data-crbx-entry="' + esc(e.action) + '" style="padding:0.55rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px">'
+          + '<div style="display:flex;align-items:center;gap:0.45rem;font-size:0.84rem;font-weight:600;flex-wrap:wrap">' + esc(e.row.name)
+          + '<span style="font-size:0.64rem;font-weight:600;padding:1px 6px;border-radius:10px;background:rgba(0,0,0,0.06);color:var(--gray);text-transform:uppercase;letter-spacing:0.04em">' + (rb ? 'runbook' : 'checklist') + '</span></div>'
+          + '<div style="font-size:0.75rem;color:var(--' + (e.action === 'update' ? 'blue' : 'green') + ');margin-top:2px">' + esc(said) + '</div>'
+          + (e.warnings.length ? '<div style="font-size:0.72rem;color:var(--gray);margin-top:2px">' + esc(e.warnings.join('; ')) + '</div>' : '')
+          + '</div>';
+      });
+      h += '</div>';
+    }
+    if (p.refused.length) {
+      h += '<div data-crbx-refused style="padding:0.6rem 0.75rem;border:1px solid var(--border);border-left:3px solid var(--red-text);border-radius:6px;margin-bottom:0.6rem">'
+        + '<div style="font-size:0.78rem;font-weight:600;margin-bottom:0.25rem">Not imported</div>';
+      p.refused.forEach(function (r) { h += '<div style="font-size:0.75rem;color:var(--gray);line-height:1.5">' + esc(r.name) + ' ' + esc(r.why) + '.</div>'; });
+      h += '</div>';
+    }
+    if (!p.entries.length) h += '<div style="font-size:0.8rem;color:var(--gray)">There is nothing in this file to import.</div>';
+    h += '</div></div><div class="modal-footer">';
+    h += '<button class="btn" onclick="_crbxBack()">Back</button>';
+    if (p.entries.length) {
+      var words = [];
+      if (nAdd) words.push(nAdd + ' new');
+      if (nUpd) words.push(nUpd + ' updated');
+      h += '<button class="btn btn-primary" id="crbxImportBtn" onclick="_crbxImport()">Import (' + words.join(', ') + ')</button>';
+    }
+    return h + '</div>';
+  }
+  var all = _crbxSorted();
+  var nSel = all.filter(function (t) { return x.sel[t.id]; }).length;
+
+  h += '<div style="margin-bottom:1.25rem">';
+  h += sect('Export', 'The ones ticked, as an Excel workbook, a Word document laid out by your layout, or a JSON file that keeps everything exactly.');
+  if (!all.length) {
+    h += '<div style="font-size:0.8rem;color:var(--gray);margin-bottom:0.5rem">There are none to export yet.</div>';
+  } else {
+    h += '<div style="display:flex;gap:0.75rem;font-size:0.74rem;margin-bottom:0.35rem"><a href="#" onclick="_crbxSelAll(true);return false">Tick all</a><a href="#" onclick="_crbxSelAll(false);return false">Tick none</a></div>';
+    h += '<div style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:0.35rem 0.6rem;margin-bottom:0.6rem">';
+    all.forEach(function (t) {
+      var n = (t.items || []).length;
+      h += '<label style="display:flex;align-items:center;gap:0.5rem;padding:0.25rem 0;font-size:0.82rem;cursor:pointer">'
+        + '<input type="checkbox" data-crbx-sel="' + esc(t.id) + '"' + (x.sel[t.id] ? ' checked' : '') + ' onchange="_crbxToggle(' + jsArg(t.id) + ', this.checked)" style="accent-color:var(--accent)">'
+        + '<span style="flex:1;min-width:0;overflow-wrap:anywhere">' + esc(t.name) + '</span>'
+        + '<span style="font-size:0.68rem;color:var(--gray);white-space:nowrap">' + esc(t.kind === 'runbook' ? 'runbook' : 'checklist') + ' \u00b7 ' + n + '</span></label>';
+    });
+    h += '</div>';
+  }
+  var dis = nSel ? '' : ' disabled';
+  h += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap">'
+    + '<button class="btn btn-sm" id="crbxXlsx"' + dis + ' onclick="_crbxExport(\'xlsx\')">Excel workbook</button>'
+    + '<button class="btn btn-sm" id="crbxDocx"' + dis + ' onclick="_crbxExport(\'docx\')">Word document</button>'
+    + '<button class="btn btn-sm" id="crbxJson"' + dis + ' onclick="_crbxExport(\'json\')">JSON file</button></div>';
+  h += '</div>';
+
+  h += '<div style="margin-bottom:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">';
+  h += sect('Import', 'An Excel workbook, Word document or JSON file in the shape these write. One whose name and type are already here is updated, and its items keep the ticks made on engagements; the rest are added. You see what will change before anything is saved.');
+  h += '<button class="btn btn-sm btn-primary" id="crbxPick" onclick="_crbxPick()">Choose a file</button>';
+  h += '</div>';
+
+  h += '<div style="margin-bottom:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">';
+  h += sect('To fill in', 'Start one outside Pental and import it: a workbook with its columns ready and an example of each, a Word document with a blank checklist and runbook, or an example JSON file.');
+  h += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap">'
+    + '<button class="btn btn-sm" id="crbxBlankXlsx" onclick="_crbxBlank(\'xlsx\')">Excel workbook</button>'
+    + '<button class="btn btn-sm" id="crbxBlankDocx" onclick="_crbxBlank(\'docx\')">Word document</button>'
+    + '<button class="btn btn-sm" id="crbxBlankJson" onclick="_crbxBlank(\'json\')">JSON example</button></div>';
+  h += '</div>';
+
+  var mine = null;
+  try { mine = _getDocxTemplateMeta('checklist'); } catch (e) {}
+  h += '<div style="padding-top:1rem;border-top:1px solid var(--border)">';
+  h += sect('Word layout', 'Exports and the document to fill in are laid out by <strong data-crbx-layout>' + (mine ? esc(mine.name || mine.filename || 'your layout') : 'the built-in layout') + '</strong>.'
+    + ' Download it, restyle it in Word (fonts, colours, a cover, your header) and upload it. Keep its placeholders, such as {name}, {description}, and {#items} to {/items} in the items row;'
+    + ' keep the details table (its Name and Type rows) and the items table (its Item or Step column) for its documents to be read back in.');
+  h += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap">';
+  h += '<button class="btn btn-sm" id="crbxLayoutGet" onclick="_crbxLayoutDownload()">Download the layout</button>';
+  if (canManage()) {
+    h += '<button class="btn btn-sm" id="crbxLayoutPut" onclick="_crbxLayoutUpload()">Upload a layout</button>';
+    if (mine) h += '<button class="btn btn-sm" id="crbxLayoutReset" onclick="_crbxLayoutReset()">Use the built-in layout</button>';
+  }
+  h += '</div></div>';
+  h += '</div><div class="modal-footer"><button class="btn" onclick="closeM()">Close</button></div>';
+  return h;
+}
+function _crbxSelAll(on) {
+  var x = S._crbx;
+  if (!x) return;
+  (S.data.checklists_runbooks || []).forEach(function (t) { x.sel[t.id] = !!on; });
+  render();
+}
+window._crbxSelAll = _crbxSelAll;
+function _crbxToggle(id, on) {
+  var x = S._crbx;
+  if (!x) return;
+  x.sel[id] = !!on;
+  var any = (S.data.checklists_runbooks || []).some(function (t) { return x.sel[t.id]; });
+  ['crbxXlsx', 'crbxDocx', 'crbxJson'].forEach(function (k) { var b = document.getElementById(k); if (b) b.disabled = !any; });
+}
+window._crbxToggle = _crbxToggle;
+async function _crbxExport(fmt) {
+  var x = S._crbx || { sel: {} };
+  var list = _crbxSorted().filter(function (t) { return x.sel[t.id]; }).map(_crbxOut);
+  if (!list.length) { toast('Tick at least one to export', 'error'); return; }
+  _showLoading();
+  try {
+    if (fmt === 'json') _crbxDownload(new Blob([_crbxJson(list)], { type: 'application/json' }), _crbxFileName(list, 'json'));
+    else if (fmt === 'xlsx') _crbxDownload(new Blob([await _crbxXlsx(list)], { type: _CRBX_XLSX }), _crbxFileName(list, 'xlsx'));
+    else if (fmt === 'docx') _crbxDownload(await _crbxDocx(list, false), _crbxFileName(list, 'docx'));
+    else return;
+    toast(list.length === 1 ? 'Exported \u201c' + list[0].name + '\u201d' : 'Exported ' + list.length + ' checklists and runbooks', 'success');
+  } catch (e) {
+    console.error('[checklists] export:', e);
+    toast('Export failed: ' + (e && e.message || e), 'error');
+  } finally { _hideLoading(); }
+}
+window._crbxExport = _crbxExport;
+async function _crbxBlank(fmt) {
+  _showLoading();
+  try {
+    if (fmt === 'json') _crbxDownload(new Blob([_crbxJson(_crbxExample())], { type: 'application/json' }), 'Checklists example.json');
+    else if (fmt === 'xlsx') _crbxDownload(new Blob([await _crbxXlsx([], { blank: true })], { type: _CRBX_XLSX }), _crbxFileName([], 'xlsx', true));
+    else if (fmt === 'docx') _crbxDownload(await _crbxDocx(_crbxBlankLists(), true), _crbxFileName([], 'docx', true));
+  } catch (e) {
+    console.error('[checklists] template:', e);
+    toast('That could not be made: ' + (e && e.message || e), 'error');
+  } finally { _hideLoading(); }
+}
+window._crbxBlank = _crbxBlank;
+function _crbxPick() {
+  var input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.xlsx,.docx,.json,application/json,' + _CRBX_XLSX + ',' + _CRBX_DOCX;
+  input.onchange = function () { _crbxLoad(input.files && input.files[0]); };
+  input.click();
+}
+window._crbxPick = _crbxPick;
+async function _crbxLoad(file) {
+  if (!file) return;
+  if (file.size > _CRBX_MAX.bytes) { toast('That file is larger than 10 MB, which is far more than checklists need', 'error'); return; }
+  var ext = ((String(file.name || '').match(/\.([a-z0-9]+)$/i) || [])[1] || '').toLowerCase();
+  if (ext !== 'json' && ext !== 'xlsx' && ext !== 'docx') { toast('Choose an Excel workbook (.xlsx), a Word document (.docx) or a JSON file (.json)', 'error'); return; }
+  _showLoading();
+  try {
+    var raw;
+    if (ext === 'json') raw = _crbxReadJson(await file.text());
+    else if (ext === 'xlsx') raw = await _crbxReadXlsx(await file.arrayBuffer());
+    else raw = await _crbxReadDocx(await file.arrayBuffer());
+    if (!S._crbx) S._crbx = { sel: {} };
+    S._crbx.plan = _crbxPlan(raw, ext !== 'json');
+    S._crbx.file = file.name;
+    if (!S.modal || S.modal.type !== 'crbTransfer') S.modal = { type: 'crbTransfer' };
+    render();
+  } catch (e) {
+    console.error('[checklists] import read:', e);
+    toast(e && e.message || String(e), 'error');
+  } finally { _hideLoading(); }
+}
+window._crbxLoad = _crbxLoad;
+function _crbxBack() {
+  if (S._crbx) { S._crbx.plan = null; S._crbx.file = ''; }
+  render();
+}
+window._crbxBack = _crbxBack;
+async function _crbxImport() {
+  var x = S._crbx;
+  if (!x || !x.plan || !x.plan.entries.length) return;
+  var btn = document.getElementById('crbxImportBtn');
+  if (btn) btn.disabled = true;
+  _showLoading();
+  try {
+    var entries = x.plan.entries.slice();
+    var done = await _crbxApply(x.plan);
+    var bits = [];
+    if (done.added) bits.push(done.added + ' new');
+    if (done.updated) bits.push(done.updated + ' updated');
+    if (entries.length === 1 && bits.length) toast('Imported \u201c' + entries[0].row.name + '\u201d (' + (done.added ? 'new' : 'updated') + ')', 'success');
+    else if (bits.length) toast('Imported: ' + bits.join(', '), 'success');
+    if (done.failed.length) {
+      toast(_forPeople(done.failed.length + ' could not be saved (' + done.failed.map(function (f) { return f.name; }).join(', ') + '): '
+        + _friendlyErrorText(done.failed[0].why)), 'error', 12000);
+
+      x.plan = { entries: done.failed.map(function (f) { return f.entry; }).filter(Boolean), refused: [] };
+      render();
+      return;
+    }
+    x.plan = null;
+    x.file = '';
+    closeM();
+    render();
+  } catch (e) {
+    console.error('[checklists] import:', e);
+    toast('Import failed: ' + (e && e.message || e), 'error');
+    if (btn) btn.disabled = false;
+  } finally { _hideLoading(); }
+}
+window._crbxImport = _crbxImport;
+async function _crbxLayoutDownload() {
+  _showLoading();
+  try {
+    await _ensurePdfTemplates();
+    var mine = _getDocxTemplateMeta('checklist');
+    var buf = await _crbxLayoutBuf();
+    _crbxDownload(new Blob([buf], { type: _CRBX_DOCX }), mine ? (mine.filename || 'Checklist layout.docx') : 'Checklist layout.docx');
+  } catch (e) {
+    toast('The layout could not be fetched: ' + (e && e.message || e), 'error');
+  } finally { _hideLoading(); }
+}
+window._crbxLayoutDownload = _crbxLayoutDownload;
+function _crbxLayoutUpload() {
+  if (!canManage()) { toast('Only an administrator or a senior can change the layout', 'error'); return; }
+  var input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.docx,' + _CRBX_DOCX;
+  input.onchange = function () { _crbxLayoutPut(input.files && input.files[0]); };
+  input.click();
+}
+window._crbxLayoutUpload = _crbxLayoutUpload;
+async function _crbxLayoutPut(file) {
+  if (!file) return;
+  if (!/\.docx$/i.test(file.name || '')) { toast('Choose a Word document (.docx)', 'error'); return; }
+  if (file.size > 5 * 1024 * 1024) { toast('That layout is larger than 5 MB', 'error'); return; }
+  _showLoading();
+  try {
+    var buf = await file.arrayBuffer();
+    var probe = _crbxExample();
+    var blob = await _crbxDocx(probe, false, buf);
+    var check = await _crbxReadDocxText(await blob.arrayBuffer());
+    if (check.indexOf(probe[0].items[0].title) < 0) {
+      throw new Error(_forPeople('it shows no checklist\u2019s items. It needs {#checklists} and {/checklists} around each checklist, and {#items} and {/items} in the items table\u2019s row. Download the built-in layout to start from it.'));
+    }
+    var bytes = new Uint8Array(buf), bin = '';
+    for (var i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    var old = _listDocxTemplates('checklist').map(function (t) { return t.id; });
+    var meta = { name: file.name.replace(/\.docx$/i, ''), data: btoa(bin), filename: file.name, uploaded_at: new Date().toISOString(), size: file.size };
+    await _saveDocxTemplateData('checklist', meta);
+    await _setDefaultDocxTemplate('checklist', meta.id);
+
+    for (var j = 0; j < old.length; j++) { if (old[j] !== meta.id) { try { await _deleteDocxTemplate('checklist', old[j]); } catch (e) {} } }
+    toast('Your layout is used for checklist documents from now on', 'success');
+    render();
+  } catch (e) {
+    console.error('[checklists] layout:', e);
+    toast('That layout was not kept: ' + (e && e.message || e), 'error');
+  } finally { _hideLoading(); }
+}
+window._crbxLayoutPut = _crbxLayoutPut;
+async function _crbxReadDocxText(buf) {
+  await _loadDocxLibs();
+  var f = new PizZip(buf).file('word/document.xml');
+  return f ? f.asText().replace(/<[^>]+>/g, '') : '';
+}
+async function _crbxLayoutReset() {
+  if (!(await confirmAsync('Checklist documents will be laid out by the built-in layout again. Your layout is removed.', { title: 'Use the built-in layout?', confirmText: 'Use the built-in layout' }))) return;
+  _showLoading();
+  try {
+    var ids = _listDocxTemplates('checklist').map(function (t) { return t.id; });
+    for (var i = 0; i < ids.length; i++) await _deleteDocxTemplate('checklist', ids[i]);
+    toast('Checklist documents use the built-in layout', 'success');
+    render();
+  } catch (e) {
+    toast('That could not be changed: ' + (e && e.message || e), 'error');
+  } finally { _hideLoading(); }
+}
+window._crbxLayoutReset = _crbxLayoutReset;
 function renderImportModal() {
   var list = S.data.library || [];
 
@@ -66504,6 +68575,9 @@ async function exportAllData() {
     feedback: S.data.feedback || [],
     contractor_payments: S.data.contractor_payments || [],
     qa_comments: S.data.qa_comments || [],
+
+    checklists_runbooks: S.data.checklists_runbooks || [],
+    assessment_phase_checklist_state: S.data.assessment_phase_checklist_state || [],
     timeline_events: (S.data.assessments || []).reduce(function(acc, a) { return acc.concat(a._timeline || []); }, [])
   };
 
@@ -66698,8 +68772,11 @@ async function importAllData(evt) {
     }
 
     var tables = [
+
+      { key: 'checklists_runbooks', table: 'checklists_runbooks' },
       { key: 'assessments', table: 'assessments' },
       { key: 'findings', table: 'findings' },
+      { key: 'assessment_phase_checklist_state', table: 'assessment_phase_checklist_state' },
 
       { key: 'scan_runs', table: 'scan_runs' },
       { key: 'proposals', table: 'proposals' },

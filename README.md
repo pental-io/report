@@ -165,6 +165,7 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 
 - **Every engagement in one list**, with a reference code for each (numbered your way, or random), a type from your own list, its dates, test days, perspective and lead tester. Rename, duplicate, archive and restore, or delete. An engagement is open from the moment it is made, with no status to move along: its report downloads whenever you like.
 - **Phases.** External, internal, web, retest or whatever shape the work takes, each with its own type, scope, test days and retest setting.
+- **Checklists and runbooks on each phase.** Six curated checklists to start from, each suggested on a phase of its type: web application (OWASP WSTG), internal infrastructure, external infrastructure, cloud, mobile (OWASP MASVS) and wireless. Write your own too: tick items as you test, with who ticked each and when if you want it, and follow a runbook's steps with each command a click to copy. Bring them in or take them out as Excel, Word or JSON, in **Settings, Checklists & Runbooks**.
 - **On each engagement:** its notes, scope, the artifacts left on the client's systems, caveats, additional evidence and files, appendices for the report, and comments for your team.
 - **Sections your way.** Rename, reorder, give an icon to, switch off or leave out of the report any built-in section, and add your own in the ten field styles.
 

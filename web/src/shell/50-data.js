@@ -8,9 +8,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 var _REPORTER_NO_TABLES = {
-  invoices: 1, contractor_payments: 1, proposals: 1, feedback: 1, meetings: 1, meeting_attendees: 1, checklists_runbooks: 1,
-  assessment_phase_checklist_state: 1, scan_providers: 1, scan_cadences: 1, scan_schedules: 1, scan_runs: 1, scan_results: 1,
-  scan_billing_plans: 1, client_scan_targets: 1, issue_trackers: 1, finding_tickets: 1, contractor_teams: 1, qa_comments: 1,
+  invoices: 1, contractor_payments: 1, proposals: 1, feedback: 1, meetings: 1, meeting_attendees: 1, scan_providers: 1,
+  scan_cadences: 1, scan_schedules: 1, scan_runs: 1, scan_results: 1, scan_billing_plans: 1, client_scan_targets: 1, issue_trackers: 1, finding_tickets: 1, contractor_teams: 1, qa_comments: 1,
   contact_requests: 1, email_notifications: 1, webauthn_credentials_master: 1, payment_events: 1, tickets: 1,
 };
 var _REPORTER_NO_RPC = /^rpc_(scan|invoice|proposal|xero|ticket|tracker|meeting|contractor|pm_|docs_|qa_|transfer_status$|set_active_tenant$|mail_frame_save$|signin_setup_save$|credentials_read$|engagements_commercial$|scan_types_servable$)/;

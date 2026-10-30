@@ -6,7 +6,6 @@
 // Copyright (c) Pental Limited.
 // SPDX-License-Identifier: AGPL-3.0-only
 
-var CHECKLIST_RUNBOOK_LIBRARY = {};
 var _DASH_GROUPS = [];
 var _DASH_WIDGETS = {};
 function _SCAN_FIELD_DEFS() { return []; }
@@ -22,7 +21,6 @@ function _checkProposalPdfCache() { return; }
 function _clientDocDownloadHtml() { return ''; }
 function _clientDocPickerHtml() { return ''; }
 function _clientDocShows() { return false; }
-async function _copyRunbookCmd() { return Promise.resolve(null); }
 function _dashEdAvailableWidgets() { return; }
 function _dashEdDrag() { return; }
 function _dashEdLoadLayoutForRole() { return {}; }
@@ -89,7 +87,6 @@ function _qaWhere() { return; }
 function _qaWriteMarkup() { return; }
 function _renderAttestationTemplateFields() { return; }
 function _renderInvoiceTemplateFields() { return; }
-function _renderPhaseChecklistsPanel() { return ''; }
 function _renderProposalTemplateFields() { return; }
 async function _scanCap() { return Promise.resolve(null); }
 function _scanCapNow() { return; }
@@ -139,7 +136,6 @@ async function confirmBankPayment() { return; }
 async function confirmPayment() { return; }
 async function connectXero() { return Promise.resolve(null); }
 async function createInvoice() { return; }
-async function deleteChecklistTemplate() { return Promise.resolve(null); }
 async function deleteInvoice() { return Promise.resolve(null); }
 async function deleteProposal() { return Promise.resolve(null); }
 async function deliverReport() { return; }
@@ -150,7 +146,6 @@ async function downloadInvoice() { return Promise.resolve(null); }
 function downloadInvoicePdf() { return Promise.resolve(null); }
 async function downloadProposal() { return; }
 function downloadProposalPdf() { return; }
-async function duplicateChecklistTemplate() { return Promise.resolve(null); }
 async function duplicateProposal() { return Promise.resolve(null); }
 async function genAttestationPDF() { return null; }
 async function genInvoicePDF() { return null; }
@@ -159,8 +154,6 @@ async function genProposalPDF() { return null; }
 function getQAChanges() { return []; }
 function hasBankPayment() { return false; }
 function hasStripe() { return; }
-async function importAllCuratedChecklists() { return Promise.resolve(null); }
-async function importCuratedChecklist() { return Promise.resolve(null); }
 function isContractor() { return; }
 async function loadXeroStatus() { return Promise.resolve(null); }
 async function loadXeroSyncLog() { return Promise.resolve(null); }
@@ -168,8 +161,6 @@ async function markInvoicePaid() { return Promise.resolve(null); }
 async function markPaidByBank() { return; }
 function meetCalendarEnabled() { return; }
 async function mergeScanDuplicates() { return; }
-function openChecklistEditor() { return; }
-function openChecklistTransfer() { return; }
 async function openLoaEditor() { return Promise.resolve(null); }
 function openSetupWizard() { return; }
 function openWithdrawDelivery() { return; }
@@ -182,8 +173,6 @@ async function removeLoASignature() { return Promise.resolve(null); }
 function removeProposalPhase() { return; }
 async function renderApplyConfirmation() { return ''; }
 function renderCalendarPage() { return ''; }
-function renderChecklistEditorModal() { return; }
-function renderChecklistTransferModal() { return ''; }
 function renderClientDetail() { return ''; }
 function renderClientFindings() { return ''; }
 function renderClientUserModal() { return ''; }
@@ -235,7 +224,6 @@ function renderWithdrawDeliveryModal() { return ''; }
 async function reopenQAApproval() { return Promise.resolve(null); }
 async function resubmitToQA() { return Promise.resolve(null); }
 async function retryFailedXeroTasks() { return Promise.resolve(null); }
-async function saveChecklistFeatureToggle() { return Promise.resolve(null); }
 async function saveLoASettings() { return Promise.resolve(null); }
 async function saveLoaDrawnSignature() { return Promise.resolve(null); }
 async function saveMeetingIntegration() { return Promise.resolve(null); }
