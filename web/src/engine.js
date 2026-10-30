@@ -48426,6 +48426,8 @@ function _ffLabelDefault(key) {
   key = _ffKey(key);
   if (key === 'title') return 'Title';
   if (key === 'severity') return 'Severity';
+
+  if (key === 'phase') return 'Phase';
   if (key === 'retest_results' || key === 'retest') return 'Retest Results';
   var d = _ffDefs().find(function(x) { return x.key === key; });
   return d ? d.label : key;
@@ -54291,6 +54293,7 @@ function _syncBuildProposals(regions, a, imgFor) {
       }
       else if (key === 'phase') {
 
+        if (!_syncNorm(_syncPlainOf(raw))) return;
         val = _pntlResolvePhase(a, raw);
         if (!val) { _notePhase(raw); changes.push({ field: 'phase', label: 'Phase', col: 'phase', kind: 'phase', current: f.phase || '', proposed: '', rawPhase: _syncPlainOf(raw).trim() }); return; }
       }
@@ -54702,6 +54705,15 @@ function _syncPreviewHtml(value, isEvidence, figFrom, richImgs) {
     return _figNumber(out, figFrom) || '<span style="color:var(--gray)">(empty)</span>';
   } catch (e) { return esc(_syncPlainOf(value)); }
 }
+function _syncPhasePreviewHtml(c) {
+  var name = String((c && (c.proposed || c.rawPhase)) || '').trim();
+  var h = '<div class="sync-preview">' + esc(name) + '</div>';
+  if (name && !c.proposed) {
+    h += '<div style="font-size:0.75rem;color:var(--gray);margin-top:0.15rem">Not a phase of this assessment yet. '
+      + 'Tick it under Phases the assessment does not have to move the finding into it; left unticked, the finding stays where it is.</div>';
+  }
+  return h;
+}
 function _syncKnownNote(n) {
   return n + ' suggestion' + (n === 1 ? '' : 's') + ' already waiting in the QA review came back as '
     + (n === 1 ? 'a tracked change' : 'tracked changes') + ', unchanged. '
@@ -54950,7 +54962,9 @@ function renderSyncReviewModal() {
     if (it.kind === 'finding') {
       (it.changes || []).forEach(function (c) {
         r += '<div style="margin-bottom:0.5rem"><b>' + esc(c.label) + '</b>'
-          + (c.clears
+          + (c.kind === 'phase'
+              ? _syncPhasePreviewHtml(c)
+              : c.clears
               ? '<div style="font-size:0.75rem;color:var(--yellow);margin-top:0.15rem">Emptied in the document. Ticking this clears it on the finding.</div>'
               : (c.tracked
                   ? '<div class="qa-diff" style="margin-top:0.2rem">' + (function () {
