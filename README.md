@@ -324,8 +324,8 @@ Two things are fetched from outside when you use them: the AI provider you choos
 
 [Pental](https://pental.io) is all of Pental Report, and what it takes to sell pentesting as a service, under your brand:
 
-- **Pentest as a service.** Clients sign in to a portal on your own domain to read their findings, comment on them and ask for retests, during an engagement and long after it.
-- **Live reporting.** A finding reaches the client the day you confirm it, marked as a draft until it is written up, and nothing unfinished goes into the report.
+- **Pentest as a service.** Clients sign in to a portal on your own domain to read their findings, ask for retests and comment on the engagement, during it and long after it.
+- **Live reporting.** Show a finding to the client the day you confirm it, marked as a draft until it is written up, and nothing unfinished goes into the report.
 - **QA before anything goes out.** One review queue, your own checklist, comments and suggested edits on the words themselves, and an optional AI reviewer.
 - **Credentials and scheduling.** Clients send their test credentials encrypted, for your lead tester to view once, and a testing calendar shows who is testing what, and when.
 - **And the rest.** Attestation letters, findings pushed to your clients' Jira, ServiceNow and other trackers with their state read back, and scanner output imported as findings.

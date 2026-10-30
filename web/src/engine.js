@@ -60528,7 +60528,7 @@ function _smBuiltinRowHtml(d) {
     h += '<button class="btn btn-ghost btn-sm" style="margin-top:0.3rem" onclick="_resetPromptField(\'sm_prompt_' + d.key + '\',\'' + d.key + '\')" title="Restore the built-in prompt">Reset to default</button>';
 
     h += _aiContractNote((d.key === 'executive_summary' || d.key === 'retest_summary')
-      ? _AI_REPLY_CONTRACTS.summary + (d.key === 'executive_summary' ? '\n\nFor an engagement with phases, Pental also sets out the structure by phase: an introduction, a section for each phase and a conclusion with the recommendations.' : '')
+      ? (d.key === 'executive_summary' ? _AI_SUMMARY_GROUNDING + '\n\n' : '') + _AI_REPLY_CONTRACTS.summary + (d.key === 'executive_summary' ? '\n\nFor an engagement with phases, Pental also sets out the structure by phase: an introduction, a section for each phase and a conclusion with the recommendations.' : '')
       : _AI_REPLY_CONTRACTS.html);
     h += '</details>';
   }

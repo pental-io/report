@@ -83,8 +83,8 @@ function _reporterMove() {
   // as /report and the README say it.
   var adds = '<ul class="rp-move-adds">'
     + '<li><strong>Pentest as a service.</strong> Clients sign in to a portal on your own domain to read their findings, '
-    + 'comment on them and ask for retests, during an engagement and long after it.</li>'
-    + '<li><strong>Live reporting.</strong> A finding reaches the client the day you confirm it, marked as a draft until '
+    + 'ask for retests and comment on the engagement, during it and long after it.</li>'
+    + '<li><strong>Live reporting.</strong> Show a finding to the client the day you confirm it, marked as a draft until '
     + 'it is written up, and nothing unfinished goes into the report.</li>'
     + '<li><strong>QA before anything goes out.</strong> One review queue, your own checklist, comments and suggested '
     + 'edits on the words themselves, and an optional AI reviewer.</li>'

@@ -87,3 +87,10 @@ div:has(> #pwAdoption){display:none !important}
    Pental never shows one to a client): none is marked out as internal. */
 .comment-internal{border-left:0;background:none;padding:0;border-radius:0}
 .comment-unread.comment-internal.comment-unread-clearing{border-left-color:transparent;border-left-width:0;background:transparent;padding-left:0}
+
+/* 1975, later that morning: an engagement's "Capture credentials for this
+   assessment" asks the client to send credentials through the client portal,
+   which is Pental's. Hidden, not removed: saving still reads it, unticked, and
+   the perspective's own switch cannot show it again (an inline display loses
+   to !important). */
+#aCaptureCredsRow{display:none !important}
