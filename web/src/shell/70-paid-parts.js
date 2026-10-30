@@ -61,6 +61,8 @@ function _assAutomationNote() { return null; }
 var _REPORTER_SETTINGS_TABS = {
   login: 1, branding: 1, pdf_templates: 1, filenames: 1, company: 1, testing_ip: 1,
   assessments: 1, findings: 1, checklists: 1, ai: 1, security: 1, data: 1,
+  // 1976: its own, for a newer release (shell/85-updates.js).
+  updates: 1,
 };
 function _setTabOn(id) { return !!_REPORTER_SETTINGS_TABS[id]; }
 function renderSettings() {

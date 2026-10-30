@@ -27,6 +27,10 @@ function renderSidebar() {
   if (canManage()) h += b('users', S.page === 'users', IC.staff, 'Team');
   if (u.role === 'admin') h += b('settings', S.page === 'settings', IC.settings, 'Settings');
   h += '</div></nav>';
+  // 1976: whether there is a newer release, asked whenever the sidebar is
+  // drawn (at most every half hour), for the banner at the top of the page
+  // (shell/85-updates.js).
+  setTimeout(_rpUpdKick, 0);
   // The version links to where Pental Report's source is published
   // (AGPL-3.0, section 13: a user of the network service can get its source).
   h += '<div class="rp-side-note"><a class="rp-ver" href="' + esc(REPORTER.sourceUrl) + '" target="_blank" rel="noopener" title="Pental Report is free software (AGPL-3.0): its source">Pental Report ' + esc(REPORTER.version) + '</a>'

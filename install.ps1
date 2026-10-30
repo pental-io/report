@@ -29,7 +29,7 @@ param(
   [switch]$Local,
   [switch]$Tailscale,
   [string]$Dir = '',
-  [string]$Version = '0.1.4',
+  [string]$Version = '0.1.5',
   [switch]$Yes,
   [switch]$NoOpen
 )
@@ -252,6 +252,11 @@ if (-not $update) {
   Step "Your settings are kept ($Dir\.env)"
 }
 Env-Set 'REPORT_VERSION' $Version
+# What Pental Report is told of this computer, so the app gives the exact
+# command that updates it when a release is out. Forward slashes, which
+# PowerShell takes in a path, so .env reads it as written.
+Env-Set 'REPORT_HOST' 'windows'
+Env-Set 'REPORT_DIR' ($Dir -replace '\\', '/')
 $port = Env-Get 'PORT'; if (-not $port) { $port = '8080' }
 $Domain = Env-Get 'DOMAIN'
 $addr = Env-Get 'PUBLIC_URL'; if (-not $addr) { $addr = "http://localhost:$port" }

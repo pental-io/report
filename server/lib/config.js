@@ -88,6 +88,18 @@ export function loadConfig(env = process.env) {
     // A link to the paid product, tagged so its visits show up in Pental's own
     // counts. Not a setting anybody needs to change.
     pentalUrl: 'https://pental.io',
+    // Updates (lib/updates.js). Whether to ask GitHub for the latest release
+    // (UPDATE_CHECK=off stops it), the token the updater on this computer asks
+    // with (made by setup and the installer; without one there is no updater),
+    // and what the installer says of this computer, so the app can give the
+    // exact command that updates it: its system, where Pental Report lives,
+    // and whether it was installed as root.
+    updateCheck: bool(env.UPDATE_CHECK, true),
+    updateUrl: String(env.UPDATE_URL || '').trim(),
+    updateToken: String(env.UPDATE_TOKEN || '').trim().length >= 24 ? String(env.UPDATE_TOKEN).trim() : '',
+    reportHost: /^(linux|macos|windows)$/i.test(String(env.REPORT_HOST || '').trim()) ? String(env.REPORT_HOST).trim().toLowerCase() : '',
+    reportDir: String(env.REPORT_DIR || '').trim().slice(0, 300),
+    reportRoot: bool(env.REPORT_ROOT, false),
   };
   if (cfg.publicUrl && !/^https?:\/\/[^/]+$/.test(cfg.publicUrl)) problems.push('PUBLIC_URL must be an origin such as https://reports.yourfirm.com (no path)');
   if (cfg.storage.backend === 's3') {

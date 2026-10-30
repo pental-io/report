@@ -13,7 +13,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 set -eu
 
-VERSION="0.1.4"
+VERSION="0.1.5"
 REPO="pental-io/report"
 IMAGE="ghcr.io/pental-io/report"
 
@@ -32,11 +32,13 @@ Pental Report installer
   --version X.Y.Z  a release other than this installer's
   --yes            ask nothing, take the defaults
   --no-open        leave the browser closed at the end
+  --no-auto-update leave updating to you: Pental Report says when a release
+                   is out, with this command to run
 USAGE
 }
 
 # ── Options ────────────────────────────────────────────────────────────────
-DOMAIN_ARG=""; MODE=""; DIR="${PENTAL_REPORT_DIR:-}"; YES=0; OPEN=1
+DOMAIN_ARG=""; MODE=""; DIR="${PENTAL_REPORT_DIR:-}"; YES=0; OPEN=1; AUTO_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --domain) DOMAIN_ARG="${2:-}"; MODE=domain; shift; [ $# -gt 0 ] && shift ;;
@@ -49,6 +51,8 @@ while [ $# -gt 0 ]; do
     --version=*) VERSION="${1#*=}"; shift ;;
     --yes|-y) YES=1; shift ;;
     --no-open) OPEN=0; shift ;;
+    --no-auto-update) AUTO_ARG=0; shift ;;
+    --auto-update) AUTO_ARG=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -207,8 +211,13 @@ port_busy() {
 envget() { sed -n "s/^$1=//p" .env | tail -n 1; }
 envset() {
   if grep -q "^$1=" .env; then
-    ( umask 077; sed "s|^$1=.*|$1=$2|" .env > .env.next ) && cat .env.next > .env && rm -f .env.next
+    _v=$(printf '%s' "$2" | sed 's/[\\&|]/\\&/g')
+    ( umask 077; sed "s|^$1=.*|$1=$_v|" .env > .env.next ) && cat .env.next > .env && rm -f .env.next
   else printf '%s=%s\n' "$1" "$2" >> .env; fi
+}
+secret() {
+  if command -v openssl >/dev/null 2>&1; then openssl rand -base64 "$1" | tr -d '\n=' | tr '+/' '-_'
+  else head -c "$1" /dev/urandom | base64 | tr -d '\n=' | tr '+/' '-_'; fi
 }
 
 if [ $UPDATE = 0 ]; then
@@ -243,6 +252,12 @@ else
   step "Your settings are kept ($DIR/.env)"
 fi
 envset REPORT_VERSION "$VERSION"
+# What Pental Report is told of this computer, so the app can give the exact
+# command that updates it, and the token its updater asks with (update.sh).
+case "$OS" in Darwin) envset REPORT_HOST macos ;; *) envset REPORT_HOST linux ;; esac
+envset REPORT_DIR "$DIR"
+if [ "$(id -u)" = 0 ]; then envset REPORT_ROOT 1; else envset REPORT_ROOT 0; fi
+[ -n "$(envget UPDATE_TOKEN)" ] || envset UPDATE_TOKEN "$(secret 32)"
 PORT=$(envget PORT); PORT=${PORT:-8080}
 DOMAIN=$(envget DOMAIN)
 ADDR=$(envget PUBLIC_URL); ADDR=${ADDR:-http://localhost:$PORT}
@@ -330,6 +345,106 @@ if [ $SHARE = 1 ]; then
   step "Shared with your tailnet at $ADDR"
 fi
 
+# ── Updates ────────────────────────────────────────────────────────────────
+# The updater (update.sh) asks Pental Report every minute whether to update,
+# and installs a new release when an administrator presses Update Now, or
+# overnight when updates are automatic (Settings, Updates). On Linux a systemd
+# timer runs it (cron where there is no systemd), as root because it runs
+# Docker; on macOS a launchd agent, as you. Without it, Pental Report still
+# says when a release is out, with the command that installs it.
+UNIT=pental-report-update
+AGENT=io.pental.report.update
+PLIST="$HOME/Library/LaunchAgents/$AGENT.plist"
+xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+as_root() {
+  [ "$(id -u)" = 0 ] && return 0
+  [ -n "$SUDO" ] || return 1
+  $SUDO -n true 2>/dev/null && return 0
+  can_ask || return 1
+  note "Setting up updates asks for your password, once."
+  $SUDO -v
+}
+setup_updater() {
+  case "$OS" in
+    Linux)
+      as_root || { warn "Updating by itself is set up as root (through sudo), which is not available here."; return 1; }
+      if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+        printf '%s\n' "[Unit]" "Description=Pental Report's updater: asks Pental Report whether to update, and does" \
+          "After=docker.service" "Wants=docker.service" "" "[Service]" "Type=oneshot" "ExecStart=/bin/sh \"$DIR/update.sh\"" \
+          "TimeoutStartSec=1h" "LogLevelMax=notice" | $SUDO tee "/etc/systemd/system/$UNIT.service" >/dev/null || return 1
+        printf '%s\n' "[Unit]" "Description=Pental Report's updater, every minute" "" "[Timer]" "OnBootSec=2min" "OnUnitActiveSec=1min" \
+          "AccuracySec=15s" "" "[Install]" "WantedBy=timers.target" | $SUDO tee "/etc/systemd/system/$UNIT.timer" >/dev/null || return 1
+        $SUDO systemctl daemon-reload >>"$LOG" 2>&1 && $SUDO systemctl enable --now "$UNIT.timer" >>"$LOG" 2>&1 || return 1
+      elif [ -d /etc/cron.d ]; then
+        printf '* * * * * root /bin/sh "%s/update.sh" >/dev/null 2>&1\n' "$DIR" | $SUDO tee "/etc/cron.d/$UNIT" >/dev/null || return 1
+      else
+        warn "This computer has neither systemd nor cron to run the updater."; return 1
+      fi ;;
+    Darwin)
+      [ "$(id -u)" != 0 ] || { warn "On macOS the updater runs as you, so run the installer without sudo to set it up."; return 1; }
+      mkdir -p "$HOME/Library/LaunchAgents"
+      cat > "$PLIST" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$AGENT</string>
+  <key>ProgramArguments</key><array><string>/bin/sh</string><string>$(xml "$DIR")/update.sh</string></array>
+  <key>StartInterval</key><integer>60</integer>
+  <key>RunAtLoad</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:$(xml "$HOME")/.docker/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+</dict>
+</plist>
+PLISTEOF
+      launchctl bootout "gui/$(id -u)/$AGENT" >/dev/null 2>&1 || true
+      launchctl bootstrap "gui/$(id -u)" "$PLIST" >>"$LOG" 2>&1 || return 1 ;;
+  esac
+  return 0
+}
+remove_updater() {
+  case "$OS" in
+    Linux)
+      if [ -f "/etc/systemd/system/$UNIT.timer" ] || [ -f "/etc/cron.d/$UNIT" ]; then
+        as_root || return 1
+        if [ -f "/etc/systemd/system/$UNIT.timer" ]; then
+          $SUDO systemctl disable --now "$UNIT.timer" >>"$LOG" 2>&1 || true
+          $SUDO rm -f "/etc/systemd/system/$UNIT.timer" "/etc/systemd/system/$UNIT.service"
+          $SUDO systemctl daemon-reload >>"$LOG" 2>&1 || true
+        fi
+        $SUDO rm -f "/etc/cron.d/$UNIT"
+      fi ;;
+    Darwin)
+      launchctl bootout "gui/$(id -u)/$AGENT" >/dev/null 2>&1 || true
+      rm -f "$PLIST" ;;
+  esac
+  return 0
+}
+UPD=""
+if [ "${PENTAL_REPORT_UPDATER:-}" = 1 ]; then
+  # Run by the updater itself: it stays as it is.
+  UPD=on
+else
+  WANT_UPD="$AUTO_ARG"
+  [ -n "$WANT_UPD" ] || WANT_UPD=$(envget UPDATER)
+  if [ -z "$WANT_UPD" ]; then
+    if can_ask; then
+      say ""
+      ask A "Keep Pental Report up to date by itself? New releases install overnight, after a copy of the database [Y/n]" "y"
+      case "$A" in [nN]*) WANT_UPD=0 ;; *) WANT_UPD=1 ;; esac
+    else WANT_UPD=1; fi
+  fi
+  envset UPDATER "$WANT_UPD"
+  if [ "$WANT_UPD" = 1 ]; then
+    if setup_updater; then UPD=on; step "It updates itself: new releases install overnight"
+    else UPD=none; note "Updates are yours to install: Pental Report says when one is out, with the command"; fi
+  else
+    remove_updater || true
+    UPD=off
+  fi
+fi
+
 FIRST=0
 case "$($GET "http://127.0.0.1:$PORT/reporter/v1/config" 2>/dev/null || true)" in *'"first_run":true'*) FIRST=1 ;; esac
 TOKEN=$(envget SETUP_TOKEN)
@@ -364,7 +479,8 @@ say ""
 printf '  %sLives in%s  %s\n' "$D" "$R" "$DIR"
 printf '  %sLogs%s      cd %s && %s compose logs -f report\n' "$D" "$R" "$DIR" "$DOCKER"
 printf '  %sStop%s      cd %s && %s compose stop\n' "$D" "$R" "$DIR" "$DOCKER"
-printf '  %sUpdate%s    run this installer again\n' "$D" "$R"
+if [ "$UPD" = on ]; then printf '  %sUpdates%s   install by themselves overnight (Settings, Updates)\n' "$D" "$R"
+else printf '  %sUpdate%s    run this installer again\n' "$D" "$R"; fi
 say ""
 rm -f "$LOG"
 

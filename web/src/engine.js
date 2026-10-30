@@ -6044,6 +6044,7 @@ function _dtHeadCells(t) {
   return ths.length ? ths : null;
 }
 var _DT_SHORT = 176;
+function _dtMainHard() { return (typeof window !== 'undefined' && window.innerWidth <= 480) ? 56 : 112; }
 function _dtAllot(t, availKnown) {
   var nat = t._dtNat, min = t._dtMin, cols = t._dtCols;
   if (!nat || !min || !cols || cols.length !== nat.length) return;
@@ -6052,9 +6053,9 @@ function _dtAllot(t, availKnown) {
   var mi = t._dtMain;
   var pad = t._dtMainPad || 0;
 
-  var floorC = Math.max(112, Math.min(224, Math.round(A * 0.3)));
+  var floorC = Math.max(_dtMainHard(), Math.min(224, Math.round(A * 0.3)));
 
-  var mainNat = mi >= 0 ? Math.max(nat[mi], 112 + pad) : 0;
+  var mainNat = mi >= 0 ? Math.max(nat[mi], _dtMainHard() + pad) : 0;
   var mainFloor = mi >= 0 ? Math.min(mainNat, floorC + pad) : 0;
   var mainComfort = Math.min(mainNat, Math.max(mainFloor, Math.min(Math.round(A * 0.4), _DT_CAP + pad)));
   var w = nat.slice();
@@ -6095,7 +6096,7 @@ function _dtAllot(t, availKnown) {
   if (deficit > 0) deficit -= take(deficit, function (i, x) { return elide[i] ? _DT_CAP : x; });
 
   if (deficit > 0 && mi >= 0) {
-    var hard = 112 + pad;
+    var hard = _dtMainHard() + pad;
     var room = w.map(function (x, i) { return i === mi ? Math.max(0, main - hard) : Math.max(0, x - min[i]); });
     var total = room.reduce(function (a, b) { return a + b; }, 0);
     if (total > 0) {
@@ -6178,6 +6179,29 @@ function _dtAllot(t, availKnown) {
   w.forEach(function (x, i) { if (i !== mi) total += x; });
   cols.forEach(function (c, i) { c.style.width = i === mi ? (out ? main + 'px' : '') : (w[i] + 'px'); });
   t.style.minWidth = out ? total + 'px' : '';
+  _dtCards(t, out);
+}
+function _dtCardsBox(t) {
+  var mt = t && t.parentElement;
+  if (!mt || !mt.classList || !mt.classList.contains('mob-table')) return null;
+  for (var s = mt.nextElementSibling; s; s = s.nextElementSibling) {
+    if (s.classList.contains('mob-cards')) return mt.parentElement || null;
+  }
+  return null;
+}
+function _dtCards(t, out) {
+  t._dtOut = !!out;
+  if (!_dtCardsBox(t)) return;
+  var sig = _dtSig(t);
+  var twins = sig ? Array.prototype.filter.call(document.querySelectorAll('table.dt'), function (x) {
+    return x.isConnected && _dtCardsBox(x) && _dtSig(x) === sig;
+  }) : [t];
+  if (twins.indexOf(t) < 0) twins.push(t);
+  var any = twins.some(function (x) { return !!x._dtOut; });
+  twins.forEach(function (x) {
+    var box = _dtCardsBox(x);
+    if (box && box.classList.contains('tbl-cards') !== any) box.classList.toggle('tbl-cards', any);
+  });
 }
 var _dtBusy = false;
 function _dtSig(t) {
@@ -24973,107 +24997,6 @@ function renderOverLimitBanner() {
     + '</div>';
 }
 window.renderOverLimitBanner = renderOverLimitBanner;
-function renderSchemaUpdateBanner() {
-  if (!S._schemaUpdateAvailable || S._schemaBannerDismissed) return '';
-  if (S.profile && S.profile.role === 'client') return '';
-
-  var _mayRun = typeof canEdit === 'function' ? canEdit() : false;
-
-  var _gw = _dbIsGateway();
-
-  var _sh = !_gw && _dbIsSelfHosted();
-
-  var h = '<div style="display:flex;align-items:center;gap:0.75rem;padding:0.7rem 0.95rem;margin-bottom:1rem;border:1px solid rgba(234,179,8,0.3);background:rgba(234,179,8,0.06);border-radius:8px">' +
-    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#eab308" stroke-width="2" style="flex-shrink:0"><path d="M12 2v6m0 0 3-3m-3 3L9 5"/><path d="M4 12a8 8 0 1 0 16 0"/></svg>' +
-    '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:0.82rem;color:var(--text)">Database update available</div>' +
-    '<div style="font-size:0.74rem;color:var(--gray);margin-top:1px">' +
-    (_gw
-      ? 'Your gateway applies Pental\u2019s signed update at its daily check. To apply it now, open your pental.io dashboard, Portal Configuration, Database, and press Check for updates now.'
-      : _sh
-      ? 'Your stack\u2019s updater applies Pental\u2019s signed update at its daily run, unless it is turned off. To apply it now, run ./pental-update.sh in the kit\u2019s folder on the server.'
-      : _mayRun
-      ? 'Your database is missing recent updates. Re-run the latest setup SQL to enable new features. It is safe to run again.'
-      : 'Your database is missing recent updates, so some things may not work yet.') +
-    '</div></div>';
-  if (_gw && _mayRun) {
-    h += '<a class="btn btn-primary btn-sm" href="https://pental.io/manage" target="_blank" rel="noopener noreferrer" style="font-size:0.75rem;white-space:nowrap;text-decoration:none">Open pental.io</a>';
-  } else if (_mayRun) {
-    h += '<button class="btn btn-primary btn-sm" id="schemaCopyBtn" onclick="copySchemaSql()" style="font-size:0.75rem;white-space:nowrap">Copy SQL</button>';
-    if (_supabaseSqlEditorUrl()) {
-      h += '<a class="btn btn-ghost btn-sm" href="' + _supabaseSqlEditorUrl() + '" target="_blank" rel="noopener noreferrer" style="font-size:0.75rem;white-space:nowrap;text-decoration:none">Open SQL editor</a>';
-    }
-  }
-  h += '<button class="btn btn-ghost btn-sm" onclick="dismissSchemaBanner()" style="font-size:0.75rem" title="Dismiss for now">Later</button>';
-  h += '</div>';
-  return h;
-}
-function dismissSchemaBanner() { S._schemaBannerDismissed = true; render(); }
-function _dbIsSelfHosted() {
-  try {
-    var url = String(EFFECTIVE_SUPABASE_URL || '');
-    if (!url || url === SUPABASE_URL) return false;
-    var host = new URL(url).hostname;
-    return !!host && !/\.supabase\.(co|in)$/i.test(host) && !_dbIsGateway();
-  } catch (e) { return false; }
-}
-function _dbIsGateway() {
-  try {
-    var k = String(EFFECTIVE_SUPABASE_KEY || '');
-    var parts = k.split('.');
-    if (parts.length !== 3 || parts[0].indexOf('eyJ') !== 0) return false;
-    var b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    var claims = JSON.parse(atob(b64 + '==='.slice((b64.length + 3) % 4)));
-    return !!claims && claims.iss === 'pental-gateway';
-  } catch (e) { return false; }
-}
-function _supabaseSqlEditorUrl() {
-  try {
-
-    var url = EFFECTIVE_SUPABASE_URL || '';
-
-    if (!url || url === SUPABASE_URL) return '';
-
-    var m = /^([a-z0-9]{16,40})\.supabase\.(co|in)$/i.exec(new URL(url).hostname);
-    if (!m) return '';
-    return 'https://supabase.com/dashboard/project/' + m[1].toLowerCase() + '/sql/new';
-  } catch (e) { return ''; }
-}
-async function copySchemaSql() {
-
-  if (typeof canEdit === 'function' && !canEdit()) {
-    toast('The database update is for internal users', 'error');
-    return;
-  }
-  var btn = document.getElementById('schemaCopyBtn');
-  var reset = function(txt) { if (btn) { btn.textContent = txt; setTimeout(function() { if (btn) btn.textContent = 'Copy SQL'; }, 3000); } };
-  if (btn) btn.textContent = 'Copying...';
-  try {
-    var _tok = '';
-    try { var _s = await supabaseClient.auth.getSession(); if (_s && _s.data && _s.data.session) _tok = _s.data.session.access_token; } catch (se) {}
-    var res = await tenantFetch('/api/settings-sync?action=schema-sql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + _tok },
-      body: JSON.stringify({}),
-    });
-    var data = res.ok ? await res.json() : null;
-    var text = data && (typeof data.paste === 'string' && data.paste ? data.paste : data.sql);
-    if (!text) throw new Error('no sql');
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (ce) {
-      var ta = document.createElement('textarea');
-      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    }
-    reset('✓ Copied');
-    toast('Setup SQL copied. Paste it into your Supabase SQL editor and run it.', 'success');
-  } catch (e) {
-    reset('Copy failed');
-    toast('Could not fetch the SQL. Open pental.io/manage and copy it from the Database section.', 'error');
-  }
-}
 function renderApp() {
   return '<div class="app"><div class="mobile-overlay" id="mobOverlay" onclick="closeMobileMenu()"></div>' + renderSidebar() + renderMainRegion() + renderMobBottomNav() + '</div>' + '<div id="rbBanner">' + _rbRunBanner() + '</div>' + (S.modal && !S.wizard ? renderModal() : '') + (S.wizard ? renderSetupWizard() : '');
 }
@@ -37284,6 +37207,7 @@ function renderSettings__portal() {
 
     {id:'security',label:'Security',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>'},
     {id:'data',label:'Data',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>'},
+    {id:'updates',label:'Updates',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>'},
     {id:'feature',label:'Send Feedback',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>'}
   ];
 
@@ -40416,6 +40340,8 @@ function renderSettings__portal() {
     setTimeout(function() { if (typeof loadActiveSessions === 'function') loadActiveSessions(); }, 100);
   }
   }
+
+  if (_st === 'updates') h += _rpUpdatesSettingsHtml();
 
   if (_st === 'data') {
 

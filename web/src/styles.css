@@ -580,7 +580,9 @@ input[type="date"]{font-family:var(--font-mono);font-size:0.85rem}
    last row that fits whole, so the box never ends through one; this keeps that
    true while somebody scrolls it, and `scroll-padding-top` (written by the same
    function) is the sticky heading's height, so a row never settles under it. */
-.card-body.findings-scroll{max-height:400px;overflow-y:auto;padding:0;scroll-snap-type:y proximity;scroll-padding-top:2.6rem}
+/* 1976: NO SCROLL INSIDE THE PAGE'S. [stated] Arian: "audit fully for double scrolls". These lists show eight or ten
+   at most, and a 400px box made them a second scroll inside the dashboard's: they are as long as they are now. */
+.card-body.findings-scroll{padding:0}
 .card-body.findings-scroll > table.dt tbody tr,
 .card-body.findings-scroll > div{scroll-snap-align:start}
 /* 1686: the findings widgets are data tables in this scroll area, so their
@@ -5128,3 +5130,23 @@ body.afm-dragging,body.afm-dragging *{cursor:grabbing!important;-webkit-user-sel
 .exp-fmt-o input:checked + span{background:var(--accent);color:#fff}
 .exp-fmt-o input:focus-visible + span{outline:2px solid var(--accent);outline-offset:-4px;box-shadow:inset 0 0 0 4px var(--bg)}
 @media (prefers-reduced-motion:reduce){.exp-fmt-o span{transition:none}}
+/* 1976: NOTHING SCROLLS SIDEWAYS THAT NEED NOT. [stated] Arian: "why is there double scroll on findings table in assessment
+   area on small screen double check and audit everything", then "audit fully for double scrolls". verification/
+   audit_scroll_1976.mjs opens every page of the portal and of the reporting tool at every width from 320 to 1440 and
+   lists whatever scrolls. A phase's findings card on a phone was up to 166px wider than the screen, because its row of
+   buttons would not wrap; from 901px to 1366px a findings table ran past its card and scrolled sideways while the page
+   scrolled down. The row wraps now; on the narrowest phones the main column's floor is half (_dtMainHard); and a table
+   out of room, its cells already tight (the sizer's own dt-tight), that has the cards a phone shows beside it is shown
+   as those cards, with every table of the same columns on the page (_dtCards), laid out unseen so the next resize
+   measures it as before. */
+.card-header > .flex{flex-wrap:wrap;row-gap:0.4rem}
+@media (max-width:480px){table.dt th.c-main::after{width:3.5rem}}
+.tbl-cards{position:relative}
+.tbl-cards > .mob-table{position:absolute;left:0;right:0;top:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none}
+.tbl-cards > .mob-cards{display:flex!important}
+/* 1976: a dashboard row of narrow cards, two to a row up to 1280px and one under 960px: a third of the row at 1180px, or
+   half of it at 901px, was narrower than Team Assessments' table needs, and the card scrolled sideways. */
+@media (max-width:1280px){.dash-row.grid-3{grid-template-columns:1fr 1fr}}
+@media (max-width:960px){.dash-row.grid-3,.dash-row.grid-2{grid-template-columns:1fr}}
+/* 1976: the way from a dashboard list's first ten to the rest. */
+.dash-more{padding:0.4rem 0.75rem 0.6rem;border-top:1px solid var(--border);text-align:center}

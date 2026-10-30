@@ -33,6 +33,7 @@ import { Realtime } from './lib/realtime/index.js';
 import { AiWorker } from './lib/ai.js';
 import { ensureSchema, ensureInstance } from './lib/setup.js';
 import { Api } from './lib/api.js';
+import { Updates } from './lib/updates.js';
 import { Web } from './lib/web.js';
 import { Router, applyCors, sendJson, handleError, HttpError } from './lib/http.js';
 
@@ -73,6 +74,9 @@ export async function createServer(env = process.env, { listen = true } = {}) {
   const ai = new AiWorker({ db });
   await ai.start();
   const api = new Api({ cfg, db, authz, instance, version: REPORTER_VERSION });
+  // Whether there is a newer release, and the updater on this computer.
+  const updates = new Updates({ cfg, db, api, version: REPORTER_VERSION });
+  await updates.start();
   const web = new Web({ cfg });
   if (!web.ready()) log.warn('the app is not built yet', { webDir: cfg.webDir });
 
@@ -85,6 +89,10 @@ export async function createServer(env = process.env, { listen = true } = {}) {
     .add('*', '/storage/v1/*rest', (req, res, url, p) => storage.handle(req, res, url, p.rest))
     .add('GET', '/reporter/v1/config', (req, res) => api.config(req, res))
     .add('POST', '/reporter/v1/first-admin', (req, res) => api.firstAdmin(req, res))
+    .add('GET', '/reporter/v1/updates', (req, res) => updates.appGet(req, res))
+    .add('POST', '/reporter/v1/updates', (req, res) => updates.appPost(req, res))
+    .add('GET', '/reporter/v1/updater', (req, res, url) => updates.agentGet(req, res, url))
+    .add('POST', '/reporter/v1/updater', (req, res) => updates.agentPost(req, res))
     .add('*', '/api/admin', (req, res) => api.admin(req, res))
     .add('*', '/api/utils', (req, res, url) => api.utils(req, res, url))
     .add('GET', '/health', async (req, res) => {
@@ -128,12 +136,13 @@ export async function createServer(env = process.env, { listen = true } = {}) {
   server.on('upgrade', (req, socket, head) => realtime.upgrade(req, socket, head));
   server.keepAliveTimeout = 65000;
 
-  const out = { cfg, db, schema, authz, rest, auth, storage, realtime, ai, api, web, server, instance };
+  const out = { cfg, db, schema, authz, rest, auth, storage, realtime, ai, api, updates, web, server, instance };
   if (listen) {
     await new Promise((resolve) => server.listen(cfg.port, cfg.host, resolve));
     log.info('listening', { port: cfg.port, host: cfg.host, publicUrl: cfg.publicUrl || '(the address each request arrives at)' });
   }
   out.close = async () => {
+    updates.stop();
     await Promise.allSettled([ai.stop()]);
     await realtime.stop();
     storage.stop();

@@ -97,6 +97,7 @@ Either way, the address your team types is `PUBLIC_URL` in `.env`, and the insta
 | `--version X.Y.Z` | `-Version X.Y.Z` | A particular release rather than the latest |
 | `--yes` | `-Yes` | Ask nothing and take the defaults |
 | `--no-open` | `-NoOpen` | Leave the browser closed at the end |
+| `--no-auto-update` | | No updater: you run the install command when a release is out (see [Updating](#updating)) |
 
 On Windows, give it options like this:
 
@@ -269,7 +270,11 @@ Every engagement becomes a report two ways, both in your own brand.
 
 ## Updating
 
-Run the install command again. It downloads the new release and restarts Pental Report, and your settings (`.env`) and your data stay as they are. Pental Report brings its database up to date when it starts.
+Pental Report tells its administrators when a new release is out, in **Settings, Updates**, with what the release changes, and in a banner at the top of the page when there is something to do about it. Where it updates itself, nothing is said until the new release is in.
+
+**By itself, on Linux and macOS.** The installer sets up a small updater on the computer Pental Report runs on (`update.sh`, run by a systemd timer on Linux and a launchd agent on macOS). A new release then installs overnight, between 1am and 6am on that computer's clock, or straight away when an administrator presses **Update Now**. Before each one the updater copies the database to `backups/` (the last three are kept), installs the release from its own tag on GitHub, and puts the version before it back if the new one does not start. What it did is in `update.log` and in Settings, Updates. With automatic updates turned off there, a release installs only when you press Update Now; the installer's `--no-auto-update` sets up no updater at all.
+
+**With one command, anywhere.** Run the install command again: Settings, Updates gives it for your computer. It downloads the new release and restarts Pental Report, and your settings (`.env`) and your data stay as they are. Pental Report brings its database up to date when it starts. On Windows, this is how it is updated.
 
 ## Backups
 
@@ -319,6 +324,8 @@ docker compose exec report node server/bin/reset-mfa.js you@yourfirm.com
 Everything lives in the PostgreSQL that runs beside Pental Report: assessments, findings, your library, settings, templates and uploaded files (or your own S3-compatible bucket). Nothing is sent to Pental.
 
 Two things are fetched from outside when you use them: the AI provider you choose, and the Word-to-PDF engine (from `cdn.zetaoffice.net`) when you make a PDF from a Word template. The conversion runs in your browser, and your document is not uploaded anywhere.
+
+To know of a new release, the server asks GitHub for Pental Report's latest one twice a day. The request carries nothing but the version it runs, and `UPDATE_CHECK=off` in `.env` stops it. An update is downloaded from GitHub too.
 
 ## Moving to Pental
 

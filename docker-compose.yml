@@ -33,7 +33,7 @@ services:
       retries: 30
 
   report:
-    image: ghcr.io/pental-io/report:${REPORT_VERSION:-0.1.4}
+    image: ghcr.io/pental-io/report:${REPORT_VERSION:-0.1.5}
     build: .
     restart: unless-stopped
     depends_on:
@@ -55,6 +55,14 @@ services:
       S3_BUCKET: ${S3_BUCKET:-}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      # Updates: whether to ask GitHub for the latest release, the token the
+      # updater on this computer asks with (update.sh), and what the installer
+      # says of this computer, for the command the app gives to update it.
+      UPDATE_CHECK: ${UPDATE_CHECK:-on}
+      UPDATE_TOKEN: ${UPDATE_TOKEN:-}
+      REPORT_HOST: ${REPORT_HOST:-}
+      REPORT_DIR: ${REPORT_DIR:-}
+      REPORT_ROOT: ${REPORT_ROOT:-0}
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
 
