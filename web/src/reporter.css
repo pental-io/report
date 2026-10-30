@@ -94,3 +94,24 @@ div:has(> #pwAdoption){display:none !important}
    the perspective's own switch cannot show it again (an inline display loses
    to !important). */
 #aCaptureCredsRow{display:none !important}
+
+/* The Word round trip, in line with the report's button (75-word.js,
+   _syncPanelHtml): a label and the upload placeholder after a hairline, the
+   edited file in use a line under the row. A Word file can be dropped on it. */
+.rp-trip{flex:none;display:flex;align-items:center;gap:0.5rem;padding-left:0.75rem;border-left:1px solid var(--border);
+  border-radius:0;transition:background 0.15s,box-shadow 0.15s}
+.rp-trip .rp-trip-l{font-family:var(--font-body,inherit);font-size:0.8rem;font-weight:600;letter-spacing:normal;
+  color:var(--gray);white-space:nowrap}
+.rp-trip .btn{display:inline-flex;align-items:center;gap:0.35rem;white-space:nowrap}
+.rp-trip .btn svg{width:13px;height:13px;flex:none}
+/* The placeholder that asks for the file, as the portal's panel had it, on
+   one line beside the report's button. */
+.rp-trip .rp-trip-drop{display:inline-flex;align-items:center;gap:0.45rem;padding:0.28rem 0.7rem;border:1.5px dashed var(--border);
+  border-radius:6px;cursor:pointer;font-family:var(--font-body,inherit);font-size:0.72rem;letter-spacing:normal;white-space:nowrap;
+  transition:border-color 0.15s,background 0.15s}
+.rp-trip .rp-trip-drop:hover{border-color:var(--accent);background:rgba(var(--accent-rgb,183,28,28),0.04)}
+.rp-trip .rp-trip-none{color:var(--gray)}
+.rp-trip .rp-trip-act{color:var(--accent);font-weight:600}
+.rp-trip.is-over .rp-trip-drop{border-color:var(--accent);border-style:solid;background:rgba(var(--accent-rgb,183,28,28),0.08)}
+.rp-trip-cur{flex:1 1 100%;margin:0}
+@media (max-width:700px){.rp-trip{flex:1 1 100%;flex-wrap:wrap;border-left:0;padding-left:0}.rp-trip .rp-trip-drop{white-space:normal}}

@@ -28410,7 +28410,7 @@ function renderAssessmentDetail() {
       h += '<div style="order:' + _smDocOrder('doc_report') + ';flex:' + (_hasSync ? '2 1 340px' : '1 1 200px') + ';min-width:0;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:0.75rem;display:flex;gap:0.75rem;align-items:stretch;flex-wrap:wrap">';
       h += '<div style="flex:1 1 190px;min-width:0">';
 
-      h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem' + (_docxAutoPdfOn('report') ? '' : ';margin-bottom:0.5rem') + '">';
+      h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem' + '' + '">';
       h += '<div style="display:flex;align-items:center;gap:0.5rem;min-width:0">';
       h += '<div style="width:28px;height:28px;border-radius:6px;background:rgba(59,130,246,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0">' + _smDocIcon('doc_report') + '</div>';
       h += '<span style="font-size:0.8rem;font-weight:600;color:var(--text)">' + esc(_smLabel('doc_report')) + '</span></div>';
@@ -28430,7 +28430,7 @@ function renderAssessmentDetail() {
       h += '</div>';
       h += '</div>';
 
-      var _pdfIsMade = _docxAutoPdfOn('report');
+      var _pdfIsMade = true;
       if (!_pdfIsMade) {
         h += '<div class="afm-row" style="display:flex;gap:0.4rem;align-items:stretch;flex-wrap:wrap;margin-top:0.5rem">';
 
@@ -56031,48 +56031,6 @@ async function syncUploadEdited(assessmentId, inputEl) {
   }
 }
 window.syncUploadEdited = syncUploadEdited;
-function _syncPanelHtml(a, opts) {
-  opts = opts || {};
-
-  var h = '<div style="flex:1 1 170px;min-width:0;' + (opts.bare ? '' : 'border-left:1px solid var(--border);padding-left:0.75rem;') + 'display:flex;flex-direction:column">';
-
-  h += '<div style="font-size:0.78rem;font-weight:600;color:var(--text);margin-bottom:0.35rem;order:-2">'
-    + 'Edited in Word?</div>';
-  h += '<label style="border:1.5px dashed var(--border);border-radius:6px;'
-    + 'padding:0.6rem 0.75rem;text-align:center;cursor:pointer;display:block;'
-    + 'transition:border-color 0.15s,background 0.15s;margin-bottom:0.35rem"'
-    + ' onmouseover="this.style.borderColor=\'var(--accent)\';this.style.background=\'rgba(99,102,241,0.04)\'"'
-    + ' onmouseout="this.style.borderColor=\'var(--border)\';this.style.background=\'transparent\'"'
-    + ' title="'
-    + esc('Track changes and comments are fine: you choose which tracked edits to accept, '
-        + 'and Word comments come back as comments on this engagement') + '">'
-    + '<div style="font-size:0.72rem;color:var(--gray);margin-bottom:0.15rem">No edited DOCX uploaded</div>'
-    + '<div style="font-size:0.72rem;color:var(--accent);font-weight:600">Click to upload DOCX</div>'
-    + '<input type="file" accept=".docx" style="display:none" onchange="syncUploadEdited(\'' + a.id + '\', this)"></label>';
-  if (opts.withDownload) {
-
-    h += '<div style="margin-bottom:0.4rem;order:-1">';
-
-    h += _renderDocxDownloadButton('report', a.id, 'downloadReport', { label: 'Download the Word file', showWhenEmpty: true,
-      extraActions: [_qaReviewCopyAction(a)] });
-    h += '</div>';
-  }
-
-  h += '<div style="font-size:0.68rem;color:var(--gray);line-height:1.45">'
-    + 'You review what changed before anything is written.</div>';
-  if (a.edited_docx_path) {
-
-    h += '<div class="sync-current" title="' + esc('Download hands this file back everywhere in Pental Report, brought up to date with anything changed here since') + '">';
-    h += '<span class="qa-pill info">Current report</span>';
-    h += '<span class="sync-current-name">' + esc(a.edited_docx_name || 'Uploaded report') + '</span>';
-    h += '<span class="sync-current-when">' + fmtDateTime(a.edited_docx_at) + '</span>';
-    if (canManage()) h += '<button class="btn btn-ghost btn-sm qa-cmt-act" onclick="clearEditedReport(\'' + a.id + '\')" title="Hand back a freshly generated report from now on">Use a generated one</button>';
-    h += '</div>';
-  }
-
-  h += '</div>';
-  return h;
-}
 async function uploadAssessmentFile(assessmentId, inputEl) {
   _showLoading();
   try {
