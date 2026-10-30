@@ -32329,7 +32329,7 @@ function _aiHtmlTidy(html, o) {
 }
 function _aiHtmlFromReply(raw, o) {
 
-  var t = String(raw == null ? '' : raw).replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^\s*<think>[\s\S]*$/i, '').replace(/\r\n?/g, '\n').trim();
+  var t = String(raw == null ? '' : raw).replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^\s*<think>[\s\S]*$/i, '').replace(/\r\n?/g, '\n').replace(/\u2029/g, '\n\n').replace(/\u2028/g, '\n').trim();
   t = _aiUnfence(t);
   t = _aiUnchat(t).trim();
 
@@ -32346,17 +32346,43 @@ function _aiSummaryHtml(raw) {
   var doc = document.implementation.createHTMLDocument('');
   var box = doc.createElement('div');
   box.innerHTML = html;
+
+  Array.prototype.slice.call(box.querySelectorAll('p')).forEach(function (p) {
+    if (p.closest('pre,code,.code-block') || (p.parentNode && p.parentNode.closest && p.parentNode.closest('li,td,th,blockquote'))) return;
+    Array.prototype.slice.call(p.childNodes).forEach(function (n) {
+      if (n.nodeType !== 3 || String(n.nodeValue || '').indexOf('\n') < 0) return;
+      var parts = String(n.nodeValue).split(/[ \t]*\n[ \t]*/), f = doc.createDocumentFragment();
+      var before = n.previousSibling ? String(n.previousSibling.textContent || '') : '';
+      parts.forEach(function (s, i) {
+        if (i) {
+          var prev = i === 1 && !parts[0] ? before : parts[i - 1];
+          if (/[A-Za-z0-9,]$/.test(String(prev).trim()) && /^[a-z]/.test(s)) f.appendChild(doc.createTextNode(' '));
+          else f.appendChild(doc.createElement('br'));
+        }
+        if (s) f.appendChild(doc.createTextNode(s));
+      });
+      p.replaceChild(f, n);
+    });
+  });
   Array.prototype.slice.call(box.querySelectorAll('p')).forEach(function (p) {
     if (!p.querySelector('br') || (p.parentNode && p.parentNode.closest && p.parentNode.closest('li,td,th,blockquote'))) return;
-    var parts = [], cur = doc.createElement('p');
+
+    var groups = [[]];
     Array.prototype.slice.call(p.childNodes).forEach(function (n) {
-      if (n.nodeName === 'BR') { parts.push(cur); cur = doc.createElement('p'); }
-      else cur.appendChild(n);
+      if (n.nodeName === 'BR') groups.push([]);
+      else groups[groups.length - 1].push(n);
     });
-    parts.push(cur);
-    parts = parts.filter(function (x) { return x.textContent.trim() || x.querySelector('img'); });
-    if (parts.length < 2) return;
-    parts.forEach(function (x) { p.parentNode.insertBefore(x, p); });
+    groups = groups.filter(function (g) { return g.some(function (n) { return /\S/.test(n.textContent || '') || n.nodeName === 'IMG' || (n.querySelector && n.querySelector('img')); }); });
+    if (groups.length < 2) {
+      while (p.firstChild && p.firstChild.nodeName === 'BR') p.removeChild(p.firstChild);
+      while (p.lastChild && p.lastChild.nodeName === 'BR') p.removeChild(p.lastChild);
+      return;
+    }
+    groups.forEach(function (g) {
+      var x = doc.createElement('p');
+      g.forEach(function (n) { x.appendChild(n); });
+      p.parentNode.insertBefore(x, p);
+    });
     p.parentNode.removeChild(p);
   });
   var ps = Array.prototype.slice.call(box.children);
@@ -51898,6 +51924,67 @@ function _normalisePastedHtml(html) {
     pre.parentNode.replaceChild(div, pre);
   });
   Array.prototype.slice.call(root.querySelectorAll('code')).forEach(function (c) { c.className = ''; c.removeAttribute('class'); });
+
+  (function keepLaidOutLines() {
+    var KEEPS = /(^|;)\s*(white-space\s*:\s*(pre|pre-wrap|pre-line|break-spaces)|white-space-collapse\s*:\s*(preserve|preserve-breaks|break-spaces))\s*(;|$)/i;
+    var keeps = function (el) { return !!(el && el.getAttribute && KEEPS.test(el.getAttribute('style') || '')); };
+    var isCode = function (el) { return /^(PRE|CODE|TEXTAREA)$/.test(el.nodeName) || !!(el.classList && el.classList.contains('code-block')); };
+    var SPLITS = /^(DIV|P|BLOCKQUOTE|SECTION|ARTICLE|MAIN|HEADER|FOOTER)$/;
+    var BLOCK = /^(DIV|P|BLOCKQUOTE|SECTION|ARTICLE|MAIN|HEADER|FOOTER|H[1-6]|UL|OL|TABLE|HR|FIGURE)$/;
+    var lines = function (v) { return String(v || '').replace(/\r\n?/g, '\n'); };
+
+    var breakLines = function (el) {
+      Array.prototype.slice.call(el.childNodes).forEach(function (n) {
+        if (n.nodeType === 3) {
+          var v = lines(n.nodeValue);
+          if (v.indexOf('\n') < 0) return;
+          var frag = doc.createDocumentFragment();
+          v.split('\n').forEach(function (ln, i) { if (i) frag.appendChild(doc.createElement('br')); if (ln) frag.appendChild(doc.createTextNode(ln)); });
+          n.parentNode.replaceChild(frag, n);
+        } else if (n.nodeType === 1 && !isCode(n)) breakLines(n);
+      });
+    };
+    Array.prototype.slice.call(root.querySelectorAll('[style]')).filter(function (el) {
+      if (!keeps(el) || isCode(el)) return false;
+      for (var p = el.parentElement; p && p !== root; p = p.parentElement) if (keeps(p)) return false;
+      return true;
+    }).forEach(function (el) {
+      if (!SPLITS.test(el.nodeName) || !el.parentNode) { breakLines(el); return; }
+
+      var groups = [[]];
+      Array.prototype.slice.call(el.childNodes).forEach(function (n) {
+        if (n.nodeType === 3) {
+          lines(n.nodeValue).split(/\n[ \t]*\n\s*/).forEach(function (part, i) {
+            if (i) groups.push([]);
+            part.split('\n').forEach(function (ln, j) {
+              if (j) groups[groups.length - 1].push(doc.createElement('br'));
+              if (ln) groups[groups.length - 1].push(doc.createTextNode(ln));
+            });
+          });
+        } else if (n.nodeType === 1 && BLOCK.test(n.nodeName)) {
+          if (!isCode(n)) breakLines(n);
+          groups.push([n]);
+          groups.push([]);
+        } else {
+          if (n.nodeType === 1 && !isCode(n)) breakLines(n);
+          groups[groups.length - 1].push(n);
+        }
+      });
+      var out = doc.createDocumentFragment();
+      groups.forEach(function (g) {
+        while (g.length && g[0].nodeName === 'BR') g.shift();
+        while (g.length && g[g.length - 1].nodeName === 'BR') g.pop();
+        if (!g.length) return;
+        if (g.length === 1 && g[0].nodeType === 1 && BLOCK.test(g[0].nodeName)) { out.appendChild(g[0]); return; }
+        var words = g.some(function (n) { return /\S/.test(n.textContent || '') || (n.nodeType === 1 && (/^(IMG|TABLE)$/.test(n.nodeName) || (n.querySelector && n.querySelector('img,table')))); });
+        if (!words) return;
+        var para = doc.createElement('p');
+        g.forEach(function (n) { para.appendChild(n); });
+        out.appendChild(para);
+      });
+      el.parentNode.replaceChild(out, el);
+    });
+  })();
 
   (function collapse(node) {
     for (var n = node.firstChild; n; n = n.nextSibling) {
