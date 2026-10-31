@@ -5860,6 +5860,18 @@ DECLARE
 BEGIN
   v_user_id := auth.uid();
   IF v_user_id IS NULL THEN RETURN false; END IF;
+  BEGIN
+    v_sid := auth.jwt() ->> 'session_id';
+  EXCEPTION WHEN OTHERS THEN v_sid := NULL; END;
+  IF v_sid IS NOT NULL AND v_sid !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN v_sid := NULL; END IF;
+
+  -- 1977: A SESSION AN API KEY SIGNED IN (rpc_api_key_bind) is fresh through
+  -- its key alone (_api_session_ok): while the key lives, for an api_v1_
+  -- function, never for a table, a file, another function or a browser, and
+  -- never by the rules below.
+  IF v_sid IS NOT NULL AND EXISTS (SELECT 1 FROM public.api_key_sessions WHERE session_id = v_sid::uuid) THEN
+    RETURN public._api_session_ok(v_sid::uuid, v_user_id);
+  END IF;
 
   -- Window comes from settings. We cap at 43200 (30 days) and floor at 5 min.
   BEGIN
@@ -5871,11 +5883,12 @@ BEGIN
   -- 1841: this session, once the person has passed in a session written down
   -- (_mfa_fresh). A session that was ended (signed out, or signed out
   -- elsewhere) is not fresh, though its token has an hour left to run.
-  IF EXISTS (SELECT 1 FROM public._mfa_fresh WHERE auth_user_id = v_user_id) THEN
-    BEGIN
-      v_sid := auth.jwt() ->> 'session_id';
-    EXCEPTION WHEN OTHERS THEN v_sid := NULL; END;
-    IF v_sid IS NULL OR v_sid !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN RETURN false; END IF;
+  -- 1977: and for anybody who has ever held an API key, so a session a key's
+  -- exchange signed in and nothing has bound yet is never read from the
+  -- person's stamp (the rule below), whatever the stamp says.
+  IF EXISTS (SELECT 1 FROM public._mfa_fresh WHERE auth_user_id = v_user_id)
+     OR EXISTS (SELECT 1 FROM public.api_keys WHERE auth_user_id = v_user_id) THEN
+    IF v_sid IS NULL THEN RETURN false; END IF;
     SELECT verified_at INTO v_at FROM public._mfa_fresh
      WHERE session_id = v_sid::uuid AND auth_user_id = v_user_id;
     IF v_at IS NULL OR v_at <= now() - make_interval(mins => v_window_min) THEN RETURN false; END IF;
@@ -6057,6 +6070,8 @@ BEGIN
     INSERT INTO public._mfa_fresh (session_id, auth_user_id, verified_at)
     VALUES (gen_random_uuid(), p_auth_id, '-infinity');
   END IF;
+  -- 1977: and the API keys they made with the factor being reset.
+  PERFORM public._api_keys_end(NULL, p_auth_id, 'Its person''s second factor was reset');
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp;
 
@@ -34598,6 +34613,8 @@ BEGIN
   END LOOP;
   DELETE FROM public._stripe_session_checks WHERE first_at < now() - interval '4 days';
   PERFORM public._signin_sweep();
+  -- 1977: and an API key's spent exchanges, ended sessions and old writes.
+  BEGIN PERFORM public._api_sweep(); EXCEPTION WHEN undefined_function THEN NULL; END;
   -- 1841: and pg_cron's run history, once an hour (_cron_tidy).
   BEGIN PERFORM public._cron_tidy(); EXCEPTION WHEN undefined_function THEN NULL; END;
   -- 1847: and the files kept in step with SharePoint or Google Drive. Whatever
@@ -38513,6 +38530,9 @@ REVOKE ALL ON FUNCTION public._transfer_require_service() FROM PUBLIC, anon, aut
 -- older Supabase ties a bucket's owner to a user), buckets before objects.
 -- A public table belonging to an extension, or owned by a role this schema's
 -- owner is not, is left out (and named by the manifest).
+-- 1977: an API key's exchanges and sessions stay behind (a session is this
+-- home's sign-in, which does not move); the keys, the switches, the writes
+-- noted and the log move, so a key works on the new home at its new address.
 CREATE OR REPLACE FUNCTION public._transfer_tables()
   RETURNS TABLE (table_schema text, table_name text, ord integer)
   LANGUAGE sql STABLE SET search_path = public, pg_catalog, pg_temp AS $tt$
@@ -38526,7 +38546,8 @@ CREATE OR REPLACE FUNCTION public._transfer_tables()
    WHERE n.nspname = 'public' AND c.relkind = 'r'
      AND c.relname NOT IN ('_pental_transfer', '_pental_schema_version', '_pw_dummy', '_ai_requests', '_ticket_jobs', '_ticket_runs', '_tickets_state', '_mail_jobs', '_mail_token', '_mail_state',
                            '_xero_jobs', '_xero_pending', '_xero_state', '_net_jobs', '_signin_codes', '_signin_hits', '_sso_pending', '_sso_jwks',
-                           '_docs_google_cache', '_docs_pending', '_docs_links', '_docs_ms_grant', '_docs_ms_cache', '_pm_jobs')
+                           '_docs_google_cache', '_docs_pending', '_docs_links', '_docs_ms_grant', '_docs_ms_cache', '_pm_jobs',
+                           'api_key_exchanges', 'api_key_sessions')
      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
      AND pg_has_role(current_user, c.relowner, 'MEMBER')
    ORDER BY 3;
@@ -38540,7 +38561,8 @@ CREATE OR REPLACE FUNCTION public._transfer_skipped() RETURNS jsonb
    WHERE n.nspname = 'public' AND c.relkind = 'r'
      AND c.relname NOT IN ('_pental_transfer', '_pental_schema_version', '_pw_dummy', '_ai_requests', '_ticket_jobs', '_ticket_runs', '_tickets_state', '_mail_jobs', '_mail_token', '_mail_state',
                            '_xero_jobs', '_xero_pending', '_xero_state', '_net_jobs', '_signin_codes', '_signin_hits', '_sso_pending', '_sso_jwks',
-                           '_docs_google_cache', '_docs_pending', '_docs_links', '_docs_ms_grant', '_docs_ms_cache', '_pm_jobs')
+                           '_docs_google_cache', '_docs_pending', '_docs_links', '_docs_ms_grant', '_docs_ms_cache', '_pm_jobs',
+                           'api_key_exchanges', 'api_key_sessions')
      AND (EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
           OR NOT pg_has_role(current_user, c.relowner, 'MEMBER'));
 $tsk$;
@@ -44546,14 +44568,1258 @@ BEGIN
 END $rls_once$;
 -- 1958: END
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 1977: THE PENTAL API, VERSION 1.
+--
+-- [stated] Arian: "I want to also allow for api docs to allow for people to be
+-- able to do custom project management or whatever they need with pental on
+-- both reporter and portal , done securely". Decided with him: each person
+-- makes keys for themselves, where an administrator allows their role; a
+-- documented, versioned API (the api_v1_ functions below), never the tables;
+-- keys that read and keys that also write, writing off until an
+-- administrator turns it on; a key lives 90 days unless an administrator
+-- allows longer, up to a year.
+--
+-- HOW A KEY SIGNS IN. The same three calls on Supabase, on the gateway and in
+-- Pental Report, with nothing added to any server:
+--   1. rpc_api_key_exchange(p_key), with the publishable key: the key is
+--      checked and a single-use password set on its person's sign-in record,
+--      which comes back with their address;
+--   2. /auth/v1/token?grant_type=password with those two: a session, as every
+--      sign-in from the portal ends;
+--   3. rpc_api_key_bind(p_key), as that session, within the minute: the
+--      session is the key's from then on (api_key_sessions).
+-- A session that is a key's is fresh (mfa_is_fresh) only through its key
+-- (_api_session_ok): while the key lives, for an api_v1_ function, and never
+-- from a browser. So it reads and writes what its person could in the portal,
+-- through these functions alone: no table, no file, no other function, and
+-- nothing at all once the key is revoked or expires, its person is switched
+-- off or changes role, organisation or sign-in, an administrator takes their
+-- role off the list, or their second factor is reset.
+--
+-- WHAT IS KEPT. A key is shown once, when it is made, and kept as its SHA-256
+-- (as a scanner's push token is). Its prefix (pental_ and eight characters)
+-- is kept as it is, to tell keys apart in a list.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- The firm's switches, one row. Off until an administrator turns them on.
+CREATE TABLE IF NOT EXISTS public.api_settings (
+  id boolean PRIMARY KEY DEFAULT true,
+  enabled boolean NOT NULL DEFAULT false,
+  write_enabled boolean NOT NULL DEFAULT false,
+  roles text[] NOT NULL DEFAULT ARRAY['admin', 'senior', 'standard']::text[],
+  max_days integer NOT NULL DEFAULT 90,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid,
+  CONSTRAINT api_settings_one CHECK (id),
+  CONSTRAINT api_settings_days CHECK (max_days BETWEEN 1 AND 365),
+  CONSTRAINT api_settings_roles CHECK (roles <@ ARRAY['admin', 'senior', 'standard', 'sales', 'marketing', 'client', 'contractor']::text[])
+);
+INSERT INTO public.api_settings (id) VALUES (true) ON CONFLICT (id) DO NOTHING;
+
+-- A person's keys. Kept after a key is revoked or has expired, and after its
+-- person is deleted (no reference to profiles, so the record of whose it was
+-- stays): a person who has ever held a key is read session by session from
+-- then on (mfa_is_fresh), which is what keeps a session a key signed in from
+-- ever counting as one the person signed in themselves.
+CREATE TABLE IF NOT EXISTS public.api_keys (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  profile_id uuid NOT NULL,
+  auth_user_id uuid NOT NULL,
+  name text NOT NULL,
+  prefix text NOT NULL,
+  key_hash text NOT NULL,
+  scope text NOT NULL,
+  role_at_creation text NOT NULL,
+  client_id_at_creation uuid,
+  team_at_creation uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  last_used_at timestamptz,
+  last_used_ip text,
+  revoked_at timestamptz,
+  revoked_by uuid,
+  revoked_reason text,
+  CONSTRAINT api_keys_prefix_key UNIQUE (prefix),
+  CONSTRAINT api_keys_hash_key UNIQUE (key_hash),
+  CONSTRAINT api_keys_scope CHECK (scope IN ('read', 'write')),
+  CONSTRAINT api_keys_name CHECK (length(btrim(name)) BETWEEN 1 AND 80),
+  CONSTRAINT api_keys_hash_shape CHECK (key_hash ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT api_keys_prefix_shape CHECK (prefix ~ '^pental_[0-9a-f]{8}$')
+);
+CREATE INDEX IF NOT EXISTS api_keys_profile_idx ON public.api_keys (profile_id);
+CREATE INDEX IF NOT EXISTS api_keys_auth_idx ON public.api_keys (auth_user_id);
+
+-- An exchange: the single-use password set for a key, as its bcrypt (the one
+-- written to the sign-in record), so the bind can change it again where
+-- nothing has used it. Spent by the bind, within a minute.
+CREATE TABLE IF NOT EXISTS public.api_key_exchanges (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  key_id uuid NOT NULL,
+  auth_user_id uuid NOT NULL,
+  bridge_hash text NOT NULL,
+  ip text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  used_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS api_key_exchanges_key_idx ON public.api_key_exchanges (key_id, created_at);
+
+-- The sessions a key signed in. A key keeps its five newest; an older one is
+-- ended (ended_at), and a key revoked ends them all.
+CREATE TABLE IF NOT EXISTS public.api_key_sessions (
+  session_id uuid PRIMARY KEY,
+  key_id uuid NOT NULL,
+  auth_user_id uuid NOT NULL,
+  ip text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  ended_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS api_key_sessions_key_idx ON public.api_key_sessions (key_id, created_at);
+
+-- Each write a key made: what, on which row, when. Sixty a minute is the most;
+-- kept 90 days.
+CREATE TABLE IF NOT EXISTS public.api_key_writes (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  key_id uuid NOT NULL,
+  at timestamptz NOT NULL DEFAULT now(),
+  fn text NOT NULL,
+  target uuid
+);
+CREATE INDEX IF NOT EXISTS api_key_writes_key_idx ON public.api_key_writes (key_id, at);
+
+-- What was done with keys and the switches, by whom: a key made, revoked, or
+-- revoked with every other; the switches changed. Names as they were then.
+CREATE TABLE IF NOT EXISTS public.api_key_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  at timestamptz NOT NULL DEFAULT now(),
+  event text NOT NULL,
+  key_id uuid,
+  key_prefix text,
+  key_name text,
+  person_id uuid,
+  person text,
+  by_id uuid,
+  by_person text,
+  detail text
+);
+CREATE INDEX IF NOT EXISTS api_key_events_at_idx ON public.api_key_events (at DESC);
+
+-- Nobody reads or writes these but the functions below.
+ALTER TABLE public.api_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.api_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.api_key_exchanges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.api_key_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.api_key_writes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.api_key_events ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.api_settings, public.api_keys, public.api_key_exchanges, public.api_key_sessions,
+              public.api_key_writes, public.api_key_events FROM PUBLIC, anon, authenticated;
+GRANT ALL ON public.api_settings, public.api_keys, public.api_key_exchanges, public.api_key_sessions,
+             public.api_key_writes, public.api_key_events TO service_role;
+
+-- ── The refusals, each in one place ──────────────────────────────────────────
+-- An HTTP status (PostgREST and the gateway answer PTnnn as status nnn), the
+-- reason in words as the message, and a short code as the detail, which a
+-- program can act on.
+CREATE OR REPLACE FUNCTION public._api_refuse(p_code text, p_message text DEFAULT NULL) RETURNS void
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, pg_temp AS $apirefuse$
+DECLARE v_status text; v_msg text;
+BEGIN
+  SELECT x.s, x.m INTO v_status, v_msg FROM (VALUES
+    ('key_invalid', 'PT401', 'That is not a key this database knows.'),
+    ('key_revoked', 'PT401', 'This key was revoked.'),
+    ('key_expired', 'PT401', 'This key has expired. Make a new one in My Profile.'),
+    ('key_suspended', 'PT401', 'This key no longer works: its person was switched off, or changed role, organisation or sign-in since it was made.'),
+    ('not_a_key_session', 'PT401', 'This function is for a session an API key signed in: exchange the key (rpc_api_key_exchange), sign in with what that returns, then bind the session (rpc_api_key_bind).'),
+    ('session_ended', 'PT401', 'This session was ended: a key keeps its five newest sessions. Exchange the key again.'),
+    ('no_session', 'PT401', 'Bind with the session the exchange signed in, as its access token.'),
+    ('no_exchange', 'PT401', 'Bind within a minute of the exchange, with the session that exchange signed in.'),
+    ('role_off', 'PT403', 'An administrator has not allowed API keys for this person''s role (Settings, API).'),
+    ('contractors_off', 'PT403', 'Contractors are switched off here (Settings, Feature Modules), so a contractor''s key reads nothing.'),
+    ('api_off', 'PT403', 'The API is switched off. An administrator turns it on in Settings, API.'),
+    ('writes_off', 'PT403', 'Writing through the API is switched off. An administrator turns it on in Settings, API.'),
+    ('read_only', 'PT403', 'This key reads only. Make a key that can also write to change anything.'),
+    ('browser', 'PT403', 'API keys are used from servers and scripts, never from a browser, where every visitor could read them.'),
+    ('interactive_session', 'PT403', 'That session is somebody''s own sign-in to the portal. Bind a session the exchange signed in.'),
+    ('session_taken', 'PT409', 'That session belongs to another key.'),
+    ('not_allowed', 'PT403', 'This person cannot make that change.'),
+    ('not_found', 'PT404', 'Nothing with that id that this key can see.'),
+    ('changed', 'PT409', 'It was changed since you read it (row_version). Read it again and decide.'),
+    ('rate_limited', 'PT429', 'Too many requests for this key. Wait a minute.'),
+    ('bad_request', 'PT400', 'Something in the request is not right.')
+  ) AS x(c, s, m) WHERE x.c = p_code;
+  RAISE EXCEPTION USING ERRCODE = COALESCE(v_status, 'PT400'), DETAIL = COALESCE(p_code, 'bad_request'),
+    MESSAGE = COALESCE(NULLIF(p_message, ''), v_msg, 'Something in the request is not right.');
+END $apirefuse$;
+REVOKE ALL ON FUNCTION public._api_refuse(text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._api_refuse(text, text) TO authenticated, service_role;
+
+-- A request a browser makes says where it is from (Origin, Sec-Fetch-Site);
+-- servers and scripts send neither. A key in a page is a key every visitor
+-- holds, so a key is never taken from one.
+CREATE OR REPLACE FUNCTION public._api_from_browser() RETURNS boolean
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, pg_temp AS $apibrowser$
+DECLARE h jsonb;
+BEGIN
+  BEGIN
+    h := NULLIF(current_setting('request.headers', true), '')::jsonb;
+  EXCEPTION WHEN OTHERS THEN h := NULL; END;
+  IF h IS NULL OR jsonb_typeof(h) <> 'object' THEN RETURN false; END IF;
+  RETURN COALESCE(h ->> 'origin', '') <> '' OR COALESCE(h ->> 'sec-fetch-site', '') <> '';
+END $apibrowser$;
+REVOKE ALL ON FUNCTION public._api_from_browser() FROM PUBLIC, anon, authenticated;
+
+-- The key a secret is, by its SHA-256; nothing for anything that is not one.
+CREATE OR REPLACE FUNCTION public._api_key_by_secret(p_key text) RETURNS public.api_keys
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $apibysecret$
+  SELECT k.* FROM public.api_keys k
+   WHERE btrim(COALESCE(p_key, '')) ~ '^pental_[0-9a-f]{8}_[0-9a-f]{64}$'
+     AND k.key_hash = encode(extensions.digest(btrim(p_key), 'sha256'), 'hex')
+$apibysecret$;
+REVOKE ALL ON FUNCTION public._api_key_by_secret(text) FROM PUBLIC, anon, authenticated;
+
+-- Whether a key works, and if not why: live, or the refusal's code. Asked on
+-- every call a key makes, so a change takes effect on the next one.
+CREATE OR REPLACE FUNCTION public._api_key_state(p_key uuid) RETURNS text
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apistate$
+DECLARE k public.api_keys; st public.api_settings; p record;
+BEGIN
+  SELECT * INTO k FROM public.api_keys WHERE id = p_key;
+  IF k.id IS NULL THEN RETURN 'key_invalid'; END IF;
+  IF k.revoked_at IS NOT NULL THEN RETURN 'key_revoked'; END IF;
+  IF k.expires_at <= now() THEN RETURN 'key_expired'; END IF;
+  SELECT * INTO st FROM public.api_settings WHERE id;
+  IF NOT COALESCE(st.enabled, false) THEN RETURN 'api_off'; END IF;
+  SELECT pr.id, pr.role, pr.active, pr.auth_user_id, pr.client_id, pr.contractor_team_id INTO p
+    FROM public.profiles pr WHERE pr.id = k.profile_id;
+  IF p.id IS NULL OR p.active IS DISTINCT FROM true OR p.auth_user_id IS DISTINCT FROM k.auth_user_id
+     OR p.role IS DISTINCT FROM k.role_at_creation OR p.client_id IS DISTINCT FROM k.client_id_at_creation
+     OR p.contractor_team_id IS DISTINCT FROM k.team_at_creation THEN
+    RETURN 'key_suspended';
+  END IF;
+  IF NOT (p.role = ANY (st.roles)) THEN RETURN 'role_off'; END IF;
+  -- A contractor is nobody while the firm has contractors off (current_user_role).
+  IF p.role = 'contractor' AND NOT COALESCE((SELECT s.contractors_enabled FROM public.settings s
+                                               ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1), false) THEN
+    RETURN 'contractors_off';
+  END IF;
+  RETURN 'live';
+END $apistate$;
+REVOKE ALL ON FUNCTION public._api_key_state(uuid) FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public._api_key_live(p_key uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apilive$
+  SELECT public._api_key_state(p_key) = 'live'
+$apilive$;
+REVOKE ALL ON FUNCTION public._api_key_live(uuid) FROM PUBLIC, anon, authenticated;
+
+-- This request's session id, when it has one.
+CREATE OR REPLACE FUNCTION public._api_session_id() RETURNS uuid
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, pg_temp AS $apisid$
+DECLARE v text;
+BEGIN
+  BEGIN
+    v := auth.jwt() ->> 'session_id';
+  EXCEPTION WHEN OTHERS THEN v := NULL; END;
+  IF v IS NULL OR v !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN RETURN NULL; END IF;
+  RETURN v::uuid;
+END $apisid$;
+REVOKE ALL ON FUNCTION public._api_session_id() FROM PUBLIC, anon, authenticated;
+
+-- Whether this request's session is one a key signed in (in any state).
+CREATE OR REPLACE FUNCTION public._api_is_key_session() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apiiskey$
+  SELECT EXISTS (SELECT 1 FROM public.api_key_sessions s WHERE s.session_id = public._api_session_id())
+$apiiskey$;
+REVOKE ALL ON FUNCTION public._api_is_key_session() FROM PUBLIC, anon, authenticated;
+
+-- THE ONE PLACE A KEY'S SESSION IS FRESH (mfa_is_fresh asks this, and only
+-- this, for a session a key signed in): its binding not ended and its
+-- person's, the key live, the request an api_v1_ function's (/rpc/api_v1_...,
+-- as PostgREST names it, or /rest/v1/rpc/api_v1_... as the gateway does), not
+-- from a browser, and the session not signed out.
+CREATE OR REPLACE FUNCTION public._api_session_ok(p_sid uuid, p_uid uuid) RETURNS boolean
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apisessok$
+DECLARE b public.api_key_sessions;
+BEGIN
+  SELECT * INTO b FROM public.api_key_sessions WHERE session_id = p_sid;
+  IF b.session_id IS NULL OR b.ended_at IS NOT NULL OR b.auth_user_id IS DISTINCT FROM p_uid THEN RETURN false; END IF;
+  IF COALESCE(current_setting('request.path', true), '') !~ '^(/rest/v1)?/rpc/api_v1_[a-z0-9_]+$' THEN RETURN false; END IF;
+  IF public._api_from_browser() THEN RETURN false; END IF;
+  IF NOT public._api_key_live(b.key_id) THEN RETURN false; END IF;
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM auth.sessions WHERE id = p_sid) THEN RETURN false; END IF;
+  EXCEPTION WHEN undefined_table OR insufficient_privilege THEN NULL; END;
+  RETURN true;
+END $apisessok$;
+REVOKE ALL ON FUNCTION public._api_session_ok(uuid, uuid) FROM PUBLIC, anon, authenticated;
+
+-- The key behind this request, for every api_v1_ function before it does
+-- anything: a refusal that says why when there is none, or it does not work.
+CREATE OR REPLACE FUNCTION public._api_need_key() RETURNS uuid
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apineed$
+DECLARE b public.api_key_sessions; v_state text;
+BEGIN
+  IF auth.uid() IS NOT NULL THEN
+    SELECT * INTO b FROM public.api_key_sessions WHERE session_id = public._api_session_id() AND auth_user_id = auth.uid();
+  END IF;
+  IF b.session_id IS NULL THEN PERFORM public._api_refuse('not_a_key_session'); END IF;
+  IF public._api_from_browser() THEN PERFORM public._api_refuse('browser'); END IF;
+  v_state := public._api_key_state(b.key_id);
+  IF v_state <> 'live' THEN PERFORM public._api_refuse(v_state); END IF;
+  IF b.ended_at IS NOT NULL THEN PERFORM public._api_refuse('session_ended'); END IF;
+  RETURN b.key_id;
+END $apineed$;
+REVOKE ALL ON FUNCTION public._api_need_key() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._api_need_key() TO authenticated, service_role;
+
+-- And for a write: a key that may write, writing switched on, sixty writes a
+-- minute at most; the write noted (api_key_writes). A write that then fails
+-- takes its note with it.
+CREATE OR REPLACE FUNCTION public._api_need_write(p_fn text, p_target uuid) RETURNS uuid
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apiwrite$
+DECLARE v_key uuid; v_scope text; v_n integer; v_ip text := public._request_ip();
+BEGIN
+  v_key := public._api_need_key();
+  SELECT scope INTO v_scope FROM public.api_keys WHERE id = v_key FOR UPDATE;
+  IF v_scope IS DISTINCT FROM 'write' THEN PERFORM public._api_refuse('read_only'); END IF;
+  IF NOT COALESCE((SELECT write_enabled FROM public.api_settings WHERE id), false) THEN PERFORM public._api_refuse('writes_off'); END IF;
+  SELECT count(*) INTO v_n FROM public.api_key_writes WHERE key_id = v_key AND at > now() - interval '1 minute';
+  IF v_n >= 60 THEN PERFORM public._api_refuse('rate_limited', 'Sixty writes a minute is the most for a key. Wait a minute.'); END IF;
+  INSERT INTO public.api_key_writes (key_id, fn, target) VALUES (v_key, p_fn, p_target);
+  IF random() < 0.02 THEN DELETE FROM public.api_key_writes WHERE key_id = v_key AND at < now() - interval '90 days'; END IF;
+  UPDATE public.api_keys SET last_used_at = now(), last_used_ip = COALESCE(v_ip, last_used_ip) WHERE id = v_key;
+  RETURN v_key;
+END $apiwrite$;
+REVOKE ALL ON FUNCTION public._api_need_write(text, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._api_need_write(text, uuid) TO authenticated, service_role;
+
+-- ── 1. The exchange (anonymous) ──────────────────────────────────────────────
+-- A key for a single-use password on its person's sign-in record, and their
+-- address: { email, password, expires_in }. Sign in with them at once
+-- (/auth/v1/token?grant_type=password), then bind. Ten a minute for a key.
+CREATE OR REPLACE FUNCTION public.rpc_api_key_exchange(p_key text) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $apiexchange$
+DECLARE k public.api_keys; v_state text; v_n integer; v_bridge text; v_enc text; v_email text; v_ip text := public._request_ip();
+BEGIN
+  IF public._api_from_browser() THEN PERFORM public._api_refuse('browser'); END IF;
+  k := public._api_key_by_secret(p_key);
+  IF k.id IS NULL THEN PERFORM public._api_refuse('key_invalid'); END IF;
+  -- One exchange at a time for a key.
+  PERFORM 1 FROM public.api_keys WHERE id = k.id FOR UPDATE;
+  v_state := public._api_key_state(k.id);
+  IF v_state <> 'live' THEN PERFORM public._api_refuse(v_state); END IF;
+  SELECT count(*) INTO v_n FROM public.api_key_exchanges WHERE key_id = k.id AND created_at > now() - interval '1 minute';
+  IF v_n >= 10 THEN PERFORM public._api_refuse('rate_limited', 'Ten exchanges a minute is the most for a key. Keep the session and refresh it, rather than exchanging for every call.'); END IF;
+  -- As every sign-in from the portal ends (_signin_bridge, rpc_password_login):
+  -- 256 random bits, bcrypt on the sign-in record, the address it is under.
+  v_bridge := encode(extensions.gen_random_bytes(32), 'base64');
+  v_enc := extensions.crypt(v_bridge, extensions.gen_salt('bf'));
+  UPDATE auth.users SET encrypted_password = v_enc, email_confirmed_at = COALESCE(email_confirmed_at, now()), updated_at = now()
+   WHERE id = k.auth_user_id AND deleted_at IS NULL
+  RETURNING email INTO v_email;
+  IF COALESCE(btrim(v_email), '') = '' THEN PERFORM public._api_refuse('key_suspended'); END IF;
+  DELETE FROM public.api_key_exchanges WHERE key_id = k.id AND created_at < now() - interval '1 day';
+  INSERT INTO public.api_key_exchanges (key_id, auth_user_id, bridge_hash, ip) VALUES (k.id, k.auth_user_id, v_enc, v_ip);
+  UPDATE public.api_keys SET last_used_at = now(), last_used_ip = COALESCE(v_ip, last_used_ip) WHERE id = k.id;
+  RETURN jsonb_build_object('email', v_email, 'password', v_bridge, 'expires_in', 60);
+END $apiexchange$;
+REVOKE ALL ON FUNCTION public.rpc_api_key_exchange(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.rpc_api_key_exchange(text) TO anon, authenticated, service_role;
+
+-- ── 3. The bind (the session the exchange signed in) ─────────────────────────
+-- The session is the key's from now on. Only a session made by this key's
+-- exchange in the last minute, never one that passed the second factor (a
+-- person's own, in the portal); once each. A key keeps its five newest
+-- sessions. { ok, key: { id, name, prefix, scope, expires_at } }.
+CREATE OR REPLACE FUNCTION public.rpc_api_key_bind(p_key text) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $apibind$
+DECLARE k public.api_keys; v_uid uuid := auth.uid(); v_sid uuid := public._api_session_id(); v_state text;
+  b public.api_key_sessions; x public.api_key_exchanges; v_made timestamptz; v_ip text := public._request_ip();
+BEGIN
+  IF public._api_from_browser() THEN PERFORM public._api_refuse('browser'); END IF;
+  k := public._api_key_by_secret(p_key);
+  IF k.id IS NULL OR v_uid IS NULL OR k.auth_user_id IS DISTINCT FROM v_uid THEN PERFORM public._api_refuse('key_invalid'); END IF;
+  PERFORM 1 FROM public.api_keys WHERE id = k.id FOR UPDATE;
+  v_state := public._api_key_state(k.id);
+  IF v_state <> 'live' THEN PERFORM public._api_refuse(v_state); END IF;
+  IF v_sid IS NULL THEN PERFORM public._api_refuse('no_session'); END IF;
+  SELECT * INTO b FROM public.api_key_sessions WHERE session_id = v_sid;
+  IF b.session_id IS NOT NULL THEN
+    IF b.key_id = k.id AND b.ended_at IS NULL THEN
+      RETURN jsonb_build_object('ok', true, 'key', jsonb_build_object('id', k.id, 'name', k.name, 'prefix', k.prefix, 'scope', k.scope, 'expires_at', k.expires_at));
+    END IF;
+    PERFORM public._api_refuse(CASE WHEN b.key_id = k.id THEN 'session_ended' ELSE 'session_taken' END);
+  END IF;
+  IF EXISTS (SELECT 1 FROM public._mfa_fresh WHERE session_id = v_sid) THEN PERFORM public._api_refuse('interactive_session'); END IF;
+  SELECT * INTO x FROM public.api_key_exchanges
+   WHERE key_id = k.id AND used_at IS NULL AND created_at > now() - interval '60 seconds'
+   ORDER BY created_at DESC LIMIT 1 FOR UPDATE;
+  IF x.id IS NULL THEN PERFORM public._api_refuse('no_exchange'); END IF;
+  -- Begun after that exchange, where the sign-in records can be read.
+  BEGIN
+    SELECT created_at INTO v_made FROM auth.sessions WHERE id = v_sid;
+    IF v_made IS NULL OR v_made < x.created_at - interval '2 seconds' THEN PERFORM public._api_refuse('no_exchange'); END IF;
+  EXCEPTION WHEN undefined_table OR insufficient_privilege THEN NULL; END;
+  UPDATE public.api_key_exchanges SET used_at = now() WHERE id = x.id;
+  INSERT INTO public.api_key_sessions (session_id, key_id, auth_user_id, ip) VALUES (v_sid, k.id, v_uid, v_ip);
+  UPDATE public.api_key_sessions SET ended_at = now()
+   WHERE key_id = k.id AND ended_at IS NULL
+     AND session_id NOT IN (SELECT s.session_id FROM public.api_key_sessions s
+                             WHERE s.key_id = k.id AND s.ended_at IS NULL ORDER BY s.created_at DESC LIMIT 5);
+  DELETE FROM public.api_key_sessions WHERE key_id = k.id AND ended_at < now() - interval '1 day';
+  -- The single-use password, where nothing has used it (the gateway spends it
+  -- as it signs in; Supabase keeps it until it is changed): changed to one
+  -- nobody knows. Only if it is still this exchange's.
+  UPDATE auth.users SET encrypted_password = extensions.crypt(encode(extensions.gen_random_bytes(32), 'base64'), extensions.gen_salt('bf'))
+   WHERE id = v_uid AND encrypted_password = x.bridge_hash;
+  UPDATE public.api_keys SET last_used_at = now(), last_used_ip = COALESCE(v_ip, last_used_ip) WHERE id = k.id;
+  RETURN jsonb_build_object('ok', true, 'key', jsonb_build_object('id', k.id, 'name', k.name, 'prefix', k.prefix, 'scope', k.scope, 'expires_at', k.expires_at));
+END $apibind$;
+REVOKE ALL ON FUNCTION public.rpc_api_key_bind(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_api_key_bind(text) TO authenticated, service_role;
+
+-- ── Keys, in the portal ──────────────────────────────────────────────────────
+-- Every call below is a person's own, signed in to the portal with the second
+-- factor fresh; never a key's.
+CREATE OR REPLACE FUNCTION public._api_portal_caller()
+RETURNS TABLE (id uuid, name text, email text, role text, client_id uuid, contractor_team_id uuid, eff text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apicaller$
+  SELECT pr.id, pr.name, pr.email, pr.role, pr.client_id, pr.contractor_team_id, public.current_user_role()
+    FROM public.profiles pr WHERE pr.auth_user_id = auth.uid() AND pr.active = true
+   ORDER BY pr.created_at NULLS LAST, pr.id LIMIT 1
+$apicaller$;
+REVOKE ALL ON FUNCTION public._api_portal_caller() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._api_portal_caller() TO authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public._api_portal_refusal() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apiportref$
+BEGIN
+  IF auth.uid() IS NULL THEN RETURN jsonb_build_object('ok', false, 'code', 'not_signed_in', 'error', 'Sign in first.'); END IF;
+  IF public._api_is_key_session() THEN RETURN jsonb_build_object('ok', false, 'code', 'key_session', 'error', 'Keys are managed in the portal, not with a key.'); END IF;
+  IF NOT public.mfa_is_fresh() THEN RETURN jsonb_build_object('ok', false, 'code', 'confirm_factor', 'error', 'Your second factor needs confirming again.'); END IF;
+  RETURN NULL;
+END $apiportref$;
+REVOKE ALL ON FUNCTION public._api_portal_refusal() FROM PUBLIC, anon, authenticated;
+
+-- A key as the portal lists it (never its hash).
+CREATE OR REPLACE FUNCTION public._api_key_json(k public.api_keys) RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apikeyjson$
+  SELECT jsonb_build_object('id', k.id, 'name', k.name, 'prefix', k.prefix, 'scope', k.scope,
+    'created_at', k.created_at, 'expires_at', k.expires_at, 'last_used_at', k.last_used_at, 'last_used_ip', k.last_used_ip,
+    'revoked_at', k.revoked_at, 'revoked_reason', k.revoked_reason,
+    'revoked_by', (SELECT pr.name FROM public.profiles pr WHERE pr.id = k.revoked_by),
+    'state', public._api_key_state(k.id),
+    'writes', (SELECT count(*) FROM public.api_key_writes w WHERE w.key_id = k.id),
+    'last_write_at', (SELECT max(w.at) FROM public.api_key_writes w WHERE w.key_id = k.id))
+$apikeyjson$;
+REVOKE ALL ON FUNCTION public._api_key_json(public.api_keys) FROM PUBLIC, anon, authenticated;
+
+-- The switches, as everybody signed in may read them (to know whether they can
+-- make a key, and for how long); all of them for an administrator.
+CREATE OR REPLACE FUNCTION public.rpc_api_settings_get() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apisetget$
+DECLARE st public.api_settings; c record; v_no jsonb := public._api_portal_refusal();
+BEGIN
+  IF v_no IS NOT NULL THEN RETURN v_no; END IF;
+  SELECT * INTO c FROM public._api_portal_caller();
+  SELECT * INTO st FROM public.api_settings WHERE id;
+  RETURN jsonb_build_object('ok', true, 'enabled', COALESCE(st.enabled, false), 'write_enabled', COALESCE(st.write_enabled, false),
+    'roles', to_jsonb(COALESCE(st.roles, ARRAY[]::text[])), 'max_days', COALESCE(st.max_days, 90),
+    'my_role_allowed', c.eff IS NOT NULL AND c.eff <> 'none' AND c.eff = ANY (COALESCE(st.roles, ARRAY[]::text[])),
+    'admin', c.eff = 'admin', 'updated_at', st.updated_at,
+    'updated_by', (SELECT pr.name FROM public.profiles pr WHERE pr.id = st.updated_by));
+END $apisetget$;
+REVOKE ALL ON FUNCTION public.rpc_api_settings_get() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_api_settings_get() TO authenticated, service_role;
+
+-- An administrator's: whether there is an API, whether it writes, whose roles
+-- may make keys, and the longest a key may live (keys already made keep the
+-- life they were made with; revoke one to end it sooner).
+CREATE OR REPLACE FUNCTION public.rpc_api_settings_save(p_enabled boolean, p_write_enabled boolean, p_roles text[], p_max_days integer)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apisetsave$
+DECLARE c record; was public.api_settings; v_roles text[]; v_said text[] := ARRAY[]::text[]; v_no jsonb := public._api_portal_refusal();
+BEGIN
+  IF v_no IS NOT NULL THEN RETURN v_no; END IF;
+  SELECT * INTO c FROM public._api_portal_caller();
+  IF c.eff IS DISTINCT FROM 'admin' THEN RETURN jsonb_build_object('ok', false, 'code', 'not_admin', 'error', 'Only an administrator changes the API''s settings.'); END IF;
+  SELECT array_agg(DISTINCT r ORDER BY r) INTO v_roles FROM unnest(COALESCE(p_roles, ARRAY[]::text[])) r WHERE r IS NOT NULL;
+  v_roles := COALESCE(v_roles, ARRAY[]::text[]);
+  IF NOT (v_roles <@ ARRAY['admin', 'senior', 'standard', 'sales', 'marketing', 'client', 'contractor']::text[]) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'bad_roles', 'error', 'That is not a role here.');
+  END IF;
+  IF p_max_days IS NULL OR p_max_days NOT BETWEEN 1 AND 365 THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'bad_days', 'error', 'The longest a key may live is from 1 day to 365 days.');
+  END IF;
+  SELECT * INTO was FROM public.api_settings WHERE id FOR UPDATE;
+  IF COALESCE(was.enabled, false) IS DISTINCT FROM COALESCE(p_enabled, false) THEN v_said := v_said || CASE WHEN p_enabled THEN 'API on' ELSE 'API off' END; END IF;
+  IF COALESCE(was.write_enabled, false) IS DISTINCT FROM COALESCE(p_write_enabled, false) THEN v_said := v_said || CASE WHEN p_write_enabled THEN 'writing on' ELSE 'writing off' END; END IF;
+  IF was.roles IS DISTINCT FROM v_roles THEN v_said := v_said || ('roles: ' || COALESCE(NULLIF(array_to_string(v_roles, ', '), ''), 'none')); END IF;
+  IF was.max_days IS DISTINCT FROM p_max_days THEN v_said := v_said || ('longest life: ' || p_max_days || ' days'); END IF;
+  UPDATE public.api_settings SET enabled = COALESCE(p_enabled, false), write_enabled = COALESCE(p_write_enabled, false),
+         roles = v_roles, max_days = p_max_days, updated_at = now(), updated_by = c.id
+   WHERE id;
+  IF array_length(v_said, 1) IS NOT NULL THEN
+    INSERT INTO public.api_key_events (event, by_id, by_person, detail) VALUES ('settings', c.id, c.name, array_to_string(v_said, '; '));
+  END IF;
+  RETURN public.rpc_api_settings_get();
+END $apisetsave$;
+REVOKE ALL ON FUNCTION public.rpc_api_settings_save(boolean, boolean, text[], integer) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_api_settings_save(boolean, boolean, text[], integer) TO authenticated, service_role;
+
+-- MAKING A KEY. The person's own, for their own access; their second factor
+-- given in this very session in the last ten minutes (the portal asks for it
+-- again otherwise), so a browser left signed in, or taken over, cannot make
+-- a credential that outlives it. A key that writes only while writing is on.
+-- Ten live keys a person at most. The key comes back once, here; it is kept
+-- only as its SHA-256.
+CREATE OR REPLACE FUNCTION public.rpc_api_key_create(p_name text, p_scope text DEFAULT 'read', p_days integer DEFAULT NULL)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $apicreate$
+DECLARE c record; st public.api_settings; v_sid uuid := public._api_session_id(); v_name text; v_scope text; v_days integer;
+  v_pre text; v_secret text; v_id uuid; v_exp timestamptz; v_try integer := 0; v_no jsonb := public._api_portal_refusal();
+BEGIN
+  IF v_no IS NOT NULL THEN RETURN v_no; END IF;
+  SELECT * INTO c FROM public._api_portal_caller();
+  IF c.id IS NULL THEN RETURN jsonb_build_object('ok', false, 'code', 'no_profile', 'error', 'Your account is not active here.'); END IF;
+  SELECT * INTO st FROM public.api_settings WHERE id;
+  IF NOT COALESCE(st.enabled, false) THEN RETURN jsonb_build_object('ok', false, 'code', 'api_off', 'error', 'The API is switched off. An administrator turns it on in Settings, API.'); END IF;
+  IF c.eff IS NULL OR c.eff = 'none' OR NOT (c.eff = ANY (st.roles)) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'role_off', 'error', 'An administrator has not allowed API keys for your role.');
+  END IF;
+  IF v_sid IS NULL OR NOT EXISTS (SELECT 1 FROM public._mfa_fresh f WHERE f.session_id = v_sid AND f.auth_user_id = auth.uid()
+                                    AND COALESCE(f.entered_at, f.verified_at) > now() - interval '10 minutes') THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'confirm_factor', 'error', 'Confirm your second factor to make a key.');
+  END IF;
+  v_name := btrim(regexp_replace(COALESCE(p_name, ''), '\s+', ' ', 'g'));
+  IF length(v_name) NOT BETWEEN 1 AND 80 THEN RETURN jsonb_build_object('ok', false, 'code', 'bad_name', 'error', 'Give the key a name of up to 80 characters, saying what uses it.'); END IF;
+  v_scope := lower(btrim(COALESCE(p_scope, 'read')));
+  IF v_scope NOT IN ('read', 'write') THEN RETURN jsonb_build_object('ok', false, 'code', 'bad_scope', 'error', 'A key reads, or reads and writes.'); END IF;
+  IF v_scope = 'write' AND NOT COALESCE(st.write_enabled, false) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'writes_off', 'error', 'Writing through the API is switched off, so only a key that reads can be made.');
+  END IF;
+  v_days := COALESCE(p_days, LEAST(90, st.max_days));
+  IF v_days < 1 OR v_days > st.max_days THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'bad_days', 'error', 'A key lives from 1 day to ' || st.max_days || ' days here.');
+  END IF;
+  IF (SELECT count(*) FROM public.api_keys WHERE profile_id = c.id AND revoked_at IS NULL AND expires_at > now()) >= 10 THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'too_many', 'error', 'You have ten keys that work. Revoke one you no longer use first.');
+  END IF;
+  v_exp := now() + make_interval(days => v_days);
+  LOOP
+    v_pre := 'pental_' || encode(extensions.gen_random_bytes(4), 'hex');
+    v_secret := v_pre || '_' || encode(extensions.gen_random_bytes(32), 'hex');
+    BEGIN
+      INSERT INTO public.api_keys (profile_id, auth_user_id, name, prefix, key_hash, scope, role_at_creation,
+                                   client_id_at_creation, team_at_creation, expires_at)
+      VALUES (c.id, auth.uid(), v_name, v_pre, encode(extensions.digest(v_secret, 'sha256'), 'hex'), v_scope, c.role,
+              c.client_id, c.contractor_team_id, v_exp)
+      RETURNING id INTO v_id;
+      EXIT;
+    EXCEPTION WHEN unique_violation THEN
+      v_try := v_try + 1;
+      IF v_try >= 5 THEN RAISE; END IF;
+    END;
+  END LOOP;
+  INSERT INTO public.api_key_events (event, key_id, key_prefix, key_name, person_id, person, by_id, by_person, detail)
+  VALUES ('created', v_id, v_pre, v_name, c.id, c.name, c.id, c.name,
+          CASE WHEN v_scope = 'write' THEN 'reads and writes' ELSE 'reads' END || ', ' || v_days || ' day' || CASE WHEN v_days = 1 THEN '' ELSE 's' END);
+  RETURN jsonb_build_object('ok', true, 'key', v_secret, 'id', v_id, 'prefix', v_pre, 'name', v_name, 'scope', v_scope, 'expires_at', v_exp);
+END $apicreate$;
+REVOKE ALL ON FUNCTION public.rpc_api_key_create(text, text, integer) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_api_key_create(text, text, integer) TO authenticated, service_role;
+
+-- A person's own keys, newest first.
+CREATE OR REPLACE FUNCTION public.rpc_api_keys_mine() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apimine$
+DECLARE c record; v_no jsonb := public._api_portal_refusal();
+BEGIN
+  IF v_no IS NOT NULL THEN RETURN v_no; END IF;
+  SELECT * INTO c FROM public._api_portal_caller();
+  RETURN jsonb_build_object('ok', true, 'keys', COALESCE((SELECT jsonb_agg(public._api_key_json(k) ORDER BY k.created_at DESC)
+    FROM public.api_keys k WHERE k.profile_id = c.id), '[]'::jsonb));
+END $apimine$;
+REVOKE ALL ON FUNCTION public.rpc_api_keys_mine() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_api_keys_mine() TO authenticated, service_role;
+
+-- Every key, with whose it is: an administrator's.
+CREATE OR REPLACE FUNCTION public.rpc_api_keys_all() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apiall$
+DECLARE c record; v_no jsonb := public._api_portal_refusal();
+BEGIN
+  IF v_no IS NOT NULL THEN RETURN v_no; END IF;
+  SELECT * INTO c FROM public._api_portal_caller();
+  IF c.eff IS DISTINCT FROM 'admin' THEN RETURN jsonb_build_object('ok', false, 'code', 'not_admin', 'error', 'Only an administrator sees every key.'); END IF;
+  RETURN jsonb_build_object('ok', true, 'keys', COALESCE((SELECT jsonb_agg(public._api_key_json(k)
+      || jsonb_build_object('person_id', k.profile_id, 'person', COALESCE(pr.name, 'A person since deleted'), 'email', pr.email, 'role', pr.role)
+      ORDER BY (public._api_key_state(k.id) = 'live') DESC, k.created_at DESC)
+    FROM public.api_keys k LEFT JOIN public.profiles pr ON pr.id = k.profile_id), '[]'::jsonb));
+END $apiall$;
+REVOKE ALL ON FUNCTION public.rpc_api_keys_all() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_api_keys_all() TO authenticated, service_role;
+
+-- Revoking: a person their own key, an administrator anybody's. At once:
+-- the next call the key's sessions make is refused.
+CREATE OR REPLACE FUNCTION public.rpc_api_key_revoke(p_id uuid, p_reason text DEFAULT NULL) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apirevoke$
+DECLARE c record; k public.api_keys; v_reason text; v_no jsonb := public._api_portal_refusal();
+BEGIN
+  IF v_no IS NOT NULL THEN RETURN v_no; END IF;
+  SELECT * INTO c FROM public._api_portal_caller();
+  IF c.id IS NULL THEN RETURN jsonb_build_object('ok', false, 'code', 'no_profile', 'error', 'Your account is not active here.'); END IF;
+  SELECT * INTO k FROM public.api_keys WHERE id = p_id FOR UPDATE;
+  IF k.id IS NULL OR (k.profile_id IS DISTINCT FROM c.id AND c.eff IS DISTINCT FROM 'admin') THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'not_found', 'error', 'No such key of yours.');
+  END IF;
+  IF k.revoked_at IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'already', true); END IF;
+  v_reason := NULLIF(left(btrim(regexp_replace(COALESCE(p_reason, ''), '\s+', ' ', 'g')), 200), '');
+  UPDATE public.api_keys SET revoked_at = now(), revoked_by = c.id,
+         revoked_reason = COALESCE(v_reason, CASE WHEN k.profile_id = c.id THEN 'Revoked by its owner' ELSE 'Revoked by an administrator' END)
+   WHERE id = k.id;
+  UPDATE public.api_key_sessions SET ended_at = now() WHERE key_id = k.id AND ended_at IS NULL;
+  INSERT INTO public.api_key_events (event, key_id, key_prefix, key_name, person_id, person, by_id, by_person, detail)
+  VALUES ('revoked', k.id, k.prefix, k.name, k.profile_id, (SELECT pr.name FROM public.profiles pr WHERE pr.id = k.profile_id), c.id, c.name, v_reason);
+  RETURN jsonb_build_object('ok', true);
+END $apirevoke$;
+REVOKE ALL ON FUNCTION public.rpc_api_key_revoke(uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_api_key_revoke(uuid, text) TO authenticated, service_role;
+
+-- Every key that works, revoked at once: an administrator's, for a key that
+-- may have got out.
+CREATE OR REPLACE FUNCTION public.rpc_api_keys_revoke_all(p_reason text DEFAULT NULL) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apirevall$
+DECLARE c record; v_n integer; v_reason text; v_no jsonb := public._api_portal_refusal();
+BEGIN
+  IF v_no IS NOT NULL THEN RETURN v_no; END IF;
+  SELECT * INTO c FROM public._api_portal_caller();
+  IF c.eff IS DISTINCT FROM 'admin' THEN RETURN jsonb_build_object('ok', false, 'code', 'not_admin', 'error', 'Only an administrator revokes every key.'); END IF;
+  v_reason := COALESCE(NULLIF(left(btrim(regexp_replace(COALESCE(p_reason, ''), '\s+', ' ', 'g')), 200), ''), 'Every key revoked by an administrator');
+  UPDATE public.api_key_sessions s SET ended_at = now()
+    FROM public.api_keys k WHERE k.id = s.key_id AND k.revoked_at IS NULL AND s.ended_at IS NULL;
+  UPDATE public.api_keys SET revoked_at = now(), revoked_by = c.id, revoked_reason = v_reason WHERE revoked_at IS NULL;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  INSERT INTO public.api_key_events (event, by_id, by_person, detail)
+  VALUES ('revoked_all', c.id, c.name, v_n || ' key' || CASE WHEN v_n = 1 THEN '' ELSE 's' END || ': ' || v_reason);
+  RETURN jsonb_build_object('ok', true, 'revoked', v_n);
+END $apirevall$;
+REVOKE ALL ON FUNCTION public.rpc_api_keys_revoke_all(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_api_keys_revoke_all(text) TO authenticated, service_role;
+
+-- What was done with keys, newest first: an administrator's.
+CREATE OR REPLACE FUNCTION public.rpc_api_key_events(p_limit integer DEFAULT 100) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apievents$
+DECLARE c record; v_no jsonb := public._api_portal_refusal();
+BEGIN
+  IF v_no IS NOT NULL THEN RETURN v_no; END IF;
+  SELECT * INTO c FROM public._api_portal_caller();
+  IF c.eff IS DISTINCT FROM 'admin' THEN RETURN jsonb_build_object('ok', false, 'code', 'not_admin', 'error', 'Only an administrator reads the API''s log.'); END IF;
+  RETURN jsonb_build_object('ok', true, 'events', COALESCE((SELECT jsonb_agg(to_jsonb(e) ORDER BY e.at DESC) FROM (
+    SELECT ev.at, ev.event, ev.key_prefix, ev.key_name, ev.person, ev.by_person, ev.detail
+      FROM public.api_key_events ev ORDER BY ev.at DESC LIMIT GREATEST(1, LEAST(COALESCE(p_limit, 100), 500))) e), '[]'::jsonb));
+END $apievents$;
+REVOKE ALL ON FUNCTION public.rpc_api_key_events(integer) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_api_key_events(integer) TO authenticated, service_role;
+
+-- What the clock clears (_net_tick, hourly): spent exchanges, ended
+-- sessions, and writes noted more than 90 days ago.
+CREATE OR REPLACE FUNCTION public._api_sweep() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apisweep$
+BEGIN
+  DELETE FROM public.api_key_exchanges WHERE created_at < now() - interval '1 day';
+  DELETE FROM public.api_key_sessions WHERE ended_at < now() - interval '1 day';
+  DELETE FROM public.api_key_writes WHERE at < now() - interval '90 days';
+END $apisweep$;
+REVOKE ALL ON FUNCTION public._api_sweep() FROM PUBLIC, anon, authenticated;
+
+-- ── Keys end with what they were made for ────────────────────────────────────
+-- A person switched off or deleted, or whose role, organisation, contractor
+-- team or sign-in record changes, has their keys revoked, and they stay so
+-- (_api_key_state refuses them meanwhile in any case).
+CREATE OR REPLACE FUNCTION public._api_keys_end(p_profile uuid, p_auth uuid, p_reason text) RETURNS integer
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apiend$
+DECLARE v_n integer := 0; r record;
+BEGIN
+  FOR r IN SELECT k.id, k.prefix, k.name, k.profile_id FROM public.api_keys k
+            WHERE k.revoked_at IS NULL AND ((p_profile IS NOT NULL AND k.profile_id = p_profile) OR (p_auth IS NOT NULL AND k.auth_user_id = p_auth))
+            FOR UPDATE LOOP
+    UPDATE public.api_keys SET revoked_at = now(), revoked_reason = p_reason WHERE id = r.id;
+    UPDATE public.api_key_sessions SET ended_at = now() WHERE key_id = r.id AND ended_at IS NULL;
+    INSERT INTO public.api_key_events (event, key_id, key_prefix, key_name, person_id, person, detail)
+    VALUES ('revoked', r.id, r.prefix, r.name, r.profile_id, (SELECT pr.name FROM public.profiles pr WHERE pr.id = r.profile_id), p_reason);
+    v_n := v_n + 1;
+  END LOOP;
+  RETURN v_n;
+END $apiend$;
+REVOKE ALL ON FUNCTION public._api_keys_end(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public._tg_api_keys_profile() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apitgprof$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    PERFORM public._api_keys_end(OLD.id, NULL, 'Its person was deleted');
+    RETURN OLD;
+  END IF;
+  IF NEW.active IS DISTINCT FROM true AND OLD.active IS NOT DISTINCT FROM true THEN
+    PERFORM public._api_keys_end(OLD.id, NULL, 'Its person was switched off');
+  ELSIF NEW.role IS DISTINCT FROM OLD.role THEN
+    PERFORM public._api_keys_end(OLD.id, NULL, 'Its person''s role changed');
+  ELSIF NEW.client_id IS DISTINCT FROM OLD.client_id THEN
+    PERFORM public._api_keys_end(OLD.id, NULL, 'Its person''s organisation changed');
+  ELSIF NEW.contractor_team_id IS DISTINCT FROM OLD.contractor_team_id THEN
+    PERFORM public._api_keys_end(OLD.id, NULL, 'Its person''s contractor team changed');
+  ELSIF NEW.auth_user_id IS DISTINCT FROM OLD.auth_user_id THEN
+    PERFORM public._api_keys_end(OLD.id, NULL, 'Its person''s sign-in changed');
+  END IF;
+  RETURN NEW;
+END $apitgprof$;
+REVOKE ALL ON FUNCTION public._tg_api_keys_profile() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS zz_api_keys_profile ON public.profiles;
+CREATE TRIGGER zz_api_keys_profile AFTER UPDATE OF active, role, client_id, contractor_team_id, auth_user_id OR DELETE ON public.profiles
+  FOR EACH ROW EXECUTE FUNCTION public._tg_api_keys_profile();
+
+-- ── The API, version 1 ───────────────────────────────────────────────────────
+-- Each function asks for the key first (_api_need_key, _api_need_write) and
+-- then reads and writes as the person (SECURITY INVOKER): the rows their
+-- portal shows them, the changes their portal lets them make. They return
+-- tables of named columns (never a table's own rows), each listed in the
+-- guide; new columns and functions may be added to v1, and nothing in it is
+-- taken away or changed in meaning: a change that would is api_v2_.
+--
+-- changed_at is when a row was last written, as the database keeps it
+-- (row_version, the clock in microseconds, moved by every write); a row not
+-- written since that came reads its updated_at. p_changed_since takes rows
+-- written since a moment, for polling.
+
+-- Who this key is, and what it may do.
+CREATE OR REPLACE FUNCTION public.api_v1_me()
+RETURNS TABLE (person_id uuid, name text, email text, role text, job_title text, client_id uuid,
+               key_id uuid, key_name text, key_prefix text, key_scope text, key_expires_at timestamptz,
+               firm text, api_version text, writes_enabled boolean)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apime$
+#variable_conflict use_column
+DECLARE v_key uuid := public._api_need_key();
+BEGIN
+  RETURN QUERY
+  SELECT pr.id, pr.name, pr.email, pr.role, pr.job_title, pr.client_id,
+         k.id, k.name, k.prefix, k.scope, k.expires_at,
+         (SELECT s.company_name::text FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1),
+         'v1'::text,
+         (k.scope = 'write' AND COALESCE((SELECT st.write_enabled FROM public.api_settings st WHERE st.id), false))
+    FROM public.api_keys k JOIN public.profiles pr ON pr.id = k.profile_id
+   WHERE k.id = v_key;
+END $apime$;
+
+-- The values a field may hold, each with a label to show for it.
+CREATE OR REPLACE FUNCTION public.api_v1_statuses()
+RETURNS TABLE (kind text, value text, label text, rank integer)
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apistatuses$
+#variable_conflict use_column
+BEGIN
+  PERFORM public._api_need_key();
+  RETURN QUERY SELECT x.k, x.v, x.l, x.r FROM (VALUES
+    ('finding_status', 'open', 'Open', 1),
+    ('finding_status', 'remediated', 'Remediated', 2),
+    ('finding_status', 'part_remediated', 'Part Remediated', 3),
+    ('finding_status', 'accepted', 'Risk Accepted', 4),
+    ('severity', 'critical', 'Critical', 1),
+    ('severity', 'high', 'High', 2),
+    ('severity', 'medium', 'Medium', 3),
+    ('severity', 'low', 'Low', 4),
+    ('severity', 'info', 'Info', 5),
+    ('retest_status', 'requested', 'Retest Requested', 1),
+    ('retest_status', 'fixed', 'Remediated', 2),
+    ('retest_status', 'part_fixed', 'Part Remediated', 3),
+    ('retest_status', 'not_fixed', 'Not Remediated', 4),
+    ('retest_status', 'accepted', 'Risk Accepted', 5),
+    ('engagement_status', 'draft', 'Pending', 1),
+    ('engagement_status', 'active', 'Active', 2),
+    ('engagement_status', 'completed', 'Completed', 3),
+    ('engagement_status', 'delivered', 'Delivered', 4),
+    ('engagement_status', 'cancelled', 'Cancelled', 5),
+    ('qa_status', 'not_submitted', 'Not submitted', 1),
+    ('qa_status', 'pending', 'Awaiting review', 2),
+    ('qa_status', 'in_review', 'In review', 3),
+    ('qa_status', 'revision', 'Sent back', 4),
+    ('qa_status', 'approved', 'Approved', 5)
+  ) AS x(k, v, l, r);
+END $apistatuses$;
+
+-- The people this person can see: the firm's, to a member of it.
+CREATE OR REPLACE FUNCTION public.api_v1_people(p_include_inactive boolean DEFAULT false)
+RETURNS TABLE (id uuid, name text, email text, role text, job_title text, active boolean, client_id uuid, contractor_team_id uuid)
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apipeople$
+#variable_conflict use_column
+BEGIN
+  PERFORM public._api_need_key();
+  RETURN QUERY
+  SELECT pr.id, pr.name, pr.email, pr.role, pr.job_title, COALESCE(pr.active, true), pr.client_id, pr.contractor_team_id
+    FROM public.profiles pr
+   WHERE COALESCE(p_include_inactive, false) OR COALESCE(pr.active, true)
+   ORDER BY lower(pr.name), pr.id;
+END $apipeople$;
+
+-- Clients.
+CREATE OR REPLACE FUNCTION public.api_v1_clients(p_search text DEFAULT NULL, p_changed_since timestamptz DEFAULT NULL)
+RETURNS TABLE (id uuid, name text, industry text, contact_name text, contact_email text, contact_phone text, address text,
+               status text, job_code text, created_at timestamptz, updated_at timestamptz, changed_at timestamptz, row_version bigint)
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apiclients$
+#variable_conflict use_column
+BEGIN
+  PERFORM public._api_need_key();
+  RETURN QUERY
+  SELECT c.id, c.name, c.industry, c.contact_name, c.contact_email, c.contact_phone, c.address,
+         c.status, c.job_code::text, c.created_at, c.updated_at,
+         COALESCE(to_timestamp(c.row_version / 1000000.0), c.updated_at, c.created_at), c.row_version
+    FROM public.clients c
+   WHERE (NULLIF(btrim(COALESCE(p_search, '')), '') IS NULL
+          OR c.name ILIKE '%' || replace(replace(replace(btrim(p_search), '\', '\\'), '%', '\%'), '_', '\_') || '%')
+     AND (p_changed_since IS NULL OR COALESCE(to_timestamp(c.row_version / 1000000.0), c.updated_at, c.created_at) >= p_changed_since)
+   ORDER BY lower(c.name), c.id;
+END $apiclients$;
+
+-- Engagements, with their findings counted (the ones this person can see).
+CREATE OR REPLACE FUNCTION public.api_v1_engagements(p_client_id uuid DEFAULT NULL, p_status text DEFAULT NULL,
+                                                     p_changed_since timestamptz DEFAULT NULL, p_include_archived boolean DEFAULT false)
+RETURNS TABLE (id uuid, client_id uuid, client_name text, name text, type text, status text, qa_status text, job_code text,
+               start_date date, end_date date, lead_id uuid, lead_name text, contractor_team_id uuid, test_days numeric,
+               scope text, phases jsonb, findings_total integer, findings_open integer,
+               delivered_at timestamptz, archived_at timestamptz, created_at timestamptz, updated_at timestamptz,
+               changed_at timestamptz, row_version bigint)
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apiengs$
+#variable_conflict use_column
+BEGIN
+  PERFORM public._api_need_key();
+  RETURN QUERY
+  SELECT a.id, a.client_id, c.name, a.name, a.type, a.status, a.qa_status, a.job_code::text,
+         a.start_date, a.end_date, a.lead_id, lp.name, a.contractor_team_id, a.test_days,
+         a.scope, CASE WHEN jsonb_typeof(a.phases) = 'array' THEN a.phases ELSE NULL END,
+         (SELECT count(*)::integer FROM public.findings f WHERE f.assessment_id = a.id AND f.archived_at IS NULL),
+         (SELECT count(*)::integer FROM public.findings f WHERE f.assessment_id = a.id AND f.archived_at IS NULL AND f.status = 'open'),
+         a.delivered_at, a.archived_at, a.created_at, a.updated_at,
+         COALESCE(to_timestamp(a.row_version / 1000000.0), a.updated_at, a.created_at), a.row_version
+    FROM public.assessments a
+    LEFT JOIN public.clients c ON c.id = a.client_id
+    LEFT JOIN public.profiles lp ON lp.id = a.lead_id
+   WHERE (p_client_id IS NULL OR a.client_id = p_client_id)
+     AND (p_status IS NULL OR a.status = p_status)
+     AND (COALESCE(p_include_archived, false) OR a.archived_at IS NULL)
+     AND (p_changed_since IS NULL OR COALESCE(to_timestamp(a.row_version / 1000000.0), a.updated_at, a.created_at) >= p_changed_since)
+   ORDER BY a.start_date DESC NULLS LAST, a.created_at DESC, a.id;
+END $apiengs$;
+
+-- Findings: their fields, never their evidence (screenshots and request and
+-- response text). Description, impact and remediation are HTML, as written.
+CREATE OR REPLACE FUNCTION public.api_v1_findings(p_engagement_id uuid DEFAULT NULL, p_client_id uuid DEFAULT NULL,
+                                                  p_status text DEFAULT NULL, p_severity text DEFAULT NULL,
+                                                  p_changed_since timestamptz DEFAULT NULL, p_include_drafts boolean DEFAULT true,
+                                                  p_include_archived boolean DEFAULT false)
+RETURNS TABLE (id uuid, engagement_id uuid, client_id uuid, finding_code text, title text, severity text, severity_rank integer,
+               cvss numeric, cvss_vector text, status text, phase text, category text, cwe text, affected_hosts text,
+               description text, impact text, remediation text, refs jsonb, custom_fields jsonb,
+               is_draft boolean, client_visible boolean, retest_requested boolean, retest_status text,
+               retest_requested_at timestamptz, retest_completed_at timestamptz, archived_at timestamptz,
+               created_at timestamptz, updated_at timestamptz, changed_at timestamptz, row_version bigint)
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apifindings$
+#variable_conflict use_column
+BEGIN
+  PERFORM public._api_need_key();
+  RETURN QUERY
+  SELECT f.id, f.assessment_id, COALESCE(f.client_id, a.client_id), f.finding_code::text, f.title, f.severity,
+         CASE f.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 WHEN 'info' THEN 5 END,
+         f.cvss, f.cvss_vector::text, f.status, f.phase, f.category, f.cwe, f.affected_hosts,
+         f.description, f.impact, f.remediation,
+         CASE WHEN jsonb_typeof(f.refs) = 'array' THEN f.refs ELSE '[]'::jsonb END,
+         CASE WHEN jsonb_typeof(f.custom_fields) = 'object' THEN f.custom_fields ELSE '{}'::jsonb END,
+         COALESCE(f.is_draft, false), COALESCE(f.client_visible, false), COALESCE(f.retest_requested, false), f.retest_status,
+         f.retest_requested_at, f.retest_completed_at, f.archived_at, f.created_at, f.updated_at,
+         COALESCE(to_timestamp(f.row_version / 1000000.0), f.updated_at, f.created_at), f.row_version
+    FROM public.findings f
+    LEFT JOIN public.assessments a ON a.id = f.assessment_id
+   WHERE (p_engagement_id IS NULL OR f.assessment_id = p_engagement_id)
+     AND (p_client_id IS NULL OR COALESCE(f.client_id, a.client_id) = p_client_id)
+     AND (p_status IS NULL OR f.status = p_status)
+     AND (p_severity IS NULL OR f.severity = p_severity)
+     AND (COALESCE(p_include_drafts, true) OR NOT COALESCE(f.is_draft, false))
+     AND (COALESCE(p_include_archived, false) OR f.archived_at IS NULL)
+     AND (p_changed_since IS NULL OR COALESCE(to_timestamp(f.row_version / 1000000.0), f.updated_at, f.created_at) >= p_changed_since)
+   ORDER BY f.assessment_id, CASE f.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 WHEN 'info' THEN 5 ELSE 6 END,
+            f.created_at, f.id;
+END $apifindings$;
+
+-- An engagement's comments (or every engagement's, without one).
+CREATE OR REPLACE FUNCTION public.api_v1_comments(p_engagement_id uuid DEFAULT NULL, p_changed_since timestamptz DEFAULT NULL)
+RETURNS TABLE (id uuid, engagement_id uuid, parent_id uuid, author_id uuid, author_name text, author_role text, content text,
+               client_visible boolean, created_at timestamptz, updated_at timestamptz, changed_at timestamptz)
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apicomments$
+#variable_conflict use_column
+BEGIN
+  PERFORM public._api_need_key();
+  RETURN QUERY
+  SELECT cm.id, cm.assessment_id, cm.parent_id, cm.user_id, cm.user_name, cm.user_role, cm.content,
+         cm.client_visible, cm.created_at, cm.updated_at,
+         COALESCE(to_timestamp(cm.row_version / 1000000.0), cm.updated_at, cm.created_at)
+    FROM public.assessment_comments cm
+   WHERE (p_engagement_id IS NULL OR cm.assessment_id = p_engagement_id)
+     AND (p_changed_since IS NULL OR COALESCE(to_timestamp(cm.row_version / 1000000.0), cm.updated_at, cm.created_at) >= p_changed_since)
+   ORDER BY cm.created_at, cm.id;
+END $apicomments$;
+
+-- An engagement's timeline (or every engagement's), oldest first.
+CREATE OR REPLACE FUNCTION public.api_v1_timeline(p_engagement_id uuid DEFAULT NULL, p_changed_since timestamptz DEFAULT NULL)
+RETURNS TABLE (id uuid, engagement_id uuid, title text, by_id uuid, by_name text, created_at timestamptz)
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apitimeline$
+#variable_conflict use_column
+BEGIN
+  PERFORM public._api_need_key();
+  RETURN QUERY
+  SELECT t.id, t.assessment_id, COALESCE(NULLIF(t.title, ''), NULLIF(t.event, '')), t.user_id, t.user_name, t.created_at
+    FROM public.timeline_events t
+   WHERE (p_engagement_id IS NULL OR t.assessment_id = p_engagement_id)
+     AND (p_changed_since IS NULL OR COALESCE(to_timestamp(t.row_version / 1000000.0), t.created_at) >= p_changed_since)
+   ORDER BY t.created_at, t.id;
+END $apitimeline$;
+
+-- An engagement's files: what each is, not its contents.
+CREATE OR REPLACE FUNCTION public.api_v1_files(p_engagement_id uuid DEFAULT NULL)
+RETURNS TABLE (id uuid, engagement_id uuid, file_name text, file_size bigint, mime_type text, doc_type text,
+               uploaded_by_name text, uploaded_by_client boolean, client_visible boolean, created_at timestamptz)
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apifiles$
+#variable_conflict use_column
+BEGIN
+  PERFORM public._api_need_key();
+  RETURN QUERY
+  SELECT fl.id, fl.assessment_id, fl.file_name, fl.file_size, fl.mime_type, fl.doc_type,
+         fl.uploaded_by_name, COALESCE(fl.uploaded_by_client, false), COALESCE(fl.client_visible, false), fl.created_at
+    FROM public.assessment_files fl
+   WHERE (p_engagement_id IS NULL OR fl.assessment_id = p_engagement_id)
+   ORDER BY fl.created_at, fl.id;
+END $apifiles$;
+
+-- ── Writes ───────────────────────────────────────────────────────────────────
+-- Each as the person (their row rules decide, as in the portal), with the
+-- key's write noted. A row they cannot see is not found (404); one they can
+-- see and may not change is refused (403); a row_version given that is not
+-- the row's any more is refused as changed (409), and nothing is written.
+-- Changes made here send no email: the portal's screens do that.
+
+-- A line in an engagement's timeline, by this person.
+CREATE OR REPLACE FUNCTION public._api_timeline(p_engagement uuid, p_text text, p_subject uuid DEFAULT NULL) RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apitl$
+DECLARE c record;
+BEGIN
+  IF NOT public.can_access_assessment(p_engagement) THEN RETURN; END IF;
+  SELECT * INTO c FROM public._api_portal_caller();
+  INSERT INTO public.timeline_events (assessment_id, title, event, user_id, user_name, details)
+  VALUES (p_engagement, left(p_text, 500), left(p_text, 500), c.id, COALESCE(c.name, 'API'),
+          CASE WHEN p_subject IS NULL THEN NULL ELSE jsonb_build_object('subject_id', p_subject)::text END);
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'Pental API: the timeline line was not written (%)', SQLERRM;
+END $apitl$;
+REVOKE ALL ON FUNCTION public._api_timeline(uuid, text, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._api_timeline(uuid, text, uuid) TO authenticated, service_role;
+
+-- The next reference for a new engagement of a client, as the portal makes
+-- it (getNextClientJobCode): the client's code and the next number after the
+-- highest any of its engagements or proposals has. None where the client has
+-- no code yet; the portal gives it one when it is next shown.
+CREATE OR REPLACE FUNCTION public._api_next_job_code(p_client uuid) RETURNS text
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apijob$
+DECLARE v_code text; v_n integer;
+BEGIN
+  IF NOT public.can_access_client(p_client) AND NOT public.can_see_client(p_client) THEN RETURN NULL; END IF;
+  SELECT NULLIF(btrim(c.job_code), '') INTO v_code FROM public.clients c WHERE c.id = p_client;
+  IF v_code IS NULL THEN RETURN NULL; END IF;
+  SELECT COALESCE(max((substring(x.jc FROM '-([0-9]+)$'))::integer), 0) INTO v_n FROM (
+    SELECT a.job_code::text AS jc FROM public.assessments a WHERE a.client_id = p_client AND a.job_code IS NOT NULL
+    UNION ALL
+    SELECT p.job_code::text FROM public.proposals p WHERE p.client_id = p_client AND p.job_code IS NOT NULL) x
+   WHERE x.jc ~ '-[0-9]+$';
+  RETURN v_code || '-' || lpad((v_n + 1)::text, 3, '0');
+END $apijob$;
+REVOKE ALL ON FUNCTION public._api_next_job_code(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._api_next_job_code(uuid) TO authenticated, service_role;
+
+-- Whether a person may lead engagements, and their name.
+CREATE OR REPLACE FUNCTION public._api_lead_name(p_profile uuid) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apilead$
+  SELECT pr.name FROM public.profiles pr
+   WHERE pr.id = p_profile AND COALESCE(pr.active, true) AND pr.role IN ('admin', 'senior', 'standard', 'contractor')
+$apilead$;
+REVOKE ALL ON FUNCTION public._api_lead_name(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._api_lead_name(uuid) TO authenticated, service_role;
+
+-- A finding's status: open, remediated, part_remediated or accepted.
+CREATE OR REPLACE FUNCTION public.api_v1_finding_set_status(p_finding_id uuid, p_status text, p_row_version bigint DEFAULT NULL)
+RETURNS TABLE (id uuid, status text, changed boolean, changed_at timestamptz, row_version bigint)
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apisetstatus$
+#variable_conflict use_column
+DECLARE v_st text := lower(btrim(COALESCE(p_status, ''))); cur record; v_rv bigint;
+BEGIN
+  PERFORM public._api_need_write('finding_set_status', p_finding_id);
+  IF v_st NOT IN ('open', 'remediated', 'part_remediated', 'accepted') THEN
+    PERFORM public._api_refuse('bad_request', 'p_status is one of open, remediated, part_remediated, accepted.');
+  END IF;
+  SELECT f.id, f.status, f.row_version INTO cur FROM public.findings f WHERE f.id = p_finding_id;
+  IF cur.id IS NULL THEN PERFORM public._api_refuse('not_found'); END IF;
+  IF p_row_version IS NOT NULL AND cur.row_version IS DISTINCT FROM p_row_version THEN PERFORM public._api_refuse('changed'); END IF;
+  IF cur.status = v_st THEN
+    RETURN QUERY SELECT cur.id, cur.status, false, COALESCE(to_timestamp(cur.row_version / 1000000.0), now()), cur.row_version;
+    RETURN;
+  END IF;
+  BEGIN
+    UPDATE public.findings f SET status = v_st, updated_at = now()
+     WHERE f.id = p_finding_id AND f.row_version IS NOT DISTINCT FROM cur.row_version
+    RETURNING f.row_version INTO v_rv;
+  EXCEPTION WHEN insufficient_privilege OR check_violation OR raise_exception THEN
+    PERFORM public._api_refuse('not_allowed', SQLERRM);
+  END;
+  IF NOT FOUND THEN
+    IF (SELECT f.row_version FROM public.findings f WHERE f.id = p_finding_id) IS DISTINCT FROM cur.row_version THEN PERFORM public._api_refuse('changed'); END IF;
+    PERFORM public._api_refuse('not_allowed');
+  END IF;
+  RETURN QUERY SELECT p_finding_id, v_st, true, to_timestamp(v_rv / 1000000.0), v_rv;
+END $apisetstatus$;
+
+-- A retest asked for, as the portal asks (rpc_request_retest), for a finding
+-- that is open or part remediated and not waiting for one already.
+CREATE OR REPLACE FUNCTION public.api_v1_finding_request_retest(p_finding_id uuid)
+RETURNS TABLE (id uuid, retest_status text, retest_requested_at timestamptz, already boolean)
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apiretest$
+#variable_conflict use_column
+DECLARE cur record; v_out jsonb;
+BEGIN
+  PERFORM public._api_need_write('finding_request_retest', p_finding_id);
+  SELECT f.id, f.status, f.retest_status, f.retest_requested, f.retest_requested_at INTO cur FROM public.findings f WHERE f.id = p_finding_id;
+  IF cur.id IS NULL THEN PERFORM public._api_refuse('not_found'); END IF;
+  IF cur.retest_status = 'requested' THEN
+    RETURN QUERY SELECT cur.id, cur.retest_status, cur.retest_requested_at, true;
+    RETURN;
+  END IF;
+  -- The portal's own rule (_retestAskable).
+  IF cur.status NOT IN ('open', 'part_remediated') OR COALESCE(cur.retest_status, '') IN ('fixed', 'accepted')
+     OR (COALESCE(cur.retest_requested, false) AND COALESCE(cur.retest_status, '') NOT IN ('not_fixed', 'part_fixed')) THEN
+    PERFORM public._api_refuse('not_allowed', 'A retest is asked for a finding that is open or part remediated, and not remediated or accepted at its last retest.');
+  END IF;
+  v_out := public.rpc_request_retest(p_finding_id);
+  IF NOT COALESCE((v_out ->> 'success')::boolean, false) THEN
+    PERFORM public._api_refuse(CASE WHEN v_out ->> 'error' = 'Finding not found' THEN 'not_found' ELSE 'not_allowed' END, v_out ->> 'error');
+  END IF;
+  RETURN QUERY SELECT f.id, f.retest_status, f.retest_requested_at, COALESCE(v_out ->> 'message', '') = 'Already requested'
+    FROM public.findings f WHERE f.id = p_finding_id;
+END $apiretest$;
+
+-- A comment on an engagement, or a reply to one. Plain text, shown as it is
+-- written. Seen by the client only when p_client_visible is true (a client's
+-- own comment always is).
+CREATE OR REPLACE FUNCTION public.api_v1_comment_add(p_engagement_id uuid, p_content text, p_parent_id uuid DEFAULT NULL,
+                                                    p_client_visible boolean DEFAULT false)
+RETURNS TABLE (id uuid, engagement_id uuid, parent_id uuid, client_visible boolean, created_at timestamptz)
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apicomment$
+#variable_conflict use_column
+DECLARE c record; v_text text := btrim(COALESCE(p_content, '')); v_vis boolean; v_id uuid; v_at timestamptz;
+BEGIN
+  PERFORM public._api_need_write('comment_add', p_engagement_id);
+  IF v_text = '' OR length(v_text) > 10000 THEN PERFORM public._api_refuse('bad_request', 'p_content is the comment''s text, up to 10,000 characters.'); END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.assessments a WHERE a.id = p_engagement_id) THEN PERFORM public._api_refuse('not_found'); END IF;
+  IF p_parent_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.assessment_comments cm WHERE cm.id = p_parent_id AND cm.assessment_id = p_engagement_id) THEN
+    PERFORM public._api_refuse('not_found', 'No comment with that p_parent_id on this engagement.');
+  END IF;
+  SELECT * INTO c FROM public._api_portal_caller();
+  v_vis := CASE WHEN c.eff = 'client' THEN true ELSE COALESCE(p_client_visible, false) END;
+  BEGIN
+    INSERT INTO public.assessment_comments (assessment_id, user_id, user_name, user_role, parent_id, content, client_visible)
+    VALUES (p_engagement_id, c.id, COALESCE(c.name, ''), COALESCE(c.role, ''), p_parent_id, v_text, v_vis)
+    RETURNING assessment_comments.id, assessment_comments.created_at INTO v_id, v_at;
+  EXCEPTION WHEN insufficient_privilege OR check_violation OR raise_exception THEN
+    PERFORM public._api_refuse('not_allowed', SQLERRM);
+  END;
+  RETURN QUERY SELECT v_id, p_engagement_id, p_parent_id, v_vis, v_at;
+END $apicomment$;
+
+-- A new client. Its reference (job_code) is given by the portal when it is
+-- next shown, as for any client made without one.
+CREATE OR REPLACE FUNCTION public.api_v1_client_create(p_name text, p_industry text DEFAULT NULL, p_contact_name text DEFAULT NULL,
+                                                      p_contact_email text DEFAULT NULL, p_contact_phone text DEFAULT NULL,
+                                                      p_address text DEFAULT NULL)
+RETURNS TABLE (id uuid, name text, created_at timestamptz, row_version bigint)
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apiclientnew$
+#variable_conflict use_column
+DECLARE v_name text := btrim(regexp_replace(COALESCE(p_name, ''), '\s+', ' ', 'g')); v_id uuid; v_at timestamptz; v_rv bigint;
+BEGIN
+  PERFORM public._api_need_write('client_create', NULL);
+  IF length(v_name) NOT BETWEEN 1 AND 200 THEN PERFORM public._api_refuse('bad_request', 'p_name is the client''s name, up to 200 characters.'); END IF;
+  IF NULLIF(btrim(COALESCE(p_contact_email, '')), '') IS NOT NULL AND btrim(p_contact_email) !~ '^[^\s@]+@[^\s@]+\.[^\s@]+$' THEN
+    PERFORM public._api_refuse('bad_request', 'p_contact_email is not an email address.');
+  END IF;
+  BEGIN
+    INSERT INTO public.clients (name, industry, contact_name, contact_email, contact_phone, address)
+    VALUES (v_name, NULLIF(btrim(COALESCE(p_industry, '')), ''), COALESCE(btrim(p_contact_name), ''), COALESCE(btrim(p_contact_email), ''),
+            NULLIF(btrim(COALESCE(p_contact_phone, '')), ''), NULLIF(btrim(COALESCE(p_address, '')), ''))
+    RETURNING clients.id, clients.created_at, clients.row_version INTO v_id, v_at, v_rv;
+  EXCEPTION WHEN insufficient_privilege OR check_violation OR raise_exception THEN
+    PERFORM public._api_refuse('not_allowed', SQLERRM);
+  END;
+  RETURN QUERY SELECT v_id, v_name, v_at, v_rv;
+END $apiclientnew$;
+
+-- A client's details: a parameter left out (null) is left as it is; an empty
+-- string clears it (never the name).
+CREATE OR REPLACE FUNCTION public.api_v1_client_update(p_client_id uuid, p_row_version bigint DEFAULT NULL, p_name text DEFAULT NULL,
+                                                      p_industry text DEFAULT NULL, p_contact_name text DEFAULT NULL,
+                                                      p_contact_email text DEFAULT NULL, p_contact_phone text DEFAULT NULL,
+                                                      p_address text DEFAULT NULL)
+RETURNS TABLE (id uuid, changed boolean, changed_at timestamptz, row_version bigint)
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apiclientupd$
+#variable_conflict use_column
+DECLARE cur record; v_name text; v_rv bigint;
+BEGIN
+  PERFORM public._api_need_write('client_update', p_client_id);
+  SELECT c.id, c.row_version, c.updated_at INTO cur FROM public.clients c WHERE c.id = p_client_id;
+  IF cur.id IS NULL THEN PERFORM public._api_refuse('not_found'); END IF;
+  IF p_row_version IS NOT NULL AND cur.row_version IS DISTINCT FROM p_row_version THEN PERFORM public._api_refuse('changed'); END IF;
+  IF p_name IS NOT NULL THEN
+    v_name := btrim(regexp_replace(p_name, '\s+', ' ', 'g'));
+    IF length(v_name) NOT BETWEEN 1 AND 200 THEN PERFORM public._api_refuse('bad_request', 'p_name is the client''s name, up to 200 characters.'); END IF;
+  END IF;
+  IF NULLIF(btrim(COALESCE(p_contact_email, '')), '') IS NOT NULL AND btrim(p_contact_email) !~ '^[^\s@]+@[^\s@]+\.[^\s@]+$' THEN
+    PERFORM public._api_refuse('bad_request', 'p_contact_email is not an email address.');
+  END IF;
+  IF p_name IS NULL AND p_industry IS NULL AND p_contact_name IS NULL AND p_contact_email IS NULL AND p_contact_phone IS NULL AND p_address IS NULL THEN
+    RETURN QUERY SELECT cur.id, false, COALESCE(to_timestamp(cur.row_version / 1000000.0), cur.updated_at), cur.row_version;
+    RETURN;
+  END IF;
+  BEGIN
+    UPDATE public.clients c SET
+      name = COALESCE(v_name, c.name),
+      industry = CASE WHEN p_industry IS NULL THEN c.industry ELSE NULLIF(btrim(p_industry), '') END,
+      contact_name = CASE WHEN p_contact_name IS NULL THEN c.contact_name ELSE btrim(p_contact_name) END,
+      contact_email = CASE WHEN p_contact_email IS NULL THEN c.contact_email ELSE btrim(p_contact_email) END,
+      contact_phone = CASE WHEN p_contact_phone IS NULL THEN c.contact_phone ELSE NULLIF(btrim(p_contact_phone), '') END,
+      address = CASE WHEN p_address IS NULL THEN c.address ELSE NULLIF(btrim(p_address), '') END,
+      updated_at = now()
+     WHERE c.id = p_client_id AND c.row_version IS NOT DISTINCT FROM cur.row_version
+    RETURNING c.row_version INTO v_rv;
+  EXCEPTION WHEN insufficient_privilege OR check_violation OR raise_exception THEN
+    PERFORM public._api_refuse('not_allowed', SQLERRM);
+  END;
+  IF NOT FOUND THEN
+    IF (SELECT c.row_version FROM public.clients c WHERE c.id = p_client_id) IS DISTINCT FROM cur.row_version THEN PERFORM public._api_refuse('changed'); END IF;
+    PERFORM public._api_refuse('not_allowed');
+  END IF;
+  RETURN QUERY SELECT p_client_id, true, to_timestamp(v_rv / 1000000.0), v_rv;
+END $apiclientupd$;
+
+-- A new engagement for a client, as the portal's New Assessment makes one:
+-- pending (draft), with the client's next reference, its lead if one is
+-- given, and the two timeline lines the portal writes.
+CREATE OR REPLACE FUNCTION public.api_v1_engagement_create(p_client_id uuid, p_name text, p_start_date date, p_end_date date,
+                                                          p_type text DEFAULT NULL, p_lead_id uuid DEFAULT NULL,
+                                                          p_test_days numeric DEFAULT NULL, p_scope text DEFAULT NULL)
+RETURNS TABLE (id uuid, job_code text, name text, status text, created_at timestamptz, row_version bigint)
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apiengnew$
+#variable_conflict use_column
+DECLARE c record; v_name text := btrim(regexp_replace(COALESCE(p_name, ''), '\s+', ' ', 'g')); v_lead text; v_code text;
+  v_id uuid; v_at timestamptz; v_rv bigint;
+BEGIN
+  PERFORM public._api_need_write('engagement_create', p_client_id);
+  IF NOT EXISTS (SELECT 1 FROM public.clients cl WHERE cl.id = p_client_id) THEN PERFORM public._api_refuse('not_found', 'No client with that p_client_id that this key can see.'); END IF;
+  IF length(v_name) NOT BETWEEN 1 AND 300 THEN PERFORM public._api_refuse('bad_request', 'p_name is the engagement''s name, up to 300 characters.'); END IF;
+  IF p_start_date IS NULL OR p_end_date IS NULL THEN PERFORM public._api_refuse('bad_request', 'p_start_date and p_end_date are both needed.'); END IF;
+  IF p_end_date < p_start_date THEN PERFORM public._api_refuse('bad_request', 'p_end_date is on or after p_start_date.'); END IF;
+  IF p_test_days IS NOT NULL AND (p_test_days < 0 OR p_test_days > 1000) THEN PERFORM public._api_refuse('bad_request', 'p_test_days is from 0 to 1,000.'); END IF;
+  IF p_lead_id IS NOT NULL THEN
+    v_lead := public._api_lead_name(p_lead_id);
+    IF v_lead IS NULL THEN PERFORM public._api_refuse('bad_request', 'p_lead_id is an active tester, senior, administrator or contractor.'); END IF;
+  END IF;
+  SELECT * INTO c FROM public._api_portal_caller();
+  v_code := public._api_next_job_code(p_client_id);
+  BEGIN
+    INSERT INTO public.assessments (client_id, name, type, status, start_date, end_date, lead_id, test_days, scope, job_code,
+                                    test_perspective, capture_credentials, credentials_status)
+    VALUES (p_client_id, v_name, NULLIF(btrim(COALESCE(p_type, '')), ''), 'draft', p_start_date, p_end_date, p_lead_id,
+            COALESCE(p_test_days, 0), COALESCE(p_scope, ''), v_code, 'unauthenticated', false, 'none')
+    RETURNING assessments.id, assessments.created_at, assessments.row_version INTO v_id, v_at, v_rv;
+  EXCEPTION WHEN insufficient_privilege OR check_violation OR raise_exception THEN
+    PERFORM public._api_refuse('not_allowed', SQLERRM);
+  END;
+  PERFORM public._api_timeline(v_id, 'Assessment created by ' || COALESCE(c.name, 'staff') || ' (API)');
+  IF p_lead_id IS NOT NULL THEN PERFORM public._api_timeline(v_id, 'Lead tester assigned: ' || v_lead, p_lead_id); END IF;
+  RETURN QUERY SELECT v_id, v_code, v_name, 'draft'::text, v_at, v_rv;
+END $apiengnew$;
+
+-- An engagement's name, type, dates, lead, days and scope: a parameter left
+-- out (null) is left as it is; p_clear_lead takes the lead off.
+CREATE OR REPLACE FUNCTION public.api_v1_engagement_update(p_engagement_id uuid, p_row_version bigint DEFAULT NULL, p_name text DEFAULT NULL,
+                                                          p_type text DEFAULT NULL, p_start_date date DEFAULT NULL, p_end_date date DEFAULT NULL,
+                                                          p_lead_id uuid DEFAULT NULL, p_clear_lead boolean DEFAULT false,
+                                                          p_test_days numeric DEFAULT NULL, p_scope text DEFAULT NULL)
+RETURNS TABLE (id uuid, changed boolean, changed_at timestamptz, row_version bigint)
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apiengupd$
+#variable_conflict use_column
+DECLARE cur record; v_name text; v_lead text; v_new_lead uuid; v_start date; v_end date; v_rv bigint;
+BEGIN
+  PERFORM public._api_need_write('engagement_update', p_engagement_id);
+  SELECT a.id, a.row_version, a.updated_at, a.start_date, a.end_date, a.lead_id INTO cur FROM public.assessments a WHERE a.id = p_engagement_id;
+  IF cur.id IS NULL THEN PERFORM public._api_refuse('not_found'); END IF;
+  IF p_row_version IS NOT NULL AND cur.row_version IS DISTINCT FROM p_row_version THEN PERFORM public._api_refuse('changed'); END IF;
+  IF p_name IS NOT NULL THEN
+    v_name := btrim(regexp_replace(p_name, '\s+', ' ', 'g'));
+    IF length(v_name) NOT BETWEEN 1 AND 300 THEN PERFORM public._api_refuse('bad_request', 'p_name is the engagement''s name, up to 300 characters.'); END IF;
+  END IF;
+  v_start := COALESCE(p_start_date, cur.start_date);
+  v_end := COALESCE(p_end_date, cur.end_date);
+  IF v_start IS NOT NULL AND v_end IS NOT NULL AND v_end < v_start THEN PERFORM public._api_refuse('bad_request', 'The end date is on or after the start date.'); END IF;
+  IF p_test_days IS NOT NULL AND (p_test_days < 0 OR p_test_days > 1000) THEN PERFORM public._api_refuse('bad_request', 'p_test_days is from 0 to 1,000.'); END IF;
+  v_new_lead := CASE WHEN COALESCE(p_clear_lead, false) THEN NULL ELSE COALESCE(p_lead_id, cur.lead_id) END;
+  IF p_lead_id IS NOT NULL AND NOT COALESCE(p_clear_lead, false) AND p_lead_id IS DISTINCT FROM cur.lead_id THEN
+    v_lead := public._api_lead_name(p_lead_id);
+    IF v_lead IS NULL THEN PERFORM public._api_refuse('bad_request', 'p_lead_id is an active tester, senior, administrator or contractor.'); END IF;
+  END IF;
+  IF v_name IS NULL AND p_type IS NULL AND p_start_date IS NULL AND p_end_date IS NULL AND p_test_days IS NULL AND p_scope IS NULL
+     AND v_new_lead IS NOT DISTINCT FROM cur.lead_id THEN
+    RETURN QUERY SELECT cur.id, false, COALESCE(to_timestamp(cur.row_version / 1000000.0), cur.updated_at), cur.row_version;
+    RETURN;
+  END IF;
+  BEGIN
+    UPDATE public.assessments a SET
+      name = COALESCE(v_name, a.name),
+      type = CASE WHEN p_type IS NULL THEN a.type ELSE NULLIF(btrim(p_type), '') END,
+      start_date = v_start, end_date = v_end,
+      lead_id = v_new_lead,
+      test_days = COALESCE(p_test_days, a.test_days),
+      scope = COALESCE(p_scope, a.scope),
+      updated_at = now()
+     WHERE a.id = p_engagement_id AND a.row_version IS NOT DISTINCT FROM cur.row_version
+    RETURNING a.row_version INTO v_rv;
+  EXCEPTION WHEN insufficient_privilege OR check_violation OR raise_exception THEN
+    PERFORM public._api_refuse('not_allowed', SQLERRM);
+  END;
+  IF NOT FOUND THEN
+    IF (SELECT a.row_version FROM public.assessments a WHERE a.id = p_engagement_id) IS DISTINCT FROM cur.row_version THEN PERFORM public._api_refuse('changed'); END IF;
+    PERFORM public._api_refuse('not_allowed');
+  END IF;
+  IF v_lead IS NOT NULL THEN PERFORM public._api_timeline(p_engagement_id, 'Lead tester assigned: ' || v_lead, p_lead_id); END IF;
+  RETURN QUERY SELECT p_engagement_id, true, to_timestamp(v_rv / 1000000.0), v_rv;
+END $apiengupd$;
+
+-- Who may call the API's functions: a session signed in (each asks for its key
+-- first); never the anonymous key.
+DO $api_grants$
+DECLARE f record;
+BEGIN
+  FOR f IN SELECT p.oid::regprocedure AS sig FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname LIKE 'api\_v1\_%' LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon', f.sig);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO authenticated, service_role', f.sig);
+  END LOOP;
+END $api_grants$;
+
 -- 1806: the version stamp below is written by this file and read by anyone,
 -- never written by a session (a signed-in user could otherwise set it, and a
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: f60ad60ad539af78 @ 2025102901
+-- schema-fingerprint: 449fca3a1bf45179 @ 2025103101
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025102901, now())
+VALUES (1, 2025103101, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 

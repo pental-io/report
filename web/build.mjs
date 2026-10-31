@@ -33,7 +33,13 @@ fs.mkdirSync(path.join(DIST, 'assets'), { recursive: true });
 const shellFiles = fs.readdirSync(path.join(SRC, 'shell')).filter((f) => f.endsWith('.js')).sort();
 let app = [read('stubs.js'), ...shellFiles.map((f) => `// ── shell/${f} ──\n` + read(path.join('shell', f))), read('engine.js')].join('\n;\n');
 app = app.split('%%REPORTER_VERSION%%').join(version);
-const leftover = app.match(/%%(SUPABASE_URL|SUPABASE_PUBLISHABLE_KEY|MASTER_SUPABASE_URL|MASTER_SUPABASE_PUBLISHABLE_KEY|REPORTER_VERSION)%%/g);
+// The methodology library's text, fetched when a template is previewed or
+// added, named by its content so a browser never keeps an old one.
+const libText = JSON.stringify(JSON.parse(read('methodology-library.json')));
+const libFile = `methodology-library.${hash(libText)}.json`;
+if (app.split('%%CRB_LIBRARY_FILE%%').length !== 2) throw new Error('the app names the methodology library other than once');
+app = app.split('%%CRB_LIBRARY_FILE%%').join(libFile);
+const leftover = app.match(/%%(SUPABASE_URL|SUPABASE_PUBLISHABLE_KEY|MASTER_SUPABASE_URL|MASTER_SUPABASE_PUBLISHABLE_KEY|REPORTER_VERSION|CRB_LIBRARY_FILE)%%/g);
 if (leftover) throw new Error('placeholders left in the app: ' + [...new Set(leftover)].join(', '));
 // It must parse: a broken script shows a blank page with no other clue.
 {
@@ -63,6 +69,7 @@ fs.writeFileSync(path.join(DIST, 'assets', cssFile), css);
 // ── Libraries and the files the app loads by name ─────────────────────────
 fs.cpSync(path.join(SRC, 'vendor'), path.join(DIST, 'assets', 'vendor'), { recursive: true });
 fs.cpSync(path.join(SRC, 'public'), path.join(DIST, 'assets'), { recursive: true });
+fs.writeFileSync(path.join(DIST, 'assets', libFile), libText);
 const sb = fs.readFileSync(path.join(SRC, 'vendor', 'supabase-js-2.39.3', 'supabase.js'), 'utf8');
 const sbFile = `supabase-js-2.39.3.${hash(sb)}.js`;
 fs.writeFileSync(path.join(DIST, 'assets', sbFile), sb);

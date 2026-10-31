@@ -33,7 +33,7 @@ services:
       retries: 30
 
   report:
-    image: ghcr.io/pental-io/report:${REPORT_VERSION:-0.1.7}
+    image: ghcr.io/pental-io/report:${REPORT_VERSION:-0.1.8}
     build: .
     restart: unless-stopped
     depends_on:

@@ -184,7 +184,7 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 - **A testing calendar.** Each tester's engagements week by week, and the ones still waiting for a lead, given one from there.
 - **Every engagement in one list**, with a reference code for each (numbered your way, or random), a type from your own list, its dates, test days, perspective and lead tester. Rename, duplicate, archive and restore, or delete. An engagement is open from the moment it is made, with no status to move along: its report downloads whenever you like.
 - **Phases.** External, internal, web, retest or whatever shape the work takes, each with its own type, scope, test days and retest setting.
-- **Checklists and runbooks on each phase.** A methodology library of 22 checklists to start from, searched by name and narrowed by category, each previewed before you add it: OSSTMM 3, PTES, NIST SP 800-115, OWASP (ASVS 5.0, the API Security Top 10, the Top 10 2025, the LLM Top 10 2026 and the IoT Security Testing Guide), MITRE ATT&CK, PCI DSS 11.4, Active Directory, Kubernetes, thick clients, red team, social engineering and physical. Six of them are suggested on a phase of their type: web application (OWASP WSTG), internal infrastructure, external infrastructure, cloud, mobile (OWASP MASVS) and wireless. Write your own too: tick items as you test, with who ticked each and when if you want it, and follow a runbook's steps with each command a click to copy. Bring them in or take them out as Excel, Word or JSON, in **Settings, Checklists & Runbooks**.
+- **Checklists and runbooks on each phase.** A methodology library of 22 checklists and 21 runbooks to start from, searched by name and narrowed by category, each previewed before you add it. The checklists follow OSSTMM 3, PTES, NIST SP 800-115, OWASP (the WSTG test by test, ASVS 5.0 section by section, the MASVS, the API Security Top 10, the Top 10 2025, the LLM Top 10 2026 and the IoT Security Testing Guide), MITRE ATT&CK, PCI DSS 11.4, Active Directory, Kubernetes, thick clients, red team, social engineering and physical, each item saying what it establishes, what to check and what to record. The runbooks take an engagement from kick-off to close-out (credentials, third-party permissions, a testing day, a scope change, unexpected impact, a critical finding, client data, the report, the readout, retests) and run each kind of test step by step, an authorised phishing campaign, a physical assessment and a red team operation included. A phase of a default type is offered its checklist and its runbook: web application (OWASP WSTG), internal infrastructure, external infrastructure, cloud, mobile (OWASP MASVS) and wireless. Write your own too: tick items as you test, with who ticked each and when if you want it, and follow a runbook's steps with each command a click to copy. Bring them in or take them out as Excel, Word or JSON, in **Settings, Checklists & Runbooks**.
 - **On each engagement:** its notes, scope, the artifacts left on the client's systems, caveats, appendices for the report (screenshots, tool output, scan results and the rest), files such as videos, and comments for your team.
 - **Sections your way.** Rename, reorder, give an icon to, switch off or leave out of the report any built-in section, and add your own in the ten field styles.
 
@@ -228,6 +228,10 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 - **People.** Add a colleague, change their address, send setup links, and reset a lost authenticator. Each person has a profile with a picture, job title and phone, for the reports that name them.
 - **A second factor for everyone**: an authenticator app, or a security key or passkey once it is served over HTTPS. Choose which are allowed or require both, when people prove it again and how long a session lasts, and see active sessions and sign the others out. See [Security](#security).
 - **Live together.** What a colleague saves appears for everyone at once, and two people saving the same finding are asked before one overwrites the other.
+
+**Your own tools**
+
+- **An API.** Connect a tracker, a project board, a dashboard or a script. Each person makes their own keys, and a key reads and changes only what its person can. See [The API](#the-api).
 
 ## AI on Your Own Key
 
@@ -286,6 +290,14 @@ Every engagement becomes a report two ways, both in your own brand.
   <br><sub>Where the template is kept</sub>
 </p>
 
+## The API
+
+An administrator turns the API on under **Settings, API**, and decides whether keys may write, which roles may make keys and the longest a key may live (90 days to begin with, up to 365). Each person then makes their own keys on **Profile**, under **API Keys**, each one reading, or reading and writing. A key is shown once, with the address to call (the one you open Pental Report at) and the publishable key beside it, and only a one-way hash of it is kept.
+
+A key works as its person: it reads what they can read and changes what they can change, through the API's own functions alone, never a table directly and never from a web page. It stops when it expires or is revoked, and is revoked by itself when its person is switched off or deleted, changes role or sign-in, or has their second factor reset. Settings, API lists every key with its person, when and from where it was last used and how many writes it has made, with **Revoke** beside each and **Revoke every key**.
+
+A program signs in with three calls and then calls the functions: engagements, findings, clients, people, comments, timelines and files to read, and, with writing on, a finding's status, a retest request, comments, clients and engagements to write. [The Pental API guide](https://pental.io/guides/pental-api) has the three calls with examples in Python, JavaScript and curl, every function, and what each refusal means, and [the OpenAPI document](https://pental.io/openapi/pental-api-v1.json) lists every parameter and column.
+
 ## Updating
 
 Pental Report tells its administrators when a new release is out, in **Settings, Updates**, with what the release changes, and in a banner at the top of the page when there is something to do about it. Where it updates itself, nothing is said until the new release is in.
@@ -333,7 +345,8 @@ An administrator makes a colleague a new password link from Team, and resets a l
 # A link to choose a new password (it works once, for an hour)
 docker compose exec report node server/bin/password-link.js you@yourfirm.com
 
-# Clear a lost authenticator or security key: a new one is set up at the next sign-in
+# Clear a lost authenticator or security key: a new one is set up at the next sign-in,
+# and any API keys the person holds are revoked
 docker compose exec report node server/bin/reset-mfa.js you@yourfirm.com
 ```
 
@@ -359,7 +372,7 @@ To know of a new release, the server asks GitHub for Pental Report's latest one 
 
 ## Security
 
-Every person signs in with a password and a second factor: an authenticator app, or a security key or passkey once Pental Report is served over HTTPS. Passwords are hashed with bcrypt. Row-level security in PostgreSQL checks every read and write against the person's role and a recent second factor. Your AI key is kept encrypted in the database, and this server's signing keys are sealed with `VAULT_KEY`.
+Every person signs in with a password and a second factor: an authenticator app, or a security key or passkey once Pental Report is served over HTTPS. Passwords are hashed with bcrypt. Row-level security in PostgreSQL checks every read and write against the person's role and a recent second factor. Your AI key is kept encrypted in the database, and this server's signing keys are sealed with `VAULT_KEY`. An API key is kept only as a SHA-256 hash, works as its person through the API's own functions alone, and is refused from a web page.
 
 Found a vulnerability? Please see [SECURITY.md](SECURITY.md).
 

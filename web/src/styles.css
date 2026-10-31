@@ -2736,6 +2736,10 @@ body.rb-barred{min-height:calc(100vh - var(--rb-bar,3rem))}
   background:var(--bg);border:1px solid var(--accent);border-radius:8px;padding:0.7rem 0.8rem;line-height:1.6}
 .token-cmd{font-family:var(--font-mono);font-size:0.72rem;word-break:break-all;background:var(--bg);
   border:1px solid var(--border);border-radius:8px;padding:0.7rem 0.8rem;line-height:1.7;color:var(--gray)}
+/* 1977: why the API card offers nothing to make, in its own words. */
+.api-p{font-size:0.85rem;color:var(--gray);line-height:1.6;margin:0 0 0.85rem}
+.api-hint{display:block;font-size:0.8rem;color:var(--gray);line-height:1.5}
+.api-note{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:0.7rem 0.85rem;font-size:0.85rem;line-height:1.55;color:var(--text)}
 
 /* ── VULNERABILITY SCANS (561) ────────────────────────────────────────────
    The area is built out of the same vocabulary as every other area: cards,
@@ -4305,6 +4309,15 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
 .crbl-items li::marker{color:var(--gray);font-size:0.8rem;font-weight:700}
 .crbl-item-t{font-size:0.87rem;font-weight:600;line-height:1.4;color:var(--text)}
 .crbl-item-d{margin-top:0.15rem;font-size:0.8rem;line-height:1.55;color:var(--gray)}
+/* 1977: each item of a filled-out template opens to its text, on a phase and in the preview. */
+.crbl-items details>summary{cursor:pointer}
+.crbl-items details>summary:hover{color:var(--accent)}
+.crbl-items details[open] .crbl-item-d{margin:0.35rem 0 0.2rem}
+.crbl-older{font-size:0.74rem;line-height:1.45;color:var(--gray);padding:0.35rem 0.55rem;border-radius:8px;background:var(--bg);border:1px dashed var(--border)}
+.crb-det{margin-top:2px}
+.crb-det>summary{cursor:pointer;width:max-content;font-size:0.74rem;color:var(--gray)}
+.crb-det>summary:hover{color:var(--text)}
+.crb-det[open]>summary{margin-bottom:0.25rem}
 @media (max-width:600px){
   .crbl-row{flex-direction:column;align-items:stretch}
   .crbl-row-a{justify-content:flex-end}

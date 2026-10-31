@@ -922,11 +922,13 @@ async function _crbAddForPhase(libKey, assessmentId, phaseIdx) {
   if (!row) {
     _showLoading();
     try {
-      var res = await supabaseClient.from('checklists_runbooks').insert(_crbLibraryPayload(tpl)).select('*');
+
+      var whole = await _crbLibFull(libKey);
+      var res = await supabaseClient.from('checklists_runbooks').insert(_crbLibraryPayload(whole)).select('*');
       if (res.error) { toast('Could not add it: ' + _errMsg(res.error), 'error'); return; }
       row = res.data && res.data[0];
       if (!row) { toast('Could not add it', 'error'); return; }
-      S.data.checklists_runbooks = (S.data.checklists_runbooks || []).concat([row]);
+      _crbKeepRow(row);
     } catch (err) {
       console.error('_crbAddForPhase:', err);
       toast('Error: ' + err.message, 'error');
@@ -1506,6 +1508,11 @@ function _renderPhaseChecklistsPanel(assessment, phase, phaseIdx, isClient) {
     ? (Object.keys(CHECKLIST_RUNBOOK_LIBRARY).find(function(k) { return String(CHECKLIST_RUNBOOK_LIBRARY[k].phase_hint || '').toLowerCase() === _phTypeLc; }) || null)
     : null;
 
+  var libMatchKeys = libMatchKey ? [libMatchKey].concat(Object.keys(CHECKLIST_RUNBOOK_LIBRARY).filter(function(k) {
+    var x = CHECKLIST_RUNBOOK_LIBRARY[k];
+    return x.kind === 'runbook' && String(x.phase_hint || '').toLowerCase() === _phTypeLc;
+  }).slice(0, 1)) : [];
+
   if (!attachedIds.length && (!canWrite || (!allTemplates.length && !libMatchKey))) return '';
 
   var templates = allTemplates.filter(function(t) { return attachedIds.indexOf(t.id) !== -1; });
@@ -1605,7 +1612,9 @@ function _renderPhaseChecklistsPanel(assessment, phase, phaseIdx, isClient) {
         }
         h += '<div style="flex:1;min-width:0">';
         h += '<div style="font-size:0.85rem;font-weight:600' + (isTicked ? ';text-decoration:line-through;color:var(--gray)' : '') + '">' + esc(it.title || '') + '</div>';
-        if (it.description) h += '<div class="crb-rich" style="font-size:0.78rem;color:var(--gray);margin-top:2px">' + _crbDisplay(it.description) + '</div>';
+
+        if (it.description && _crbDescLong(it.description)) h += '<details class="crb-det"><summary>Details</summary><div class="crb-rich" style="font-size:0.78rem;color:var(--gray)">' + _crbDisplay(it.description) + '</div></details>';
+        else if (it.description) h += '<div class="crb-rich" style="font-size:0.78rem;color:var(--gray);margin-top:2px">' + _crbDisplay(it.description) + '</div>';
         if (it.ref_url) h += '<div style="font-size:0.72rem;margin-top:2px"><a href="' + esc(it.ref_url) + '" target="_blank" rel="noopener" style="color:var(--accent)">Reference &rarr;</a></div>';
         if (auditInfo) {
           var atDate = auditInfo.at ? new Date(auditInfo.at).toLocaleString('en-GB') : '';
@@ -1647,14 +1656,16 @@ function _renderPhaseChecklistsPanel(assessment, phase, phaseIdx, isClient) {
 
   if (canWrite) {
 
-    var _lib = libMatchKey ? CHECKLIST_RUNBOOK_LIBRARY[libMatchKey] : null;
-    var _showSuggest = !!_lib && !templates.some(function(t) { return t.source === _lib.source; });
-    if (_showSuggest) {
-      h += '<div data-crb-suggest="' + esc(libMatchKey) + '" style="display:flex;align-items:center;gap:0.6rem;margin-top:0.5rem;padding:0.5rem 0.75rem;background:var(--bg);border:1px dashed var(--border);border-radius:6px">';
+    var _showSuggest = false;
+    libMatchKeys.forEach(function(_k) {
+      var _lib = CHECKLIST_RUNBOOK_LIBRARY[_k];
+      if (!_lib || templates.some(function(t) { return _crbLibBase(t.source) === _crbLibBase(_lib.source); })) return;
+      _showSuggest = true;
+      h += '<div data-crb-suggest="' + esc(_k) + '" style="display:flex;align-items:center;gap:0.6rem;margin-top:0.5rem;padding:0.5rem 0.75rem;background:var(--bg);border:1px dashed var(--border);border-radius:6px">';
       h += '<div style="flex:1;min-width:0;font-size:0.78rem;color:var(--gray)">Suggested for this phase: <strong style="color:var(--text)">' + esc(_lib.name) + '</strong> &middot; ' + esc(_lib.kind) + ', ' + (_lib.items || []).length + (_lib.kind === 'runbook' ? ' steps' : ' items') + '</div>';
-      h += '<button class="btn btn-sm btn-primary" style="white-space:nowrap" onclick="_crbAddForPhase(\'' + esc(libMatchKey) + '\',\'' + esc(assessment.id) + '\',' + phaseIdx + ')">Add</button>';
+      h += '<button class="btn btn-sm btn-primary" style="white-space:nowrap" onclick="_crbAddForPhase(\'' + esc(_k) + '\',\'' + esc(assessment.id) + '\',' + phaseIdx + ')">Add</button>';
       h += '</div>';
-    }
+    });
     var unattached = allTemplates.filter(function(t) { return attachedIds.indexOf(t.id) === -1; });
     if (unattached.length) {
       var phType = phase.type || '';
@@ -2584,520 +2595,1442 @@ function _activeLogo(s) {
 }
 var SEV_DEFAULTS={critical:'#7c3aed',high:'#991b1b',medium:'#f59e0b',low:'#3b82f6',info:'#6b7280'};
 var CHECKLIST_RUNBOOK_LIBRARY = {
-  phase_web_v1: {
-    kind: 'checklist',
-    name: 'Web Application Testing (OWASP WSTG)',
-    description: 'Coverage tracker for a web application phase, across the OWASP Web Security Testing Guide categories and the OWASP API Security Top 10. Tick a category once its checks are covered; the code in each title points to the section in the guide.',
-    category: 'Web and API',
-    phase_hint: 'Web Application',
-    source: 'phase_web_v1',
-    source_url: 'https://owasp.org/www-project-web-security-testing-guide/',
+  phase_web_v2: {
+    kind: "checklist",
+    name: "Web Application Testing (OWASP WSTG)",
+    description: "Coverage tracker for a web application phase, with one item per test case of the OWASP Web Security Testing Guide v4.2 in the guide's own order. Tick each test once it is covered or recorded as not applicable, keep the evidence each item names, and use the API Security Top 10 checklist alongside it for API endpoints.",
+    category: "Web and API",
+    phase_hint: "Web Application",
+    source: "phase_web_v2",
+    source_url: "https://owasp.org/www-project-web-security-testing-guide/",
     items: [
-      { id: 'info', title: 'Information gathering (WSTG-INFO)', description: 'Confirm what the application exposes about itself, from public sources to error output, and record the attack surface. Done when the information-gathering checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
-      { id: 'config', title: 'Configuration and deployment management (WSTG-CONF)', description: 'Confirm platform, server and deployment configuration follow current hardening guidance. Done when the checks are covered and deviations recorded.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
-      { id: 'identity', title: 'Identity management (WSTG-IDNT)', description: 'Confirm roles, registration and account provisioning are handled safely. Done when the identity checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
-      { id: 'authn', title: 'Authentication (WSTG-ATHN)', description: 'Confirm credentials are transmitted and stored safely, lockout is enforced and the login flow resists bypass. Done when the authentication checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
-      { id: 'authz', title: 'Authorization (WSTG-ATHZ)', description: 'Confirm access controls hold across roles and objects, covering privilege escalation and insecure direct object reference. Done when the authorization checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
-      { id: 'session', title: 'Session management (WSTG-SESS)', description: 'Confirm session identifiers, attributes and lifecycle meet current guidance, covering fixation and cross-site request forgery. Done when the session checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
-      { id: 'input', title: 'Input validation (WSTG-INPV)', description: 'Confirm user-supplied input is validated, encoded and parameterised across all input vectors, covering the injection and cross-site scripting classes. Done when each in-scope input has been reviewed and results recorded.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
-      { id: 'errors', title: 'Error handling (WSTG-ERRH)', description: 'Confirm errors do not leak stack traces, internal detail or configuration. Done when the error-handling checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
-      { id: 'crypto', title: 'Cryptography (WSTG-CRYP)', description: 'Confirm transport and stored-data cryptography follow current standards. Done when the cryptography checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
-      { id: 'business', title: 'Business logic (WSTG-BUSLOGIC)', description: 'Confirm business workflows resist out-of-order, timing and value-manipulation abuse. Done when the business-logic checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
-      { id: 'client', title: 'Client-side (WSTG-CLNT)', description: 'Confirm client-side code, storage and framing are handled safely. Done when the client-side checks are covered.', ref_url: 'https://owasp.org/www-project-web-security-testing-guide/stable/' },
-      { id: 'api', title: 'API testing (WSTG-APIT and OWASP API Top 10)', description: 'Confirm any application APIs are covered against the <strong>OWASP API Security Top 10</strong>, including object- and function-level authorisation. Done when the API checks are covered.', ref_url: 'https://owasp.org/www-project-api-security/' }
+      { id: "info-01", title: "WSTG-INFO-01 Search engine discovery for information leakage" },
+      { id: "info-02", title: "WSTG-INFO-02 Fingerprint the web server" },
+      { id: "info-03", title: "WSTG-INFO-03 Review web server metafiles for information leakage" },
+      { id: "info-04", title: "WSTG-INFO-04 Enumerate applications on the web server" },
+      { id: "info-05", title: "WSTG-INFO-05 Review web page content for information leakage" },
+      { id: "info-06", title: "WSTG-INFO-06 Identify application entry points" },
+      { id: "info-07", title: "WSTG-INFO-07 Map execution paths through the application" },
+      { id: "info-08", title: "WSTG-INFO-08 Fingerprint the web application framework" },
+      { id: "info-09", title: "WSTG-INFO-09 Fingerprint the web application" },
+      { id: "info-10", title: "WSTG-INFO-10 Map the application architecture" },
+      { id: "conf-01", title: "WSTG-CONF-01 Network infrastructure configuration" },
+      { id: "conf-02", title: "WSTG-CONF-02 Application platform configuration" },
+      { id: "conf-03", title: "WSTG-CONF-03 File extension handling for sensitive information" },
+      { id: "conf-04", title: "WSTG-CONF-04 Old, backup and unreferenced files" },
+      { id: "conf-05", title: "WSTG-CONF-05 Infrastructure and application admin interfaces" },
+      { id: "conf-06", title: "WSTG-CONF-06 HTTP methods" },
+      { id: "conf-07", title: "WSTG-CONF-07 HTTP Strict Transport Security" },
+      { id: "conf-08", title: "WSTG-CONF-08 RIA cross-domain policy" },
+      { id: "conf-09", title: "WSTG-CONF-09 File permissions" },
+      { id: "conf-10", title: "WSTG-CONF-10 Subdomain takeover" },
+      { id: "conf-11", title: "WSTG-CONF-11 Cloud storage" },
+      { id: "idnt-01", title: "WSTG-IDNT-01 Role definitions" },
+      { id: "idnt-02", title: "WSTG-IDNT-02 User registration process" },
+      { id: "idnt-03", title: "WSTG-IDNT-03 Account provisioning process" },
+      { id: "idnt-04", title: "WSTG-IDNT-04 Account enumeration and guessable user accounts" },
+      { id: "idnt-05", title: "WSTG-IDNT-05 Weak or unenforced username policy" },
+      { id: "athn-01", title: "WSTG-ATHN-01 Credentials sent over an encrypted channel" },
+      { id: "athn-02", title: "WSTG-ATHN-02 Default credentials" },
+      { id: "athn-03", title: "WSTG-ATHN-03 Weak lockout mechanism" },
+      { id: "athn-04", title: "WSTG-ATHN-04 Authentication schema bypass" },
+      { id: "athn-05", title: "WSTG-ATHN-05 Vulnerable remember password" },
+      { id: "athn-06", title: "WSTG-ATHN-06 Browser cache weaknesses" },
+      { id: "athn-07", title: "WSTG-ATHN-07 Weak password policy" },
+      { id: "athn-08", title: "WSTG-ATHN-08 Weak security questions and answers" },
+      { id: "athn-09", title: "WSTG-ATHN-09 Weak password change or reset functions" },
+      { id: "athn-10", title: "WSTG-ATHN-10 Weaker authentication in alternative channels" },
+      { id: "athz-01", title: "WSTG-ATHZ-01 Directory traversal and file inclusion" },
+      { id: "athz-02", title: "WSTG-ATHZ-02 Authorisation schema bypass" },
+      { id: "athz-03", title: "WSTG-ATHZ-03 Privilege escalation" },
+      { id: "athz-04", title: "WSTG-ATHZ-04 Insecure direct object references" },
+      { id: "sess-01", title: "WSTG-SESS-01 Session management schema" },
+      { id: "sess-02", title: "WSTG-SESS-02 Cookie attributes" },
+      { id: "sess-03", title: "WSTG-SESS-03 Session fixation" },
+      { id: "sess-04", title: "WSTG-SESS-04 Exposed session variables" },
+      { id: "sess-05", title: "WSTG-SESS-05 Cross-site request forgery" },
+      { id: "sess-06", title: "WSTG-SESS-06 Logout functionality" },
+      { id: "sess-07", title: "WSTG-SESS-07 Session timeout" },
+      { id: "sess-08", title: "WSTG-SESS-08 Session puzzling" },
+      { id: "sess-09", title: "WSTG-SESS-09 Session hijacking" },
+      { id: "inpv-01", title: "WSTG-INPV-01 Reflected cross-site scripting" },
+      { id: "inpv-02", title: "WSTG-INPV-02 Stored cross-site scripting" },
+      { id: "inpv-03", title: "WSTG-INPV-03 HTTP verb tampering" },
+      { id: "inpv-04", title: "WSTG-INPV-04 HTTP parameter pollution" },
+      { id: "inpv-05", title: "WSTG-INPV-05 SQL injection" },
+      { id: "inpv-06", title: "WSTG-INPV-06 LDAP injection" },
+      { id: "inpv-07", title: "WSTG-INPV-07 XML injection" },
+      { id: "inpv-08", title: "WSTG-INPV-08 Server-side include injection" },
+      { id: "inpv-09", title: "WSTG-INPV-09 XPath injection" },
+      { id: "inpv-10", title: "WSTG-INPV-10 IMAP and SMTP injection" },
+      { id: "inpv-11", title: "WSTG-INPV-11 Code injection" },
+      { id: "inpv-12", title: "WSTG-INPV-12 Command injection" },
+      { id: "inpv-13", title: "WSTG-INPV-13 Format string injection" },
+      { id: "inpv-14", title: "WSTG-INPV-14 Incubated vulnerabilities" },
+      { id: "inpv-15", title: "WSTG-INPV-15 HTTP splitting and smuggling" },
+      { id: "inpv-16", title: "WSTG-INPV-16 HTTP incoming requests" },
+      { id: "inpv-17", title: "WSTG-INPV-17 Host header injection" },
+      { id: "inpv-18", title: "WSTG-INPV-18 Server-side template injection" },
+      { id: "inpv-19", title: "WSTG-INPV-19 Server-side request forgery" },
+      { id: "errh-01", title: "WSTG-ERRH-01 Improper error handling" },
+      { id: "errh-02", title: "WSTG-ERRH-02 Stack traces" },
+      { id: "cryp-01", title: "WSTG-CRYP-01 Weak transport layer security" },
+      { id: "cryp-02", title: "WSTG-CRYP-02 Padding oracle" },
+      { id: "cryp-03", title: "WSTG-CRYP-03 Sensitive information sent over unencrypted channels" },
+      { id: "cryp-04", title: "WSTG-CRYP-04 Weak encryption" },
+      { id: "busl-01", title: "WSTG-BUSL-01 Business logic data validation" },
+      { id: "busl-02", title: "WSTG-BUSL-02 Ability to forge requests" },
+      { id: "busl-03", title: "WSTG-BUSL-03 Integrity checks" },
+      { id: "busl-04", title: "WSTG-BUSL-04 Process timing" },
+      { id: "busl-05", title: "WSTG-BUSL-05 Limits on how often a function can be used" },
+      { id: "busl-06", title: "WSTG-BUSL-06 Circumvention of workflows" },
+      { id: "busl-07", title: "WSTG-BUSL-07 Defences against application misuse" },
+      { id: "busl-08", title: "WSTG-BUSL-08 Upload of unexpected file types" },
+      { id: "busl-09", title: "WSTG-BUSL-09 Upload of malicious files" },
+      { id: "clnt-01", title: "WSTG-CLNT-01 DOM-based cross-site scripting" },
+      { id: "clnt-02", title: "WSTG-CLNT-02 JavaScript execution" },
+      { id: "clnt-03", title: "WSTG-CLNT-03 HTML injection" },
+      { id: "clnt-04", title: "WSTG-CLNT-04 Client-side URL redirect" },
+      { id: "clnt-05", title: "WSTG-CLNT-05 CSS injection" },
+      { id: "clnt-06", title: "WSTG-CLNT-06 Client-side resource manipulation" },
+      { id: "clnt-07", title: "WSTG-CLNT-07 Cross-origin resource sharing" },
+      { id: "clnt-08", title: "WSTG-CLNT-08 Cross-site flashing" },
+      { id: "clnt-09", title: "WSTG-CLNT-09 Clickjacking" },
+      { id: "clnt-10", title: "WSTG-CLNT-10 WebSockets" },
+      { id: "clnt-11", title: "WSTG-CLNT-11 Web messaging" },
+      { id: "clnt-12", title: "WSTG-CLNT-12 Browser storage" },
+      { id: "clnt-13", title: "WSTG-CLNT-13 Cross-site script inclusion" },
+      { id: "apit-01", title: "WSTG-APIT-01 GraphQL" }
     ]
   },
-
-  phase_internal_v1: {
-    kind: 'checklist',
-    name: 'Internal Infrastructure Review',
-    description: 'Coverage tracker for an internal infrastructure phase, including Active Directory. Each item is confirmed against current hardening guidance, with deviations and exceptions recorded. For technique, follow the linked guidance.',
-    category: 'Infrastructure',
-    phase_hint: 'Internal Infrastructure',
-    source: 'phase_internal_v1',
-    source_url: 'https://csrc.nist.gov/publications/detail/sp/800-115/final',
+  phase_internal_v2: {
+    kind: "checklist",
+    name: "Internal Infrastructure Review",
+    description: "Coverage tracker for an internal infrastructure test, in the order a tester usually works: scope and discovery, segmentation, management services, patching, legacy protocols, name resolution and relay, credentials, databases, virtualisation, backup and storage, network and embedded devices, port access control, then endpoint and logging observations. Tick each item once covered or recorded as not applicable, and attach the Active Directory Security Review checklist for the directory itself.",
+    category: "Infrastructure",
+    phase_hint: "Internal Infrastructure",
+    source: "phase_internal_v2",
+    source_url: "https://csrc.nist.gov/publications/detail/sp/800-115/final",
     items: [
-      { id: 'discovery', title: 'Host discovery coverage recorded', description: 'Live hosts across the in-scope ranges are enumerated and recorded. Done when coverage is complete.' },
-      { id: 'inventory', title: 'Service and version inventory', description: 'Open ports, services and versions are inventoried. Done when the inventory is recorded.' },
-      { id: 'patch', title: 'Patch level and end-of-life software review', description: 'Confirm software is supported and patched to current guidance. Done when gaps are recorded.' },
-      { id: 'creds', title: 'Default and weak credential review (authorised)', description: 'Confirm services do not retain vendor-default or weak credentials. Done when the review is recorded.' },
-      { id: 'shares', title: 'File-sharing and storage exposure review', description: 'Confirm shares and network storage are not over-exposed. Done when exposure is recorded.' },
-      { id: 'remote', title: 'Remote access hardening review (for example SSH and RDP)', description: 'Confirm remote-access services follow current hardening guidance. Done when the review is recorded.' },
-      { id: 'ad-privileged', title: 'Active Directory privileged access review (tiering)', description: 'Confirm privileged group membership is justified and a tiering model is enforced. Done when exceptions are recorded.', ref_url: 'https://learn.microsoft.com/en-us/security/privileged-access-workstations/overview' },
-      { id: 'ad-kerberos', title: 'Kerberos and delegation hardening review', description: 'Confirm Kerberos settings and delegation follow current hardening guidance. Done when exceptions are recorded.' },
-      { id: 'legacy', title: 'Legacy protocol review (for example NTLM and name-resolution fallbacks)', description: 'Confirm legacy authentication and name-resolution fallbacks are disabled or restricted per current guidance. Done when exceptions are recorded.' },
-      { id: 'segmentation', title: 'Segmentation and firewall ruleset review', description: 'Confirm network segmentation and rulesets match intent. Done when deviations are recorded.' },
-      { id: 'logging', title: 'Logging and detection coverage for privileged activity', description: 'Confirm security-relevant and privileged events are logged and monitored. Done when coverage is recorded.' }
+      { id: "scope-roe", title: "Scope, rules of engagement and test constraints" },
+      { id: "test-position", title: "Starting position and access recorded" },
+      { id: "host-discovery", title: "Host discovery across in-scope ranges" },
+      { id: "service-inventory", title: "Service and version inventory (TCP and UDP)" },
+      { id: "seg-zones", title: "Segmentation between network zones" },
+      { id: "seg-rulesets", title: "Firewall and router ruleset review" },
+      { id: "egress", title: "Outbound filtering from internal zones" },
+      { id: "layer2", title: "Layer 2 protections on access switches" },
+      { id: "remote-admin", title: "Remote administration services (RDP, SSH, WinRM, VNC)" },
+      { id: "bmc", title: "Out-of-band management controllers (BMC and IPMI)" },
+      { id: "web-consoles", title: "Web-based administration consoles" },
+      { id: "patch-kev", title: "Patch levels against known exploited vulnerabilities" },
+      { id: "eol", title: "Unsupported operating systems and software" },
+      { id: "smbv1", title: "SMB version 1, null sessions and guest access" },
+      { id: "cleartext", title: "Cleartext management and file transfer protocols" },
+      { id: "snmp", title: "SNMP versions and community strings" },
+      { id: "internal-tls", title: "Encryption on internal services" },
+      { id: "smb-signing", title: "SMB signing requirements" },
+      { id: "ldap-relay", title: "LDAP signing and channel binding (network view)" },
+      { id: "llmnr-nbtns", title: "LLMNR, NetBIOS name service and mDNS" },
+      { id: "ipv6-ra", title: "IPv6 router advertisements and DHCPv6" },
+      { id: "wpad", title: "WPAD and proxy auto-discovery" },
+      { id: "relay-targets", title: "Authentication coercion and relay targets" },
+      { id: "default-creds", title: "Default and vendor credentials" },
+      { id: "shared-local-admin", title: "Shared local administrator passwords" },
+      { id: "share-creds", title: "Credentials and sensitive data in file shares" },
+      { id: "script-creds", title: "Credentials in scripts, deployment shares and configuration files" },
+      { id: "password-reuse", title: "Password reuse and weak service passwords" },
+      { id: "db-exposure", title: "Database services exposure and authentication" },
+      { id: "db-privilege", title: "Database privileges and server-level features" },
+      { id: "virtualisation", title: "Virtualisation management planes" },
+      { id: "backup", title: "Backup systems and repositories" },
+      { id: "storage", title: "Storage management and network file systems" },
+      { id: "netdev-mgmt", title: "Network device management" },
+      { id: "printers", title: "Printers and multifunction devices" },
+      { id: "embedded", title: "Cameras, building systems, VoIP and other embedded devices" },
+      { id: "nac", title: "Network access control on wired ports" },
+      { id: "endpoint", title: "Endpoint protection observations" },
+      { id: "detection", title: "Logging and detection of test activity" },
+      { id: "ad-handoff", title: "Active Directory review (separate checklist)" }
     ]
   },
-
-  phase_external_v1: {
-    kind: 'checklist',
-    name: 'External Infrastructure Review',
-    description: 'Coverage tracker for an external, perimeter-facing phase. Each item is confirmed and recorded, with findings validated rather than taken from a scanner.',
-    category: 'Infrastructure',
-    phase_hint: 'External Infrastructure',
-    source: 'phase_external_v1',
-    source_url: 'https://csrc.nist.gov/publications/detail/sp/800-115/final',
+  phase_external_v2: {
+    kind: "checklist",
+    name: "External Infrastructure Review",
+    description: "Coverage tracker for an external, internet-facing test: ownership and authorisation, DNS, exposed services and known exploited vulnerabilities, remote access and admin interfaces, TLS, email security, web servers, CDN origins, exposed storage and code, public information, IPv6 and amplification. Tick each item once covered or recorded as not applicable, keeping the evidence each item names and validating every finding rather than taking it from a scanner.",
+    category: "Infrastructure",
+    phase_hint: "External Infrastructure",
+    source: "phase_external_v2",
+    source_url: "https://csrc.nist.gov/publications/detail/sp/800-115/final",
     items: [
-      { id: 'surface', title: 'External attack surface inventory', description: 'In-scope public hosts, domains and subdomains are inventoried from authorised sources. Done when the surface is recorded.' },
-      { id: 'services', title: 'Exposed service inventory', description: 'Internet-facing services and versions are inventoried. Done when the inventory is recorded.' },
-      { id: 'tls', title: 'TLS configuration review (protocols, ciphers, certificates)', description: 'Confirm transport security follows current standards. Done when deviations are recorded.', ref_url: 'https://www.cisecurity.org/cis-benchmarks' },
-      { id: 'email', title: 'Email security posture review (SPF, DKIM, DMARC)', description: 'Confirm sender-authentication records follow current guidance. Done when gaps are recorded.' },
-      { id: 'mgmt', title: 'Exposed management and remote-access review', description: 'Confirm admin and remote-access interfaces are not needlessly internet-facing. Done when exposure is recorded.' },
-      { id: 'creds', title: 'Default and weak credential review on exposed services (authorised)', description: 'Confirm exposed services retain no vendor-default or weak credentials. Done when the review is recorded.' },
-      { id: 'patch', title: 'Perimeter patch and end-of-life review', description: 'Confirm perimeter software is supported and patched. Done when gaps are recorded.' },
-      { id: 'validate', title: 'Known-issue validation (confirm, not scanner noise)', description: 'Confirm each candidate issue is real in this environment before reporting. Done when every reported issue is validated.' },
-      { id: 'exposure', title: 'Information-exposure review', description: 'Confirm the perimeter does not leak internal detail, credentials or sensitive files. Done when the review is recorded.' },
-      { id: 'authrate', title: 'Rate limiting and lockout on public authentication', description: 'Confirm public login surfaces resist automated guessing. Done when the review is recorded.' }
+      { id: "ownership-ip", title: "Ownership of every in-scope address" },
+      { id: "ownership-domain", title: "Ownership of every in-scope domain and host name" },
+      { id: "rules-external", title: "External rules of engagement and source addresses" },
+      { id: "recon-sources", title: "Asset discovery from public sources" },
+      { id: "dns-axfr", title: "DNS zone transfers" },
+      { id: "dns-dangling", title: "Dangling DNS records and subdomain takeover conditions" },
+      { id: "dns-wildcard", title: "Wildcard DNS records" },
+      { id: "dns-servers", title: "Exposed DNS servers and resolver behaviour" },
+      { id: "service-inventory", title: "Exposed service inventory against expectations" },
+      { id: "kev", title: "Versions against known exploited vulnerabilities" },
+      { id: "eol-external", title: "Unsupported internet-facing software" },
+      { id: "remote-gateway", title: "Remote access gateways" },
+      { id: "remote-auth", title: "Remote access authentication" },
+      { id: "admin-interfaces", title: "Administrative interfaces on the internet" },
+      { id: "remote-protocols", title: "Remote desktop, SSH and file services exposed directly" },
+      { id: "data-services", title: "Databases, caches and search services exposed directly" },
+      { id: "default-creds", title: "Default and weak credentials on exposed services" },
+      { id: "rate-limit", title: "Rate limiting and lockout on public authentication" },
+      { id: "tls-protocols", title: "TLS protocol versions and cipher suites" },
+      { id: "certificates", title: "Certificates and HTTPS enforcement" },
+      { id: "spf", title: "SPF records" },
+      { id: "dkim", title: "DKIM signing" },
+      { id: "dmarc", title: "DMARC policy" },
+      { id: "mta-sts", title: "MTA-STS and TLS-RPT" },
+      { id: "mail-servers", title: "Mail server configuration" },
+      { id: "web-default", title: "Web servers, default content and directory listing" },
+      { id: "web-headers", title: "HTTP methods, headers and error handling" },
+      { id: "origin-bypass", title: "Origin servers reachable around a CDN or WAF" },
+      { id: "cloud-storage", title: "Publicly exposed storage" },
+      { id: "code-repos", title: "Exposed source code and repositories" },
+      { id: "public-info", title: "Information exposed in public sources" },
+      { id: "service-leaks", title: "Internal detail leaked by services" },
+      { id: "ipv6-external", title: "IPv6 exposure" },
+      { id: "amplification", title: "Services usable for reflection and amplification" },
+      { id: "validation", title: "Validation of findings before reporting" }
     ]
   },
-
-  phase_cloud_v1: {
-    kind: 'checklist',
-    name: 'Cloud Configuration Review',
-    description: 'Coverage tracker for a cloud phase. Baseline against the relevant CIS Benchmark or provider security guidance and record deviations.',
-    category: 'Cloud and containers',
-    phase_hint: 'Cloud',
-    source: 'phase_cloud_v1',
-    source_url: 'https://www.cisecurity.org/cis-benchmarks',
+  phase_cloud_v2: {
+    kind: "checklist",
+    name: "Cloud Configuration Review",
+    description: "Coverage tracker for a cloud configuration review of AWS, Microsoft Azure and Google Cloud, from scope and provider rules through identity, logging, data, network, compute and organisation guardrails. Check each item for every provider in scope using the named service or setting, and record each deviation from the agreed CIS Benchmark with its evidence.",
+    category: "Cloud and containers",
+    phase_hint: "Cloud",
+    source: "phase_cloud_v2",
+    source_url: "https://www.cisecurity.org/cis-benchmarks",
     items: [
-      { id: 'iam', title: 'IAM least-privilege review', description: 'Confirm identities and roles grant only what they need. Done when over-privilege is recorded.', ref_url: 'https://www.cisecurity.org/cis-benchmarks' },
-      { id: 'storage', title: 'Public storage exposure review', description: 'Confirm object and block storage are not unintentionally public. Done when exposure is recorded.' },
-      { id: 'network', title: 'Network exposure review (security groups and firewalls)', description: 'Confirm inbound exposure matches intent. Done when open paths are recorded.' },
-      { id: 'encryption', title: 'Encryption at rest and in transit', description: 'Confirm data is encrypted per current guidance. Done when gaps are recorded.' },
-      { id: 'secrets', title: 'Key and secret management', description: 'Confirm keys and secrets are stored and rotated safely. Done when the review is recorded.' },
-      { id: 'logging', title: 'Logging, monitoring and audit trail', description: 'Confirm an audit trail is enabled and retained. Done when coverage is recorded.' },
-      { id: 'backup', title: 'Backup and recovery configuration', description: 'Confirm backups exist and are protected. Done when the review is recorded.' },
-      { id: 'baseline', title: 'Baseline against the platform CIS Benchmark', description: 'Confirm configuration against the relevant CIS Benchmark. Done when deviations are recorded.', ref_url: 'https://www.cisecurity.org/cis-benchmarks' },
-      { id: 'mfa', title: 'MFA and federation on privileged accounts', description: 'Confirm privileged access requires strong authentication. Done when the review is recorded.' },
-      { id: 'inventory', title: 'Resource inventory and drift', description: 'Confirm resources are inventoried and drift from baseline is tracked. Done when the review is recorded.' }
+      { id: "scope", title: "Accounts, subscriptions and projects in scope" },
+      { id: "provider-rules", title: "Provider penetration testing rules checked" },
+      { id: "baseline", title: "CIS Benchmark and baseline agreed" },
+      { id: "aws-root", title: "AWS root user protected" },
+      { id: "entra-admins", title: "Microsoft Entra Global Administrators and privileged roles" },
+      { id: "azure-root-scope", title: "Azure elevated access and root scope assignments" },
+      { id: "gcp-super-admin", title: "Google Cloud super administrators and organisation administrators" },
+      { id: "mfa", title: "MFA and sign-in policy for human users" },
+      { id: "federation", title: "Federation and single sign-on for the workforce" },
+      { id: "long-lived-keys", title: "Long-lived keys and service credentials" },
+      { id: "least-privilege", title: "Broad and unused permissions" },
+      { id: "privesc-aws", title: "Privilege escalation paths in AWS IAM" },
+      { id: "privesc-azure", title: "Privilege escalation paths in Azure RBAC and Entra ID" },
+      { id: "privesc-gcp", title: "Privilege escalation paths in Google Cloud IAM" },
+      { id: "external-trust", title: "Cross-account, cross-tenant and external trust" },
+      { id: "workload-identity", title: "Workload and managed identities" },
+      { id: "workload-federation", title: "Workload identity federation for pipelines and external workloads" },
+      { id: "audit-logs", title: "Control plane audit logging" },
+      { id: "data-logs", title: "Data access and service logging" },
+      { id: "log-protection", title: "Log integrity, retention and separation" },
+      { id: "alerting", title: "Alerting on security-relevant changes" },
+      { id: "threat-detection", title: "Threat detection services" },
+      { id: "inventory-drift", title: "Configuration recording, inventory and drift" },
+      { id: "storage-public", title: "Public object storage" },
+      { id: "storage-tokens", title: "Storage keys, shared access signatures and signed URLs" },
+      { id: "storage-network", title: "Storage network restrictions and secure transfer" },
+      { id: "encryption-rest", title: "Encryption at rest and customer-managed keys" },
+      { id: "key-management", title: "Key management services" },
+      { id: "tls-endpoints", title: "TLS on public endpoints and load balancers" },
+      { id: "open-firewall", title: "Security groups, NSGs and firewall rules open to the internet" },
+      { id: "admin-access", title: "Remote administration paths" },
+      { id: "public-surface", title: "Internet-facing services match intent" },
+      { id: "flow-logs", title: "Network flow and DNS logging" },
+      { id: "private-access", title: "Private endpoints and service perimeters for platform services" },
+      { id: "imds", title: "Instance metadata service protections" },
+      { id: "images-snapshots", title: "Public images, snapshots and disk exports" },
+      { id: "bootstrap-secrets", title: "Secrets in user data, custom data and start-up scripts" },
+      { id: "serverless", title: "Serverless function exposure and permissions" },
+      { id: "containers", title: "Container registries and container services" },
+      { id: "databases", title: "Managed databases" },
+      { id: "secrets-services", title: "Secrets management services" },
+      { id: "backups", title: "Backups and recovery protection" },
+      { id: "guardrails", title: "Organisation-level guardrails" }
     ]
   },
-
-  phase_mobile_v1: {
-    kind: 'checklist',
-    name: 'Mobile Application Testing (OWASP MASVS)',
-    description: 'Coverage tracker for a mobile phase, across the OWASP Mobile Application Security Verification Standard control groups. Tick each group once its controls are reviewed.',
-    category: 'Mobile and devices',
-    phase_hint: 'Mobile',
-    source: 'phase_mobile_v1',
-    source_url: 'https://mas.owasp.org/MASVS/',
+  phase_mobile_v2: {
+    kind: "checklist",
+    name: "Mobile Application Testing (OWASP MASVS)",
+    description: "Coverage tracker for a mobile phase with one item for each OWASP MASVS v2 control in the standard's order, each naming the areas the matching OWASP MASTG tests and MASWE weaknesses cover on Android and iOS. Tick a control once both platforms in scope are checked, and judge the MASVS-RESILIENCE controls against the agreed risk profile.",
+    category: "Mobile and devices",
+    phase_hint: "Mobile",
+    source: "phase_mobile_v2",
+    source_url: "https://mas.owasp.org/MASVS/",
     items: [
-      { id: 'storage', title: 'MASVS-STORAGE', description: 'Confirm sensitive data is stored and handled safely on the device. Done when storage controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
-      { id: 'crypto', title: 'MASVS-CRYPTO', description: 'Confirm cryptography uses current algorithms and sound key handling. Done when cryptography controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
-      { id: 'auth', title: 'MASVS-AUTH', description: 'Confirm authentication and authorisation are enforced correctly. Done when auth controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
-      { id: 'network', title: 'MASVS-NETWORK', description: 'Confirm network traffic is protected and certificates validated. Done when network controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
-      { id: 'platform', title: 'MASVS-PLATFORM', description: 'Confirm platform interactions and inter-app exposure are handled safely. Done when platform controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
-      { id: 'code', title: 'MASVS-CODE', description: 'Confirm the app is built with current defences and maintained dependencies. Done when code-quality controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
-      { id: 'resilience', title: 'MASVS-RESILIENCE', description: 'Confirm resilience controls match the risk profile of the app. Done when resilience controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' },
-      { id: 'privacy', title: 'MASVS-PRIVACY', description: 'Confirm personal-data handling meets the privacy commitments of the app. Done when privacy controls are reviewed.', ref_url: 'https://mas.owasp.org/MASVS/' }
+      { id: "storage-1", title: "MASVS-STORAGE-1 Secure storage of sensitive data" },
+      { id: "storage-2", title: "MASVS-STORAGE-2 Prevention of sensitive data leaks" },
+      { id: "crypto-1", title: "MASVS-CRYPTO-1 Strong, current cryptography" },
+      { id: "crypto-2", title: "MASVS-CRYPTO-2 Key management" },
+      { id: "auth-1", title: "MASVS-AUTH-1 Secure authentication and authorisation protocols" },
+      { id: "auth-2", title: "MASVS-AUTH-2 Secure local authentication" },
+      { id: "auth-3", title: "MASVS-AUTH-3 Additional authentication for sensitive operations" },
+      { id: "network-1", title: "MASVS-NETWORK-1 Secure network traffic" },
+      { id: "network-2", title: "MASVS-NETWORK-2 Identity pinning" },
+      { id: "platform-1", title: "MASVS-PLATFORM-1 Secure use of IPC mechanisms" },
+      { id: "platform-2", title: "MASVS-PLATFORM-2 Secure use of WebViews" },
+      { id: "platform-3", title: "MASVS-PLATFORM-3 Secure use of the user interface" },
+      { id: "code-1", title: "MASVS-CODE-1 Up-to-date platform version" },
+      { id: "code-2", title: "MASVS-CODE-2 Enforced app updates" },
+      { id: "code-3", title: "MASVS-CODE-3 No components with known vulnerabilities" },
+      { id: "code-4", title: "MASVS-CODE-4 Validation of untrusted input" },
+      { id: "resilience-1", title: "MASVS-RESILIENCE-1 Platform integrity checks" },
+      { id: "resilience-2", title: "MASVS-RESILIENCE-2 Anti-tampering" },
+      { id: "resilience-3", title: "MASVS-RESILIENCE-3 Anti-static analysis" },
+      { id: "resilience-4", title: "MASVS-RESILIENCE-4 Anti-dynamic analysis" },
+      { id: "privacy-1", title: "MASVS-PRIVACY-1 Minimised access to sensitive data and resources" },
+      { id: "privacy-2", title: "MASVS-PRIVACY-2 Prevention of user identification" },
+      { id: "privacy-3", title: "MASVS-PRIVACY-3 Transparency about data collection" },
+      { id: "privacy-4", title: "MASVS-PRIVACY-4 User control over their data" }
     ]
   },
-  phase_wireless_v1: {
-    kind: 'checklist',
-    name: 'Wireless Review',
-    description: 'Coverage tracker for a wireless phase. Each item is confirmed against current guidance, with deviations recorded.',
-    category: 'Infrastructure',
-    phase_hint: 'Wireless',
-    source: 'phase_wireless_v1',
-    source_url: 'https://csrc.nist.gov/publications/detail/sp/800-115/final',
+  phase_wireless_v2: {
+    kind: "checklist",
+    name: "Wireless Review",
+    description: "Coverage tracker for a wireless phase: authorised network inventory, security modes and keys, enterprise EAP and server certificate validation, management frame protection, guest isolation and captive portals, rogue and look-alike networks, WPS, controller management and signal reach. Test only networks and devices confirmed as the client's, keep the evidence each item names, and tick it once covered or recorded as not applicable.",
+    category: "Infrastructure",
+    phase_hint: "Wireless",
+    source: "phase_wireless_v2",
+    source_url: "https://csrc.nist.gov/publications/detail/sp/800-115/final",
     items: [
-      { id: 'inventory', title: 'SSID and network inventory', description: 'Record the in-scope wireless networks. Done when the inventory is complete.' },
-      { id: 'encryption', title: 'Encryption standard review (WPA2 or WPA3, no WEP or open)', description: 'Confirm networks use current encryption standards. Done when deviations are recorded.' },
-      { id: 'eap', title: 'Enterprise authentication (EAP) configuration review', description: 'Confirm enterprise authentication follows current guidance. Done when the review is recorded.' },
-      { id: 'guest', title: 'Guest network isolation', description: 'Confirm guest networks are isolated from internal resources. Done when isolation is confirmed.' },
-      { id: 'mfp', title: 'Management-frame protection', description: 'Confirm management-frame protection is enabled where supported. Done when the review is recorded.' },
-      { id: 'rogue', title: 'Rogue and unauthorised access point detection', description: 'Confirm coverage for detecting unauthorised access points. Done when the review is recorded.' },
-      { id: 'isolation', title: 'Client isolation', description: 'Confirm client-to-client isolation where expected. Done when the review is recorded.' },
-      { id: 'coverage', title: 'Signal leakage and coverage review', description: 'Confirm wireless coverage does not extend further than intended. Done when the review is recorded.' }
+      { id: "inventory", title: "Inventory of authorised wireless networks" },
+      { id: "scope-neighbours", title: "Scope boundaries and neighbouring networks" },
+      { id: "security-modes", title: "Encryption and authentication mode per network" },
+      { id: "transition-mode", title: "WPA3 transition modes" },
+      { id: "legacy-open", title: "Open and legacy networks" },
+      { id: "psk-strength", title: "Pre-shared key strength" },
+      { id: "psk-rotation", title: "Pre-shared key rotation and distribution" },
+      { id: "eap-methods", title: "Enterprise EAP methods" },
+      { id: "server-validation", title: "Client validation of the server certificate" },
+      { id: "radius", title: "RADIUS and authentication server configuration" },
+      { id: "mfp", title: "Management frame protection" },
+      { id: "guest-isolation", title: "Guest isolation and wireless segmentation" },
+      { id: "client-isolation", title: "Client-to-client isolation" },
+      { id: "captive-portal", title: "Captive portals" },
+      { id: "rogue-aps", title: "Rogue and unauthorised access points" },
+      { id: "lookalike", title: "Client behaviour towards look-alike networks" },
+      { id: "wps", title: "Wi-Fi Protected Setup" },
+      { id: "device-networks", title: "IoT, voice and device-specific networks" },
+      { id: "controller-mgmt", title: "Controller and access point management" },
+      { id: "wids", title: "Wireless monitoring and intrusion detection" },
+      { id: "signal-reach", title: "Signal reach beyond the premises" }
     ]
   },
-  std_osstmm3_v1: {
-    kind: 'checklist',
-    name: 'Security Testing Methodology (OSSTMM 3)',
-    description: 'Coverage tracker based on the ISECOM Open Source Security Testing Methodology Manual (OSSTMM 3): one item for the channels in scope, then one per test module, each module applied to every channel in scope. Record per-channel results under each module. Module names are ISECOM\'s; for method, follow the linked manual.',
-    category: 'Standards',
-    source: 'std_osstmm3_v1',
-    source_url: 'https://www.isecom.org/OSSTMM.3.pdf',
+  std_osstmm3_v2: {
+    kind: "checklist",
+    name: "Security Testing Methodology (OSSTMM 3)",
+    description: "Coverage tracker for a test run to ISECOM's OSSTMM 3: rules of engagement, test definition and operational security terms, then the 17 test modules applied to every channel in scope, ending with the attack surface measurement and the STAR. Tick an item only when it is done for each channel in scope and its evidence is filed.",
+    category: "Standards",
+    source: "std_osstmm3_v2",
+    source_url: "https://www.isecom.org/OSSTMM.3.pdf",
     items: [
-      { id: 'channels', title: 'Channels in scope (Human, Physical, Wireless, Telecommunications, Data Networks)', description: 'Confirm which of the five channels the test covers, with the targets and vectors for each. Done when every channel is marked in or out of scope, with a reason.' },
-      { id: 'posture', title: 'Posture Review', description: 'Confirm the legislation, regulation, policies, culture and operating hours that apply to the target, and the channels and vectors the test needs. Done when the posture is recorded for each channel in scope.' },
-      { id: 'logistics', title: 'Logistics', description: 'Confirm the conditions that could affect results are understood before testing: safety measures, sources of instability, permitted downtime and the pace of testing. Done when they are agreed and recorded.' },
-      { id: 'active-detection', title: 'Active Detection Verification', description: 'Confirm what can detect or interfere with the test, such as filtering or monitoring, and how results differ with it active and inactive. Done when detection and its predictability are recorded per channel.' },
-      { id: 'visibility', title: 'Visibility Audit', description: 'Confirm which targets are visible within scope, both through enumeration and through research into targets already known. Done when the target list is complete for each channel.' },
-      { id: 'access', title: 'Access Verification', description: 'Confirm the access points to each target, the type of interaction each allows, where it originates and how deep it goes. Done when access points and their limits are recorded.' },
-      { id: 'trust', title: 'Trust Verification', description: 'Confirm where one interaction relies on another, inside or outside scope, and how far each trust can be used. Done when trust relationships are recorded per channel.' },
-      { id: 'controls', title: 'Controls Verification', description: 'Confirm the controls protecting interactions, covering non-repudiation, confidentiality, privacy, integrity and alarm, and where each falls short. Done when each control type is tested and recorded.' },
-      { id: 'process', title: 'Process Verification', description: 'Confirm the processes that keep security in place, whether people work within process and policy, and the gap between practice and the recorded posture. Done when gaps are recorded.' },
-      { id: 'configuration', title: 'Configuration and Training Verification', description: 'Confirm configuration and training meet the requirements set by the posture, and record where security mechanisms fall short of them. Done when deviations are recorded per channel.' },
-      { id: 'property', title: 'Property Validation', description: 'Confirm whether unlicensed intellectual property is distributed, sold or traded within the scope. Done when the review is recorded.' },
-      { id: 'segregation', title: 'Segregation Review', description: 'Confirm how private and personal information is separated and contained: how much is held, where, of what type, and what related information is public outside the target. Done when the review is recorded.' },
-      { id: 'exposure', title: 'Exposure Verification', description: 'Confirm what can be found publicly, inside and outside scope, about targets, assets and channel infrastructure that reveals access, visibility, trust or controls. Done when exposures are recorded.' },
-      { id: 'ci-scouting', title: 'Competitive Intelligence Scouting', description: 'Confirm what can be learnt about the business and organisational environment, inside and outside scope, that could be used against the target. Done when findings are recorded.' },
-      { id: 'quarantine', title: 'Quarantine Verification', description: 'Confirm how hostile or unwanted content and interactions are held back in both directions, for how long, and how they are released. Done when quarantine methods and their limits are recorded.' },
-      { id: 'privileges', title: 'Privileges Audit', description: 'Confirm how privileges are granted and whether they can be obtained fraudulently, circumvented, hijacked, escalated or reused. Done when privilege paths are recorded.' },
-      { id: 'survivability', title: 'Survivability Validation and Service Continuity', description: 'Confirm how the target withstands disruption and which continuity and safety mechanisms keep it running, tested only within agreed limits. Done when results and limitations are recorded.' },
-      { id: 'alert-log', title: 'End Survey, Alert and Log Review', description: 'Confirm what was recorded and alerted during the test, in both directions, how quickly, how long it was kept and whether the records are intact. Done when test activity is reconciled with what was logged.' }
+      { id: "roe-permission-contract", title: "Rules of engagement: permission and contract" },
+      { id: "roe-scope-plan", title: "Rules of engagement: scope definition and test plan" },
+      { id: "roe-test-process", title: "Rules of engagement: test process" },
+      { id: "roe-reporting", title: "Rules of engagement: reporting" },
+      { id: "test-definition", title: "Assets, engagement zone, scope and vectors defined" },
+      { id: "channels", title: "Channels in scope (Human, Physical, Wireless, Telecommunications, Data Networks)" },
+      { id: "test-type", title: "Test type agreed for each channel" },
+      { id: "four-point-process", title: "Four Point Process and Trifecta applied" },
+      { id: "error-handling", title: "Test errors identified and reconciled" },
+      { id: "porosity", title: "Porosity counted: visibility, access and trust" },
+      { id: "controls-class-a", title: "Class A interactive controls identified" },
+      { id: "controls-class-b", title: "Class B process controls identified" },
+      { id: "limitations", title: "Limitations classified" },
+      { id: "m01-posture-review", title: "Posture Review (module 1)" },
+      { id: "m02-logistics", title: "Logistics (module 2)" },
+      { id: "m03-active-detection", title: "Active Detection Verification (module 3)" },
+      { id: "m04-visibility", title: "Visibility Audit (module 4)" },
+      { id: "m05-access", title: "Access Verification (module 5)" },
+      { id: "m06-trust", title: "Trust Verification (module 6)" },
+      { id: "m07-controls", title: "Controls Verification (module 7)" },
+      { id: "m08-process", title: "Process Verification (module 8)" },
+      { id: "m09-configuration", title: "Configuration Verification (module 9)" },
+      { id: "m10-property", title: "Property Validation (module 10)" },
+      { id: "m11-segregation", title: "Segregation Review (module 11)" },
+      { id: "m12-exposure", title: "Exposure Verification (module 12)" },
+      { id: "m13-ci-scouting", title: "Competitive Intelligence Scouting (module 13)" },
+      { id: "m14-quarantine", title: "Quarantine Verification (module 14)" },
+      { id: "m15-privileges", title: "Privileges Audit (module 15)" },
+      { id: "m16-survivability", title: "Survivability Validation (module 16)" },
+      { id: "m17-alert-log", title: "Alert and Log Review (module 17)" },
+      { id: "security-analysis", title: "Results analysed critically before reporting" },
+      { id: "trust-analysis", title: "Trust relationships analysed" },
+      { id: "rav", title: "Attack surface measurement (rav) calculated" },
+      { id: "star", title: "STAR (Security Test Audit Report) completed" }
     ]
   },
-  std_ptes_v1: {
-    kind: 'checklist',
-    name: 'Penetration Testing Execution Standard (PTES)',
-    description: 'Coverage tracker based on the Penetration Testing Execution Standard, across its seven main sections from pre-engagement interactions to reporting. Tick each item once it is covered and recorded. For technique, follow the linked standard and its technical guidelines.',
-    category: 'Standards',
-    source: 'std_ptes_v1',
-    source_url: 'http://www.pentest-standard.org/index.php/Main_Page',
+  std_ptes_v2: {
+    kind: "checklist",
+    name: "Penetration Testing Execution Standard (PTES)",
+    description: "Coverage tracker for a test run to the Penetration Testing Execution Standard, following its seven sections from Pre-engagement Interactions to Reporting and their sub-sections. Tick an item once it is done and its record is filed; the exploitation and post exploitation items cover authorisation, care, recording and clean-up, never technique.",
+    category: "Standards",
+    source: "std_ptes_v2",
+    source_url: "http://www.pentest-standard.org/index.php/Main_Page",
     items: [
-      { id: 'pre-scope', title: 'Pre-engagement Interactions: scope, dates and targets', description: 'Confirm the scope, goals, start and end dates, IP ranges and domains, and any third parties involved are agreed in writing, with a process for handling scope changes. Done when the scope is signed off.', ref_url: 'http://www.pentest-standard.org/index.php/Pre-engagement' },
-      { id: 'pre-roe', title: 'Pre-engagement Interactions: rules of engagement and contacts', description: 'Confirm the rules of engagement, any permitted social engineering pretexts, the position on denial of service testing, lines of communication and emergency contacts are agreed. Done when every tester has them.', ref_url: 'http://www.pentest-standard.org/index.php/Pre-engagement' },
-      { id: 'intel', title: 'Intelligence Gathering', description: 'Confirm targets are selected and researched within scope through open-source intelligence and footprinting, and the protection mechanisms in place are identified. Done when findings are recorded.', ref_url: 'http://www.pentest-standard.org/index.php/PTES_Technical_Guidelines' },
-      { id: 'threat', title: 'Threat Modeling', description: 'Confirm the business assets and processes that matter, the threat agents likely to target them, and their capability and motivation are analysed. Done when the threat model is recorded and has shaped the test plan.' },
-      { id: 'vuln', title: 'Vulnerability Analysis', description: 'Confirm vulnerabilities are identified through active and passive testing, validated rather than taken from a scanner, and researched where needed. Done when each candidate issue is confirmed or discarded.', ref_url: 'http://www.pentest-standard.org/index.php/PTES_Technical_Guidelines' },
-      { id: 'exploit', title: 'Exploitation', description: 'Confirm exploitation stays within the authorised targets and objectives, takes account of the countermeasures in place, and is targeted rather than broad. Done when each attempt and its outcome is recorded.', ref_url: 'http://www.pentest-standard.org/index.php/PTES_Technical_Guidelines' },
-      { id: 'post', title: 'Post Exploitation', description: 'Confirm the value of any compromised system is assessed within the rules of engagement, covering infrastructure analysis, high-value targets and further access where authorised, with client data protected throughout. Done when activity and evidence are recorded.', ref_url: 'http://www.pentest-standard.org/index.php/PTES_Technical_Guidelines' },
-      { id: 'cleanup', title: 'Post Exploitation: cleanup', description: 'Confirm accounts, files, tools and configuration changes made during testing are removed or reverted, and anything that could not be is reported to the client. Done when the cleanup record is complete.' },
-      { id: 'report-exec', title: 'Reporting: executive summary', description: 'Confirm the executive summary sets out the goals, overall posture, risk and recommendations in business terms for a non-technical reader. Done when it has been reviewed.' },
-      { id: 'report-tech', title: 'Reporting: technical report', description: 'Confirm the technical report records the scope, method, each finding with its evidence, risk rating and remediation, and what was not tested. Done when it has passed QA.' }
+      { id: "pre-scope", title: "Pre-engagement Interactions: scope and time estimation" },
+      { id: "pre-scoping-meeting", title: "Pre-engagement Interactions: scoping meeting" },
+      { id: "pre-questionnaires", title: "Pre-engagement Interactions: questionnaires" },
+      { id: "pre-scope-creep", title: "Pre-engagement Interactions: scope creep and payment terms" },
+      { id: "pre-dates", title: "Pre-engagement Interactions: start and end dates" },
+      { id: "pre-ranges", title: "Pre-engagement Interactions: IP ranges and domains validated" },
+      { id: "pre-third-parties", title: "Pre-engagement Interactions: dealing with third parties" },
+      { id: "pre-se-pretexts", title: "Pre-engagement Interactions: acceptable social engineering pretexts" },
+      { id: "pre-dos", title: "Pre-engagement Interactions: DoS testing" },
+      { id: "pre-goals", title: "Pre-engagement Interactions: goals" },
+      { id: "pre-communication", title: "Pre-engagement Interactions: communication and emergency contacts" },
+      { id: "pre-roe", title: "Pre-engagement Interactions: rules of engagement" },
+      { id: "pre-capabilities", title: "Pre-engagement Interactions: capabilities and technology in place" },
+      { id: "intel-target-selection", title: "Intelligence Gathering: level and target selection" },
+      { id: "intel-osint", title: "Intelligence Gathering: OSINT" },
+      { id: "intel-covert", title: "Intelligence Gathering: covert gathering" },
+      { id: "intel-footprinting", title: "Intelligence Gathering: footprinting" },
+      { id: "intel-protections", title: "Intelligence Gathering: identify protection mechanisms" },
+      { id: "threat-assets", title: "Threat Modeling: business asset analysis" },
+      { id: "threat-process", title: "Threat Modeling: business process analysis" },
+      { id: "threat-agents", title: "Threat Modeling: threat agents and capability" },
+      { id: "threat-motivation", title: "Threat Modeling: motivation and comparable incidents" },
+      { id: "vuln-testing", title: "Vulnerability Analysis: active and passive testing" },
+      { id: "vuln-validation", title: "Vulnerability Analysis: validation" },
+      { id: "vuln-research", title: "Vulnerability Analysis: research" },
+      { id: "exploit-purpose", title: "Exploitation: purpose and authorisation" },
+      { id: "exploit-countermeasures", title: "Exploitation: countermeasures and evasion" },
+      { id: "exploit-precision", title: "Exploitation: precision strike" },
+      { id: "exploit-objective", title: "Exploitation: overall objective" },
+      { id: "post-protect-client", title: "Post Exploitation: rules of engagement to protect the client" },
+      { id: "post-protect-yourself", title: "Post Exploitation: protecting yourself" },
+      { id: "post-infrastructure", title: "Post Exploitation: infrastructure analysis and high value targets" },
+      { id: "post-pillaging", title: "Post Exploitation: pillaging and sensitive data" },
+      { id: "post-exfil-persistence", title: "Post Exploitation: data exfiltration and persistence" },
+      { id: "post-further", title: "Post Exploitation: further penetration into infrastructure" },
+      { id: "post-cleanup", title: "Post Exploitation: cleanup" },
+      { id: "report-structure", title: "Reporting: report structure" },
+      { id: "report-executive", title: "Reporting: the executive summary" },
+      { id: "report-technical", title: "Reporting: technical report" }
     ]
   },
-  std_nist_sp800_115_v1: {
-    kind: 'checklist',
-    name: 'Technical Security Testing (NIST SP 800-115)',
-    description: 'Coverage tracker based on NIST SP 800-115, Technical Guide to Information Security Testing and Assessment (2008): its planning, discovery, attack and reporting phases, and the review, target identification and validation techniques it names. The number in each title points to the section. Tick each item once covered or recorded as not applicable. For technique, follow the linked guide.',
-    category: 'Standards',
-    source: 'std_nist_sp800_115_v1',
-    source_url: 'https://csrc.nist.gov/publications/detail/sp/800-115/final',
+  std_nist_sp800_115_v2: {
+    kind: "checklist",
+    name: "Technical Security Testing (NIST SP 800-115)",
+    description: "Coverage tracker following NIST SP 800-115, Technical Guide to Information Security Testing and Assessment (2008), in the publication's own order: review techniques, target identification and analysis, target vulnerability validation, security assessment planning, execution and post-testing activities. The number in each title points to the section; tick each item once covered or recorded as not applicable.",
+    category: "Standards",
+    source: "std_nist_sp800_115_v2",
+    source_url: "https://csrc.nist.gov/publications/detail/sp/800-115/final",
     items: [
-      { id: 'planning', title: 'Planning (section 6 and the planning phase)', description: 'Confirm the assessment policy, priorities, chosen techniques, logistics, plan and legal considerations are settled, with the rules agreed and approval given in writing before any testing. Done when the plan is approved.' },
-      { id: 'doc-review', title: 'Documentation review (3.1)', description: 'Confirm security policies, architecture, procedures and plans are reviewed for gaps and accuracy. Done when the review is recorded.' },
-      { id: 'log-review', title: 'Log review (3.2)', description: 'Confirm logs show that security controls record the expected events and that logging follows policy. Done when the review is recorded.' },
-      { id: 'ruleset', title: 'Ruleset review (3.3)', description: 'Confirm firewall, router and other filtering rulesets are reviewed for gaps, redundant rules and rules broader than intended. Done when deviations are recorded.' },
-      { id: 'config-review', title: 'System configuration review (3.4)', description: 'Confirm system settings are compared with the organisation\'s hardening baseline or policy. Done when deviations are recorded.' },
-      { id: 'sniffing', title: 'Network sniffing (3.5)', description: 'Confirm traffic is captured passively, where authorised, to spot cleartext protocols, unexpected services and unauthorised devices. Done when observations are recorded.' },
-      { id: 'integrity', title: 'File integrity checking (3.6)', description: 'Confirm whether file integrity checking is in place and detects changes to important files. Done when the review is recorded.' },
-      { id: 'net-discovery', title: 'Network discovery (4.1)', description: 'Confirm active or passive discovery has identified the live hosts across the in-scope ranges. Done when coverage is recorded.' },
-      { id: 'ports', title: 'Network port and service identification (4.2)', description: 'Confirm open ports, services and versions are identified on the discovered hosts. Done when the inventory is recorded.' },
-      { id: 'vuln-scan', title: 'Vulnerability scanning (4.3)', description: 'Confirm authorised vulnerability scanning has covered the discovered hosts and its output is validated rather than reported as found. Done when validated results are recorded.' },
-      { id: 'wireless', title: 'Wireless scanning (4.4)', description: 'Confirm passive and active wireless scanning, device location tracking and Bluetooth scanning are covered where wireless is in scope. Done when results, or a not-applicable note, are recorded.' },
-      { id: 'passwords', title: 'Password cracking (5.1)', description: 'Confirm any password cracking is authorised, limited to hashes obtained in scope, and that hashes and recovered passwords are handled securely. Done when password strength findings are recorded.' },
-      { id: 'pt-discovery', title: 'Penetration testing: discovery phase (5.2.1)', description: 'Confirm information gathering and scanning, then vulnerability analysis against known vulnerability sources, are complete for the in-scope targets. Done when candidate vulnerabilities are listed.' },
-      { id: 'pt-attack', title: 'Penetration testing: attack phase (5.2.1)', description: 'Confirm candidate vulnerabilities are verified by authorised attack attempts, with anything learnt from access gained fed back into discovery. Done when each attempt and its outcome is recorded.' },
-      { id: 'social', title: 'Social engineering (5.3)', description: 'Confirm any social engineering is authorised, uses approved pretexts and is aimed at user awareness and whether staff follow procedure. Done when results are recorded.' },
-      { id: 'execution', title: 'Assessment execution (section 7)', description: 'Confirm coordination with the organisation during testing, analysis of results, and secure collection, storage, transmission and destruction of assessment data. Done when data handling is recorded.' },
-      { id: 'reporting', title: 'Reporting and mitigation (section 8 and the reporting phase)', description: 'Confirm updates are given during testing and the final report sets out findings, risk ratings and mitigation recommendations, with remediation tracked afterwards. Done when the report is delivered.' }
+      { id: "doc-review", title: "Documentation review (3.1)" },
+      { id: "log-review", title: "Log review (3.2)" },
+      { id: "ruleset-review", title: "Ruleset review (3.3)" },
+      { id: "config-review", title: "System configuration review (3.4)" },
+      { id: "sniffing", title: "Network sniffing (3.5)" },
+      { id: "file-integrity", title: "File integrity checking (3.6)" },
+      { id: "net-discovery", title: "Network discovery (4.1)" },
+      { id: "port-service", title: "Network port and service identification (4.2)" },
+      { id: "vuln-scanning", title: "Vulnerability scanning (4.3)" },
+      { id: "wireless-passive", title: "Passive wireless scanning (4.4.1)" },
+      { id: "wireless-active", title: "Active wireless scanning (4.4.2)" },
+      { id: "wireless-location", title: "Wireless device location tracking (4.4.3)" },
+      { id: "bluetooth", title: "Bluetooth scanning (4.4.4)" },
+      { id: "password-cracking", title: "Password cracking (5.1)" },
+      { id: "pt-planning-discovery", title: "Penetration testing phases: planning and discovery (5.2.1)" },
+      { id: "pt-attack", title: "Penetration testing phases: attack and reporting (5.2.1)" },
+      { id: "pt-logistics", title: "Penetration testing logistics (5.2.2)" },
+      { id: "social-engineering", title: "Social engineering (5.3)" },
+      { id: "assessment-policy", title: "Developing a security assessment policy (6.1)" },
+      { id: "prioritising", title: "Prioritising and scheduling assessments (6.2)" },
+      { id: "techniques", title: "Selecting and customising techniques (6.3)" },
+      { id: "assessor-skills", title: "Assessor selection and skills (6.4.1)" },
+      { id: "location", title: "Location selection (6.4.2)" },
+      { id: "tools", title: "Technical tools and resources selection (6.4.3)" },
+      { id: "plan", title: "Assessment plan development (6.5)" },
+      { id: "legal", title: "Legal considerations (6.6)" },
+      { id: "coordination", title: "Coordination (7.1)" },
+      { id: "assessing", title: "Assessing (7.2)" },
+      { id: "analysis", title: "Analysis (7.3)" },
+      { id: "data-collection", title: "Data collection (7.4.1)" },
+      { id: "data-storage-transmission", title: "Data storage and data transmission (7.4.2, 7.4.3)" },
+      { id: "data-destruction", title: "Data destruction (7.4.4)" },
+      { id: "mitigation", title: "Mitigation recommendations (8.1)" },
+      { id: "reporting", title: "Reporting (8.2)" },
+      { id: "remediation", title: "Remediation/mitigation (8.3)" }
     ]
   },
-  web_owasp_asvs5_v1: {
-    kind: 'checklist',
-    name: 'Application Security Verification (OWASP ASVS 5.0)',
-    description: 'Coverage tracker based on the OWASP Application Security Verification Standard 5.0.0 (May 2025), one item per chapter. Agree the target level (1, 2 or 3) first, and note that some requirements can only be verified with documentation or code access rather than black-box testing. For the requirements, follow the linked chapter.',
-    category: 'Web and API',
-    phase_hint: 'Web Application',
-    source: 'web_owasp_asvs5_v1',
-    source_url: 'https://owasp.org/www-project-application-security-verification-standard/',
+  web_owasp_asvs5_v2: {
+    kind: "checklist",
+    name: "Application Security Verification (OWASP ASVS 5.0)",
+    description: "Coverage tracker for verifying an application against OWASP ASVS 5.0.0, one item per section of chapters V1 to V17, noting the level (L1, L2 or L3) at which each requirement starts. Agree the target level first, tick a section once its requirements at that level are verified or recorded as not applicable, and note where documentation, configuration or code access was needed rather than black-box testing.",
+    category: "Web and API",
+    phase_hint: "Web Application",
+    source: "web_owasp_asvs5_v2",
+    source_url: "https://owasp.org/www-project-application-security-verification-standard/",
     items: [
-      { id: 'v1', title: 'V1 Encoding and Sanitization', description: 'Confirm output encoding, injection prevention, sanitisation, memory-safe string handling and safe deserialisation wherever untrusted data is processed. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x10-V1-Encoding-and-Sanitization.md' },
-      { id: 'v2', title: 'V2 Validation and Business Logic', description: 'Confirm input validation, business logic security and anti-automation controls. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x11-V2-Validation-and-Business-Logic.md' },
-      { id: 'v3', title: 'V3 Web Frontend Security', description: 'Confirm cookie setup, browser security headers, origin separation, external resource integrity and protection against content being interpreted in unintended ways. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x12-V3-Web-Frontend-Security.md' },
-      { id: 'v4', title: 'V4 API and Web Service', description: 'Confirm web service security, HTTP message structure validation, and GraphQL and WebSocket controls where they are used. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x13-V4-API-and-Web-Service.md' },
-      { id: 'v5', title: 'V5 File Handling', description: 'Confirm file upload, storage and download are handled safely. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x14-V5-File-Handling.md' },
-      { id: 'v6', title: 'V6 Authentication', description: 'Confirm password security, the lifecycle and recovery of authentication factors, multi-factor and out-of-band mechanisms, and identity provider integration. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x15-V6-Authentication.md' },
-      { id: 'v7', title: 'V7 Session Management', description: 'Confirm session security, timeouts, termination, defences against session abuse and federated re-authentication. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x16-V7-Session-Management.md' },
-      { id: 'v8', title: 'V8 Authorization', description: 'Confirm authorisation is designed and enforced at function, object and field level, covering insecure direct object references. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x17-V8-Authorization.md' },
-      { id: 'v9', title: 'V9 Self-contained Tokens', description: 'Confirm self-contained tokens such as JWTs and SAML assertions are checked for source, integrity and content before they are trusted. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x18-V9-Self-contained-Tokens.md' },
-      { id: 'v10', title: 'V10 OAuth and OIDC', description: 'Confirm OAuth clients, resource servers and authorisation servers, OIDC clients, OpenID providers and consent management, wherever they are used. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x19-V10-OAuth-and-OIDC.md' },
-      { id: 'v11', title: 'V11 Cryptography', description: 'Confirm a cryptographic inventory, sound implementation, approved algorithms, hashing, random values and public key use. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x20-V11-Cryptography.md' },
-      { id: 'v12', title: 'V12 Secure Communication', description: 'Confirm TLS for external HTTPS and for service-to-service traffic follows current guidance. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x21-V12-Secure-Communication.md' },
-      { id: 'v13', title: 'V13 Configuration', description: 'Confirm backend communication settings, secret management and that nothing leaks unintended information. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x22-V13-Configuration.md' },
-      { id: 'v14', title: 'V14 Data Protection', description: 'Confirm sensitive data is identified and protected on the server and in the client. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x23-V14-Data-Protection.md' },
-      { id: 'v15', title: 'V15 Secure Coding and Architecture', description: 'Confirm architecture and dependency management, defensive coding and safe concurrency. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x24-V15-Secure-Coding-and-Architecture.md' },
-      { id: 'v16', title: 'V16 Security Logging and Error Handling', description: 'Confirm security events are logged, the logs are protected, and errors are handled without leaking detail. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x25-V16-Security-Logging-and-Error-Handling.md' },
-      { id: 'v17', title: 'V17 WebRTC', description: 'Confirm TURN servers, media and signalling are secured where WebRTC is used. Done when the chapter is verified at the agreed level, or recorded as not applicable.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x26-V17-WebRTC.md' }
+      { id: "v1-1", title: "V1.1 Encoding and sanitization architecture" },
+      { id: "v1-2", title: "V1.2 Injection prevention" },
+      { id: "v1-3", title: "V1.3 Sanitization" },
+      { id: "v1-4", title: "V1.4 Memory, string, and unmanaged code" },
+      { id: "v1-5", title: "V1.5 Safe deserialization" },
+      { id: "v2-1", title: "V2.1 Validation and business logic documentation" },
+      { id: "v2-2", title: "V2.2 Input validation" },
+      { id: "v2-3", title: "V2.3 Business logic security" },
+      { id: "v2-4", title: "V2.4 Anti-automation" },
+      { id: "v3-1", title: "V3.1 Web frontend security documentation" },
+      { id: "v3-2", title: "V3.2 Unintended content interpretation" },
+      { id: "v3-3", title: "V3.3 Cookie setup" },
+      { id: "v3-4", title: "V3.4 Browser security mechanism headers" },
+      { id: "v3-5", title: "V3.5 Browser origin separation" },
+      { id: "v3-6", title: "V3.6 External resource integrity" },
+      { id: "v3-7", title: "V3.7 Other browser security considerations" },
+      { id: "v4-1", title: "V4.1 Generic web service security" },
+      { id: "v4-2", title: "V4.2 HTTP message structure validation" },
+      { id: "v4-3", title: "V4.3 GraphQL" },
+      { id: "v4-4", title: "V4.4 WebSocket" },
+      { id: "v5-1", title: "V5.1 File handling documentation" },
+      { id: "v5-2", title: "V5.2 File upload and content" },
+      { id: "v5-3", title: "V5.3 File storage" },
+      { id: "v5-4", title: "V5.4 File download" },
+      { id: "v6-1", title: "V6.1 Authentication documentation" },
+      { id: "v6-2", title: "V6.2 Password security" },
+      { id: "v6-3", title: "V6.3 General authentication security" },
+      { id: "v6-4", title: "V6.4 Authentication factor lifecycle and recovery" },
+      { id: "v6-5", title: "V6.5 General multi-factor authentication requirements" },
+      { id: "v6-6", title: "V6.6 Out-of-band authentication mechanisms" },
+      { id: "v6-7", title: "V6.7 Cryptographic authentication mechanism" },
+      { id: "v6-8", title: "V6.8 Authentication with an identity provider" },
+      { id: "v7-1", title: "V7.1 Session management documentation" },
+      { id: "v7-2", title: "V7.2 Fundamental session management security" },
+      { id: "v7-3", title: "V7.3 Session timeout" },
+      { id: "v7-4", title: "V7.4 Session termination" },
+      { id: "v7-5", title: "V7.5 Defenses against session abuse" },
+      { id: "v7-6", title: "V7.6 Federated re-authentication" },
+      { id: "v8-1", title: "V8.1 Authorization documentation" },
+      { id: "v8-2", title: "V8.2 General authorization design" },
+      { id: "v8-3", title: "V8.3 Operation level authorization" },
+      { id: "v8-4", title: "V8.4 Other authorization considerations" },
+      { id: "v9-1", title: "V9.1 Token source and integrity" },
+      { id: "v9-2", title: "V9.2 Token content" },
+      { id: "v10-1", title: "V10.1 Generic OAuth and OIDC security" },
+      { id: "v10-2", title: "V10.2 OAuth client" },
+      { id: "v10-3", title: "V10.3 OAuth resource server" },
+      { id: "v10-4", title: "V10.4 OAuth authorization server" },
+      { id: "v10-5", title: "V10.5 OIDC client" },
+      { id: "v10-6", title: "V10.6 OpenID Provider" },
+      { id: "v10-7", title: "V10.7 Consent management" },
+      { id: "v11-1", title: "V11.1 Cryptographic inventory and documentation" },
+      { id: "v11-2", title: "V11.2 Secure cryptography implementation" },
+      { id: "v11-3", title: "V11.3 Encryption algorithms" },
+      { id: "v11-4", title: "V11.4 Hashing and hash-based functions" },
+      { id: "v11-5", title: "V11.5 Random values" },
+      { id: "v11-6", title: "V11.6 Public key cryptography" },
+      { id: "v11-7", title: "V11.7 In-use data cryptography" },
+      { id: "v12-1", title: "V12.1 General TLS security guidance" },
+      { id: "v12-2", title: "V12.2 HTTPS communication with external facing services" },
+      { id: "v12-3", title: "V12.3 General service to service communication security" },
+      { id: "v13-1", title: "V13.1 Configuration documentation" },
+      { id: "v13-2", title: "V13.2 Backend communication configuration" },
+      { id: "v13-3", title: "V13.3 Secret management" },
+      { id: "v13-4", title: "V13.4 Unintended information leakage" },
+      { id: "v14-1", title: "V14.1 Data protection documentation" },
+      { id: "v14-2", title: "V14.2 General data protection" },
+      { id: "v14-3", title: "V14.3 Client-side data protection" },
+      { id: "v15-1", title: "V15.1 Secure coding and architecture documentation" },
+      { id: "v15-2", title: "V15.2 Security architecture and dependencies" },
+      { id: "v15-3", title: "V15.3 Defensive coding" },
+      { id: "v15-4", title: "V15.4 Safe concurrency" },
+      { id: "v16-1", title: "V16.1 Security logging documentation" },
+      { id: "v16-2", title: "V16.2 General logging" },
+      { id: "v16-3", title: "V16.3 Security events" },
+      { id: "v16-4", title: "V16.4 Log protection" },
+      { id: "v16-5", title: "V16.5 Error handling" },
+      { id: "v17-1", title: "V17.1 TURN server" },
+      { id: "v17-2", title: "V17.2 Media" },
+      { id: "v17-3", title: "V17.3 Signaling" }
     ]
   },
-  web_owasp_api_top10_2023_v1: {
-    kind: 'checklist',
-    name: 'API Security Testing (OWASP API Security Top 10 2023)',
-    description: 'Coverage tracker for an API phase based on the OWASP API Security Top 10 2023, one item per risk. Tick a risk once every in-scope endpoint it applies to has been tested against it. For technique, follow the linked project.',
-    category: 'Web and API',
-    phase_hint: 'API',
-    source: 'web_owasp_api_top10_2023_v1',
-    source_url: 'https://owasp.org/www-project-api-security/',
+  web_owasp_api_top10_2023_v2: {
+    kind: "checklist",
+    name: "API Security Testing (OWASP API Security Top 10 2023)",
+    description: "Coverage tracker for an API phase based on the OWASP API Security Top 10 2023, one item per risk with the concrete checks behind it. Tick a risk once every in-scope endpoint it applies to has been tested against it and the evidence is recorded.",
+    category: "Web and API",
+    phase_hint: "API",
+    source: "web_owasp_api_top10_2023_v2",
+    source_url: "https://owasp.org/www-project-api-security/",
     items: [
-      { id: 'api1', title: 'API1:2023 Broken Object Level Authorization', description: 'Confirm every endpoint that takes an object identifier checks that the caller may access that object, tested across users and roles. Done when each such endpoint is covered.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
-      { id: 'api2', title: 'API2:2023 Broken Authentication', description: 'Confirm authentication endpoints, recovery flows and token handling resist credential attacks and token compromise. Done when each authentication path is covered.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
-      { id: 'api3', title: 'API3:2023 Broken Object Property Level Authorization', description: 'Confirm responses expose only the properties the caller may see, and requests cannot set properties the caller may not change. Done when each object type is covered.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
-      { id: 'api4', title: 'API4:2023 Unrestricted Resource Consumption', description: 'Confirm limits on request rate, request body size, page size and paid third-party actions such as SMS or email are enforced, tested within agreed limits. Done when the limits are recorded.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
-      { id: 'api5', title: 'API5:2023 Broken Function Level Authorization', description: 'Confirm administrative and privileged functions reject callers without the right role, across HTTP methods and API versions. Done when each privileged function is covered.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
-      { id: 'api6', title: 'API6:2023 Unrestricted Access to Sensitive Business Flows', description: 'Confirm flows that would harm the business if automated, such as purchasing, booking or posting, have protection suited to that risk. Done when each sensitive flow is reviewed.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
-      { id: 'api7', title: 'API7:2023 Server Side Request Forgery', description: 'Confirm any feature that fetches a user-supplied URL validates the destination and cannot be used to reach internal services. Done when each such feature is covered.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
-      { id: 'api8', title: 'API8:2023 Security Misconfiguration', description: 'Confirm hardening, transport security, CORS, error handling and permitted HTTP methods across the API stack follow current guidance. Done when deviations are recorded.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
-      { id: 'api9', title: 'API9:2023 Improper Inventory Management', description: 'Confirm hosts, API versions and environments are documented, and old versions and debug endpoints are retired or protected. Done when the inventory is reconciled with what was found.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
-      { id: 'api10', title: 'API10:2023 Unsafe Consumption of APIs', description: 'Confirm data received from third-party APIs is validated and treated as untrusted, over secure transport. Done when each integration is reviewed.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' }
+      { id: "api1", title: "API1:2023 Broken Object Level Authorization" },
+      { id: "api2", title: "API2:2023 Broken Authentication" },
+      { id: "api3", title: "API3:2023 Broken Object Property Level Authorization" },
+      { id: "api4", title: "API4:2023 Unrestricted Resource Consumption" },
+      { id: "api5", title: "API5:2023 Broken Function Level Authorization" },
+      { id: "api6", title: "API6:2023 Unrestricted Access to Sensitive Business Flows" },
+      { id: "api7", title: "API7:2023 Server Side Request Forgery" },
+      { id: "api8", title: "API8:2023 Security Misconfiguration" },
+      { id: "api9", title: "API9:2023 Improper Inventory Management" },
+      { id: "api10", title: "API10:2023 Unsafe Consumption of APIs" }
     ]
   },
-  web_owasp_top10_2025_v1: {
-    kind: 'checklist',
-    name: 'Web Application Risks (OWASP Top 10 2025)',
-    description: 'Coverage tracker based on the OWASP Top 10 2025, one item per category, for confirming each category has been considered and for grouping findings for the reader. The Top 10 is an awareness list, not a test method: drive the testing from the OWASP WSTG checklist. For detail, follow the linked category.',
-    category: 'Web and API',
-    phase_hint: 'Web Application',
-    source: 'web_owasp_top10_2025_v1',
-    source_url: 'https://top10.owasp.org/2025/',
+  web_owasp_top10_2025_v2: {
+    kind: "checklist",
+    name: "Web Application Risks (OWASP Top 10 2025)",
+    description: "Coverage tracker based on the OWASP Top 10 2025, one item per category, for confirming each category has been considered and for grouping findings for the reader. The Top 10 is an awareness list rather than a test method, so drive the testing from the WSTG checklist and use these checks to confirm nothing was missed.",
+    category: "Web and API",
+    phase_hint: "Web Application",
+    source: "web_owasp_top10_2025_v2",
+    source_url: "https://top10.owasp.org/2025/",
     items: [
-      { id: 'a01', title: 'A01:2025 Broken Access Control', description: 'Confirm access is denied by default and enforced on the server across roles, objects and functions, including server-side request forgery, which now sits in this category. Done when each role and object path is covered.', ref_url: 'https://top10.owasp.org/2025/A01_2025-Broken_Access_Control/' },
-      { id: 'a02', title: 'A02:2025 Security Misconfiguration', description: 'Confirm hardening across the stack, with no default accounts, unnecessary features, verbose errors or missing security headers, and XML parsers configured safely. Done when deviations are recorded.', ref_url: 'https://top10.owasp.org/2025/A02_2025-Security_Misconfiguration/' },
-      { id: 'a03', title: 'A03:2025 Software Supply Chain Failures', description: 'Confirm components are known, supported and patched, and that the build, dependency and distribution chain is controlled. Done when the component review is recorded.', ref_url: 'https://top10.owasp.org/2025/A03_2025-Software_Supply_Chain_Failures/' },
-      { id: 'a04', title: 'A04:2025 Cryptographic Failures', description: 'Confirm data in transit and at rest is protected with current algorithms, protocols and key handling, with no sensitive data sent in cleartext. Done when gaps are recorded.', ref_url: 'https://top10.owasp.org/2025/A04_2025-Cryptographic_Failures/' },
-      { id: 'a05', title: 'A05:2025 Injection', description: 'Confirm untrusted input cannot change the meaning of queries or commands, covering SQL, NoSQL, OS command, LDAP and expression language injection and cross-site scripting. Done when each in-scope input is covered.', ref_url: 'https://top10.owasp.org/2025/A05_2025-Injection/' },
-      { id: 'a06', title: 'A06:2025 Insecure Design', description: 'Confirm the design includes the controls the business risk calls for, such as limits on abuse of workflows, rather than relying on implementation alone. Done when design weaknesses are recorded.', ref_url: 'https://top10.owasp.org/2025/A06_2025-Insecure_Design/' },
-      { id: 'a07', title: 'A07:2025 Authentication Failures', description: 'Confirm resistance to credential stuffing and brute force, no default or known-breached passwords, safe credential recovery and effective multi-factor authentication. Done when each authentication path is covered.', ref_url: 'https://top10.owasp.org/2025/A07_2025-Authentication_Failures/' },
-      { id: 'a08', title: 'A08:2025 Software or Data Integrity Failures', description: 'Confirm code, updates, pipeline artefacts and serialised data are checked for integrity before they are trusted. Done when the review is recorded.', ref_url: 'https://top10.owasp.org/2025/A08_2025-Software_or_Data_Integrity_Failures/' },
-      { id: 'a09', title: 'A09:2025 Security Logging and Alerting Failures', description: 'Confirm security events are logged, protected and alerted on, and record whether the testing itself raised alerts. Done when the review is recorded.', ref_url: 'https://top10.owasp.org/2025/A09_2025-Security_Logging_and_Alerting_Failures/' },
-      { id: 'a10', title: 'A10:2025 Mishandling of Exceptional Conditions', description: 'Confirm errors and unexpected conditions fail closed, do not leak detail and leave the application in a known state. Done when the review is recorded.', ref_url: 'https://top10.owasp.org/2025/A10_2025-Mishandling_of_Exceptional_Conditions/' }
+      { id: "a01", title: "A01:2025 Broken Access Control" },
+      { id: "a02", title: "A02:2025 Security Misconfiguration" },
+      { id: "a03", title: "A03:2025 Software Supply Chain Failures" },
+      { id: "a04", title: "A04:2025 Cryptographic Failures" },
+      { id: "a05", title: "A05:2025 Injection" },
+      { id: "a06", title: "A06:2025 Insecure Design" },
+      { id: "a07", title: "A07:2025 Authentication Failures" },
+      { id: "a08", title: "A08:2025 Software or Data Integrity Failures" },
+      { id: "a09", title: "A09:2025 Security Logging and Alerting Failures" },
+      { id: "a10", title: "A10:2025 Mishandling of Exceptional Conditions" }
     ]
   },
-  ai_owasp_llm_top10_2026_v1: {
-    kind: 'checklist',
-    name: 'LLM Application Testing (OWASP GenAI LLM Top 10 2026)',
-    description: 'Coverage tracker for an application built on a large language model, based on the OWASP GenAI LLM Top 10 2026 (published August 2026), one item per risk. Where the model acts as an agent with tools and memory, the project points to its separate Agentic Top 10 as well. For technique, follow the linked list.',
-    category: 'AI applications',
-    source: 'ai_owasp_llm_top10_2026_v1',
-    source_url: 'https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/',
+  ai_owasp_llm_top10_2026_v2: {
+    kind: "checklist",
+    name: "LLM Application Testing (OWASP GenAI LLM Top 10 2026)",
+    description: "Coverage tracker for an application built on a large language model, based on the OWASP GenAI LLM Top 10 2026, one item per risk with the concrete checks behind it. Tick a risk once every model input, output and integration it applies to has been reviewed; where the model acts as an agent with tools and memory, also use the project's OWASP Top 10 for Agentic Applications.",
+    category: "AI applications",
+    source: "ai_owasp_llm_top10_2026_v2",
+    source_url: "https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/",
     items: [
-      { id: 'llm01', title: 'LLM01:2026 Prompt Injection', description: 'Confirm direct input, retrieved content, tool output, images, audio and stored memory cannot make the model act outside its intended behaviour. Done when each input route is covered.' },
-      { id: 'llm02', title: 'LLM02:2026 Sensitive Information Disclosure', description: 'Confirm confidential data cannot leak through answers, tool-call arguments, retrieved content, logs or other side channels. Done when each channel is reviewed.' },
-      { id: 'llm03', title: 'LLM03:2026 Excessive Agency', description: 'Confirm the tools the model can call have only the functions, permissions and autonomy they need, with human approval for high-impact actions. Done when each tool is reviewed.' },
-      { id: 'llm04', title: 'LLM04:2026 Supply Chain', description: 'Confirm third-party models, datasets, adapters and model artefacts are sourced and verified, and cannot be swapped for something else. Done when each component is reviewed.' },
-      { id: 'llm05', title: 'LLM05:2026 Data and Model Poisoning', description: 'Confirm data and model artefacts are protected wherever they are ingested or reused, from training and fine-tuning to retrieval and model distribution. Done when the review is recorded.' },
-      { id: 'llm06', title: 'LLM06:2026 Unbounded Consumption', description: 'Confirm limits on input size, request rate and cost prevent denial of service, runaway spend and model cloning, tested within agreed limits. Done when the limits are recorded.' },
-      { id: 'llm07', title: 'LLM07:2026 Misinformation', description: 'Confirm incorrect or unsupported output cannot be acted on unchecked by people, workflows or agents that rely on it. Done when the review is recorded.' },
-      { id: 'llm08', title: 'LLM08:2026 Hidden Context Exposure', description: 'Confirm system instructions, tool schemas and other hidden context hold nothing that helps an attacker if extracted, and no control relies on it staying hidden. Done when the review is recorded.' },
-      { id: 'llm09', title: 'LLM09:2026 Vector and Embedding Weaknesses', description: 'Confirm retrieval stores, vector-backed memory and semantic caches enforce access control and resist injected or poisoned content. Done when the review is recorded.' },
-      { id: 'llm10', title: 'LLM10:2026 Improper Output Handling', description: 'Confirm model output is validated and encoded before it reaches browsers, databases, shells or other systems. Done when each output path is covered.' }
+      { id: "llm01", title: "LLM01:2026 Prompt Injection" },
+      { id: "llm02", title: "LLM02:2026 Sensitive Information Disclosure" },
+      { id: "llm03", title: "LLM03:2026 Excessive Agency" },
+      { id: "llm04", title: "LLM04:2026 Supply Chain" },
+      { id: "llm05", title: "LLM05:2026 Data and Model Poisoning" },
+      { id: "llm06", title: "LLM06:2026 Unbounded Consumption" },
+      { id: "llm07", title: "LLM07:2026 Misinformation" },
+      { id: "llm08", title: "LLM08:2026 Hidden Context Exposure" },
+      { id: "llm09", title: "LLM09:2026 Vector and Embedding Weaknesses" },
+      { id: "llm10", title: "LLM10:2026 Improper Output Handling" }
     ]
   },
-  adv_mitre_attack_enterprise_v1: {
-    kind: 'checklist',
-    name: 'Adversary Simulation Coverage (MITRE ATT&CK Enterprise)',
-    description: 'Coverage tracker for an adversary simulation based on the MITRE ATT&CK Enterprise matrix, one item per tactic. There are fifteen as of ATT&CK v20, since v19 split Defense Evasion into Stealth and Defense Impairment. Tick a tactic once the agreed techniques under it have been exercised or recorded as out of scope, and note technique IDs in the evidence. For techniques, follow the linked matrix.',
-    category: 'Adversary simulation',
-    phase_hint: 'Red Team',
-    source: 'adv_mitre_attack_enterprise_v1',
-    source_url: 'https://attack.mitre.org/tactics/enterprise/',
+  adv_mitre_attack_enterprise_v2: {
+    kind: "checklist",
+    name: "Adversary Simulation Coverage (MITRE ATT&CK Enterprise)",
+    description: "Coverage tracker for an adversary simulation mapped to the fifteen MITRE ATT&CK Enterprise tactics in v20, after v19 split Defense Evasion into Stealth and Defense Impairment. Tick a tactic once its agreed technique families have been emulated or recorded as out of scope, noting for each technique ID whether it was prevented, detected and responded to.",
+    category: "Adversary simulation",
+    phase_hint: "Red Team",
+    source: "adv_mitre_attack_enterprise_v2",
+    source_url: "https://attack.mitre.org/tactics/enterprise/",
     items: [
-      { id: 'ta0043', title: 'Reconnaissance (TA0043)', description: 'Confirm the information an adversary would gather before acting has been collected within agreed limits. Done when the planned techniques are exercised or recorded as out of scope.', ref_url: 'https://attack.mitre.org/tactics/TA0043/' },
-      { id: 'ta0042', title: 'Resource Development (TA0042)', description: 'Confirm the infrastructure, accounts and capabilities the simulation uses are set up, recorded and ready to be removed afterwards. Done when the inventory is recorded.', ref_url: 'https://attack.mitre.org/tactics/TA0042/' },
-      { id: 'ta0001', title: 'Initial Access (TA0001)', description: 'Confirm the agreed entry routes have been attempted and their outcomes recorded. Done when each planned route is covered.', ref_url: 'https://attack.mitre.org/tactics/TA0001/' },
-      { id: 'ta0002', title: 'Execution (TA0002)', description: 'Confirm running adversary-controlled code on target systems has been exercised within the rules of engagement. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0002/' },
-      { id: 'ta0003', title: 'Persistence (TA0003)', description: 'Confirm any persistence placed was approved and recorded, and is removed at the end. Done when every item placed is accounted for.', ref_url: 'https://attack.mitre.org/tactics/TA0003/' },
-      { id: 'ta0004', title: 'Privilege Escalation (TA0004)', description: 'Confirm attempts to gain higher permissions have been exercised and recorded. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0004/' },
-      { id: 'ta0005', title: 'Stealth (TA0005)', description: 'Confirm techniques for blending in with normal activity, without weakening defences, have been exercised and recorded for the blue team. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0005/' },
-      { id: 'ta0112', title: 'Defense Impairment (TA0112)', description: 'Confirm any weakening of security controls, monitoring or tooling was explicitly approved, recorded and reversed. Done when each change is accounted for.', ref_url: 'https://attack.mitre.org/tactics/TA0112/' },
-      { id: 'ta0006', title: 'Credential Access (TA0006)', description: 'Confirm attempts to obtain credentials have been exercised, with any credentials captured stored securely and reported. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0006/' },
-      { id: 'ta0007', title: 'Discovery (TA0007)', description: 'Confirm discovery of systems, accounts and network layout from inside the environment has been exercised and recorded. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0007/' },
-      { id: 'ta0008', title: 'Lateral Movement (TA0008)', description: 'Confirm movement between systems towards the objectives has been exercised and recorded. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0008/' },
-      { id: 'ta0009', title: 'Collection (TA0009)', description: 'Confirm data gathering is limited to what proves the objective, with any real data handled under the agreed rules. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0009/' },
-      { id: 'ta0011', title: 'Command and Control (TA0011)', description: 'Confirm the command and control channels used are recorded, with whether each was detected. Done when every channel is accounted for.', ref_url: 'https://attack.mitre.org/tactics/TA0011/' },
-      { id: 'ta0010', title: 'Exfiltration (TA0010)', description: 'Confirm exfiltration is simulated with agreed marker data unless real data has been explicitly authorised. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0010/' },
-      { id: 'ta0040', title: 'Impact (TA0040)', description: 'Confirm impact is demonstrated only as agreed, usually by proving access rather than by disrupting services. Done when the agreed demonstration is recorded.', ref_url: 'https://attack.mitre.org/tactics/TA0040/' }
+      { id: "ta0043", title: "Reconnaissance (TA0043)" },
+      { id: "ta0042", title: "Resource Development (TA0042)" },
+      { id: "ta0001", title: "Initial Access (TA0001)" },
+      { id: "ta0002", title: "Execution (TA0002)" },
+      { id: "ta0003", title: "Persistence (TA0003)" },
+      { id: "ta0004", title: "Privilege Escalation (TA0004)" },
+      { id: "ta0005", title: "Stealth (TA0005)" },
+      { id: "ta0112", title: "Defense Impairment (TA0112)" },
+      { id: "ta0006", title: "Credential Access (TA0006)" },
+      { id: "ta0007", title: "Discovery (TA0007)" },
+      { id: "ta0008", title: "Lateral Movement (TA0008)" },
+      { id: "ta0009", title: "Collection (TA0009)" },
+      { id: "ta0011", title: "Command and Control (TA0011)" },
+      { id: "ta0010", title: "Exfiltration (TA0010)" },
+      { id: "ta0040", title: "Impact (TA0040)" }
     ]
   },
-  adv_red_team_engagement_v1: {
-    kind: 'checklist',
-    name: 'Threat-Led Red Team Engagement',
-    description: 'Coverage tracker for an intelligence-led red team engagement, shaped on the phases that TIBER-EU (updated in February 2025 to align with DORA threat-led penetration testing) and the Bank of England\'s CBEST share: preparation and scoping, threat intelligence, planning, testing, and closure with replay. Each framework names its own documents and roles; for those, follow the linked framework.',
-    category: 'Adversary simulation',
-    phase_hint: 'Red Team',
-    source: 'adv_red_team_engagement_v1',
-    source_url: 'https://www.ecb.europa.eu/paym/cyber-resilience/tiber-eu/html/index.en.html',
+  adv_red_team_engagement_v2: {
+    kind: "checklist",
+    name: "Threat-Led Red Team Engagement",
+    description: "Coverage tracker for a threat-led red team run on the phases that TIBER-EU (2025) and the Bank of England's CBEST describe: preparation, threat intelligence, the red team test plan, active testing and closure. Tick an item when its decision or deliverable is on file; the items cover process, objectives and control, never technique.",
+    category: "Adversary simulation",
+    phase_hint: "Red Team",
+    source: "adv_red_team_engagement_v2",
+    source_url: "https://www.ecb.europa.eu/paym/cyber-resilience/tiber-eu/html/index.en.html",
     items: [
-      { id: 'control-team', title: 'Control team and sponsor in place', description: 'Confirm a senior sponsor and a small control team (the Control Team in TIBER-EU, the Control Group in CBEST) run the engagement, and that the blue team is not told. Done when names, roles and secrecy arrangements are recorded.' },
-      { id: 'authority', title: 'Regulator or test authority engaged where required', description: 'Confirm whether the engagement runs under a framework that involves a regulator or test authority, and that they have been notified. Done when their role is recorded.' },
-      { id: 'scope', title: 'Scope of critical functions and supporting systems', description: 'Confirm the critical business functions or services in scope, and the systems that support them, are agreed in a written scope specification. Done when the scope is signed off.' },
-      { id: 'providers', title: 'Providers and contracts', description: 'Confirm the threat intelligence and red team providers are engaged under contracts that cover authorisation, liability and data handling, and meet any framework requirements for providers. Done when contracts are signed.' },
-      { id: 'risk', title: 'Risk management and stop arrangements', description: 'Confirm a risk management plan sets out limits, how testing is paused or stopped, and how a real incident or critical finding is handled. Done when the plan is approved.', ref_url: 'https://www.bankofengland.co.uk/financial-stability/operational-resilience-of-the-financial-sector/cbest-threat-intelligence-led-assessments-implementation-guide' },
-      { id: 'threat-intel', title: 'Targeted threat intelligence', description: 'Confirm threat intelligence on the organisation identifies the relevant threat actors, their likely methods and the exposed attack surface. Done when the threat intelligence report is accepted.' },
-      { id: 'scenarios', title: 'Attack scenarios selected', description: 'Confirm scenarios are drawn from the threat intelligence and agreed with the control team, and with the authority where one is involved. Done when the scenarios are recorded.' },
-      { id: 'test-plan', title: 'Red team test plan', description: 'Confirm the test plan sets out scenarios, objectives (flags), milestones, how leg-ups are requested and timings, and is approved before testing. Done when the approved plan is on file.' },
-      { id: 'comms', title: 'Communication during testing', description: 'Confirm regular update meetings with the control team, a running log of actions, and an agreed response if the blue team detects the test. Done when the arrangements are in use.' },
-      { id: 'execution', title: 'Active testing within the plan', description: 'Confirm testing follows the approved plan and scope, for the agreed period (TIBER-EU sets a minimum of 12 weeks), with a timestamped log of every action for the replay. Done when testing closes with the log complete.', ref_url: 'https://www.ecb.europa.eu/pub/pdf/other/ecb.tiber_eu_framework_2025~b32eff9a10.en.pdf' },
-      { id: 'leg-ups', title: 'Leg-ups logged and approved', description: 'Confirm every leg-up given to the red team was approved by the control team and logged with its reason. Done when the log is complete.' },
-      { id: 'rt-report', title: 'Red team report', description: 'Confirm the report describes each attack path, the objectives reached, the timeline of actions and the weaknesses that made them possible. Done when it is delivered to the control team.' },
-      { id: 'bt-report', title: 'Blue team account of detection and response', description: 'Confirm the blue team\'s view of what it detected and how it responded is captured against the red team timeline (TIBER-EU calls this the Blue Team Test Report). Done when it is recorded.', ref_url: 'https://www.ecb.europa.eu/pub/pdf/other/ecb.tiber_eu_framework_2025~b32eff9a10.en.pdf' },
-      { id: 'replay', title: 'Replay and purple teaming', description: 'Confirm the red and blue teams walk through the attack step by step, then work together on the gaps it exposed. Done when the sessions are held and their findings recorded.', ref_url: 'https://www.ecb.europa.eu/pub/pdf/other/ecb.tiber_eu_framework_2025~b32eff9a10.en.pdf' },
-      { id: 'remediation', title: 'Remediation plan', description: 'Confirm a remediation plan with owners and dates is agreed for the weaknesses found and tracked afterwards. Done when the plan is approved.' },
-      { id: 'closure', title: 'Summary, attestation and lessons learned', description: 'Confirm the closing summary, any attestation or regulator debrief, and feedback on how the engagement ran are complete. Done when the engagement is formally closed.' }
+      { id: "oversight", title: "Framework, authority and oversight confirmed" },
+      { id: "control-team", title: "Control team formed and kept secret" },
+      { id: "initiation", title: "Initiation documents and project plan" },
+      { id: "scope", title: "Scope: critical functions, systems and flags" },
+      { id: "risk", title: "Risk assessment and authority to halt" },
+      { id: "escalation", title: "Escalation route for detections and real incidents" },
+      { id: "procurement", title: "Providers procured and contracted" },
+      { id: "permission", title: "Permission to test every system and provider" },
+      { id: "threat-intel", title: "Targeted threat intelligence produced" },
+      { id: "scenarios", title: "Threat scenarios selected" },
+      { id: "test-plan", title: "Red team test plan approved" },
+      { id: "flags", title: "Flags, milestones and success criteria set" },
+      { id: "leg-ups", title: "Leg-ups controlled and logged" },
+      { id: "testing-window", title: "Active testing window and oversight cadence" },
+      { id: "reconnaissance", title: "Reconnaissance objectives met within limits" },
+      { id: "initial-access", title: "Initial access objectives (the in phase)" },
+      { id: "through-phase", title: "Persistence and lateral movement objectives (the through phase)" },
+      { id: "actions-on-objectives", title: "Actions on objectives and flags (the out phase)" },
+      { id: "action-log", title: "Red team action log kept" },
+      { id: "detection-handling", title: "Blue team detections handled" },
+      { id: "deviations", title: "Deviations and halts recorded" },
+      { id: "rt-report", title: "Red team test report delivered" },
+      { id: "bt-report", title: "Blue team test report delivered" },
+      { id: "detection-assessment", title: "Detection and response capability assessed" },
+      { id: "replay", title: "Replay exercise held" },
+      { id: "purple-teaming", title: "Purple teaming exercise held" },
+      { id: "remediation", title: "Remediation plan agreed" },
+      { id: "test-summary", title: "Test summary report approved" },
+      { id: "feedback", title: "360-degree feedback and debrief" },
+      { id: "attestation", title: "Attestation and follow-up" },
+      { id: "close-down", title: "Test data and infrastructure closed down" }
     ]
   },
-  comp_pci_dss_11_4_v1: {
-    kind: 'checklist',
-    name: 'Penetration Testing for PCI DSS (v4.0.1 Requirement 11.4)',
-    description: 'Coverage tracker for the penetration testing PCI DSS v4.0.1 Requirement 11.4 asks for, one item per sub-requirement, with the methodology requirement (11.4.1) split into its parts. Use it to check the test, its scope and the retest evidence will stand up to an assessor. For the requirement text and testing procedures, follow the linked standard.',
-    category: 'Compliance',
-    source: 'comp_pci_dss_11_4_v1',
-    source_url: 'https://www.pcisecuritystandards.org/document_library/',
+  comp_pci_dss_11_4_v2: {
+    kind: "checklist",
+    name: "Penetration Testing for PCI DSS (v4.0.1 Requirement 11.4)",
+    description: "Coverage tracker for the penetration testing PCI DSS v4.0.1 Requirement 11.4 asks for, one item per sub-requirement with 11.4.1 split into its parts, followed by the evidence an assessor will look for. Use it to check the test, its scope and the retest evidence will stand up to an assessor; for the requirement text and testing procedures, follow the linked standard.",
+    category: "Compliance",
+    source: "comp_pci_dss_11_4_v2",
+    source_url: "https://www.pcisecuritystandards.org/document_library/",
     items: [
-      { id: 'method', title: '11.4.1 Methodology defined, documented and implemented', description: 'Confirm the entity has a written penetration testing methodology based on industry-accepted approaches, and that this test follows it. Done when the methodology is referenced in the report.' },
-      { id: 'method-coverage', title: '11.4.1 Coverage of the perimeter, critical systems and segmentation', description: 'Confirm the methodology covers the entire cardholder data environment perimeter and critical systems, testing from both inside and outside the network, and validation of any segmentation and scope-reduction controls. Done when coverage is mapped to the scope.' },
-      { id: 'method-layers', title: '11.4.1 Application-layer and network-layer testing', description: 'Confirm application-layer testing covers at least the vulnerabilities listed in Requirement 6.2.4, and network-layer testing covers the components that support network functions and operating systems. Done when both layers are evidenced.' },
-      { id: 'method-records', title: '11.4.1 Recent threats, risk approach and retention', description: 'Confirm threats and vulnerabilities from the last 12 months are reviewed, the approach to assessing and addressing exploitable findings is documented, and results and remediation records are kept for at least 12 months. Done when each is evidenced.' },
-      { id: 'internal', title: '11.4.2 Internal penetration testing', description: 'Confirm internal testing follows the methodology at least once every 12 months and after any significant infrastructure or application upgrade or change, by a qualified and organisationally independent tester (not necessarily a QSA). Done when dates and tester independence are recorded.' },
-      { id: 'external', title: '11.4.3 External penetration testing', description: 'Confirm external testing follows the methodology at least once every 12 months and after any significant infrastructure or application upgrade or change, by a qualified and organisationally independent tester. Done when dates and tester independence are recorded.' },
-      { id: 'correct-retest', title: '11.4.4 Exploitable findings corrected and retested', description: 'Confirm exploitable vulnerabilities and security weaknesses are corrected in line with the entity\'s risk ranking under Requirement 6.3.1, and that testing is repeated to verify the corrections. Done when retest evidence is on file for every exploitable finding.' },
-      { id: 'segmentation', title: '11.4.5 Segmentation testing', description: 'Confirm, where segmentation isolates the cardholder data environment, that every segmentation control and method in use is tested at least once every 12 months and after changes, showing it works and isolates the environment from all out-of-scope systems. Done when results are recorded per control.' },
-      { id: 'sp-segmentation', title: '11.4.6 Service providers: segmentation every six months', description: 'Confirm, for a service provider that uses segmentation, that segmentation testing runs at least once every six months and after any change to segmentation controls. Done when the dates are recorded.' },
-      { id: 'multi-tenant', title: '11.4.7 Multi-tenant service providers support customer testing', description: 'Confirm a multi-tenant service provider supports its customers\' external penetration testing, by providing evidence of testing that meets 11.4.3 and 11.4.4 or by giving prompt access to test. Mandatory since 31 March 2025. Done when the arrangement is recorded.' }
+      { id: "method", title: "11.4.1 Methodology defined, documented and implemented" },
+      { id: "method-coverage", title: "11.4.1 Coverage of the perimeter, critical systems and segmentation" },
+      { id: "method-layers", title: "11.4.1 Application-layer and network-layer testing" },
+      { id: "method-records", title: "11.4.1 Recent threats, risk approach and retention" },
+      { id: "internal", title: "11.4.2 Internal penetration testing" },
+      { id: "external", title: "11.4.3 External penetration testing" },
+      { id: "correct-retest", title: "11.4.4 Exploitable findings corrected and retested" },
+      { id: "segmentation", title: "11.4.5 Segmentation testing" },
+      { id: "sp-segmentation", title: "11.4.6 Service providers: segmentation every six months" },
+      { id: "multi-tenant", title: "11.4.7 Multi-tenant service providers support customer testing" },
+      { id: "scope-confirmation", title: "12.5.2 Test scope matches the confirmed PCI DSS scope" },
+      { id: "tester-evidence", title: "Tester qualification and independence evidenced" },
+      { id: "multi-tenant-separation", title: "A1.1.4 Multi-tenant separation tested every six months" },
+      { id: "retention", title: "Results and remediation records retained for 12 months" },
+      { id: "retest-evidence", title: "Retest evidence linked to each exploitable finding" },
+      { id: "report-traceability", title: "Report traceable to every 11.4 element" }
     ]
   },
-  infra_active_directory_v1: {
-    kind: 'checklist',
-    name: 'Active Directory Security Review',
-    description: 'Coverage tracker for an Active Directory review within an internal infrastructure phase, going deeper than the internal checklist: privileged groups, tiering, delegation, Kerberos, permissions, certificate services, Group Policy, password policy, LAPS and legacy protocols. Each item is confirmed against current Microsoft guidance, with exceptions recorded. For technique, follow the linked guidance.',
-    category: 'Infrastructure',
-    phase_hint: 'Internal Infrastructure',
-    source: 'infra_active_directory_v1',
-    source_url: 'https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/best-practices-for-securing-active-directory',
+  infra_active_directory_v2: {
+    kind: "checklist",
+    name: "Active Directory Security Review",
+    description: "Coverage tracker for an Active Directory review within an internal infrastructure phase, going deeper than the internal checklist: password policy, Kerberos, delegation, privileged groups, permissions and tiering, LAPS, Group Policy, Certificate Services (the ESC classes), NTLM and relay, trusts, and audit and detection. Work through it with a domain account, keep the evidence each item names, and tick it once covered or recorded as not applicable.",
+    category: "Infrastructure",
+    phase_hint: "Internal Infrastructure",
+    source: "infra_active_directory_v2",
+    source_url: "https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/best-practices-for-securing-active-directory",
     items: [
-      { id: 'priv-groups', title: 'Privileged group membership', description: 'Confirm membership of Enterprise Admins, Domain Admins, Schema Admins, Administrators, the Account, Backup, Server and Print Operators groups, DnsAdmins and Group Policy Creator Owners is minimal and justified. Done when every member is accounted for.', ref_url: 'https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/appendix-b--privileged-accounts-and-groups-in-active-directory' },
-      { id: 'tiering', title: 'Tiering and privileged account protection', description: 'Confirm privileged accounts are separate from day-to-day accounts, sign in only to systems at their own tier, and are in the Protected Users group or marked as sensitive and not delegable where compatible. Done when exceptions are recorded.', ref_url: 'https://learn.microsoft.com/en-us/security/privileged-access-workstations/overview' },
-      { id: 'delegation', title: 'Kerberos delegation', description: 'Confirm unconstrained delegation is limited to domain controllers, and constrained and resource-based constrained delegation exist only where needed and point only at the intended services. Done when every delegation is justified.' },
-      { id: 'kerberos', title: 'Kerberos hardening', description: 'Confirm accounts with service principal names have long random passwords or are group managed service accounts, no account skips Kerberos pre-authentication, RC4 use is restricted in line with current Microsoft guidance, and the krbtgt password has been changed in line with policy. Done when exceptions are recorded.' },
-      { id: 'acls', title: 'Directory permissions', description: 'Confirm no unprivileged user or group holds control over privileged objects, Group Policy objects or the domain itself, such as reset password, group membership, permission or ownership changes, or directory replication rights, and that AdminSDHolder keeps its default permissions. Done when risky permissions are recorded.' },
-      { id: 'adcs', title: 'Certificate Services (AD CS)', description: 'Confirm certificate templates, certificate authority settings, enrolment endpoints and PKI object permissions are checked against the escalation classes catalogued since SpecterOps\' Certified Pre-Owned research (ESC1 to ESC8 in the original paper, extended by later research). Done when each class is checked or ruled out.', ref_url: 'https://specterops.io/research/certified-pre-owned/' },
-      { id: 'gpo', title: 'Group Policy and SYSVOL', description: 'Confirm Group Policy objects and SYSVOL hold no stored credentials, such as legacy Group Policy Preferences passwords, and that rights to edit or link GPOs are restricted. Done when findings are recorded.' },
-      { id: 'password-policy', title: 'Password policy', description: 'Confirm the domain and any fine-grained password policies set length, lockout or throttling and screening of common passwords in line with current NCSC and NIST guidance. Done when gaps are recorded.' },
-      { id: 'laps', title: 'Local administrator passwords (LAPS)', description: 'Confirm local administrator passwords are unique per machine and rotated by Windows LAPS or legacy LAPS, and that read access to them is restricted. Done when coverage and access are recorded.', ref_url: 'https://learn.microsoft.com/en-us/windows-server/identity/laps/laps-overview' },
-      { id: 'legacy', title: 'Legacy authentication and name resolution', description: 'Confirm LM and NTLMv1 are disabled, NTLM use is restricted, and LLMNR, NetBIOS name service and WPAD fallbacks are disabled where they are not needed. Done when exceptions are recorded.' },
-      { id: 'signing', title: 'SMB signing, LDAP signing and channel binding', description: 'Confirm SMB signing is required, and LDAP signing and channel binding are enforced on domain controllers. Done when exceptions are recorded.' },
-      { id: 'accounts', title: 'Stale and weakly configured accounts', description: 'Confirm inactive and orphaned accounts are removed or disabled, and no account has the password-not-required flag or a non-expiring password without a recorded reason. Done when exceptions are recorded.' },
-      { id: 'machine-quota', title: 'Machine account quota', description: 'Confirm ordinary users cannot add computers to the domain, by reducing ms-DS-MachineAccountQuota from its default of 10, unless there is a reason. Done when the setting is recorded.' },
-      { id: 'trusts', title: 'Domain and forest trusts', description: 'Confirm each trust is still needed, and that SID filtering and selective authentication are applied where appropriate. Done when every trust is recorded.' },
-      { id: 'dc-hardening', title: 'Domain controller hardening', description: 'Confirm domain controllers are supported, patched, run only the roles they need and are administered only from tier 0 systems. Done when exceptions are recorded.' },
-      { id: 'monitoring', title: 'Monitoring of directory changes', description: 'Confirm changes to privileged groups, Group Policy, certificate services and other sensitive objects are logged and alerted on. Done when coverage is recorded.' }
+      { id: "forest-inventory", title: "Forest, domain and domain controller inventory" },
+      { id: "password-policy", title: "Default domain password and lockout policy" },
+      { id: "fgpp", title: "Fine-grained password policies" },
+      { id: "password-audit", title: "Password quality audit (where authorised)" },
+      { id: "reversible-lm", title: "Reversible encryption and LM hash storage" },
+      { id: "asrep", title: "Accounts without Kerberos pre-authentication" },
+      { id: "spn-accounts", title: "Service accounts with service principal names" },
+      { id: "kerberos-enc", title: "Kerberos encryption types" },
+      { id: "krbtgt", title: "Password age of the krbtgt account" },
+      { id: "unconstrained", title: "Unconstrained delegation" },
+      { id: "constrained", title: "Constrained delegation and protocol transition" },
+      { id: "rbcd", title: "Resource-based constrained delegation" },
+      { id: "priv-groups", title: "Highest-privilege groups" },
+      { id: "operator-groups", title: "Operator and other built-in privileged groups" },
+      { id: "adminsdholder", title: "AdminSDHolder and protected accounts" },
+      { id: "tiering", title: "Administrative tiering and logon restrictions" },
+      { id: "protected-users", title: "Protected Users and credential protection features" },
+      { id: "service-privilege", title: "Service accounts in privileged groups" },
+      { id: "stale-accounts", title: "Stale, never-expiring and weakly flagged accounts" },
+      { id: "hidden-membership", title: "Hidden membership and attribute oddities" },
+      { id: "dangerous-aces", title: "Dangerous permissions and privilege paths" },
+      { id: "replication-rights", title: "Directory replication rights" },
+      { id: "gpo-rights", title: "Group Policy object permissions and links" },
+      { id: "gpp-sysvol", title: "Credentials in Group Policy Preferences and SYSVOL" },
+      { id: "laps-coverage", title: "LAPS or Windows LAPS coverage" },
+      { id: "laps-read", title: "Access to LAPS passwords" },
+      { id: "adcs-inventory", title: "Certificate Services inventory" },
+      { id: "esc-templates", title: "Certificate template weaknesses (ESC1, ESC2, ESC3)" },
+      { id: "esc-acls", title: "Access control on templates, CAs and PKI objects (ESC4, ESC5, ESC7)" },
+      { id: "esc-ca-config", title: "CA settings and certificate mapping (ESC6, ESC15)" },
+      { id: "esc-relay", title: "Enrolment endpoints and NTLM relay (ESC8, ESC11)" },
+      { id: "ntlm", title: "LM, NTLMv1 and NTLM restriction" },
+      { id: "signing", title: "SMB signing, LDAP signing and channel binding" },
+      { id: "spooler", title: "Print spooler and coercion on domain controllers" },
+      { id: "machine-quota", title: "Machine account quota and computer object creation" },
+      { id: "trusts", title: "Domain and forest trusts and SID filtering" },
+      { id: "dc-hardening", title: "Domain controller hardening" },
+      { id: "audit-policy", title: "Audit policy on domain controllers" },
+      { id: "detection", title: "Detection coverage for directory attacks" }
     ]
   },
-  cloud_kubernetes_v1: {
-    kind: 'checklist',
-    name: 'Kubernetes and Container Review (CIS, NSA and CISA)',
-    description: 'Coverage tracker for a Kubernetes cluster and its workloads, following the areas of the CIS Kubernetes Benchmark and the NSA and CISA Kubernetes Hardening Guide (v1.2). For a managed service such as EKS, AKS or GKE, use the provider-specific CIS Benchmark for the parts the provider runs. The CIS numbers in titles point to benchmark sections. For each control, follow the linked benchmark.',
-    category: 'Cloud and containers',
-    source: 'cloud_kubernetes_v1',
-    source_url: 'https://www.cisecurity.org/benchmark/kubernetes',
+  cloud_kubernetes_v2: {
+    kind: "checklist",
+    name: "Kubernetes and Container Review (CIS, NSA and CISA)",
+    description: "Coverage tracker for a Kubernetes cluster and its workloads, following the CIS Kubernetes Benchmark (section numbers from v1.12.0 in brackets) and the NSA and CISA Kubernetes Hardening Guidance v1.2. For EKS, AKS or GKE, mark control plane items the provider runs as provider-managed, use the provider's CIS Benchmark for nodes, and record each deviation with its evidence.",
+    category: "Cloud and containers",
+    source: "cloud_kubernetes_v2",
+    source_url: "https://www.cisecurity.org/benchmark/kubernetes",
     items: [
-      { id: 'inventory', title: 'Cluster inventory and benchmark choice', description: 'Confirm the clusters, versions and node pools in scope, whether the control plane is self-managed or provider-managed, and which benchmark applies. Done when scope and benchmark are recorded.' },
-      { id: 'cp-files', title: 'Control plane node configuration files (CIS 1.1)', description: 'Confirm ownership and permissions on control plane manifests, configuration files and certificate material are restricted. Done when deviations are recorded.' },
-      { id: 'api-server', title: 'API server (CIS 1.2)', description: 'Confirm anonymous access is disabled where possible, authorisation includes Node and RBAC and is never AlwaysAllow, admission plugins are set, secrets are encrypted at rest, and audit logging and TLS are configured. Done when deviations are recorded.' },
-      { id: 'cm-scheduler', title: 'Controller manager and scheduler (CIS 1.3 and 1.4)', description: 'Confirm profiling is off, both components bind only to localhost, and the controller manager uses separate service account credentials. Done when deviations are recorded.' },
-      { id: 'etcd', title: 'etcd (CIS 2)', description: 'Confirm etcd requires TLS with client certificate authentication for clients and peers, uses its own certificate authority and is reachable only from the control plane. Done when deviations are recorded.' },
-      { id: 'user-auth', title: 'Authentication and authorisation for users (CIS 3.1)', description: 'Confirm people authenticate through an identity provider rather than client certificates, service account tokens or bootstrap tokens. Done when deviations are recorded.' },
-      { id: 'audit', title: 'Audit logging (CIS 3.2)', description: 'Confirm an audit policy records security-relevant requests and that audit logs are sent off the cluster and monitored. Done when coverage is recorded.' },
-      { id: 'kubelet', title: 'Worker nodes and kubelet (CIS 4.1 and 4.2)', description: 'Confirm kubelet anonymous access is off, authorisation is Webhook rather than AlwaysAllow, the read-only port is disabled, certificates rotate and node configuration files are locked down. Done when deviations are recorded.' },
-      { id: 'rbac', title: 'RBAC and service accounts (CIS 5.1)', description: 'Confirm cluster-admin is used only where needed; wildcards, access to secrets, pod creation and bind, impersonate and escalate rights are minimal; default service accounts are unused and tokens are mounted only where needed. Done when over-privilege is recorded.' },
-      { id: 'pod-security', title: 'Pod security (CIS 5.2)', description: 'Confirm a policy mechanism such as Pod Security Admission blocks privileged containers, host namespaces, privilege escalation, root containers, added capabilities, hostPath volumes and host ports except where justified. Done when exceptions are recorded.' },
-      { id: 'images-runtime', title: 'Images and container hardening', description: 'Confirm images come from trusted registries and are scanned and minimal, containers run as non-root with read-only root file systems where possible, and seccomp profiles apply. Done when gaps are recorded.', ref_url: 'https://media.defense.gov/2022/Aug/29/2003066362/1/1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF' },
-      { id: 'network', title: 'Network policies and segmentation (CIS 5.3)', description: 'Confirm the network plugin supports network policies, every namespace has policies that deny by default and allow only needed traffic, and nodes are segmented from other networks. Done when open paths are recorded.' },
-      { id: 'secrets', title: 'Secrets management (CIS 5.4)', description: 'Confirm secrets are mounted as files rather than environment variables, access to them is restricted, and external secret storage is considered. Done when gaps are recorded.' },
-      { id: 'admission', title: 'Admission control and image provenance (CIS 5.5)', description: 'Confirm admission controls enforce image provenance and policy, and ordinary users cannot change webhook configurations. Done when the review is recorded.' },
-      { id: 'namespaces', title: 'Namespaces, resource limits and general policies (CIS 5.6)', description: 'Confirm workloads are separated by namespace with the default namespace unused, and resource quotas and limits stop one workload starving others. Done when gaps are recorded.' },
-      { id: 'cloud-metadata', title: 'Cloud metadata and provider access', description: 'Confirm pods cannot reach the cloud instance metadata service or provider credentials unless they need them, and workload identities have least privilege. Done when exposure is recorded.', ref_url: 'https://media.defense.gov/2022/Aug/29/2003066362/1/1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF' },
-      { id: 'upgrades', title: 'Version support and upgrades', description: 'Confirm the Kubernetes version and add-ons are supported and patched, with a regular upgrade process. Done when gaps are recorded.', ref_url: 'https://media.defense.gov/2022/Aug/29/2003066362/1/1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF' }
+      { id: "scope", title: "Clusters, versions and benchmark in scope" },
+      { id: "api-exposure", title: "API server network exposure" },
+      { id: "api-authn", title: "API server authentication and anonymous access (CIS 1.2)" },
+      { id: "api-authz", title: "API server authorisation, admission plugins and TLS (CIS 1.2)" },
+      { id: "secrets-encryption", title: "Encryption of Secrets at rest (CIS 1.2)" },
+      { id: "cm-scheduler", title: "Controller manager and scheduler (CIS 1.3 and 1.4)" },
+      { id: "cp-files", title: "Control plane configuration files and PKI (CIS 1.1)" },
+      { id: "etcd", title: "Protection of etcd (CIS 2)" },
+      { id: "user-auth", title: "Authentication for people (CIS 3.1)" },
+      { id: "cluster-admin", title: "Use of cluster-admin and system:masters (CIS 5.1)" },
+      { id: "rbac-wildcards", title: "Wildcards, Secret access and workload creation (CIS 5.1)" },
+      { id: "rbac-escalation", title: "Escalate, bind, impersonate and other escalation rights (CIS 5.1)" },
+      { id: "service-accounts", title: "Service accounts and token mounting (CIS 5.1)" },
+      { id: "pod-security", title: "Pod Security Standards and admission (CIS 5.2)" },
+      { id: "host-access", title: "Privileged and host-namespace workloads (CIS 5.2)" },
+      { id: "security-context", title: "Container security context hardening (CIS 5.2 and 5.6)" },
+      { id: "network-policies", title: "Network policies and default deny (CIS 5.3)" },
+      { id: "egress-metadata", title: "Egress, cloud metadata and node reachability" },
+      { id: "secrets-handling", title: "Secrets handling (CIS 5.4)" },
+      { id: "kubelet-auth", title: "Kubelet authentication and authorisation (CIS 4.2)" },
+      { id: "node-config", title: "Worker node files and other kubelet settings (CIS 4.1 to 4.3)" },
+      { id: "node-hardening", title: "Node operating system and access" },
+      { id: "admission-control", title: "Admission control and policy enforcement" },
+      { id: "image-provenance", title: "Image provenance and registries (CIS 5.5)" },
+      { id: "image-scanning", title: "Image vulnerability scanning and content" },
+      { id: "runtime-detection", title: "Runtime threat detection" },
+      { id: "audit-logging", title: "Kubernetes audit policy and log handling (CIS 3.2)" },
+      { id: "managed-logging", title: "Managed control plane logging" },
+      { id: "dashboards", title: "Exposed dashboards and web consoles" },
+      { id: "add-ons", title: "Add-ons and their exposed endpoints" },
+      { id: "external-exposure", title: "Services, ingress and external exposure" },
+      { id: "namespaces-tenancy", title: "Namespaces and multi-tenancy (CIS 5.6)" },
+      { id: "resource-limits", title: "Resource quotas and limits" },
+      { id: "cloud-identity", title: "Pod access to cloud identities" },
+      { id: "versions", title: "Version support and upgrades" }
     ]
   },
-  people_social_engineering_v1: {
-    kind: 'checklist',
-    name: 'Social Engineering and Phishing Assessment',
-    description: 'Coverage tracker for a social engineering or phishing phase, from authorisation to reporting, drawing on the PTES pre-engagement guidance and the NCSC\'s phishing guidance. It records how the assessment is approved, run safely and reported. For the defensive context, follow the linked guidance.',
-    category: 'People and physical',
-    phase_hint: 'Social Engineering',
-    source: 'people_social_engineering_v1',
-    source_url: 'https://www.ncsc.gov.uk/guidance/phishing',
+  people_social_engineering_v2: {
+    kind: "checklist",
+    name: "Social Engineering and Phishing Assessment",
+    description: "Coverage tracker for a social engineering or phishing phase, from authorisation and legal review through campaign control and measurement to a debrief that blames no one, drawing on the PTES pre-engagement guidance and the NCSC's phishing guidance. Tick an item when it is agreed or done and its record is filed; nothing here covers how to build lures or infrastructure.",
+    category: "People and physical",
+    phase_hint: "Social Engineering",
+    source: "people_social_engineering_v2",
+    source_url: "https://www.ncsc.gov.uk/guidance/phishing",
     items: [
-      { id: 'authorisation', title: 'Written authorisation from the right person', description: 'Confirm someone with authority over the people and systems in scope has authorised the assessment in writing, and that HR and legal have been consulted. Done when the authorisation is on file.' },
-      { id: 'objectives', title: 'Objectives and measures agreed', description: 'Confirm what the assessment is for, such as awareness, reporting or technical controls, and how results will be measured, counting reports as well as clicks. Done when the objectives are recorded.', ref_url: 'https://www.ncsc.gov.uk/guidance/phishing' },
-      { id: 'targets', title: 'Scope of targets', description: 'Confirm the people or groups, channels (email, phone, SMS or in person) and dates in scope, and any exclusions the client asks for. Done when the target list is approved.' },
-      { id: 'pretexts', title: 'Pretexts approved', description: 'Confirm each pretext is approved in advance, avoids themes likely to cause distress such as health, bereavement, pay or redundancy, and does not impersonate a third party without its agreement. Done when approved pretexts are recorded.', ref_url: 'http://www.pentest-standard.org/index.php/Pre-engagement' },
-      { id: 'infrastructure', title: 'Sending infrastructure', description: 'Confirm the domains, mail servers, phone numbers and landing pages used are set up for this engagement, secured, and recorded so they can be taken down afterwards. Done when the inventory is recorded.' },
-      { id: 'coordination', title: 'Coordination with mail and security teams', description: 'Confirm who at the client knows, and whether any filtering exceptions are used, so results are read correctly and real incidents are not confused with the test. Done when the arrangement is recorded.' },
-      { id: 'data-handling', title: 'Safe handling of captured data', description: 'Confirm landing pages record that a submission happened without keeping the password, and any personal data collected is minimised, encrypted and deleted on an agreed date in line with UK GDPR. Done when the data handling plan is agreed.' },
-      { id: 'tracking', title: 'Tracking and evidence', description: 'Confirm what is tracked (delivery, opens, clicks, submissions and reports) and that each event keeps a timestamp and evidence. Done when tracking is tested before launch.' },
-      { id: 'escalation', title: 'Escalation and stop arrangements', description: 'Confirm a client contact is reachable throughout, how a worried or distressed member of staff is looked after, and how the campaign is stopped at short notice. Done when contacts and the stop process are agreed.' },
-      { id: 'test-run', title: 'Test run before launch', description: 'Confirm the campaign is tested end to end against an approved test recipient before it reaches staff. Done when the test run succeeds.' },
-      { id: 'reporting', title: 'Reporting without blame', description: 'Confirm results are reported at the level of teams, processes and controls rather than to discipline individuals, with reporting behaviour shown alongside clicks. Done when the report is reviewed.', ref_url: 'https://www.ncsc.gov.uk/guidance/phishing' },
-      { id: 'close-down', title: 'Close-down and debrief', description: 'Confirm the infrastructure is taken down, collected data is deleted as agreed, and staff are told about the exercise supportively if the client wishes. Done when close-down is recorded.' }
+      { id: "authorisation", title: "Written authorisation from the right person" },
+      { id: "legal-hr", title: "Legal and HR review" },
+      { id: "privacy", title: "Privacy review and data protection" },
+      { id: "objectives", title: "Objectives and measures agreed" },
+      { id: "channels", title: "Channels, dates and times in scope" },
+      { id: "target-list", title: "Target list approved" },
+      { id: "pretexts", title: "Pretexts approved in writing" },
+      { id: "inventory", title: "Campaign infrastructure inventoried and controlled" },
+      { id: "coordination", title: "Coordination with mail, security and service desk teams" },
+      { id: "submissions-handling", title: "Submissions recorded without keeping passwords" },
+      { id: "test-run", title: "End-to-end test run before launch" },
+      { id: "delivery", title: "Delivery measured" },
+      { id: "opens-clicks", title: "Opens and clicks measured with their limits" },
+      { id: "submissions", title: "Submissions measured" },
+      { id: "reports", title: "Reports to the security team and time to report" },
+      { id: "security-response", title: "Security team response measured" },
+      { id: "vishing", title: "Vishing calls where in scope" },
+      { id: "smishing", title: "Smishing messages where in scope" },
+      { id: "stop-conditions", title: "Stop conditions agreed and tested" },
+      { id: "welfare", title: "Staff welfare looked after" },
+      { id: "no-blame-results", title: "Results reported without blaming individuals" },
+      { id: "debrief", title: "Debrief that blames no individual" },
+      { id: "close-down", title: "Close-down and data deletion" }
     ]
   },
-  people_physical_v1: {
-    kind: 'checklist',
-    name: 'Physical Security Assessment',
-    description: 'Coverage tracker for a physical security phase, from authorisation to evidence handling. It records what was assessed and how safely, with controls compared against the guidance of the UK National Protective Security Authority (NPSA). For control guidance, follow the linked source.',
-    category: 'People and physical',
-    phase_hint: 'Physical',
-    source: 'people_physical_v1',
-    source_url: 'https://www.npsa.gov.uk/',
+  people_physical_v2: {
+    kind: "checklist",
+    name: "Physical Security Assessment",
+    description: "Coverage tracker for a physical security phase, from authorisation letters and safety through perimeter, entry points, reception, staff behaviour, access control, monitoring and secure areas to evidence handling, with controls compared against UK NPSA guidance. Tick an item when it is assessed and recorded; items cover observation and review, never defeating locks, passes or alarms.",
+    category: "People and physical",
+    phase_hint: "Physical",
+    source: "people_physical_v2",
+    source_url: "https://www.npsa.gov.uk/",
     items: [
-      { id: 'letter', title: 'Authorisation letter carried', description: 'Confirm every tester carries a signed authorisation letter naming them, the sites and the dates, with a client contact who can confirm it at any time testing runs. Done when each tester has a copy.' },
-      { id: 'site-authority', title: 'Authority over every site', description: 'Confirm the signatory has authority over each site, and that landlords, shared-building managers or security contractors have agreed where the client does not control the premises. Done when consent for each site is on file.' },
-      { id: 'roe', title: 'Rules of engagement', description: 'Confirm permitted times, areas and techniques, and anything ruled out such as forced entry or particular areas, are agreed in writing. Done when the rules are signed.' },
-      { id: 'safety', title: 'Safety and escalation', description: 'Confirm how testers identify themselves if challenged or detained, who they call, and how police involvement or a safety issue is handled. Done when every tester knows the process.' },
-      { id: 'recon', title: 'Reconnaissance within limits', description: 'Confirm site observation and open-source research stay within agreed limits and avoid recording members of the public. Done when observations are recorded.' },
-      { id: 'perimeter', title: 'Perimeter', description: 'Confirm fences, gates, barriers, lighting and perimeter detection are assessed for gaps. Done when findings are recorded.' },
-      { id: 'entry-points', title: 'Entry points', description: 'Confirm doors, windows, loading bays, roof and service access are assessed for weaknesses and for whether they are monitored. Done when findings are recorded.' },
-      { id: 'tailgating', title: 'Tailgating and reception', description: 'Confirm whether staff and reception challenge people following others through controlled doors or arriving without an appointment. Done when attempts and outcomes are recorded.' },
-      { id: 'badges', title: 'Badges and access control', description: 'Confirm badge technology, reader configuration, visitor passes and the handling of lost or unreturned badges resist misuse. Done when findings are recorded.' },
-      { id: 'internal', title: 'Internal controls', description: 'Confirm internal doors, secure rooms, server and communications rooms, clear desks, screen locking and unattended network ports are assessed. Done when findings are recorded.' },
-      { id: 'detection', title: 'Detection and response', description: 'Confirm whether CCTV, alarms, guards and the control room detected the activity, and how quickly they responded. Done when detections are recorded against the timeline.' },
-      { id: 'evidence', title: 'Evidence handling', description: 'Confirm photographs and recordings are limited to what the report needs, avoid capturing members of the public where possible, and are stored encrypted and deleted on an agreed date. Done when the evidence log is complete.' },
-      { id: 'items', title: 'Items taken or left', description: 'Confirm anything taken as proof of access or left as a marker is logged, returned or removed, and reported. Done when every item is accounted for.' }
+      { id: "letter", title: "Authorisation letter carried by every tester" },
+      { id: "confirming-contacts", title: "Client contacts able to confirm the testers" },
+      { id: "site-authority", title: "Authority over every site and area" },
+      { id: "rules", title: "Rules of engagement for physical testing" },
+      { id: "safety", title: "Safety risk assessment" },
+      { id: "challenge-process", title: "Process when challenged, detained or police attend" },
+      { id: "scope", title: "Sites, buildings and areas in scope" },
+      { id: "reconnaissance", title: "Hostile reconnaissance view assessed" },
+      { id: "perimeter", title: "Perimeter condition and coverage" },
+      { id: "entry-points", title: "Entry points observed" },
+      { id: "reception", title: "Reception and visitor management" },
+      { id: "contractors-deliveries", title: "Contractors, couriers and deliveries" },
+      { id: "staff-challenge", title: "Staff challenge and reporting behaviour" },
+      { id: "tailgating", title: "Tailgating susceptibility observed" },
+      { id: "access-control", title: "Access control system reviewed" },
+      { id: "passes", title: "Pass issue, display and return" },
+      { id: "doors-keys", title: "Doors, locks and key control" },
+      { id: "cctv", title: "CCTV coverage and monitoring" },
+      { id: "alarms", title: "Intruder alarm and response" },
+      { id: "guarding", title: "Security officers and patrols" },
+      { id: "secure-areas", title: "Secure areas" },
+      { id: "clear-desk", title: "Clear desk and clear screen" },
+      { id: "disposal", title: "Disposal of documents and media" },
+      { id: "network-points", title: "Unattended network points and devices" },
+      { id: "out-of-hours", title: "Out-of-hours conditions" },
+      { id: "timeline", title: "Detection and response timeline" },
+      { id: "evidence", title: "Evidence handling and privacy" },
+      { id: "items", title: "Items taken or left accounted for" },
+      { id: "debrief", title: "Debrief without blame" }
     ]
   },
-  dev_iot_istg_v1: {
-    kind: 'checklist',
-    name: 'IoT Device Testing (OWASP ISTG)',
-    description: 'Coverage tracker for an IoT device based on the OWASP IoT Security Testing Guide (ISTG v1.0.1), one item per component in its catalogue of test cases. Agree the physical and authorisation access levels first, since they decide which components can be tested. For test cases, follow the linked guide.',
-    category: 'Mobile and devices',
-    source: 'dev_iot_istg_v1',
-    source_url: 'https://owasp.org/www-project-iot-security-testing-guide/',
+  dev_iot_istg_v2: {
+    kind: "checklist",
+    name: "IoT Device Testing (OWASP ISTG)",
+    description: "Coverage tracker for an IoT device following the OWASP IoT Security Testing Guide test case catalogue, with one item per component category (or pair of categories) naming its ISTG test case IDs. Agree the physical (PA-1 to PA-4) and authorisation (AA-1 to AA-4) access levels first, mark items outside them as not applicable, and record the result of each test case.",
+    category: "Mobile and devices",
+    source: "dev_iot_istg_v2",
+    source_url: "https://owasp.org/www-project-iot-security-testing-guide/",
     items: [
-      { id: 'access-levels', title: 'Access levels agreed (PA-1 to PA-4, AA-1 to AA-4)', description: 'Confirm the physical access level (remote, local, non-invasive or invasive) and the authorisation access level (unauthorised up to manufacturer) the test assumes, and whether devices may be opened or damaged. Done when the levels are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
-      { id: 'proc', title: 'Processing Units (ISTG-PROC)', description: 'Confirm access control and privilege escalation on the processing unit, the implementation of its instructions and its protection against side-channel attacks are assessed where invasive access is in scope. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
-      { id: 'mem', title: 'Memory (ISTG-MEM)', description: 'Confirm memory does not disclose source code, binaries, implementation detail or user data, and holds no unencrypted secrets or weak cryptography. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
-      { id: 'fw', title: 'Firmware (ISTG-FW)', description: 'Confirm the firmware is up to date, carries no unnecessary software, holds no hardcoded or unencrypted secrets and uses current cryptography. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
-      { id: 'fw-inst', title: 'Installed Firmware (ISTG-FW[INST])', description: 'Confirm access to the running firmware and privilege escalation within it are controlled, user data is protected, and the bootloader checks signatures. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
-      { id: 'fw-updt', title: 'Firmware Update Mechanism (ISTG-FW[UPDT])', description: 'Confirm updates are authorised, signed, encrypted, sent securely, verified before install and protected against rollback. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
-      { id: 'des', title: 'Data Exchange Services (ISTG-DES)', description: 'Confirm the device\'s network services enforce authorisation, disclose no implementation or user data, are up to date, protect confidential data, use current cryptography, keep to the intended business logic and validate input. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
-      { id: 'int', title: 'Internal Interfaces (ISTG-INT, including I2C and UART)', description: 'Confirm internal interfaces such as I2C buses and UART consoles give no unauthorised access, disclose no data and validate input. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
-      { id: 'phy', title: 'Physical Interfaces (ISTG-PHY)', description: 'Confirm external physical ports enforce authorisation, protect secrets, use current cryptography and validate input. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
-      { id: 'wrls', title: 'Wireless Interfaces (ISTG-WRLS)', description: 'Confirm wireless interfaces enforce authorisation, protect secrets, use current cryptography and resist input and logic abuse. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
-      { id: 'ui', title: 'User Interfaces (ISTG-UI)', description: 'Confirm the interfaces used to manage the device, such as web pages, apps or on-device menus, enforce authorisation, protect secrets, use current cryptography and validate input. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' }
+      { id: "scope", title: "ISTG-PROC to ISTG-UI Components and access levels agreed" },
+      { id: "proc-authz", title: "ISTG-PROC-AUTHZ Access to the processing unit" },
+      { id: "proc-logic-sidec", title: "ISTG-PROC-LOGIC and ISTG-PROC-SIDEC Instruction handling and side-channel resistance" },
+      { id: "mem-info", title: "ISTG-MEM-INFO Information exposed by memory contents" },
+      { id: "mem-scrt-crypt", title: "ISTG-MEM-SCRT and ISTG-MEM-CRYPT Secrets and cryptography in memory" },
+      { id: "fw-info", title: "ISTG-FW-INFO Information disclosed by the firmware" },
+      { id: "fw-conf", title: "ISTG-FW-CONF Outdated and unnecessary software in firmware" },
+      { id: "fw-scrt", title: "ISTG-FW-SCRT Secrets in firmware" },
+      { id: "fw-crypt", title: "ISTG-FW-CRYPT Cryptography used in firmware" },
+      { id: "inst-authz", title: "ISTG-FW[INST]-AUTHZ and ISTG-FW[INST]-INFO Access to the running firmware and user data" },
+      { id: "inst-crypt", title: "ISTG-FW[INST]-CRYPT Bootloader signature verification" },
+      { id: "updt-authz", title: "ISTG-FW[UPDT]-AUTHZ Authorisation to update firmware" },
+      { id: "updt-signature", title: "ISTG-FW[UPDT]-CRYPT-001 and ISTG-FW[UPDT]-CRYPT-004 Update signing and signature checks" },
+      { id: "updt-transport", title: "ISTG-FW[UPDT]-CRYPT-002 and ISTG-FW[UPDT]-CRYPT-003 Update encryption and delivery" },
+      { id: "updt-logic", title: "ISTG-FW[UPDT]-LOGIC Rollback protection" },
+      { id: "des-authz", title: "ISTG-DES-AUTHZ Access to data exchange services" },
+      { id: "des-info", title: "ISTG-DES-INFO Information disclosed by services" },
+      { id: "des-conf", title: "ISTG-DES-CONF Outdated software and unneeded functions in services" },
+      { id: "des-scrt-crypt", title: "ISTG-DES-SCRT and ISTG-DES-CRYPT Secrets and cryptography in data exchange" },
+      { id: "des-logic", title: "ISTG-DES-LOGIC Business logic of data exchange" },
+      { id: "des-inpv", title: "ISTG-DES-INPV Input validation in data exchange" },
+      { id: "int-authz", title: "ISTG-INT-AUTHZ Access through internal interfaces" },
+      { id: "int-info", title: "ISTG-INT-INFO Information on internal interfaces" },
+      { id: "int-conf", title: "ISTG-INT-CONF Configuration of internal interfaces" },
+      { id: "int-scrt-crypt", title: "ISTG-INT-SCRT and ISTG-INT-CRYPT Secrets and cryptography on internal interfaces" },
+      { id: "int-logic-inpv", title: "ISTG-INT-LOGIC and ISTG-INT-INPV Logic and input handling on internal interfaces" },
+      { id: "int-i2c", title: "ISTG-INT[I2C] I2C bus access, data and invalid input" },
+      { id: "int-uart-authz", title: "ISTG-INT[UART]-AUTHZ Serial console and bootloader access" },
+      { id: "int-uart-info-inpv", title: "ISTG-INT[UART]-INFO and ISTG-INT[UART]-INPV Serial output and command handling" },
+      { id: "phy-authz", title: "ISTG-PHY-AUTHZ Access through physical interfaces" },
+      { id: "phy-info", title: "ISTG-PHY-INFO Information through physical interfaces" },
+      { id: "phy-conf", title: "ISTG-PHY-CONF Configuration of physical interfaces" },
+      { id: "phy-scrt-crypt", title: "ISTG-PHY-SCRT and ISTG-PHY-CRYPT Secrets and cryptography on physical interfaces" },
+      { id: "phy-logic-inpv", title: "ISTG-PHY-LOGIC and ISTG-PHY-INPV Logic and input handling on physical interfaces" },
+      { id: "wrls-authz", title: "ISTG-WRLS-AUTHZ Access through wireless interfaces" },
+      { id: "wrls-info", title: "ISTG-WRLS-INFO Information disclosed over the air" },
+      { id: "wrls-conf", title: "ISTG-WRLS-CONF Configuration of wireless interfaces" },
+      { id: "wrls-scrt-crypt", title: "ISTG-WRLS-SCRT and ISTG-WRLS-CRYPT Secrets and cryptography over the air" },
+      { id: "wrls-logic-inpv", title: "ISTG-WRLS-LOGIC and ISTG-WRLS-INPV Logic and input handling over the air" },
+      { id: "ui-authz", title: "ISTG-UI-AUTHZ Access to user interfaces" },
+      { id: "ui-info", title: "ISTG-UI-INFO Information disclosed by user interfaces" },
+      { id: "ui-conf", title: "ISTG-UI-CONF Configuration of user interfaces" },
+      { id: "ui-scrt-crypt", title: "ISTG-UI-SCRT and ISTG-UI-CRYPT Secrets and cryptography in user interfaces" },
+      { id: "ui-logic-inpv", title: "ISTG-UI-LOGIC and ISTG-UI-INPV Logic and input handling in user interfaces" }
     ]
   },
-  dev_thick_client_v1: {
-    kind: 'checklist',
-    name: 'Thick Client Application Testing',
-    description: 'Coverage tracker for a desktop (thick client) application, built around the OWASP Desktop App Security Top 10 (2021, an incubator project) plus the client-side areas a desktop test also needs. For technique, follow the linked project.',
-    category: 'Mobile and devices',
-    source: 'dev_thick_client_v1',
-    source_url: 'https://owasp.org/www-project-desktop-app-security-top-10/',
+  dev_thick_client_v2: {
+    kind: "checklist",
+    name: "Thick Client Application Testing",
+    description: "Coverage tracker for a desktop (thick client) application and its back end, covering architecture, installation, binaries, local data, traffic, server-side enforcement, updates and the local attack surface, with OWASP Desktop App Security Top 10 (2021) and CWE references where they apply. Work through each item with the client installed and run as a standard user, and keep the evidence each item names.",
+    category: "Mobile and devices",
+    source: "dev_thick_client_v2",
+    source_url: "https://owasp.org/www-project-desktop-app-security-top-10/",
     items: [
-      { id: 'architecture', title: 'Architecture and trust boundaries', description: 'Confirm whether the client talks to an application server or straight to a database, which components run locally, and where trust is placed. Done when the architecture is recorded.' },
-      { id: 'traffic', title: 'DA7 Insecure Communication', description: 'Confirm traffic between client and server is encrypted with certificate validation, and that the server does not trust what the client sends. Done when protocols and endpoints are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
-      { id: 'injection', title: 'DA1 Injections', description: 'Confirm input that reaches databases, commands or interpreters, from the client or through its server, is handled safely. Done when each input is covered.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
-      { id: 'auth-session', title: 'DA2 Broken Authentication & Session Management', description: 'Confirm sign-in, session handling and any offline or cached authentication cannot be bypassed from the client. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
-      { id: 'data-exposure', title: 'DA3 Sensitive Data Exposure', description: 'Confirm credentials, connection strings, keys and personal data are not exposed in local files, the registry, logs, memory or the binary itself. Done when the locations checked are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
-      { id: 'crypto', title: 'DA4 Improper Cryptography Usage', description: 'Confirm the application uses current algorithms, with keys that are not hardcoded or recoverable from the client. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
-      { id: 'authz', title: 'DA5 Improper Authorization', description: 'Confirm authorisation is enforced on the server, so hidden or disabled client features cannot be switched on to gain access. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
-      { id: 'misconfig', title: 'DA6 Security Misconfiguration', description: 'Confirm installation folders, files, services and registry keys have safe permissions and the application runs with no more privilege than it needs. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
-      { id: 'library-loading', title: 'Library loading', description: 'Confirm the application and its installer load libraries only from protected locations, so a low-privileged user cannot replace or plant them. Done when results are recorded.' },
-      { id: 'code-quality', title: 'DA8 Poor Code Quality', description: 'Confirm binary protections such as ASLR, DEP and code signing are in place, and the application handles unexpected input and errors safely. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
-      { id: 'components', title: 'DA9 Using Components with Known Vulnerabilities', description: 'Confirm bundled libraries, frameworks and runtimes are supported and patched. Done when the component inventory is recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
-      { id: 'updates', title: 'Update mechanism', description: 'Confirm updates are downloaded securely and verified, for example by signature, before they are installed. Done when results are recorded.' },
-      { id: 'ipc', title: 'Local services and inter-process communication', description: 'Confirm local services, named pipes, sockets and other channels the application exposes enforce authorisation and validate input. Done when results are recorded.' },
-      { id: 'logging', title: 'DA10 Insufficient Logging & Monitoring', description: 'Confirm security events are logged on the server side and logs do not hold sensitive data. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' }
+      { id: "architecture", title: "Architecture and trust boundaries" },
+      { id: "two-tier", title: "Two-tier clients talking straight to a database" },
+      { id: "three-tier", title: "Three-tier clients and the application server API" },
+      { id: "installer", title: "Installer and installation location" },
+      { id: "file-permissions", title: "Installed file and folder permissions" },
+      { id: "dll-search-order", title: "DLL and library search order" },
+      { id: "binary-mitigations", title: "Binary exploit mitigations" },
+      { id: "code-signing", title: "Code signing of binaries and scripts" },
+      { id: "embedded-secrets", title: "Secrets and keys in binaries" },
+      { id: "config-secrets", title: "Secrets in configuration files" },
+      { id: "stored-credentials", title: "Stored credentials and session tokens" },
+      { id: "local-data", title: "Local storage of application data" },
+      { id: "memory", title: "Sensitive data in memory and crash dumps" },
+      { id: "logs", title: "Sensitive data in logs and diagnostics" },
+      { id: "traffic", title: "Traffic interception and protocols" },
+      { id: "certificate-validation", title: "TLS and certificate validation" },
+      { id: "server-authorisation", title: "Authorisation enforced on the server" },
+      { id: "input-handling", title: "Input handling and injection through the client" },
+      { id: "authentication-session", title: "Authentication and session handling" },
+      { id: "cryptography", title: "Use of cryptography" },
+      { id: "update-integrity", title: "Update mechanism integrity" },
+      { id: "ipc", title: "Inter-process communication exposure" },
+      { id: "registry", title: "Registry keys and permissions" },
+      { id: "services", title: "Privileged services shipped with the client" },
+      { id: "run-privilege", title: "Privilege the client runs with" },
+      { id: "licensing", title: "Licensing and feature checks done on the client" },
+      { id: "embedded-browser", title: "Embedded browsers and web content" },
+      { id: "components", title: "Bundled components and runtimes" },
+      { id: "error-handling", title: "Error handling and malformed input" },
+      { id: "server-logging", title: "Security event logging on the server" },
+      { id: "uninstall", title: "Uninstall residue" }
     ]
   },
+  run_kickoff_v1: {
+    kind: "runbook",
+    name: "Engagement kick-off and readiness",
+    description: "Runbook for the kick-off call and the readiness checks that come before any testing. Use it in the week before the start date to confirm authorisation, rules of engagement, contacts, access and the go or no-go decision.",
+    category: "Engagement process",
+    source: "run_kickoff_v1",
+    source_url: "https://www.ncsc.gov.uk/guidance/penetration-testing",
+    items: [
+      { id: "signed-scope", title: "Confirm scope and authorisation are signed" },
+      { id: "kickoff-call", title: "Hold the kick-off call" },
+      { id: "roe", title: "Agree the rules of engagement" },
+      { id: "contacts", title: "Exchange contacts and an emergency route" },
+      { id: "windows", title: "Fix testing windows and time zones" },
+      { id: "source-ips", title: "Declare and allow-list source addresses" },
+      { id: "access", title: "Receive accounts, data and access" },
+      { id: "environment", title: "Confirm the environment and its safeguards" },
+      { id: "comms", title: "Agree communication and status updates" },
+      { id: "go-no-go", title: "Make the go or no-go decision" }
+    ]
+  },
+  run_credentials_v1: {
+    kind: "runbook",
+    name: "Test accounts and credentials",
+    description: "Runbook for requesting, receiving, storing, using and retiring the test accounts and secrets a client provides, and for handling credentials found during testing. Use it from the first account request until the client confirms everything is disabled.",
+    category: "Engagement process",
+    source: "run_credentials_v1",
+    source_url: "https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html",
+    items: [
+      { id: "request", title: "Request the right accounts" },
+      { id: "receive", title: "Receive them through a secure channel" },
+      { id: "vault", title: "Store them in the firm's vault" },
+      { id: "mfa", title: "Set up MFA and recovery" },
+      { id: "check", title: "Check the accounts before day one" },
+      { id: "in-scope", title: "Use accounts only in scope" },
+      { id: "share", title: "Share safely within the team" },
+      { id: "found", title: "Handle credentials found during testing" },
+      { id: "lockout", title: "Deal with lock-outs and suspected exposure" },
+      { id: "retire", title: "Retire everything at the end" }
+    ]
+  },
+  run_third_party_v1: {
+    kind: "runbook",
+    name: "Third-party and hosting provider permissions",
+    description: "Runbook for confirming that everyone with a stake in the targets allows the test, from cloud providers to managed service, hosting, CDN, WAF and SaaS providers. Use it during scoping, and again whenever a target turns out to be hosted or run by someone else.",
+    category: "Engagement process",
+    source: "run_third_party_v1",
+    source_url: "https://www.microsoft.com/msrc/pentest-rules-of-engagement",
+    items: [
+      { id: "map", title: "Map who owns and runs each target" },
+      { id: "cloud-policy", title: "Check each cloud provider's policy" },
+      { id: "rights", title: "Confirm the client's rights over each asset" },
+      { id: "msp", title: "Get managed service provider agreement" },
+      { id: "hosting", title: "Clear hosting, CDN and WAF providers" },
+      { id: "saas", title: "Deal with SaaS vendors" },
+      { id: "consent", title: "Record written consent" },
+      { id: "never", title: "Know what is never tested without the owner" },
+      { id: "provider-vulns", title: "Report provider vulnerabilities properly" },
+      { id: "recheck", title: "Recheck when new targets appear" }
+    ]
+  },
+  run_testing_day_v1: {
+    kind: "runbook",
+    name: "Starting and ending a testing day",
+    description: "Runbook for the routine that opens and closes every testing day. Use it daily so that all activity is authorised, logged and traceable, and the client always knows what is running and what was found.",
+    category: "Engagement process",
+    source: "run_testing_day_v1",
+    source_url: "https://csrc.nist.gov/pubs/sp/800/115/final",
+    items: [
+      { id: "confirm-window", title: "Confirm authorisation and today's window" },
+      { id: "platform", title: "Check the testing platform" },
+      { id: "announce-start", title: "Announce the start" },
+      { id: "activity-log", title: "Keep the activity log as you work" },
+      { id: "work-plan", title: "Work to the plan and the agreed rates" },
+      { id: "check-ins", title: "Check in during the day" },
+      { id: "stop-conditions", title: "Stop when a stop condition is met" },
+      { id: "announce-end", title: "Finish and announce the end" },
+      { id: "summary", title: "Send the end-of-day summary" },
+      { id: "secure-evidence", title: "Secure the day's evidence" }
+    ]
+  },
+  run_scope_change_v1: {
+    kind: "runbook",
+    name: "Scope changes and out-of-scope discoveries",
+    description: "Runbook for when testing reveals assets outside the signed scope, or the client asks to add or remove targets. Use it before interacting with anything new, so every target tested stays authorised in writing.",
+    category: "Engagement process",
+    source: "run_scope_change_v1",
+    source_url: "https://www.ncsc.gov.uk/guidance/penetration-testing",
+    items: [
+      { id: "stop", title: "Stop at the boundary" },
+      { id: "record", title: "Record the discovery" },
+      { id: "ownership", title: "Check ownership against the scope" },
+      { id: "raise", title: "Raise it with the client" },
+      { id: "approval", title: "Get written approval before testing" },
+      { id: "update", title: "Update the scope record" },
+      { id: "client-requests", title: "Handle client-requested changes" },
+      { id: "third-party", title: "Treat third-party assets with care" },
+      { id: "report", title: "Report scope decisions" }
+    ]
+  },
+  run_service_impact_v1: {
+    kind: "runbook",
+    name: "Unexpected impact or an outage during testing",
+    description: "Runbook for when a target slows down, errors or fails while testing is running, whether or not the test caused it. Use it the moment impact is noticed or reported, and follow it through to an agreed restart and the report.",
+    category: "Engagement process",
+    source: "run_service_impact_v1",
+    source_url: "https://csrc.nist.gov/pubs/sp/800/115/final",
+    items: [
+      { id: "stop", title: "Stop all testing at once" },
+      { id: "notify", title: "Notify the client and the engagement lead" },
+      { id: "preserve", title: "Preserve your logs and timestamps" },
+      { id: "cause", title: "Help the client establish cause" },
+      { id: "recovery", title: "Support recovery, not repair" },
+      { id: "internal", title: "Report it inside the firm" },
+      { id: "resume-criteria", title: "Agree resumption criteria" },
+      { id: "restart", title: "Restart under the changed conditions" },
+      { id: "report", title: "Record it in the report" }
+    ]
+  },
+  run_critical_finding_v1: {
+    kind: "runbook",
+    name: "Escalating a critical finding during testing",
+    description: "Runbook for reporting a finding that cannot wait for the report, such as an easily abused exposure or evidence of an existing compromise. Use it the moment a tester suspects a critical issue, before testing continues.",
+    category: "Engagement process",
+    source: "run_critical_finding_v1",
+    source_url: "https://www.crest-approved.org/wp-content/uploads/2022/04/CREST-Penetration-Testing-Guide-1.pdf",
+    items: [
+      { id: "criteria", title: "Recognise what counts as critical" },
+      { id: "stop-confirm", title: "Stop and confirm" },
+      { id: "tell-lead", title: "Tell the engagement lead at once" },
+      { id: "notify-client", title: "Notify the client within the agreed time" },
+      { id: "share-details", title: "Share details through a secure channel" },
+      { id: "receipt", title: "Confirm receipt and ownership" },
+      { id: "continue", title: "Agree whether testing continues" },
+      { id: "support", title: "Support the client without taking over" },
+      { id: "record", title: "Record the escalation" },
+      { id: "report", title: "Carry it into the report" }
+    ]
+  },
+  run_client_data_v1: {
+    kind: "runbook",
+    name: "Handling client data and evidence",
+    description: "Runbook for collecting, storing, sharing and destroying client data and test evidence. Use it from kick-off to close-out so the firm meets its contract and its UK GDPR duties when it handles personal data for the client.",
+    category: "Engagement process",
+    source: "run_client_data_v1",
+    source_url: "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/security/a-guide-to-data-security/",
+    items: [
+      { id: "terms", title: "Confirm the data terms before testing" },
+      { id: "minimum", title: "Collect the minimum" },
+      { id: "redact", title: "Redact before evidence leaves the working area" },
+      { id: "at-rest", title: "Encrypt data at rest" },
+      { id: "in-transit", title: "Encrypt data in transit" },
+      { id: "locations", title: "Store only in approved locations" },
+      { id: "access", title: "Control and log access" },
+      { id: "incident", title: "Handle a data incident" },
+      { id: "retention", title: "Apply the retention period" },
+      { id: "destroy", title: "Destroy securely and certify" }
+    ]
+  },
+  run_reporting_qa_v1: {
+    kind: "runbook",
+    name: "Writing, reviewing and delivering the report",
+    description: "Runbook for turning test results into a report the client can act on, through technical peer review and quality assurance to secure delivery of the draft and final versions. Use it from the last testing day until the client accepts the final report.",
+    category: "Engagement process",
+    source: "run_reporting_qa_v1",
+    source_url: "https://www.ncsc.gov.uk/guidance/penetration-testing",
+    items: [
+      { id: "structure", title: "Set the structure before writing" },
+      { id: "findings", title: "Write each finding to a standard" },
+      { id: "severity", title: "Calibrate severity" },
+      { id: "evidence", title: "Check evidence quality and redaction" },
+      { id: "remediation", title: "Write remediation the client can act on" },
+      { id: "peer-review", title: "Run a technical peer review" },
+      { id: "qa", title: "Run quality assurance" },
+      { id: "draft", title: "Issue the draft securely" },
+      { id: "comments", title: "Handle client comments" },
+      { id: "final", title: "Issue the final version" }
+    ]
+  },
+  run_readout_v1: {
+    kind: "runbook",
+    name: "Readout and debrief meeting",
+    description: "Runbook for the meeting that walks the client through the report and agrees what happens next. Use it once the draft or final report has been issued, ideally within two weeks of delivery.",
+    category: "Engagement process",
+    source: "run_readout_v1",
+    source_url: "https://www.crest-approved.org/wp-content/uploads/2022/04/CREST-Penetration-Testing-Guide-1.pdf",
+    items: [
+      { id: "book", title: "Book it with the right people" },
+      { id: "prepare", title: "Prepare the material" },
+      { id: "context", title: "Open with context" },
+      { id: "walkthrough", title: "Walk through critical and high findings" },
+      { id: "themes", title: "Draw out root causes and themes" },
+      { id: "priorities", title: "Agree remediation priorities" },
+      { id: "disputes", title: "Take questions and record disputes" },
+      { id: "next-steps", title: "Agree next steps and retest timing" },
+      { id: "notes", title: "Send the meeting notes" }
+    ]
+  },
+  run_retest_v1: {
+    kind: "runbook",
+    name: "Retesting remediated findings",
+    description: "Runbook for verifying a client's fixes against the original findings and updating the report. Use it when the client confirms remediation is complete and asks for the retest agreed in the contract.",
+    category: "Engagement process",
+    source: "run_retest_v1",
+    source_url: "https://www.crest-approved.org/wp-content/uploads/2022/04/CREST-Penetration-Testing-Guide-1.pdf",
+    items: [
+      { id: "fixed", title: "Confirm what was fixed and how" },
+      { id: "scope", title: "Agree the retest scope and authorisation" },
+      { id: "prepare", title: "Prepare from the original evidence" },
+      { id: "test", title: "Test each finding the same way" },
+      { id: "outcome", title: "Record the outcome" },
+      { id: "rerate", title: "Reassess severity where partly fixed" },
+      { id: "new-issues", title: "Record new issues noticed" },
+      { id: "update", title: "Update the report and version history" },
+      { id: "deliver", title: "Review and deliver" }
+    ]
+  },
+  run_closeout_v1: {
+    kind: "runbook",
+    name: "Engagement close-out and clean-up",
+    description: "Runbook for closing an engagement cleanly: removing what testing left behind, revoking access, returning or destroying data and capturing lessons. Use it after the last testing activity, and finish it before the engagement is marked complete.",
+    category: "Engagement process",
+    source: "run_closeout_v1",
+    source_url: "https://csrc.nist.gov/pubs/sp/800/115/final",
+    items: [
+      { id: "inventory", title: "List every artefact left in place" },
+      { id: "remove", title: "Remove artefacts and revert changes" },
+      { id: "confirm", title: "Confirm clean-up with the client in writing" },
+      { id: "accounts", title: "Ask for accounts and secrets to be disabled" },
+      { id: "access", title: "Revoke the firm's access" },
+      { id: "data", title: "Return or destroy client data" },
+      { id: "machines", title: "Clean testing machines" },
+      { id: "lessons", title: "Hold a lessons-learned review" },
+      { id: "feedback", title: "Request client feedback" },
+      { id: "close", title: "Close the engagement record" }
+    ]
+  },
+  run_web_assessment_v1: {
+    kind: "runbook",
+    name: "Running a web application and API assessment",
+    description: "Runbook for running a web application and API test from preparation to validated findings, ordered around the OWASP WSTG categories and the OWASP API Security Top 10 2023. Use it to plan the work, keep coverage recorded and make sure every reported issue has been confirmed.",
+    category: "Web and API",
+    phase_hint: "Web Application",
+    source: "run_web_assessment_v1",
+    source_url: "https://owasp.org/www-project-web-security-testing-guide/",
+    items: [
+      { id: "prepare", title: "Prepare and confirm access" },
+      { id: "map", title: "Map the application and its roles" },
+      { id: "config", title: "Review configuration and deployment" },
+      { id: "unauthenticated", title: "Cover the unauthenticated surface first" },
+      { id: "authn-session", title: "Test authentication and sessions" },
+      { id: "authorisation", title: "Test authorisation across roles and objects" },
+      { id: "input", title: "Test input handling and errors" },
+      { id: "client-side", title: "Test client-side behaviour" },
+      { id: "logic", title: "Test business logic" },
+      { id: "api", title: "Test the APIs against the API Top 10" },
+      { id: "validate", title: "Validate every candidate issue" },
+      { id: "record", title: "Record as you go" }
+    ]
+  },
+  run_internal_assessment_v1: {
+    kind: "runbook",
+    name: "Running an internal infrastructure and Active Directory assessment",
+    description: "Runbook for an internal network and Active Directory test, from getting connected to reaching the agreed objectives without disrupting the business. Use it to pace discovery safely, cover the directory review and record privilege paths as evidence.",
+    category: "Infrastructure",
+    phase_hint: "Internal Infrastructure",
+    source: "run_internal_assessment_v1",
+    source_url: "https://cisa.gov/resources-tools/resources/detecting-and-mitigating-active-directory-compromises",
+    items: [
+      { id: "connect", title: "Get connected and record your position" },
+      { id: "safety", title: "Agree safety limits first" },
+      { id: "discovery", title: "Discover hosts at an agreed rate" },
+      { id: "services", title: "Inventory services and versions" },
+      { id: "protocols", title: "Review name resolution and legacy protocols" },
+      { id: "credentials", title: "Check credential hygiene" },
+      { id: "directory", title: "Review the directory" },
+      { id: "paths", title: "Map privilege paths" },
+      { id: "objectives", title: "Pursue the agreed objectives" },
+      { id: "segmentation", title: "Check segmentation and detection" },
+      { id: "evidence", title: "Record evidence and clean up" }
+    ]
+  },
+  run_external_assessment_v1: {
+    kind: "runbook",
+    name: "Running an external infrastructure assessment",
+    description: "Runbook for testing an organisation's internet-facing infrastructure, from confirming ownership of every address to validated findings. Use it to order the work and keep discovery, validation and evidence traceable.",
+    category: "Infrastructure",
+    phase_hint: "External Infrastructure",
+    source: "run_external_assessment_v1",
+    source_url: "https://csrc.nist.gov/pubs/sp/800/115/final",
+    items: [
+      { id: "targets", title: "Confirm targets and ownership" },
+      { id: "setup", title: "Agree source addresses and protections" },
+      { id: "passive", title: "Gather passive information" },
+      { id: "discovery", title: "Discover hosts and services at an agreed rate" },
+      { id: "services", title: "Identify and fingerprint services" },
+      { id: "encryption", title: "Review encryption and certificates" },
+      { id: "email-dns", title: "Check email and DNS posture" },
+      { id: "authentication", title: "Assess exposed authentication" },
+      { id: "validate", title: "Validate vulnerabilities" },
+      { id: "record", title: "Record evidence and coverage" }
+    ]
+  },
+  run_cloud_review_v1: {
+    kind: "runbook",
+    name: "Running a cloud configuration review",
+    description: "Runbook for a read-only configuration review of an AWS, Azure or Google Cloud estate against the provider's CIS Benchmark and the provider's own guidance. Use it from setting up access to removing it, so findings are complete, validated and traceable.",
+    category: "Cloud and containers",
+    phase_hint: "Cloud",
+    source: "run_cloud_review_v1",
+    source_url: "https://www.cisecurity.org/cis-benchmarks/",
+    items: [
+      { id: "scope", title: "Agree scope and check the provider policy" },
+      { id: "access", title: "Set up read-only access" },
+      { id: "check-access", title: "Check the access before starting" },
+      { id: "inventory", title: "Build the inventory" },
+      { id: "benchmark", title: "Review against the benchmark" },
+      { id: "identity", title: "Review identity and privilege paths" },
+      { id: "exposure", title: "Review data exposure and network access" },
+      { id: "logging", title: "Review logging and detection" },
+      { id: "validate", title: "Validate findings" },
+      { id: "evidence", title: "Record evidence" },
+      { id: "remove-access", title: "Remove access" }
+    ]
+  },
+  run_mobile_assessment_v1: {
+    kind: "runbook",
+    name: "Running a mobile application assessment",
+    description: "Runbook for testing an iOS or Android application and the APIs behind it, using the OWASP MASVS control groups and the MASTG. Use it to receive builds and devices, order the static and dynamic work, and confirm results on the store build.",
+    category: "Mobile and devices",
+    phase_hint: "Mobile",
+    source: "run_mobile_assessment_v1",
+    source_url: "https://mas.owasp.org/MASTG/",
+    items: [
+      { id: "builds", title: "Receive builds and confirm versions" },
+      { id: "devices", title: "Prepare test devices" },
+      { id: "backend-scope", title: "Confirm accounts and backend scope" },
+      { id: "static", title: "Carry out the static review" },
+      { id: "dynamic", title: "Carry out the dynamic review" },
+      { id: "network", title: "Inspect network traffic" },
+      { id: "authentication", title: "Test authentication and sessions" },
+      { id: "backend", title: "Test the backend APIs" },
+      { id: "resilience-privacy", title: "Assess resilience and privacy where in scope" },
+      { id: "store-build", title: "Compare the store build with the test build" },
+      { id: "close", title: "Validate, record and clean up" }
+    ]
+  },
+  run_wireless_assessment_v1: {
+    kind: "runbook",
+    name: "Running an on-site wireless assessment",
+    description: "Runbook for an on-site assessment of an organisation's Wi-Fi, from authorisation and the site survey to configuration checks, rogue access point investigation and evidence. Use it to plan the visit and make sure only the client's own networks and devices are tested.",
+    category: "Infrastructure",
+    phase_hint: "Wireless",
+    source: "run_wireless_assessment_v1",
+    source_url: "https://www.nist.gov/publications/guidelines-securing-wireless-local-area-networks-wlans",
+    items: [
+      { id: "authorise", title: "Confirm authorisation and the network list" },
+      { id: "visit", title: "Plan the visit" },
+      { id: "passive", title: "Survey passively first" },
+      { id: "inventory", title: "Match against the authorised inventory" },
+      { id: "modes", title: "Review encryption and authentication modes" },
+      { id: "enterprise", title: "Review enterprise authentication" },
+      { id: "psk-guest", title: "Assess shared keys and guest access" },
+      { id: "segmentation", title: "Check segmentation from each network" },
+      { id: "rogue", title: "Investigate rogue devices" },
+      { id: "leakage", title: "Measure signal leakage" },
+      { id: "evidence", title: "Record evidence and leave cleanly" }
+    ]
+  },
+  run_phishing_campaign_v1: {
+    kind: "runbook",
+    name: "Running an authorised phishing campaign",
+    description: "Runbook for planning, running and reporting an authorised phishing simulation that measures reporting as well as clicks and harms no one. Use it from the first approvals to the no-blame debrief; it covers process only, not how to build lures or infrastructure.",
+    category: "People and physical",
+    phase_hint: "Social Engineering",
+    source: "run_phishing_campaign_v1",
+    source_url: "https://www.ncsc.gov.uk/guidance/phishing",
+    items: [
+      { id: "approvals", title: "Get the approvals" },
+      { id: "privacy", title: "Complete a privacy review" },
+      { id: "objectives", title: "Agree objectives and measures" },
+      { id: "pretexts", title: "Approve the pretexts" },
+      { id: "targets", title: "Approve the target list" },
+      { id: "schedule", title: "Agree sending windows and coordination" },
+      { id: "monitor", title: "Monitor the campaign live" },
+      { id: "stop", title: "Stop when a stop condition is met" },
+      { id: "replies", title: "Handle replies and reports" },
+      { id: "measure", title: "Measure without keeping credentials" },
+      { id: "debrief", title: "Debrief without blame" },
+      { id: "close-down", title: "Close down and delete data" }
+    ]
+  },
+  run_physical_assessment_v1: {
+    kind: "runbook",
+    name: "Running an authorised physical assessment",
+    description: "Runbook for planning and running an authorised physical security assessment safely, from the authorisation letter to the debrief. Use it for every site visit; it covers conduct and process only, not techniques for defeating locks, badges or alarms.",
+    category: "People and physical",
+    phase_hint: "Physical",
+    source: "run_physical_assessment_v1",
+    source_url: "https://www.npsa.gov.uk/",
+    items: [
+      { id: "authority", title: "Confirm authority for every site" },
+      { id: "letter", title: "Prepare the authorisation letter" },
+      { id: "safety", title: "Plan for safety" },
+      { id: "challenge", title: "Agree the stop and challenge procedure" },
+      { id: "brief", title: "Brief the team and the client" },
+      { id: "conduct", title: "Conduct yourself properly on site" },
+      { id: "evidence", title: "Capture evidence proportionately" },
+      { id: "stop", title: "Stop when a stop condition is met" },
+      { id: "items", title: "Account for items and leave cleanly" },
+      { id: "debrief", title: "Debrief the client" }
+    ]
+  },
+  run_red_team_ops_v1: {
+    kind: "runbook",
+    name: "Running a red team operation",
+    description: "Runbook for running a red team operation under white team control, from deconfliction and risk management to closure with the blue team. Use it for intelligence-led and objective-based operations; it covers process only, not tradecraft.",
+    category: "Adversary simulation",
+    phase_hint: "Red Team",
+    source: "run_red_team_ops_v1",
+    source_url: "https://www.bankofengland.co.uk/financial-stability/operational-resilience-of-the-financial-sector/cbest-threat-intelligence-led-assessments-implementation-guide",
+    items: [
+      { id: "white-team", title: "Stand up the white team" },
+      { id: "objectives", title: "Agree objectives and flags" },
+      { id: "risk", title: "Set the risk management plan" },
+      { id: "deconfliction", title: "Agree deconfliction" },
+      { id: "stop-conditions", title: "Define stop conditions" },
+      { id: "operate", title: "Run the operation within the plan" },
+      { id: "daily-updates", title: "Update the white team daily" },
+      { id: "timeline", title: "Keep evidence and a timeline" },
+      { id: "close-active", title: "Close the active phase safely" },
+      { id: "replay", title: "Reveal and replay with the blue team" },
+      { id: "report", title: "Report and agree remediation" }
+    ]
+  }
 };
+var _CRB_LIB_FILE = '%%CRB_LIBRARY_FILE%%';
+var _crbLibWhole = null, _crbLibAsk = null;
+function _crbLibUrl() {
+  return '/assets/' + (/^%%/.test(_CRB_LIB_FILE) ? 'methodology-library.json' : _CRB_LIB_FILE);
+}
+function _crbLibLoad() {
+  if (_crbLibWhole) return Promise.resolve(_crbLibWhole);
+  if (!_crbLibAsk) {
+    _crbLibAsk = fetch(_crbLibUrl(), { credentials: 'same-origin' }).then(function (r) {
+      if (!r.ok) throw new Error('The methodology library could not be loaded (' + r.status + '). Try again.');
+      return r.json();
+    }).then(function (j) { _crbLibWhole = j; return j; }, function (e) { _crbLibAsk = null; throw e; });
+  }
+  return _crbLibAsk;
+}
+async function _crbLibFull(key) {
+  var lib = await _crbLibLoad();
+  var t = lib && lib[key];
+  if (!t || !Array.isArray(t.items)) throw new Error('That template is not in the methodology library.');
+  return t;
+}
+function _crbLibBase(source) { return String(source || '').replace(/_v\d+$/, ''); }
+function _crbKeepRow(row) {
+  if (!row) return;
+  S.data.checklists_runbooks = (S.data.checklists_runbooks || []).filter(function (t) { return t.id !== row.id; }).concat([row]);
+}
 var THEME_DEFAULTS={
   dark:{bg:'#0c0c0c',surface:'#000000',text:'#e4e4e7',muted:'#a1a1aa'},
   light:{bg:'#ebebef',surface:'#ffffff',text:'#09090b',muted:'#3f3f46'}
@@ -32407,6 +33340,316 @@ function renderLibrary() {
 
   return h;
 }
+var _API_GUIDE = 'https://pental.io/guides/pental-api';
+function _apiRoles() {
+  var r = [['admin', 'Admin'], ['senior', 'Senior'], ['standard', 'Standard']];
+  if (typeof contractorsEnabled === 'function' && contractorsEnabled()) r.push(['contractor', 'External']);
+  return r;
+}
+function _apiSt() { return S._api || (S._api = { mine: null, set: null, all: null, events: null, busy: {}, err: '' }); }
+function _apiRoleWord(r) {
+  var m = _apiRoles().concat([['contractor', 'External'], ['sales', 'Sales'], ['marketing', 'Marketing'], ['client', 'Client']]);
+  for (var i = 0; i < m.length; i++) if (m[i][0] === r) return m[i][1];
+  return r || '';
+}
+function _apiStateWords(st) {
+  return ({ live: 'Works', key_revoked: 'Revoked', key_expired: 'Expired', key_suspended: 'Stopped: its person changed',
+    role_off: 'Paused: role not allowed', api_off: 'Paused: the API is off', contractors_off: 'Paused: external testers are off' })[st] || st || '';
+}
+function _apiStateBadge(st) {
+  var cls = st === 'live' ? 'badge-success' : (st === 'key_revoked' || st === 'key_expired' || st === 'key_suspended') ? 'badge-high' : 'badge-medium';
+  return '<span class="badge ' + cls + '">' + esc(_apiStateWords(st)) + '</span>';
+}
+function _apiWhen(t) { return t ? esc(fmtDateTime(t)) : '<span class="sub-text">Never</span>'; }
+var _API_NOT_YET = 'Your database does not have the API yet. It comes with the database update to setup 2025103101, which an administrator applies when Pental shows Database update available.';
+async function _apiCall(name, params) {
+
+  var r;
+  try { r = await _safeRpc(name, params || {}); }
+  catch (e) { return { ok: false, code: 'error', error: (e && e.message) || 'No answer from your database.' }; }
+  if (r.error && _isMissingRpc(r.error)) return { ok: false, code: 'not_installed', error: _API_NOT_YET };
+  if (r.error) return { ok: false, code: 'error', error: _errMsg(r.error) };
+  return r.data || { ok: false, code: 'error', error: 'No answer from your database.' };
+}
+function _apiConfirmFactor(said) {
+  _mfaKeepOwnProfile();
+  toast(said || 'Enter your authenticator code to carry on', 'warning');
+  _suppressRender = true;
+  document.body.classList.add('loaded');
+  if (!_showMfaVerify('api')) {
+
+    _suppressRender = false;
+    toast('Sign out and in again with your second factor, then try once more.', 'error');
+  }
+}
+function _apiCardShell() {
+  return '<div class="card mb-4" id="apiKeysCard"><div class="card-header"><span class="card-title">' + IC.key + ' API Keys</span>'
+    + '<a class="btn btn-ghost btn-sm" href="' + _API_GUIDE + '" target="_blank" rel="noopener" style="font-size:0.75rem">The API guide</a></div>'
+    + '<div class="card-body" id="apiKeysBody">' + _apiCardBody() + '</div></div>';
+}
+function _apiCardBody() {
+  var st = _apiSt();
+  if (!st.mine && !st.busy.mine) setTimeout(_apiLoadMine, 0);
+  if (!st.mine) return '<p class="api-hint">Loading your keys...</p>';
+  if (st.mine.code === 'confirm_factor') return '<p class="api-hint">Your second factor needs confirming again before your keys are shown.</p>';
+  if (st.mine.code === 'not_installed') return '<p class="api-hint">' + esc(st.mine.error) + '</p>';
+  if (st.mine.error) return '<p class="api-hint">Your keys could not be read: ' + esc(st.mine.error) + '</p>';
+  var s = st.set || {}, keys = st.mine.keys || [];
+  var h = '<p class="api-p">A key lets a script or another system of yours read, and if you choose change, what you can see in Pental, through the API: engagements, findings, clients, comments and the rest. '
+    + 'It works as you, with your access and no more, and only through the API. Keep it as you would a password. It stops working when it expires, when you or an administrator revoke it, or if your role changes or your second factor is reset.</p>';
+  if (!s.enabled) {
+    h += '<div class="api-note">The API is switched off. ' + (s.admin ? '<a href="#" onclick="event.preventDefault();S.settingsTab=\'api\';nav(\'settings\')">Turn it on in Settings, API</a>.' : 'An administrator turns it on in Settings, API.') + '</div>';
+  } else if (!s.my_role_allowed) {
+    h += '<div class="api-note">Your role cannot make API keys here. An administrator can allow it in Settings, API.</div>';
+  } else {
+    h += '<button class="btn btn-primary btn-sm" onclick="openApiKeyMake()">' + IC.plus + ' Make a key</button>';
+  }
+  if (keys.length) {
+    h += '<div class="mob-table" style="margin-top:0.9rem"><table class="dt"><thead><tr><th class="c-main">Key</th><th>Can</th><th>Made</th><th>Expires</th><th>Last used</th><th>State</th><th></th></tr></thead><tbody>';
+    keys.forEach(function (k) {
+      h += '<tr><td class="c-main"><strong>' + esc(k.name) + '</strong><div class="sub-text mono">' + esc(k.prefix) + '...</div></td>'
+        + '<td>' + (k.scope === 'write' ? 'Read and write' : 'Read') + '</td>'
+        + '<td>' + esc(fmtDate(k.created_at)) + '</td><td>' + esc(fmtDate(k.expires_at)) + '</td>'
+        + '<td>' + _apiWhen(k.last_used_at) + (k.last_used_ip ? '<div class="sub-text mono">' + esc(k.last_used_ip) + '</div>' : '') + '</td>'
+        + '<td>' + _apiStateBadge(k.state) + (k.revoked_reason ? '<div class="sub-text">' + esc(k.revoked_reason) + '</div>' : '') + '</td>'
+        + '<td>' + (k.revoked_at ? '' : '<button class="btn btn-ghost btn-sm" style="color:var(--red-text)" onclick="_apiKeyRevoke(\'' + esc(k.id) + '\', \'mine\')">Revoke</button>') + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+  }
+  return h;
+}
+function _apiPaintCard() {
+  var b = document.getElementById('apiKeysBody');
+  if (b) b.innerHTML = _apiCardBody();
+}
+async function _apiLoadMine() {
+  var st = _apiSt();
+  if (st.busy.mine) return;
+  st.busy.mine = true;
+  try {
+    var set = await _apiCall('rpc_api_settings_get');
+    var mine = await _apiCall('rpc_api_keys_mine');
+    st.set = set && set.ok ? set : (st.set || {});
+    st.mine = mine;
+  } finally { st.busy.mine = false; }
+  _apiPaintCard();
+
+  _apiResumeDraft();
+}
+function openApiKeyMake() {
+  var s = (_apiSt().set) || {};
+  S.modal = { type: 'api-key-make', extra: { days: Math.min(90, s.max_days || 90), max: s.max_days || 90, writes: !!s.write_enabled } };
+  render();
+}
+window.openApiKeyMake = openApiKeyMake;
+function renderApiKeyMakeModal() {
+  var x = (S.modal && S.modal.extra) || {};
+  var h = '<div class="modal-header"><h2 class="modal-title">Make an API key</h2><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
+  h += '<div class="modal-body">';
+  h += '<div class="form-group"><label class="form-label" for="apiKeyName">Name</label><input type="text" class="form-input" id="apiKeyName" maxlength="80" placeholder="What uses it, e.g. Jira sync" value="' + esc(x.name || '') + '"></div>';
+  h += '<div class="form-group"><span class="form-label">It can</span><div class="pf-roles" role="radiogroup">'
+    + '<label class="pf-role"><input type="radio" name="apiKeyScope" value="read"' + (x.scope !== 'write' ? ' checked' : '') + '><span>Read</span></label>'
+    + (x.writes ? '<label class="pf-role"><input type="radio" name="apiKeyScope" value="write"' + (x.scope === 'write' ? ' checked' : '') + '><span>Read and write</span></label>' : '')
+    + '</div>' + (x.writes ? '<p class="api-hint" style="margin-top:0.3rem">Writing: set a finding\'s status, ask for a retest, add comments, make and change clients and engagements.</p>'
+      : '<p class="api-hint" style="margin-top:0.3rem">Writing through the API is switched off here, so keys read only.</p>') + '</div>';
+  h += '<div class="form-group"><label class="form-label" for="apiKeyDays">Expires after</label><div style="display:flex;align-items:center;gap:8px"><input type="number" class="form-input" id="apiKeyDays" min="1" max="' + (x.max || 90) + '" value="' + (x.days || 90) + '" style="max-width:110px"><span class="api-hint">days (at most ' + (x.max || 90) + ')</span></div></div>';
+  h += '<p class="api-p">Making a key asks for your second factor, if you gave it more than ten minutes ago.</p>';
+  h += '</div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM()">Cancel</button><button class="btn btn-primary" id="apiKeyMakeBtn" onclick="_apiKeyMake()">Make the key</button></div>';
+  return h;
+}
+var _API_DRAFT = 'pental_api_key_draft';
+async function _apiKeyMake(draft) {
+  var d = draft || {
+    name: ((document.getElementById('apiKeyName') || {}).value || '').trim(),
+    scope: ((document.querySelector('input[name="apiKeyScope"]:checked') || {}).value) || 'read',
+    days: parseInt((document.getElementById('apiKeyDays') || {}).value || '90', 10)
+  };
+  if (!d.name) { toast('Give the key a name, saying what uses it.', 'error'); return; }
+  var btn = document.getElementById('apiKeyMakeBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Making...'; }
+  var r = await _apiCall('rpc_api_key_create', { p_name: d.name, p_scope: d.scope, p_days: d.days });
+  if (btn) { btn.disabled = false; btn.textContent = 'Make the key'; }
+  if (r.ok) {
+    try { sessionStorage.removeItem(_API_DRAFT); } catch (e) {}
+    _apiSt().mine = null;
+    S.modal = { type: 'api-key-shown', extra: r };
+    render();
+    return;
+  }
+  if (r.code === 'confirm_factor' && !draft) {
+
+    try { sessionStorage.setItem(_API_DRAFT, JSON.stringify({ d: d, by: (S.user && S.user.id) || '', at: Date.now() })); } catch (e) {}
+    closeM();
+    _apiSt().mine = null;
+    _apiConfirmFactor('Enter your authenticator code to make the key');
+    return;
+  }
+  try { sessionStorage.removeItem(_API_DRAFT); } catch (e) {}
+  toast(r.error || 'The key could not be made.', 'error');
+}
+window._apiKeyMake = _apiKeyMake;
+function _apiResumeDraft() {
+  var raw = null;
+  try { raw = sessionStorage.getItem(_API_DRAFT); } catch (e) {}
+  if (!raw) return;
+  try { sessionStorage.removeItem(_API_DRAFT); } catch (e) {}
+  var j = null;
+  try { j = JSON.parse(raw); } catch (e) {}
+  if (!j || !j.d || j.by !== ((S.user && S.user.id) || '') || Date.now() - (j.at || 0) > 300000) return;
+  _apiKeyMake(j.d);
+}
+function renderApiKeyShownModal() {
+  var k = (S.modal && S.modal.extra) || {};
+  var base = String(EFFECTIVE_SUPABASE_URL || '').replace(/\/+$/, '');
+  var row = function (label, v, id) {
+    return '<div class="form-group"><span class="form-label">' + label + '</span><div class="token-show" id="' + id + '">' + esc(v) + '</div>'
+      + '<button class="btn btn-secondary btn-sm" style="margin-top:0.35rem" data-copy="' + esc(v) + '" onclick="_copyText(this.getAttribute(\'data-copy\'), this)">Copy</button></div>';
+  };
+  var h = '<div class="modal-header"><h2 class="modal-title">' + esc(k.name || 'API key') + '</h2><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
+  h += '<div class="modal-body">';
+  h += '<p class="api-p">Copy the key now. Only a one-way hash of it is kept, so it cannot be shown again; if it is lost, make another and revoke this one. '
+    + 'It ' + (k.scope === 'write' ? 'reads and writes' : 'reads') + ' as you until ' + esc(fmtDate(k.expires_at)) + '.</p>';
+  h += row('Your key', k.key || '', 'apiKeyValue');
+  h += row('Your API address', base, 'apiKeyBase');
+  h += row('The publishable key', EFFECTIVE_SUPABASE_KEY || '', 'apiKeyAnon');
+  h += '<p class="api-p">A program signs in with these three in three short calls, from a server or a script (never from a web page), and the <a href="' + _API_GUIDE + '" target="_blank" rel="noopener">API guide</a> shows them in Python, JavaScript and curl, with every function the key can call.</p>';
+  h += '</div><div class="modal-footer"><span class="sub-text" style="margin:0 auto 0 0">Already made. Copy it before you close this.</span><button class="btn btn-primary" onclick="closeM();_apiLoadMine()">Done</button></div>';
+  return h;
+}
+async function _apiKeyRevoke(id, where) {
+  var st = _apiSt();
+  var all = (where === 'all' ? (st.all && st.all.keys) : (st.mine && st.mine.keys)) || [];
+  var k = all.find(function (x) { return x.id === id; }) || {};
+  var mineKey = where !== 'all';
+  var said = await promptAsync('Revoke ' + (k.name || 'this key') + (k.person && !mineKey ? ' (' + k.person + ')' : '') + '? Anything using it stops working at once. Why (optional, kept in the log):',
+    { title: 'Revoke the key', value: '', confirmText: 'Revoke', required: false });
+  if (said === null || said === undefined) return;
+  var r = await _apiCall('rpc_api_key_revoke', { p_id: id, p_reason: String(said || '').trim() || null });
+  if (r.code === 'confirm_factor') { _apiConfirmFactor(); return; }
+  if (!r.ok) { toast(r.error || 'It could not be revoked.', 'error'); return; }
+  toast((k.name || 'The key') + ' is revoked.', 'success');
+  if (where === 'all') { st.all = null; _apiLoadAdmin(); } else { st.mine = null; _apiLoadMine(); }
+}
+window._apiKeyRevoke = _apiKeyRevoke;
+function _apiSettingsHtml() {
+  var st = _apiSt();
+  if (!st.all && !st.busy.admin) setTimeout(_apiLoadAdmin, 0);
+  var s = st.set || {};
+  var h = '<div id="set_api_section">';
+  h += '<div class="card mt-4" id="apiSettingsCard"><div class="card-header"><span class="card-title">' + IC.key + ' API</span>'
+    + '<a class="btn btn-ghost btn-sm" href="' + _API_GUIDE + '" target="_blank" rel="noopener" style="font-size:0.75rem">The API guide</a></div><div class="card-body">';
+  h += '<p class="api-p">The API lets your team connect Pental to the rest of how they work: a tracker, a project board, a dashboard, a script. '
+    + 'Each person makes their own keys on their Profile page, and a key works as that person, through the API alone: it reads and changes only what they can themselves, never the database\'s tables directly, never from a browser. '
+    + 'A key ends when it expires or is revoked, and is revoked on its own when its person is switched off or deleted, changes role, or has their second factor reset.</p>';
+  if (!st.set) {
+    h += (st.all && st.all.code === 'not_installed') ? '<div class="api-note">' + esc(st.all.error) + '</div>' : '<p class="api-hint">Loading...</p>';
+  } else {
+    h += '<label style="display:flex;gap:0.6rem;align-items:flex-start;margin-bottom:0.6rem"><input type="checkbox" id="apiOn"' + (s.enabled ? ' checked' : '') + ' style="margin-top:3px">'
+      + '<span><strong>The API is on</strong><span class="api-hint">Off, every key stops working at once, and none can be made.</span></span></label>';
+    h += '<label style="display:flex;gap:0.6rem;align-items:flex-start;margin-bottom:0.9rem"><input type="checkbox" id="apiWrite"' + (s.write_enabled ? ' checked' : '') + ' style="margin-top:3px">'
+      + '<span><strong>Keys may write</strong><span class="api-hint">Set a finding\'s status, ask for a retest, add comments, make and change clients and engagements, as the key\'s person could themselves. Off, keys only read.</span></span></label>';
+    h += '<div class="form-group"><span class="form-label">Who may make keys</span><div style="display:flex;gap:0.9rem;flex-wrap:wrap">';
+    _apiRoles().forEach(function (r) {
+      h += '<label style="display:flex;gap:0.35rem;align-items:center"><input type="checkbox" class="apiRole" value="' + r[0] + '"' + ((s.roles || []).indexOf(r[0]) >= 0 ? ' checked' : '') + '>' + esc(r[1]) + '</label>';
+    });
+    h += '</div><p class="api-hint" style="margin-top:0.3rem">A role taken off pauses its people\'s keys until it is put back.</p></div>';
+    h += '<div class="form-group"><label class="form-label" for="apiMaxDays">Longest a key may live</label><div style="display:flex;align-items:center;gap:8px"><input type="number" class="form-input" id="apiMaxDays" min="1" max="365" value="' + (s.max_days || 90) + '" style="max-width:110px"><span class="api-hint">days, up to 365. Keys already made keep the life they were made with.</span></div></div>';
+    h += '<button class="btn btn-primary" onclick="_apiSettingsSave()">Save</button>';
+    if (s.updated_by) h += '<span class="api-hint" style="display:inline;margin-left:0.6rem">Last changed by ' + esc(s.updated_by) + ', ' + esc(fmtDateTime(s.updated_at)) + '</span>';
+  }
+  h += '</div></div>';
+
+  var keys = (st.all && st.all.keys) || [];
+  var live = keys.filter(function (k) { return k.state === 'live'; }).length;
+  h += '<div class="card mt-4" id="apiKeysAllCard"><div class="card-header"><span class="card-title">Every key</span>'
+    + (live ? '<button class="btn btn-ghost btn-sm" style="color:var(--red-text)" onclick="_apiRevokeAll()">Revoke every key</button>' : '') + '</div><div class="card-body">';
+  if (!st.all) h += '<p class="api-hint">Loading...</p>';
+  else if (st.all.error) h += '<p class="api-hint">' + esc(st.all.error) + '</p>';
+  else if (!keys.length) h += '<p class="api-hint">Nobody has made a key yet.</p>';
+  else {
+    h += '<div class="mob-table"><table class="dt"><thead><tr><th class="c-main">Key</th><th>Whose</th><th>Can</th><th>Made</th><th>Expires</th><th>Last used</th><th>Writes</th><th>State</th><th></th></tr></thead><tbody>';
+    keys.forEach(function (k) {
+      h += '<tr><td class="c-main"><strong>' + esc(k.name) + '</strong><div class="sub-text mono">' + esc(k.prefix) + '...</div></td>'
+        + '<td>' + esc(k.person || '') + (k.role ? '<div class="sub-text">' + esc(_apiRoleWord(k.role)) + '</div>' : '') + '</td>'
+        + '<td>' + (k.scope === 'write' ? 'Read and write' : 'Read') + '</td>'
+        + '<td>' + esc(fmtDate(k.created_at)) + '</td><td>' + esc(fmtDate(k.expires_at)) + '</td>'
+        + '<td>' + _apiWhen(k.last_used_at) + (k.last_used_ip ? '<div class="sub-text mono">' + esc(k.last_used_ip) + '</div>' : '') + '</td>'
+        + '<td>' + (k.writes || 0) + '</td>'
+        + '<td>' + _apiStateBadge(k.state) + (k.revoked_reason ? '<div class="sub-text">' + esc(k.revoked_reason) + (k.revoked_by ? ' (' + esc(k.revoked_by) + ')' : '') + '</div>' : '') + '</td>'
+        + '<td>' + (k.revoked_at ? '' : '<button class="btn btn-ghost btn-sm" style="color:var(--red-text)" onclick="_apiKeyRevoke(\'' + esc(k.id) + '\', \'all\')">Revoke</button>') + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+  }
+  h += '</div></div>';
+
+  var ev = (st.events && st.events.events) || [];
+  h += '<div class="card mt-4" id="apiLogCard"><div class="card-header"><span class="card-title">API log</span></div><div class="card-body">';
+  if (!st.events) h += '<p class="api-hint">Loading...</p>';
+  else if (!ev.length) h += '<p class="api-hint">Nothing yet: keys made and revoked, and changes here, are listed as they happen.</p>';
+  else {
+    var words = { created: 'Key made', revoked: 'Key revoked', revoked_all: 'Every key revoked', settings: 'Settings changed' };
+    h += '<div class="mob-table"><table class="dt"><thead><tr><th>When</th><th class="c-main">What</th><th>Key</th><th>By</th></tr></thead><tbody>';
+    ev.forEach(function (e) {
+      h += '<tr><td>' + esc(fmtDateTime(e.at)) + '</td><td class="c-main">' + esc(words[e.event] || e.event) + (e.detail ? '<div class="sub-text">' + esc(e.detail) + '</div>' : '') + '</td>'
+        + '<td>' + (e.key_name ? esc(e.key_name) + '<div class="sub-text mono">' + esc(e.key_prefix || '') + '</div>' : '') + (e.person ? '<div class="sub-text">' + esc(e.person) + '\'s</div>' : '') + '</td>'
+        + '<td>' + esc(e.by_person || 'Pental, on its own') + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+  }
+  h += '</div></div>';
+  return h + '</div>';
+}
+async function _apiLoadAdmin() {
+  var st = _apiSt();
+  if (st.busy.admin) return;
+  st.busy.admin = true;
+  try {
+    var set = await _apiCall('rpc_api_settings_get');
+    if (set.code === 'confirm_factor') { st.all = { error: 'Your second factor needs confirming again before the API\'s settings are shown.' }; st.events = { events: [] }; return; }
+    if (set.code === 'not_installed') { st.set = null; st.all = set; st.events = { events: [] }; }
+    else {
+      st.set = set.ok ? set : null;
+      st.all = await _apiCall('rpc_api_keys_all');
+      st.events = await _apiCall('rpc_api_key_events', { p_limit: 100 });
+      if (!st.all.ok && !st.all.error) st.all.error = 'The keys could not be read.';
+    }
+  } finally {
+    st.busy.admin = false;
+  }
+  var sec = document.getElementById('set_api_section');
+  if (sec && S.page === 'settings' && S.settingsTab === 'api') sec.outerHTML = _apiSettingsHtml();
+}
+async function _apiSettingsSave() {
+  var roles = Array.prototype.map.call(document.querySelectorAll('.apiRole:checked'), function (el) { return el.value; });
+  var keep = ((_apiSt().set || {}).roles || []).filter(function (r) { return !_apiRoles().some(function (x) { return x[0] === r; }); });
+  var r = await _apiCall('rpc_api_settings_save', {
+    p_enabled: !!(document.getElementById('apiOn') || {}).checked,
+    p_write_enabled: !!(document.getElementById('apiWrite') || {}).checked,
+    p_roles: roles.concat(keep),
+    p_max_days: parseInt((document.getElementById('apiMaxDays') || {}).value || '90', 10)
+  });
+  if (r.code === 'confirm_factor') { _apiConfirmFactor(); return; }
+  if (!r.ok) { toast(r.error || 'The API\'s settings could not be saved.', 'error'); return; }
+  _apiSt().set = r;
+  _apiSt().mine = null;
+  toast(r.enabled ? 'Saved. The API is on.' : 'Saved. The API is off.', 'success');
+  _apiSt().all = null;
+  _apiLoadAdmin();
+}
+window._apiSettingsSave = _apiSettingsSave;
+async function _apiRevokeAll() {
+  var said = await promptAsync('Revoke every key that works now? Everything using one stops at once, and each person makes a new key. Why (kept in the log):',
+    { title: 'Revoke every key', value: '', confirmText: 'Revoke every key', required: false });
+  if (said === null || said === undefined) return;
+  var r = await _apiCall('rpc_api_keys_revoke_all', { p_reason: String(said || '').trim() || null });
+  if (r.code === 'confirm_factor') { _apiConfirmFactor(); return; }
+  if (!r.ok) { toast(r.error || 'They could not be revoked.', 'error'); return; }
+  toast(r.revoked + ' key' + (r.revoked === 1 ? '' : 's') + ' revoked.', 'success');
+  _apiSt().all = null;
+  _apiSt().mine = null;
+  _apiLoadAdmin();
+}
+window._apiRevokeAll = _apiRevokeAll;
 function renderMyProfile__portal() {
   var u = S.profile;
   if (!u || u.role === 'client') return '<div class="empty-page"><h2>Access Restricted</h2></div>';
@@ -32445,6 +33688,8 @@ function renderMyProfile__portal() {
   h += ' Security &amp; MFA</span></div><div class="card-body" data-security-card>';
   h += _renderSecurityCardHtml();
   h += '</div></div>';
+
+  h += _apiCardShell();
 
   var _canSignProposals = proposalsEnabled() && canSeeProposals() && (u.role === 'admin' || u.role === 'senior' || u.role === 'sales');
   if (_canSignProposals) {
@@ -38469,6 +39714,8 @@ function renderSettings__portal() {
     {id:'ai',label:'AI',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 014 4v1a4 4 0 01-8 0V6a4 4 0 014-4z"/><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="0"/></svg>'},
 
     {id:'security',label:'Security',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>'},
+
+    {id:'api',label:'API',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>'},
     {id:'data',label:'Data',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>'},
     {id:'updates',label:'Updates',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>'},
     {id:'feature',label:'Send Feedback',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>'}
@@ -41520,6 +42767,10 @@ function renderSettings__portal() {
   }
   }
 
+  if (_st === 'api') {
+    h += _apiSettingsHtml();
+  }
+
   if (_st === 'updates') h += _rpUpdatesSettingsHtml();
 
   if (_st === 'data') {
@@ -43735,14 +44986,17 @@ async function saveChecklistFeatureToggle(enabled) {
   }
 }
 window.saveChecklistFeatureToggle = saveChecklistFeatureToggle;
-var _CRB_CATS = ['Standards', 'Web and API', 'Infrastructure', 'Cloud and containers', 'Mobile and devices', 'People and physical', 'Adversary simulation', 'Compliance', 'AI applications'];
+var _CRB_CATS = ['Standards', 'Web and API', 'Infrastructure', 'Cloud and containers', 'Mobile and devices', 'People and physical', 'Adversary simulation', 'Compliance', 'AI applications', 'Engagement process'];
 function _crbLibState() { return S._crbLib || (S._crbLib = { tab: '', q: '', cat: '', kind: '' }); }
 function _crbLibAdded(tpl) {
   return (S.data.checklists_runbooks || []).find(function (t) { return t.source === tpl.source; }) || null;
 }
 function _crbLibKeyFor(source) {
   if (!source) return null;
-  return Object.keys(CHECKLIST_RUNBOOK_LIBRARY).find(function (k) { return CHECKLIST_RUNBOOK_LIBRARY[k].source === source; }) || null;
+  return Object.keys(CHECKLIST_RUNBOOK_LIBRARY).find(function (k) { return _crbLibBase(CHECKLIST_RUNBOOK_LIBRARY[k].source) === _crbLibBase(source); }) || null;
+}
+function _crbLibOlder(tpl) {
+  return (S.data.checklists_runbooks || []).find(function (t) { return t.source !== tpl.source && _crbLibBase(t.source) === _crbLibBase(tpl.source); }) || null;
 }
 function _crbLibHost(url) {
   var m = /^https?:\/\/(?:www\.)?([^\/?#:]+)/i.exec(String(url || ''));
@@ -43799,6 +45053,7 @@ function _crbLibCardHtml(k) {
   if (t.phase_hint) meta.push('<span data-crb-phase>' + esc(t.phase_hint) + ' phase</span>' + (_crbPhaseIdx(t.phase_hint) === -1 ? '&nbsp;<span class="is-other">(not one of your phase types)</span>' : ''));
   if (host) meta.push('Reference: ' + esc(host));
   if (meta.length) h += '<div class="crbl-meta">' + meta.join('<i aria-hidden="true"></i>') + '</div>';
+  if (!got && _crbLibOlder(t)) h += '<div class="crbl-older" data-crb-older>Your templates have an earlier, shorter version of this. Adding it keeps that one too.</div>';
   h += '<div class="crbl-acts"><button type="button" class="btn btn-sm btn-ghost" onclick="openCrbPreview(\'' + esc(k) + '\')">Preview</button>';
   h += got
     ? '<span class="crbl-added">' + IC.check + ' In your templates</span><button type="button" class="btn btn-sm" onclick="openChecklistEditor(\'' + esc(got.id) + '\')">Open</button>'
@@ -43823,9 +45078,10 @@ function _crbLibraryHtml() {
   var nRb = all.filter(function (k) { return CHECKLIST_RUNBOOK_LIBRARY[k].kind === 'runbook'; }).length;
   var nCl = all.length - nRb;
   var h = '<div class="crbl">';
-  h += '<p class="crbl-sub">' + nCl + ' checklist' + (nCl === 1 ? '' : 's') + (nRb ? ' and ' + nRb + ' runbook' + (nRb === 1 ? '' : 's') : '')
-    + ' built on the published standards testers work to, from OSSTMM, PTES and NIST SP 800-115 to OWASP, MITRE ATT&amp;CK, CIS and PCI DSS. Adding one copies it into your templates, to change as you like and attach to a phase. '
-    + 'Each follows its standard\'s own structure; the reference it links to has the detail.</p>';
+
+  h += '<p class="crbl-sub">' + nCl + ' checklist' + (nCl === 1 ? '' : 's') + ' built on the published standards testers work to, from OSSTMM, PTES and NIST SP 800-115 to OWASP, MITRE ATT&amp;CK, CIS and PCI DSS, each on its standard\'s own structure, and every item saying what to check and what to record'
+    + (nRb ? ', and ' + nRb + ' runbook' + (nRb === 1 ? '' : 's') + ' for running an engagement and each kind of test, step by step' : '')
+    + '. Adding one copies it into your templates, to change as you like and attach to a phase.</p>';
   h += '<div class="crbl-tools"><div class="crbl-search">' + IC.search + '<input type="search" id="crbLibQ" placeholder="Search the library, e.g. OSSTMM, API, Active Directory" value="' + esc(st.q || '') + '" oninput="_crbLibFilter(\'q\', this.value)" aria-label="Search the methodology library"></div>';
   if (nRb && nCl) {
     h += '<div class="irv-seg" role="radiogroup" aria-label="Kind">' + [['', 'All'], ['checklist', 'Checklists'], ['runbook', 'Runbooks']].map(function (o) {
@@ -43894,9 +45150,16 @@ function _crbLibFilter(k, v) {
   render(true);
 }
 window._crbLibFilter = _crbLibFilter;
-function openCrbPreview(key) {
-  var t = CHECKLIST_RUNBOOK_LIBRARY[key];
-  if (!t) return;
+async function openCrbPreview(key) {
+  if (!CHECKLIST_RUNBOOK_LIBRARY[key]) return;
+
+  var t = _crbLibWhole && _crbLibWhole[key];
+  if (!t) {
+    _showLoading();
+    try { t = await _crbLibFull(key); }
+    catch (e) { toast(e.message || 'The methodology library could not be loaded.', 'error'); return; }
+    finally { _hideLoading(); }
+  }
   var got = _crbLibAdded(t);
   var rb = t.kind === 'runbook';
   var host = _crbLibHost(t.source_url);
@@ -43909,11 +45172,11 @@ function openCrbPreview(key) {
   if (host) line.push('Reference: <a href="' + esc(_crbSafeUrl(t.source_url) || '#') + '" target="_blank" rel="noopener noreferrer">' + esc(host) + '</a>');
   if (t.phase_hint) line.push('For ' + esc(t.phase_hint) + ' phases' + (_crbPhaseIdx(t.phase_hint) === -1 ? ' (not one of your phase types)' : ''));
   if (line.length) h += '<p class="crbl-prev-s">' + line.join(' &middot; ') + '</p>';
+  if ((t.items || []).some(function (it) { return rb ? it.body : it.description; })) h += '<p class="crbl-prev-s">Open ' + (rb ? 'a step' : 'an item') + ' to read it.</p>';
   h += '<ol class="crbl-items">' + (t.items || []).map(function (it) {
-    var x = '<li><div class="crbl-item-t">' + esc(it.title || '') + '</div>';
     var d = rb ? it.body : it.description;
-    if (d) x += '<div class="crbl-item-d">' + esc(String(d).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()) + '</div>';
-    return x + '</li>';
+    if (!d) return '<li><div class="crbl-item-t">' + esc(it.title || '') + '</div></li>';
+    return '<li><details><summary class="crbl-item-t">' + esc(it.title || '') + '</summary><div class="crbl-item-d crb-rich">' + _crbDisplay(d) + '</div></details></li>';
   }).join('') + '</ol></div>';
   h += '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:0.5rem"><button class="btn btn-ghost" onclick="closeM()">Close</button>'
     + (got ? '<button class="btn btn-secondary" onclick="closeM();openChecklistEditor(\'' + esc(got.id) + '\')">Open your copy</button>'
@@ -43931,12 +45194,10 @@ async function importCuratedChecklist(libraryKey) {
   _showLoading();
   try {
 
-    var payload = _crbLibraryPayload(tpl);
+    var payload = _crbLibraryPayload(await _crbLibFull(libraryKey));
     var res = await supabaseClient.from('checklists_runbooks').insert(payload).select('*');
     if (res.error) { toast('Import failed: ' + _errMsg(res.error), 'error'); return; }
-    if (res.data && res.data[0]) {
-      S.data.checklists_runbooks.push(res.data[0]);
-    }
+    if (res.data && res.data[0]) _crbKeepRow(res.data[0]);
     toast('Added "' + tpl.name + '" to your templates', 'success');
     render();
   } catch (err) {
@@ -43954,11 +45215,13 @@ async function importAllCuratedChecklists(onlyShown) {
   _showLoading();
   var added = 0;
   try {
+    var whole = await _crbLibLoad();
     for (var i = 0; i < keys.length; i++) {
-      var tpl = CHECKLIST_RUNBOOK_LIBRARY[keys[i]];
+      var tpl = whole[keys[i]];
+      if (!tpl || !Array.isArray(tpl.items)) { toast('That template is not in the methodology library.', 'error'); break; }
       var res = await supabaseClient.from('checklists_runbooks').insert(_crbLibraryPayload(tpl)).select('*');
       if (res.error) { toast('Import failed: ' + _errMsg(res.error), 'error'); break; }
-      if (res.data && res.data[0]) { S.data.checklists_runbooks.push(res.data[0]); added++; }
+      if (res.data && res.data[0]) { _crbKeepRow(res.data[0]); added++; }
     }
     if (added) toast('Added ' + added + ' template' + (added === 1 ? '' : 's') + ' to your templates', 'success');
     render();
@@ -46094,6 +47357,9 @@ function renderModal() {
     case 'phase-edit': return '<div class="modal-overlay"><div class="modal-content">' + renderPhaseEditModal() + '</div></div>';
     case 'collector-token': return '<div class="modal-overlay"><div class="modal-content">' + renderCollectorTokenModal() + '</div></div>';
     case 'push-token': return '<div class="modal-overlay"><div class="modal-content">' + renderPushTokenModal() + '</div></div>';
+
+    case 'api-key-make': return '<div class="modal-overlay"><div class="modal-content">' + renderApiKeyMakeModal() + '</div></div>';
+    case 'api-key-shown': return '<div class="modal-overlay"><div class="modal-content">' + renderApiKeyShownModal() + '</div></div>';
     case 'scan-targets': return '<div class="modal-overlay"><div class="modal-content">' + renderScanTargetsModal() + '</div></div>';
     case 'scan-provider': return '<div class="modal-overlay"><div class="modal-content">' + renderScanProviderModal() + '</div></div>';
     case 'scan-auth': return '<div class="modal-overlay"><div class="modal-content">' + renderScanAuthModal() + '</div></div>';
@@ -46478,6 +47744,10 @@ function _crbRichValue(v) {
   if (_crbIsHtml(t)) return sanitizeHtml(t);
 
   return _escHtml(t).replace(/\r?\n/g, '<br>');
+}
+function _crbDescLong(v) {
+  var t = String(v == null ? '' : v);
+  return /<(ul|ol)\b/i.test(t) || t.replace(/<[^>]+>/g, '').length > 240;
 }
 function _crbDisplay(v) {
   var t = String(v == null ? '' : v);
@@ -82231,6 +83501,35 @@ window.loadWebAuthnList = loadWebAuthnList;
 window.removeWebAuthn = removeWebAuthn;
 window.submitRemoveWebAuthnVerify = submitRemoveWebAuthnVerify;
 window.submitRemoveWebAuthnVerifyKey = submitRemoveWebAuthnVerifyKey;
+async function _copyText(text, btn) {
+  var v = String(text == null ? '' : text);
+  try {
+    await navigator.clipboard.writeText(v);
+  } catch (e) {
+
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = v;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e2) {
+      toast('Could not copy. Select the text and copy it by hand.', 'error');
+      return;
+    }
+  }
+  if (btn && btn.textContent) {
+    var was = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(function () { if (btn) btn.textContent = was; }, 1200);
+  } else {
+    toast('Copied', 'success');
+  }
+}
+window._copyText = _copyText;
 async function forgetImportMap(format) {
   if (!format) return;
   if (!(await confirmAsync('The next ' + esc(format) + ' import will use the built-in field mapping again. '

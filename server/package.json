@@ -1,6 +1,6 @@
 {
   "name": "pental-report-server",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Pental Report's server: the app, its database API, sign-in, files, live updates and the AI relay, in one container beside PostgreSQL.",
   "private": true,
   "type": "module",

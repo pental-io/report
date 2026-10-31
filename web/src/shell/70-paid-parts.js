@@ -63,8 +63,13 @@ var _REPORTER_SETTINGS_TABS = {
   assessments: 1, findings: 1, checklists: 1, ai: 1, security: 1, data: 1,
   // 1976: its own, for a newer release (shell/85-updates.js).
   updates: 1,
+  // 1977: the API, as in the portal (an administrator's: _setTabOn).
+  api: 1,
 };
-function _setTabOn(id) { return !!_REPORTER_SETTINGS_TABS[id]; }
+function _setTabOn(id) {
+  if (id === 'api' && !(S.profile && S.profile.role === 'admin')) return false;
+  return !!_REPORTER_SETTINGS_TABS[id];
+}
 function renderSettings() {
   if (!S._embedSettings && !_REPORTER_SETTINGS_TABS[S.settingsTab]) S.settingsTab = 'branding';
   return renderSettings__portal();
@@ -81,6 +86,14 @@ var _REPORTER_CARDS_OUT = {
 // Table columns, by their heading. An engagement has no status here (it is
 // open from the moment it is made), so the list has no Status column.
 var _REPORTER_COLUMNS_OUT = { 'Client Visible': 1, 'Status': 1 };
+// A findings table: its main column is the finding (renderAssessmentDetail's
+// three, and the Findings page's), where an engagement list's is the
+// assessment.
+function _rpFindingsTable(th) {
+  var row = th && th.parentNode;
+  var main = row && row.querySelector ? row.querySelector('th.c-main') : null;
+  return !!(main && (main.textContent || '').trim() === 'Finding');
+}
 
 function _reporterTidy(root) {
   root = root && root.querySelectorAll ? root : document;
@@ -95,7 +108,14 @@ function _reporterTidy(root) {
   var heads = root.querySelectorAll('th');
   for (var j = 0; j < heads.length; j++) {
     var th = heads[j];
-    if (!_REPORTER_COLUMNS_OUT[(th.textContent || '').trim()] || th.getAttribute('data-rp-out')) continue;
+    var _head = (th.textContent || '').trim();
+    if (!_REPORTER_COLUMNS_OUT[_head] || th.getAttribute('data-rp-out')) continue;
+    // 1977: [stated] Arian: "why is there no status column for the findings
+    // in reprot tool like in portal". A finding has a status here (open,
+    // remediated, part remediated, not remediated, risk accepted), and its
+    // column is headed Status too, so taking an engagement's out took the
+    // findings' with it. A table whose main column is the finding keeps it.
+    if (_head === 'Status' && _rpFindingsTable(th)) continue;
     var table = th.closest('table');
     if (!table) continue;
     var at = Array.prototype.indexOf.call(th.parentNode.children, th);
