@@ -229,7 +229,6 @@ function renderSignModal() { return ''; }
 function renderSignatures() { return ''; }
 function renderSubscriptionPage() { return ''; }
 function renderTrackerModal() { return; }
-function renderViewContractorModal() { return ''; }
 function renderWithdrawDeliveryModal() { return ''; }
 function reopenProposal() { return; }
 async function reopenQAApproval() { return Promise.resolve(null); }

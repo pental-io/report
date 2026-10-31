@@ -52,6 +52,25 @@ var VH_DEFAULT_ROWS = [
   { k: 'details', v: '0.2', l: 'Test Details Added' },
   { k: 'release', v: '1.0', l: 'Document Release' },
 ];
+// 1977, the full audit: the dates a version history row can take, in the
+// template editor. The portal's QA review date is not one: there is no QA
+// here. A release date is the day a report was released, or with none, the day
+// it last changed.
+var VH_DATE_SOURCES = [
+  { v: 'created',   l: 'Added to Pental Report' },
+  { v: 'started',   l: 'Start date' },
+  { v: 'ended',     l: 'End date' },
+  { v: 'delivered', l: 'Release date' },
+  { v: 'updated',   l: 'Last updated' },
+  { v: 'none',      l: 'Leave blank' },
+];
+// And who a row names: the portal's QA reviewer is not one, for the same reason.
+var VH_AUTHOR_SOURCES = [
+  { v: 'lead',        l: 'Lead tester' },
+  { v: 'contributors',l: 'Contributing testers' },
+  { v: 'lead_all',    l: 'Lead and contributors' },
+  { v: 'none',        l: 'Leave blank' },
+];
 
 // Engagements start and finish when somebody presses the button: the
 // schedule that does it by date runs on Pental's servers.

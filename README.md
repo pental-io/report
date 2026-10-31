@@ -225,7 +225,7 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 **Your team**
 
 - **Roles.** Administrators, senior testers and testers, each able to see and do what their role allows, checked by the database on every read and write.
-- **People.** Add a colleague, change their address, send setup links, and reset a lost authenticator. Each person has a profile with a picture, job title and phone, for the reports that name them.
+- **People.** Add a colleague, change their address, send setup links, reset a lost authenticator, and see the devices each is signed in on and sign one out. Each person has a profile with a picture, job title and phone, for the reports that name them.
 - **A second factor for everyone**: an authenticator app, or a security key or passkey once it is served over HTTPS. Choose which are allowed or require both, when people prove it again and how long a session lasts, and see active sessions and sign the others out. See [Security](#security).
 - **Live together.** What a colleague saves appears for everyone at once, and two people saving the same finding are asked before one overwrites the other.
 

@@ -1304,7 +1304,7 @@ function renderPhaseEditModal() {
   h += '<label class="ph-retest" style="margin-top:0.2rem">';
   h += '<input type="checkbox" id="phEditRetest"' + (_phaseRetestOn(ph) ? ' checked' : '') + '>';
   h += '<span><strong>Retesting available</strong>'
-    + '<em>Clients can ask for findings from this phase to be retested. Turn it off for work there is nothing to come back to.</em></span>';
+    + '<em>Findings from this phase can be marked for retest and their results recorded. Turn it off for work there is nothing to come back to.</em></span>';
   h += '</label>';
   if (_phaseRetestOn(ph) && carrying) {
     h += '<p class="ph-retest-note">Turning this off puts aside the retest state on ' + carrying + ' finding'
@@ -1992,7 +1992,7 @@ function _renderPhaseCards(viewOnly) {
       + (_phaseRetestOn(ph) ? ' checked' : '') + (viewOnly ? ' disabled' : '')
       + ' onchange="_phRetestChange(this)">';
     h += '<span><strong>Retesting available</strong>'
-      + '<em>Clients can ask for findings from this phase to be retested. Turn it off for work there is nothing to come back to.</em></span>';
+      + '<em>Findings from this phase can be marked for retest and their results recorded. Turn it off for work there is nothing to come back to.</em></span>';
     h += '</label>';
 
     if (crbEnabled) {
@@ -9548,6 +9548,107 @@ async function revokeSessionGroup(idsJsonAttr) {
 }
 window.revokeSession = revokeSession;
 window.revokeSessionGroup = revokeSessionGroup;
+async function loadUserSessions(targetProfileId) {
+  if (!targetProfileId) return;
+  var wrap = document.getElementById('userSessionsList_' + targetProfileId);
+  if (!wrap) return;
+  try {
+    var sess = await supabaseClient.auth.getSession();
+    var tok = sess && sess.data && sess.data.session && sess.data.session.access_token;
+    if (!tok) { wrap.innerHTML = '<div style="padding:0.75rem;color:var(--gray);font-size:0.8rem">Not signed in</div>'; return; }
+    var tenantId = TENANT_ID || '';
+    var r = await fetch('/api/utils?fn=sessions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json', 'x-tenant-id': tenantId },
+      body: JSON.stringify({ action: 'list', target_profile_id: targetProfileId }),
+    });
+    if (!r.ok) { wrap.innerHTML = '<div style="padding:0.75rem;color:var(--red-text);font-size:0.8rem">Could not load sessions</div>'; return; }
+    var data = await r.json();
+    var sessions = (data.sessions || []).filter(function(x) { return !x.revoked_at; });
+    if (!sessions.length) { wrap.innerHTML = '<div style="padding:0.75rem;color:var(--gray);font-size:0.8rem">No active sessions</div>'; return; }
+
+    sessions = _dedupSessionsByIp(sessions);
+    function _rel(ts) {
+      if (!ts) return '';
+      var d = (Date.now() - new Date(ts).getTime()) / 1000;
+      if (d < 60) return 'just now';
+      if (d < 3600) return Math.floor(d / 60) + ' min ago';
+      if (d < 86400) return Math.floor(d / 3600) + ' h ago';
+      return Math.floor(d / 86400) + ' d ago';
+    }
+    var h = '<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden">';
+    sessions.forEach(function(row, i) {
+      var label = row.device_label || 'Unknown device';
+      var ip = row.ip || 'unknown';
+      var last = _rel(row.last_active_at);
+      var first = row.first_seen_at ? fmtDate(row.first_seen_at) : '';
+      var _suffix = row.group_count > 1 ? ' &middot; ' + row.group_count + ' sessions' : '';
+      var _idsAttr = JSON.stringify(row.group_ids || [row.id]).replace(/"/g, '&quot;');
+      h += '<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:' + (i < sessions.length - 1 ? '1px solid var(--border)' : 'none') + '">';
+      h += '<div style="flex-shrink:0;width:32px;height:32px;border-radius:6px;background:var(--bg);display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/></svg></div>';
+      h += '<div style="flex:1;min-width:0">';
+      h += '<div style="font-size:0.82rem;font-weight:600;color:var(--text)">' + esc(label);
+      if (row.is_current) h += ' <span style="margin-left:6px;padding:1px 6px;border-radius:3px;background:rgba(var(--accent-rgb),0.15);color:var(--accent);font-size:0.68rem;font-weight:700;vertical-align:middle">YOUR SESSION</span>';
+      h += '</div>';
+      h += '<div style="font-size:0.72rem;color:var(--gray);margin-top:2px">' + esc(ip) + ' &middot; active ' + last + (first ? ' &middot; first seen ' + esc(first) : '') + _suffix + '</div>';
+      h += '</div>';
+
+      h += '<button class="btn btn-ghost btn-sm" onclick="revokeUserSessionGroup(\'' + _idsAttr + '\',\'' + esc(targetProfileId) + '\')" style="padding:4px 10px;font-size:0.72rem;color:var(--red-text)">Revoke</button>';
+      h += '</div>';
+    });
+    h += '</div>';
+    wrap.innerHTML = h;
+  } catch(e) {
+    wrap.innerHTML = '<div style="padding:0.75rem;color:var(--red-text);font-size:0.8rem">Error loading sessions</div>';
+  }
+}
+async function revokeUserSession(sessionId, targetProfileId) {
+  if (!sessionId) return;
+  if (!(await confirmAsync('The device will be signed out immediately.', { title: 'Revoke this session?', confirmText: 'Revoke', variant: 'danger' }))) return;
+  try {
+    var sess = await supabaseClient.auth.getSession();
+    var tok = sess && sess.data && sess.data.session && sess.data.session.access_token;
+    var tenantId = TENANT_ID || '';
+    var r = await fetch('/api/utils?fn=sessions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json', 'x-tenant-id': tenantId },
+      body: JSON.stringify({ action: 'revoke', session_id: sessionId }),
+    });
+    if (!r.ok) { toast('Revoke failed', 'error'); return; }
+    toast('Session revoked', 'success');
+    if (targetProfileId) loadUserSessions(targetProfileId);
+  } catch(e) { toast('Revoke failed', 'error'); }
+}
+async function revokeUserSessionGroup(idsJsonAttr, targetProfileId) {
+  var ids = [];
+  try { ids = JSON.parse(String(idsJsonAttr).replace(/&quot;/g, '"')); } catch(_e) {}
+  if (!Array.isArray(ids) || !ids.length) return;
+  if (ids.length === 1) return revokeUserSession(ids[0], targetProfileId);
+  var msg = 'These ' + ids.length + ' sessions on the same device will be signed out immediately.';
+  if (!(await confirmAsync(msg, { title: 'Revoke all sessions on this device?', confirmText: 'Revoke all', variant: 'danger' }))) return;
+  try {
+    var sess = await supabaseClient.auth.getSession();
+    var tok = sess && sess.data && sess.data.session && sess.data.session.access_token;
+    var tenantId = TENANT_ID || '';
+    var results = await Promise.all(ids.map(function(id) {
+      return fetch('/api/utils?fn=sessions', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json', 'x-tenant-id': tenantId },
+        body: JSON.stringify({ action: 'revoke', session_id: id }),
+      }).then(function(r) { return r.ok; }).catch(function() { return false; });
+    }));
+    var okCount = results.filter(function(x) { return x; }).length;
+    if (okCount === 0) { toast('Revoke failed', 'error'); return; }
+    if (okCount < ids.length) {
+      toast('Revoked ' + okCount + ' of ' + ids.length + ' sessions', 'success');
+    } else {
+      toast('Sessions revoked', 'success');
+    }
+    if (targetProfileId) loadUserSessions(targetProfileId);
+  } catch(e) { toast('Revoke failed', 'error'); }
+}
+window.revokeUserSession = revokeUserSession;
+window.revokeUserSessionGroup = revokeUserSessionGroup;
 async function revokeOtherSessions() {
   if (!(await confirmAsync('Only this device will remain signed in. All other active sessions will be terminated immediately.', { title: 'Sign out all other devices?', confirmText: 'Sign out others', variant: 'warn' }))) return;
   try {
@@ -12484,7 +12585,7 @@ function _rbEmptyState() {
   h += '<div class="rb-empty-eyebrow">Document Builder</div>';
   h += '<h2>Bring the template you already use</h2>';
   h += '<p>Upload the Word document you send clients today, in your own style. The builder takes the last '
-    + 'engagement out and puts Pental’s fields where it was, so every report Pental writes comes out in your '
+    + 'engagement out and puts Pental Report’s fields where it was, so every report it writes comes out in your '
     + 'layout. Your file is never edited, and nothing is kept until you save.</p>';
   h += '</div>';
 
@@ -12517,7 +12618,7 @@ function _rbEmptyState() {
 
   h += '<ol class="rb-flow" aria-label="How it works">';
   [[IC.upload, 'Upload', 'the document you send today'],
-   [IC.ai, 'The AI builds it', 'the last engagement out, Pental’s fields in'],
+   [IC.ai, 'The AI builds it', 'the last engagement out, Pental Report’s fields in'],
    [IC.check, 'You check', 'every change is marked, and each one can be undone'],
    [IC.eye, 'Preview and save', 'the real pages, then it is your template']].forEach(function (st) {
     h += '<li class="rb-flow-i"><span class="rb-flow-ic">' + st[0] + '</span>'
@@ -24321,7 +24422,7 @@ function _mfaFriendlyError(e, what) {
       : 'That security key is not registered on this account.';
   }
   if (name === 'NotSupportedError') return 'This browser or device does not support security keys. Use your authenticator app instead.';
-  if (name === 'SecurityError') return 'Your browser blocked this because of the address the portal is served from. Check you are on the usual portal address.';
+  if (name === 'SecurityError') return 'Your browser blocked this because of the address Pental Report is served from. Check you are on its usual address.';
   if (name === 'AbortError') return 'Cancelled.';
   if (name === 'ConstraintError') return 'Your device could not create a key that meets the requirements. Try a different device or use your authenticator app.';
   if (!raw) return isSetup ? 'Setup failed. Please try again.' : 'Verification failed. Please try again.';
@@ -26776,6 +26877,26 @@ function _conTabHolds() {
   var _lib = libraryEnabled(), _pay = invoicesEnabled();
   return 'your teams' + (_lib && _pay ? ', the library and the rate' : _lib ? ' and the library' : _pay ? ' and the rate' : '');
 }
+function _conTeamErr(e) {
+  var m = String((e && (e.message || e.details)) || e || '');
+  if (/contractor_teams_name_key|duplicate key/i.test(m)) return 'There is already a team with that name.';
+  if (/contractor_teams_name_check/i.test(m)) return 'A team needs a name of up to 120 characters.';
+  return _errMsg(e);
+}
+async function conTeamSetMember(profileId, teamId) {
+  var u = (S.data.users || []).find(function (x) { return x.id === profileId; });
+  _showLoading();
+  try {
+    var r = await supabaseClient.from('profiles').update({ contractor_team_id: teamId || null }).eq('id', profileId).select('id,contractor_team_id');
+    if (r.error) throw r.error;
+    if (!r.data || !r.data.length) throw new Error('That could not be saved. Refresh and try again.');
+    if (u) u.contractor_team_id = r.data[0].contractor_team_id || null;
+    toast(teamId ? (u ? u.name : 'They') + ' is in ' + _conTeamName(teamId) : (u ? u.name : 'They') + ' is in no team', 'success');
+    render();
+  } catch (e) { toast(_conTeamErr(e), 'error'); }
+  finally { _hideLoading(); }
+}
+window.conTeamSetMember = conTeamSetMember;
 var _navSuppressHistory = false;
 async function nav(p) { try { if (typeof _dashEdUndoPreview === 'function') _dashEdUndoPreview(); } catch (e) {}  if (S.page === 'settings' && p !== 'settings' && !S.wizard && typeof _setIsDirty === 'function' && _setIsDirty()) { _setLeaveAsk(function () { nav(p); }); return; } if (!canAccessPage(p)) { toast('You do not have access to that area', 'error'); return; } try { if (p !== 'qa-review') _coLeave(); } catch (e) {} try { _lfLeftPage(p); } catch (e) {} S.page = p; try { _coWhere({ page: p, aid: p === 'qa-review' ? (S.qa_review_id || '') : '' }); } catch (e) {} S.currentAssessment = null; S.currentFinding = null; S.currentClient = null; S.currentScanRun = null; S.searchQuery = '';
 
@@ -33437,7 +33558,7 @@ function _apiCardBody() {
   if (st.mine.code === 'not_installed') return '<p class="api-hint">' + esc(st.mine.error) + '</p>';
   if (st.mine.error) return '<p class="api-hint">Your keys could not be read: ' + esc(st.mine.error) + '</p>';
   var s = st.set || {}, keys = st.mine.keys || [];
-  var h = '<p class="api-p">A key lets a script or another system of yours read, and if you choose change, what you can see in Pental, through the API: engagements, findings, clients, comments and the rest. '
+  var h = '<p class="api-p">A key lets a script or another system of yours read, and if you choose change, what you can see in Pental Report, through the API: engagements, findings, clients, comments and the rest. '
     + 'It works as you, with your access and no more, and only through the API. Keep it as you would a password. It stops working when it expires, when you or an administrator revoke it, or if your role changes or your second factor is reset.</p>';
   if (!s.enabled) {
     h += '<div class="api-note">The API is switched off. ' + (s.admin ? '<a href="#" onclick="event.preventDefault();S.settingsTab=\'api\';nav(\'settings\')">Turn it on in Settings, API</a>.' : 'An administrator turns it on in Settings, API.') + '</div>';
@@ -33582,7 +33703,7 @@ function _apiSettingsHtml() {
   var h = '<div id="set_api_section">';
   h += '<div class="card mt-4" id="apiSettingsCard"><div class="card-header"><span class="card-title">' + IC.key + ' API</span>'
     + '<a class="btn btn-ghost btn-sm" href="' + _API_GUIDE + '" target="_blank" rel="noopener" style="font-size:0.75rem">The API guide</a></div><div class="card-body">';
-  h += '<p class="api-p">The API lets your team connect Pental to the rest of how they work: a tracker, a project board, a dashboard, a script. '
+  h += '<p class="api-p">The API lets your team connect Pental Report to the rest of how they work: a tracker, a project board, a dashboard, a script. '
     + 'Each person makes their own keys on their Profile page, and a key works as that person, through the API alone: it reads and changes only what they can themselves, never the database\'s tables directly, never from a browser. '
     + 'A key ends when it expires or is revoked, and is revoked on its own when its person is switched off or deleted, changes role, or has their second factor reset.</p>';
   if (!st.set) {
@@ -40195,13 +40316,13 @@ function renderSettings__portal() {
   h += '<div class="card mt-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> Document Templates</span></div><div class="card-body">';
 
   h += '<div style="font-weight:700;font-size:0.85rem;margin-bottom:0.5rem">Custom Word Templates</div>';
-  h += '<p style="color:var(--text);margin-bottom:0.75rem;font-size:0.82rem;line-height:1.6">Upload your own .docx templates for full control over document output. Design in Word with your branding, layout, fonts, headers, footers, and tables. Place variable placeholders where Pental should inject data. When downloading, Pental fills the template and outputs a completed .docx file. Tick <strong>Produce the PDF automatically</strong> on a document type and the filled document is also made into a PDF, contents page and page numbers included, and kept as the final PDF of that document. That happens in your browser, with nothing to set up and nothing sent to Pental.</p>';
+  h += '<p style="color:var(--text);margin-bottom:0.75rem;font-size:0.82rem;line-height:1.6">Upload your own .docx templates for full control over document output. Design in Word with your branding, layout, fonts, headers, footers, and tables. Place variable placeholders where Pental Report should put your data. When downloading, Pental Report fills the template and outputs a completed .docx file. Tick <strong>Produce the PDF automatically</strong> on a document type and the filled document is also made into a PDF, contents page and page numbers included, and kept as the final PDF of that document. That happens in your browser, with nothing to set up and nothing sent to Pental.</p>';
 
   h += '<div style="margin-bottom:1rem;padding:0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:8px">';
   h += '<div style="font-weight:600;font-size:0.82rem;margin-bottom:0.35rem">Document Builder</div>';
 
   var _dbKinds = _rbDocTypes().map(function (t) { var w = String(t.shortLabel || t.label || '').toLowerCase(); return (/^[aeiou]/.test(w) ? 'an ' : 'a ') + w; });
-  h += '<div style="font-size:0.72rem;color:var(--gray);margin-bottom:0.6rem;line-height:1.5">The <strong>Document Builder</strong> turns any document you already send' + (_dbKinds.length ? ', ' + _andList(_dbKinds) + ',' : '') + ' into the one Pental fills in, in your own style. The AI takes the last engagement out and places the fields; you check and save. Nothing needs you to know anything about how a Word file is put together.</div>';
+  h += '<div style="font-size:0.72rem;color:var(--gray);margin-bottom:0.6rem;line-height:1.5">The <strong>Document Builder</strong> turns any document you already send' + (_dbKinds.length ? ', ' + _andList(_dbKinds) + ',' : '') + ' into the one Pental Report fills in, in your own style. The AI takes the last engagement out and places the fields; you check and save. Nothing needs you to know anything about how a Word file is put together.</div>';
   h += '<div style="font-size:0.72rem;color:var(--gray);margin-bottom:0.6rem;line-height:1.5">Building a template by hand? Use <strong>Placeholder Key</strong> below for the full list of every placeholder you can drop in, including your own custom finding fields, or <strong>Draft</strong> for a ready-made .docx containing them all.</div>';
   h += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap">';
   h += '<button class="btn btn-primary btn-sm" onclick="nav(\'report-builder\')" style="font-size:0.78rem;padding:0.4rem 0.85rem;border-radius:6px">' + IC.edit + ' Open the Document Builder</button>';
@@ -42430,7 +42551,7 @@ function renderSettings__portal() {
 
   h += '<div class="card mt-4"><div class="card-header"><span class="card-title">' + IC.ai + ' AI Settings</span></div><div class="card-body">';
 
-  h += '<p style="color:var(--gray);font-size:0.8rem;margin-bottom:1rem">Choose the provider and model for Pental\'s AI features. A hosted provider\'s key is stored with your settings and never sent back to the browser. <span id="ai_route_note">' + esc(_aiRouteText(_aiSide.at ? _aiSide.cap : null, s.ai_provider || 'groq', !_aiSide.at)) + '</span> With Ollama, requests go from your browser to your own machine.' + (function () {
+  h += '<p style="color:var(--gray);font-size:0.8rem;margin-bottom:1rem">Choose the provider and model for Pental Report\'s AI features. A hosted provider\'s key is stored with your settings and never sent back to the browser. <span id="ai_route_note">' + esc(_aiRouteText(_aiSide.at ? _aiSide.cap : null, s.ai_provider || 'groq', !_aiSide.at)) + '</span> With Ollama, requests go from your browser to your own machine.' + (function () {
     var w = [assessmentsEnabled() ? 'Assessments &amp; Job Codes' : '', _findingsAreaOn() ? 'Findings &amp; Severity' : '', scanningEnabled() ? 'Scans' : ''].filter(Boolean);
     return w.length ? ' Each feature\'s prompt is set beside it: ' + _andList(w) + '.' : '';
   })() + '</p>';
@@ -42756,7 +42877,7 @@ function renderSettings__portal() {
     }
 
     h += '<div style="font-size:0.86rem;font-weight:700;color:var(--text);margin-bottom:0.35rem">MFA Methods</div>';
-    h += '<div style="font-size:0.78rem;color:var(--gray);margin-bottom:0.75rem;line-height:1.55">Pental enforces MFA for every account. Choose which methods users can enrol with, and whether one method is enough or both are required.</div>';
+    h += '<div style="font-size:0.78rem;color:var(--gray);margin-bottom:0.75rem;line-height:1.55">Pental Report enforces MFA for every account. Choose which methods users can enrol with, and whether one method is enough or both are required.</div>';
 
     h += '<div style="font-size:0.78rem;font-weight:600;color:var(--text);margin-bottom:0.4rem">Allowed methods</div>';
     h += '<div style="display:flex;flex-direction:column;gap:0.4rem;margin-bottom:0.85rem">';
@@ -42855,7 +42976,7 @@ function renderSettings__portal() {
   h += '</div></div>';
 
   h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Restore a Backup</span></div><div class="card-body">';
-  h += '<p class="set-p">Brings back a backup made above (the .zip, or a .json from before backups included files). Records are merged: one already here with the same ID is left as it is, and the rest are added. Before anything is written you see what is in it and choose what comes across: the team (and whether they are emailed), the work, and for settings and branding, the backup\u2019s or this portal\u2019s.' + '' + '</p>';
+  h += '<p class="set-p">Brings back a backup made above (the .zip, or a .json from before backups included files). Records are merged: one already here with the same ID is left as it is, and the rest are added. Before anything is written you see what is in it and choose what comes across: the team, the work, and for settings and branding, the backup\u2019s or the ones here.' + '' + '</p>';
   h += '<div class="set-warn-line">A restore cannot be undone, so download a backup of everything as it is now first.</div>';
   h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
   h += '<label class="btn btn-secondary" style="cursor:pointer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Choose a Backup File<input type="file" accept=".zip,.json,application/zip,application/json" onchange="_irvChoose(this)" style="display:none"></label>';
@@ -43624,7 +43745,7 @@ function _ollamaBlockHint(rawUrl){
     var isLocal = (host === 'localhost' || host === '127.0.0.1' || host === '::1');
     var isPrivate = /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^169\.254\./.test(host) || /\.local$/i.test(host);
     if (pageHttps && isHttp && !isLocal) {
-      return ' This portal is HTTPS, so the browser blocks a plain-HTTP request to ' + (isPrivate ? 'a private/VPN address' : 'a non-localhost host') + ' (mixed content + Chrome Private Network Access) and it never reaches Ollama, whatever OLLAMA_ORIGINS is. Quickest cert-free fix: forward localhost to it, then use http://localhost:' + port + ' here. Windows: netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=' + port + ' connectaddress=' + host + ' connectport=' + port + '  |  macOS/Linux: socat TCP-LISTEN:' + port + ',fork,reuseaddr TCP:' + host + ':' + port + '  . Or put Ollama behind HTTPS (Caddy/Tailscale). See "Access from any PC" in the setup guide.';
+      return ' This page is served over HTTPS, so the browser blocks a plain-HTTP request to ' + (isPrivate ? 'a private/VPN address' : 'a non-localhost host') + ' (mixed content + Chrome Private Network Access) and it never reaches Ollama, whatever OLLAMA_ORIGINS is. Quickest cert-free fix: forward localhost to it, then use http://localhost:' + port + ' here. Windows: netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=' + port + ' connectaddress=' + host + ' connectport=' + port + '  |  macOS/Linux: socat TCP-LISTEN:' + port + ',fork,reuseaddr TCP:' + host + ':' + port + '  . Or put Ollama behind HTTPS (Caddy/Tailscale). See "Access from any PC" in the setup guide.';
     }
     return ' Check Ollama is running and that OLLAMA_ORIGINS includes this site.';
   } catch (e) { return ' Check the URL, that Ollama is running, and that OLLAMA_ORIGINS includes this site.'; }
@@ -43675,7 +43796,7 @@ var _AI_MODEL_NOTES = [
   [/^gemma4:12b(?![0-9])/i, 'Recommended. The best model for report writing on one machine: an 8GB download that runs fully on a 12GB graphics card or a Mac with 16GB, follows your prompts closely, writes clean prose and reads screenshots.'],
   [/^gemma4:(26|31)b/i, 'Writes better still, for a 24GB graphics card (an RTX 4090) or a Mac with 32GB or more: the one for a team\'s shared AI machine. 26b is quicker, 31b writes best.'],
   [/^gemma4:e[24]b/i, 'Small and quick, for a laptop with 8GB of graphics memory or none. The writing needs more editing.'],
-  [/^qwen3\.[5-9]/i, 'A strong current model. It thinks before it answers, which the portal switches off for report writing. A good choice if your team already uses Qwen.'],
+  [/^qwen3\.[5-9]/i, 'A strong current model. It thinks before it answers, which Pental Report switches off for report writing. A good choice if your team already uses Qwen.'],
   [/^qwen3:8b/i, 'Our earlier recommendation, and still fine. gemma4:12b writes better at a similar size.'],
   [/^qwen3:(14|32)b/i, 'Better prose than qwen3:8b, and slower. gemma4 at the same size writes better now.'],
   [/^qwen3:(1\.7|4)b/i, 'Small and quick, but the writing needs more editing. Use it on a laptop with little VRAM, or for short fields rather than full descriptions.'],
@@ -46199,22 +46320,6 @@ function _vhRows(tpl) {
     return { k: r.k, v: r.v, l: lbl[r.k] || r.l, on: true };
   });
 }
-var VH_DATE_SOURCES = [
-  { v: 'created',   l: 'Added to the portal' },
-  { v: 'started',   l: 'Start date' },
-  { v: 'ended',     l: 'End date' },
-  { v: 'qa',        l: 'QA review date' },
-  { v: 'delivered', l: 'Delivered date' },
-  { v: 'updated',   l: 'Last updated' },
-  { v: 'none',      l: 'Leave blank' },
-];
-var VH_AUTHOR_SOURCES = [
-  { v: 'lead',        l: 'Lead tester' },
-  { v: 'contributors',l: 'Contributing testers' },
-  { v: 'lead_all',    l: 'Lead and contributors' },
-  { v: 'qa',          l: 'QA reviewer' },
-  { v: 'none',        l: 'Leave blank' },
-];
 var VH_ROW_DEFAULT_SRC = {
   creation:  { d: 'ended',     a: 'lead' },
   details:   { d: 'ended',     a: 'lead_all' },
@@ -46630,7 +46735,7 @@ function _renderStyleTab(tpl) {
   h += _tplC('sev_low', 'Low', sc.low);
   h += _tplC('sev_info', 'Info', sc.info);
   h += '</div>';
-  h += '<div style="margin-top:0.4rem"><button class="btn btn-ghost" onclick="syncSevFromDashboard()" style="font-size:0.65rem;padding:0.15rem 0.4rem;border:1px solid var(--border);border-radius:4px;color:var(--accent)" title="Copy severity colours from dashboard branding settings">↻ Sync from Dashboard</button></div>';
+  h += '<div style="margin-top:0.4rem"><button class="btn btn-ghost" onclick="syncSevFromDashboard()" style="font-size:0.65rem;padding:0.15rem 0.4rem;border:1px solid var(--border);border-radius:4px;color:var(--accent)" title="Copy the severity colours from Settings, Branding">↻ Sync from Branding</button></div>';
 
   h += _tplH('Severity Wording', 'How a severity READS in a generated report: CRITICAL, Critical or critical, bold or not, in colour or in the template\'s own text colour');
   var _svs = (typeof _sevStyleCfg === 'function') ? _sevStyleCfg() : { case: 'upper', bold: true, colour: 'severity' };
@@ -49212,7 +49317,7 @@ function renderClientModal() {
     ? '<button class="btn btn-ghost btn-sm" data-dismiss onclick="_clientModalBack()" style="margin-right:0.5rem" title="' + (isEdit ? 'Back to the form you came from' : 'Back without creating') + '">&larr; Back</button>'
     : '';
   var h = '<div class="modal-header"><div class="pf-head"><h2 class="modal-title">' + (isEdit ? 'Edit Client' : 'New Client') + '</h2>'
-    + '<div class="pf-sub">' + (isEdit ? 'Their name, and who to contact there.' : 'A company you work for. Anyone you add here can sign in to see their work.') + '</div></div>'
+    + '<div class="pf-sub">' + (isEdit ? 'Their name, and who to contact there.' : 'A company you work for.') + '</div></div>'
     + '<div style="display:flex;align-items:center">' + _backBtn + '<button class="btn-close" onclick="closeM()" title="Close">&times;</button></div></div>';
 
   h += '<div class="modal-body pf-body" onkeydown="_pfEnter(event, \'_clSaveClose\')">';
@@ -49856,6 +49961,75 @@ function renderUserRoleModal() {
   h += _pfPillsHtml('newrole', 'Role', _pfRoleChoices(u.role), u.role);
   h += '</div>';
   h += '<div class="modal-footer"><button class="btn btn-secondary" onclick="closeM()">Cancel</button><button class="btn btn-primary" onclick="saveUserRole(\'' + u.id + '\')">Save role</button></div>';
+  return h;
+}
+function renderViewContractorModal() {
+  var u = (S.data.users || []).find(function(x) { return x.id === S.modal.id; });
+  if (!u) return '<div class="modal-body"><p>User not found</p></div>';
+  var isConUser = u.role === 'contractor';
+
+  var fact = function (k, v, mono) {
+    return '<div class="pf-fact"><dt>' + k + '</dt><dd' + (mono && v ? ' class="mono"' : '') + '>' + (v ? esc(v) : '<span class="pf-none">Not given</span>') + '</dd></div>';
+  };
+  var h = '<div class="modal-header"><div class="pf-head"><h2 class="modal-title">' + (isConUser ? 'External Tester' : 'User') + ' Details</h2></div><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
+  h += '<div class="modal-body pf-body">';
+  h += _pfWhoHtml(u, badge(u.role, u.role));
+  h += '<dl class="pf-facts">' + fact('Phone', u.phone)
+    + (u.job_title ? fact('Job title', u.job_title) : '')
+    + (isConUser && u.contractor_company ? fact('Company', u.contractor_company) : '') + '</dl>';
+
+  if (isConUser && contractorsEnabled()) {
+    var _tms = _conTeams();
+    h += '<div class="pf-block"><div class="pf-block-head"><div><div class="pf-section-title">Team</div>'
+      + '<div class="pf-section-note">They see the engagements they lead and the ones handed to their team, and nothing else.</div></div></div>';
+    if (canManage() && _tms.length) {
+      h += '<select class="form-select" aria-label="Team" onchange="conTeamSetMember(\'' + esc(u.id) + '\', this.value || null)">'
+        + '<option value="">No team</option>'
+        + _tms.map(function (tm) { return '<option value="' + esc(tm.id) + '"' + (u.contractor_team_id === tm.id ? ' selected' : '') + '>' + esc(tm.name) + '</option>'; }).join('')
+        + '</select>';
+    } else {
+      h += '<div>' + esc(_conTeamName(u.contractor_team_id) || 'No team') + '</div>'
+        + (canManage() ? '<div class="pf-section-note" style="margin-top:0.3rem">Teams are made on the External tab.</div>' : '');
+    }
+    h += '</div>';
+  }
+
+  if (u.teams_link || u.slack_link) {
+    h += '<div class="pf-links">';
+    if (u.teams_link) h += '<a href="' + esc(u.teams_link) + '" target="_blank" rel="noopener" class="btn btn-secondary btn-sm"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 10h8M8 14h5"/></svg> Teams</a>';
+    if (u.slack_link) {
+      var slackUrl = u.slack_link.startsWith('http') ? u.slack_link : 'https://slack.com';
+      h += '<a href="' + esc(slackUrl) + '" target="_blank" rel="noopener" class="btn btn-secondary btn-sm"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2c-1.1 0-2 .9-2 2v3.5h3.5c1.1 0 2-.9 2-2s-.9-2-2-2h-1.5z"/></svg> ' + esc(u.slack_link) + '</a>';
+    }
+    h += '</div>';
+  }
+
+  if ((isConUser && invoicesEnabled()) || u.bank_name || u.bank_sort_code || u.bank_account) {
+    h += '<div class="pf-block"><div class="pf-block-head"><div class="pf-section-title">Bank details</div></div>'
+      + '<dl class="pf-facts">' + fact('Account holder', u.bank_name) + fact('Sort code', u.bank_sort_code, true) + fact('Account number', u.bank_account, true) + '</dl></div>';
+  }
+  var userAssessments = (S.data.assessments || []).filter(function(a) { return a.lead_id === u.id; });
+  if (userAssessments.length) {
+    h += '<div class="pf-block"><div class="pf-block-head"><div class="pf-section-title">Assessments they lead <span class="badge">' + userAssessments.length + '</span></div></div>';
+    h += '<div class="pf-list">';
+    userAssessments.forEach(function(a) {
+      h += '<div class="pf-list-row"><span class="clickable pf-list-name" onclick="closeM();viewAssessment(\'' + a.id + '\')">' + esc(a.name) + '</span>' + renderMergedStatus(a, false) + '</div>';
+    });
+    h += '</div></div>';
+  }
+
+  if (canManage()) {
+    h += '<div class="pf-block"><div class="pf-block-head"><div><div class="pf-section-title">Active sessions</div>'
+      + '<div class="pf-section-note">Devices signed in to this account. Revoking one makes that device sign in again.</div></div>';
+    h += '<button class="btn btn-ghost btn-sm" onclick="loadUserSessions(\'' + esc(u.id) + '\')" title="Refresh" style="padding:2px 8px"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></button>';
+    h += '</div>';
+    h += '<div id="userSessionsList_' + esc(u.id) + '"><div style="padding:0.75rem;color:var(--gray);font-size:0.8rem">Loading&hellip;</div></div>';
+    h += '</div>';
+    setTimeout(function() { if (typeof loadUserSessions === 'function') loadUserSessions(u.id); }, 100);
+  }
+
+  h += '</div>';
+  h += '<div class="modal-footer"><button class="btn btn-secondary" onclick="closeM()">Close</button></div>';
   return h;
 }
 function renderAssignTesterModal() {
@@ -58506,7 +58680,7 @@ async function downloadEditedReport(assessmentId, quiet) {
         + (refreshed.refused.length > 3 ? ' and others' : ''), 'info');
     }
     if (refreshed && refreshed.updated) {
-      toast(refreshed.updated + ' change' + (refreshed.updated === 1 ? '' : 's') + ' from the portal written into the report', 'success');
+      toast(refreshed.updated + ' change' + (refreshed.updated === 1 ? '' : 's') + ' made here written into the report', 'success');
     }
     if (refreshed && refreshed.skipped) {
 
@@ -60123,7 +60297,7 @@ async function deleteClient(clientId) {
   if (findings) msg += '<li>' + findings + ' finding' + (findings > 1 ? 's' : '') + '</li>';
   if (proposals.length) msg += '<li>' + proposals.length + ' proposal' + (proposals.length > 1 ? 's' : '') + '</li>';
   if (invoices.length) msg += '<li>' + invoices.length + ' invoice' + (invoices.length > 1 ? 's' : '') + '</li>';
-  msg += '<li>All files, comments, timeline events &amp; client portal users</li>';
+  msg += '<li>All files and comments</li>';
   msg += '</ul>';
   msg += '<p style="color:var(--red-text);font-weight:600">This action cannot be undone.</p></div>';
 
@@ -64206,7 +64380,7 @@ function syncSevFromDashboard() {
     var el = document.getElementById('tpl_sev_' + k);
     if (el) el.value = dashSev[k];
   });
-  toast('Synced from dashboard colours', 'info');
+  toast('Synced from your branding colours', 'info');
 }
 function syncSevFromReport() {
   var tpl = getTemplate('report');
@@ -83957,7 +84131,7 @@ function _irvHtml() {
   if (w.library) h += _irvRow(_IRV_IC.library, 'Library', _irvN(w.library, 'entry', 'entries'), _irvSwitch('library', C.library), '', !C.library);
   if (w.checklists) h += _irvRow(_IRV_IC.checklists, 'Checklists and runbooks', _irvN(w.checklists, 'template'), _irvSwitch('checklists', C.checklists), '', !C.checklists);
 
-  var useKeep = [['replace', 'Use ' + (P.fromReport ? 'Pental Report’s' : 'the backup’s')], ['keep', 'Keep this portal’s']];
+  var useKeep = [['replace', 'Use ' + (P.fromReport ? 'Pental Report’s' : 'the backup’s')], ['keep', 'Keep the ones here']];
   if (P.has.branding) {
     var b = P.branding;
     var prev = '<div class="irv-brand">' + (b.logo ? '<span class="irv-logo irv-logo--d"><img src="' + esc(b.logo) + '" alt="The logo for dark pages"></span>' : '')
@@ -83981,7 +84155,7 @@ function _irvHtml() {
   if (P.has.company) h += _irvRow(_IRV_IC.company, 'Company details', (P.company ? esc(P.company) + ', ' : '') + 'contact details and testing IPs', _irvSeg('company', C.company, useKeep), '', C.company === 'keep');
   var _aiName = { anthropic: 'Anthropic', openai: 'OpenAI', groq: 'Groq', ollama: 'Ollama', custom: 'your own endpoint', 'custom-openai': 'your own endpoint', 'custom-anthropic': 'your own endpoint' }[String(P.ai || '').toLowerCase()] || P.ai;
   if (P.has.ai) h += _irvRow(_IRV_IC.ai, 'AI settings', (P.ai ? 'Provider: ' + esc(_aiName) + '. ' : '') + 'The key stays behind: add it under Settings, AI.', _irvSeg('ai', C.ai, useKeep), '', C.ai === 'keep');
-  if (P.other) h += _irvRow(_IRV_IC.other, 'Everything else in Settings', _irvN(P.other, 'setting') + ': modules, notifications, automation and the rest', _irvSeg('other', C.other, [['replace', 'Restore the backup’s'], ['keep', 'Keep this portal’s']]), '', C.other === 'keep');
+  if (P.other) h += _irvRow(_IRV_IC.other, 'Everything else in Settings', _irvN(P.other, 'setting'), _irvSeg('other', C.other, [['replace', 'Restore the backup’s'], ['keep', 'Keep the ones here']]), '', C.other === 'keep');
   h += '</div>';
   h += '<div class="irv-foot"><p class="irv-sum">' + esc(_irvSummary(P, C)) + '</p>'
     + '<div class="irv-acts"><button type="button" class="btn btn-ghost" onclick="_irvClose()">Cancel</button>'
