@@ -146,6 +146,22 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 
 <p align="center">
   <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/screens/client-dark.png">
+    <img alt="A client's page: their contact, the engagements for them and the findings still open" src=".github/assets/screens/client-light.png" width="100%">
+  </picture>
+  <br><sub>A client, with their engagements</sub>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/screens/calendar-dark.png">
+    <img alt="The testing calendar: each tester's week in a row of their own, and an engagement waiting for a lead" src=".github/assets/screens/calendar-light.png" width="100%">
+  </picture>
+  <br><sub>The testing calendar</sub>
+</p>
+
+<p align="center">
+  <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/screens/fields-dark.png">
     <img alt="Settings for finding fields: rename, reorder, require, reuse and add your own" src=".github/assets/screens/fields-light.png" width="100%">
   </picture>
@@ -164,10 +180,12 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 
 **Engagements**
 
+- **Your clients**, each with their contact and their engagements, and a new engagement started from a client's page.
+- **A testing calendar.** Each tester's engagements week by week, and the ones still waiting for a lead, given one from there.
 - **Every engagement in one list**, with a reference code for each (numbered your way, or random), a type from your own list, its dates, test days, perspective and lead tester. Rename, duplicate, archive and restore, or delete. An engagement is open from the moment it is made, with no status to move along: its report downloads whenever you like.
 - **Phases.** External, internal, web, retest or whatever shape the work takes, each with its own type, scope, test days and retest setting.
-- **Checklists and runbooks on each phase.** Six curated checklists to start from, each suggested on a phase of its type: web application (OWASP WSTG), internal infrastructure, external infrastructure, cloud, mobile (OWASP MASVS) and wireless. Write your own too: tick items as you test, with who ticked each and when if you want it, and follow a runbook's steps with each command a click to copy. Bring them in or take them out as Excel, Word or JSON, in **Settings, Checklists & Runbooks**.
-- **On each engagement:** its notes, scope, the artifacts left on the client's systems, caveats, additional evidence and files, appendices for the report, and comments for your team.
+- **Checklists and runbooks on each phase.** A methodology library of 22 checklists to start from, searched by name and narrowed by category, each previewed before you add it: OSSTMM 3, PTES, NIST SP 800-115, OWASP (ASVS 5.0, the API Security Top 10, the Top 10 2025, the LLM Top 10 2026 and the IoT Security Testing Guide), MITRE ATT&CK, PCI DSS 11.4, Active Directory, Kubernetes, thick clients, red team, social engineering and physical. Six of them are suggested on a phase of their type: web application (OWASP WSTG), internal infrastructure, external infrastructure, cloud, mobile (OWASP MASVS) and wireless. Write your own too: tick items as you test, with who ticked each and when if you want it, and follow a runbook's steps with each command a click to copy. Bring them in or take them out as Excel, Word or JSON, in **Settings, Checklists & Runbooks**.
+- **On each engagement:** its notes, scope, the artifacts left on the client's systems, caveats, appendices for the report (screenshots, tool output, scan results and the rest), files such as videos, and comments for your team.
 - **Sections your way.** Rename, reorder, give an icon to, switch off or leave out of the report any built-in section, and add your own in the ten field styles.
 
 **Findings**
@@ -190,7 +208,7 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 - **Your own Word templates**, with the Draft, the Document Builder and the Placeholder Key. See [Your Reports](#your-reports).
 - **The same document every time.** The same engagement renders the same file, so this quarter's report sits beside last quarter's cleanly.
 - **Dates and file names your way**: how dates are written in documents, and the name of each kind of file Pental Report makes.
-- **Download** a report from the list of engagements, or every report at once as a ZIP.
+- **Download** a report from the list of engagements, or, as an administrator, every report at once from Settings, Data, as a ZIP of PDFs.
 
 **Exports and imports**
 
@@ -233,7 +251,7 @@ Every field and section the AI writes, built-in or your own, has a prompt of its
 - **Ollama, on your own hardware**, on each tester's computer or on one server for the team. Your browser talks to it, so prompts and evidence stay on your network. **Settings, AI** has a setup guide for both, including a shared server over Tailscale or your own VPN.
 - **Test Connection** tries it before you rely on it.
 
-Your key is kept encrypted in your own database with `VAULT_KEY`, and your own Pental Report server sends each request to the provider you chose.
+Your key is kept encrypted in your own database, and your own Pental Report server sends each request to the provider you chose.
 
 ## Your Reports
 
@@ -286,7 +304,7 @@ From the server, in the folder Pental Report lives in:
 docker compose exec -T db pg_dump -U postgres report > report-$(date +%F).sql
 ```
 
-Keep `.env` with your backups. `VAULT_KEY` in it encrypts the secrets kept in the database (your AI key and this server's signing keys), and a backup cannot be used without it.
+Keep `.env` with your backups. `VAULT_KEY` in it seals this server's signing keys in the database, and the server will not start on a copy of the database without it.
 
 <details>
 <summary><b>Restoring a database backup</b></summary>
@@ -334,14 +352,14 @@ To know of a new release, the server asks GitHub for Pental Report's latest one 
 - **Pentest as a service.** Clients sign in to a portal on your own domain to read their findings, ask for retests and comment on the engagement, during it and long after it.
 - **Live reporting.** Show a finding to the client the day you confirm it, marked as a draft until it is written up, and nothing unfinished goes into the report.
 - **QA before anything goes out.** One review queue, your own checklist, comments and suggested edits on the words themselves, and an optional AI reviewer.
-- **Credentials and scheduling.** Clients send their test credentials encrypted, for your lead tester to view once, and a testing calendar shows who is testing what, and when.
+- **Credentials.** Clients send their test credentials encrypted, for your lead tester to view once, and are reminded by email before an authenticated test starts while theirs are still outstanding.
 - **And the rest.** Attestation letters, findings pushed to your clients' Jira, ServiceNow and other trackers with their state read back, and scanner output imported as findings.
 
-**Move to Pental**, at the foot of the sidebar, walks you through it: download everything from Pental Report, start a Pental trial, and choose the file in your new portal's setup, at its Bring Your Data Across step (or later in Settings, Data). Your team, clients, assessments, findings, library, fields, sections, prompts and templates arrive as they are.
+**Move to Pental**, at the foot of the sidebar, walks you through it: download everything from Pental Report (one .zip), start a Pental trial, and upload the .zip in your new portal: its setup asks for it at Bring Your Data Across, and Settings, Data has it too. Before anything is written you choose what comes across: your team, each new person invited by email, added without one, or left out; your clients, assessments and findings; the library and checklists; and whether your branding, fields, sections, prompts and Word templates replace the portal's or sit beside them. What comes across arrives as it is.
 
 ## Security
 
-Every person signs in with a password and a second factor: an authenticator app, or a security key or passkey once Pental Report is served over HTTPS. Passwords are hashed with bcrypt. Row-level security in PostgreSQL checks every read and write against the person's role and a recent second factor. Secrets in the database are encrypted with `VAULT_KEY`.
+Every person signs in with a password and a second factor: an authenticator app, or a security key or passkey once Pental Report is served over HTTPS. Passwords are hashed with bcrypt. Row-level security in PostgreSQL checks every read and write against the person's role and a recent second factor. Your AI key is kept encrypted in the database, and this server's signing keys are sealed with `VAULT_KEY`.
 
 Found a vulnerability? Please see [SECURITY.md](SECURITY.md).
 

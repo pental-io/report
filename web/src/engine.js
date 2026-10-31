@@ -2588,6 +2588,7 @@ var CHECKLIST_RUNBOOK_LIBRARY = {
     kind: 'checklist',
     name: 'Web Application Testing (OWASP WSTG)',
     description: 'Coverage tracker for a web application phase, across the OWASP Web Security Testing Guide categories and the OWASP API Security Top 10. Tick a category once its checks are covered; the code in each title points to the section in the guide.',
+    category: 'Web and API',
     phase_hint: 'Web Application',
     source: 'phase_web_v1',
     source_url: 'https://owasp.org/www-project-web-security-testing-guide/',
@@ -2611,6 +2612,7 @@ var CHECKLIST_RUNBOOK_LIBRARY = {
     kind: 'checklist',
     name: 'Internal Infrastructure Review',
     description: 'Coverage tracker for an internal infrastructure phase, including Active Directory. Each item is confirmed against current hardening guidance, with deviations and exceptions recorded. For technique, follow the linked guidance.',
+    category: 'Infrastructure',
     phase_hint: 'Internal Infrastructure',
     source: 'phase_internal_v1',
     source_url: 'https://csrc.nist.gov/publications/detail/sp/800-115/final',
@@ -2633,6 +2635,7 @@ var CHECKLIST_RUNBOOK_LIBRARY = {
     kind: 'checklist',
     name: 'External Infrastructure Review',
     description: 'Coverage tracker for an external, perimeter-facing phase. Each item is confirmed and recorded, with findings validated rather than taken from a scanner.',
+    category: 'Infrastructure',
     phase_hint: 'External Infrastructure',
     source: 'phase_external_v1',
     source_url: 'https://csrc.nist.gov/publications/detail/sp/800-115/final',
@@ -2654,6 +2657,7 @@ var CHECKLIST_RUNBOOK_LIBRARY = {
     kind: 'checklist',
     name: 'Cloud Configuration Review',
     description: 'Coverage tracker for a cloud phase. Baseline against the relevant CIS Benchmark or provider security guidance and record deviations.',
+    category: 'Cloud and containers',
     phase_hint: 'Cloud',
     source: 'phase_cloud_v1',
     source_url: 'https://www.cisecurity.org/cis-benchmarks',
@@ -2675,6 +2679,7 @@ var CHECKLIST_RUNBOOK_LIBRARY = {
     kind: 'checklist',
     name: 'Mobile Application Testing (OWASP MASVS)',
     description: 'Coverage tracker for a mobile phase, across the OWASP Mobile Application Security Verification Standard control groups. Tick each group once its controls are reviewed.',
+    category: 'Mobile and devices',
     phase_hint: 'Mobile',
     source: 'phase_mobile_v1',
     source_url: 'https://mas.owasp.org/MASVS/',
@@ -2693,6 +2698,7 @@ var CHECKLIST_RUNBOOK_LIBRARY = {
     kind: 'checklist',
     name: 'Wireless Review',
     description: 'Coverage tracker for a wireless phase. Each item is confirmed against current guidance, with deviations recorded.',
+    category: 'Infrastructure',
     phase_hint: 'Wireless',
     source: 'phase_wireless_v1',
     source_url: 'https://csrc.nist.gov/publications/detail/sp/800-115/final',
@@ -2705,6 +2711,390 @@ var CHECKLIST_RUNBOOK_LIBRARY = {
       { id: 'rogue', title: 'Rogue and unauthorised access point detection', description: 'Confirm coverage for detecting unauthorised access points. Done when the review is recorded.' },
       { id: 'isolation', title: 'Client isolation', description: 'Confirm client-to-client isolation where expected. Done when the review is recorded.' },
       { id: 'coverage', title: 'Signal leakage and coverage review', description: 'Confirm wireless coverage does not extend further than intended. Done when the review is recorded.' }
+    ]
+  },
+  std_osstmm3_v1: {
+    kind: 'checklist',
+    name: 'Security Testing Methodology (OSSTMM 3)',
+    description: 'Coverage tracker based on the ISECOM Open Source Security Testing Methodology Manual (OSSTMM 3): one item for the channels in scope, then one per test module, each module applied to every channel in scope. Record per-channel results under each module. Module names are ISECOM\'s; for method, follow the linked manual.',
+    category: 'Standards',
+    source: 'std_osstmm3_v1',
+    source_url: 'https://www.isecom.org/OSSTMM.3.pdf',
+    items: [
+      { id: 'channels', title: 'Channels in scope (Human, Physical, Wireless, Telecommunications, Data Networks)', description: 'Confirm which of the five channels the test covers, with the targets and vectors for each. Done when every channel is marked in or out of scope, with a reason.' },
+      { id: 'posture', title: 'Posture Review', description: 'Confirm the legislation, regulation, policies, culture and operating hours that apply to the target, and the channels and vectors the test needs. Done when the posture is recorded for each channel in scope.' },
+      { id: 'logistics', title: 'Logistics', description: 'Confirm the conditions that could affect results are understood before testing: safety measures, sources of instability, permitted downtime and the pace of testing. Done when they are agreed and recorded.' },
+      { id: 'active-detection', title: 'Active Detection Verification', description: 'Confirm what can detect or interfere with the test, such as filtering or monitoring, and how results differ with it active and inactive. Done when detection and its predictability are recorded per channel.' },
+      { id: 'visibility', title: 'Visibility Audit', description: 'Confirm which targets are visible within scope, both through enumeration and through research into targets already known. Done when the target list is complete for each channel.' },
+      { id: 'access', title: 'Access Verification', description: 'Confirm the access points to each target, the type of interaction each allows, where it originates and how deep it goes. Done when access points and their limits are recorded.' },
+      { id: 'trust', title: 'Trust Verification', description: 'Confirm where one interaction relies on another, inside or outside scope, and how far each trust can be used. Done when trust relationships are recorded per channel.' },
+      { id: 'controls', title: 'Controls Verification', description: 'Confirm the controls protecting interactions, covering non-repudiation, confidentiality, privacy, integrity and alarm, and where each falls short. Done when each control type is tested and recorded.' },
+      { id: 'process', title: 'Process Verification', description: 'Confirm the processes that keep security in place, whether people work within process and policy, and the gap between practice and the recorded posture. Done when gaps are recorded.' },
+      { id: 'configuration', title: 'Configuration and Training Verification', description: 'Confirm configuration and training meet the requirements set by the posture, and record where security mechanisms fall short of them. Done when deviations are recorded per channel.' },
+      { id: 'property', title: 'Property Validation', description: 'Confirm whether unlicensed intellectual property is distributed, sold or traded within the scope. Done when the review is recorded.' },
+      { id: 'segregation', title: 'Segregation Review', description: 'Confirm how private and personal information is separated and contained: how much is held, where, of what type, and what related information is public outside the target. Done when the review is recorded.' },
+      { id: 'exposure', title: 'Exposure Verification', description: 'Confirm what can be found publicly, inside and outside scope, about targets, assets and channel infrastructure that reveals access, visibility, trust or controls. Done when exposures are recorded.' },
+      { id: 'ci-scouting', title: 'Competitive Intelligence Scouting', description: 'Confirm what can be learnt about the business and organisational environment, inside and outside scope, that could be used against the target. Done when findings are recorded.' },
+      { id: 'quarantine', title: 'Quarantine Verification', description: 'Confirm how hostile or unwanted content and interactions are held back in both directions, for how long, and how they are released. Done when quarantine methods and their limits are recorded.' },
+      { id: 'privileges', title: 'Privileges Audit', description: 'Confirm how privileges are granted and whether they can be obtained fraudulently, circumvented, hijacked, escalated or reused. Done when privilege paths are recorded.' },
+      { id: 'survivability', title: 'Survivability Validation and Service Continuity', description: 'Confirm how the target withstands disruption and which continuity and safety mechanisms keep it running, tested only within agreed limits. Done when results and limitations are recorded.' },
+      { id: 'alert-log', title: 'End Survey, Alert and Log Review', description: 'Confirm what was recorded and alerted during the test, in both directions, how quickly, how long it was kept and whether the records are intact. Done when test activity is reconciled with what was logged.' }
+    ]
+  },
+  std_ptes_v1: {
+    kind: 'checklist',
+    name: 'Penetration Testing Execution Standard (PTES)',
+    description: 'Coverage tracker based on the Penetration Testing Execution Standard, across its seven main sections from pre-engagement interactions to reporting. Tick each item once it is covered and recorded. For technique, follow the linked standard and its technical guidelines.',
+    category: 'Standards',
+    source: 'std_ptes_v1',
+    source_url: 'http://www.pentest-standard.org/index.php/Main_Page',
+    items: [
+      { id: 'pre-scope', title: 'Pre-engagement Interactions: scope, dates and targets', description: 'Confirm the scope, goals, start and end dates, IP ranges and domains, and any third parties involved are agreed in writing, with a process for handling scope changes. Done when the scope is signed off.', ref_url: 'http://www.pentest-standard.org/index.php/Pre-engagement' },
+      { id: 'pre-roe', title: 'Pre-engagement Interactions: rules of engagement and contacts', description: 'Confirm the rules of engagement, any permitted social engineering pretexts, the position on denial of service testing, lines of communication and emergency contacts are agreed. Done when every tester has them.', ref_url: 'http://www.pentest-standard.org/index.php/Pre-engagement' },
+      { id: 'intel', title: 'Intelligence Gathering', description: 'Confirm targets are selected and researched within scope through open-source intelligence and footprinting, and the protection mechanisms in place are identified. Done when findings are recorded.', ref_url: 'http://www.pentest-standard.org/index.php/PTES_Technical_Guidelines' },
+      { id: 'threat', title: 'Threat Modeling', description: 'Confirm the business assets and processes that matter, the threat agents likely to target them, and their capability and motivation are analysed. Done when the threat model is recorded and has shaped the test plan.' },
+      { id: 'vuln', title: 'Vulnerability Analysis', description: 'Confirm vulnerabilities are identified through active and passive testing, validated rather than taken from a scanner, and researched where needed. Done when each candidate issue is confirmed or discarded.', ref_url: 'http://www.pentest-standard.org/index.php/PTES_Technical_Guidelines' },
+      { id: 'exploit', title: 'Exploitation', description: 'Confirm exploitation stays within the authorised targets and objectives, takes account of the countermeasures in place, and is targeted rather than broad. Done when each attempt and its outcome is recorded.', ref_url: 'http://www.pentest-standard.org/index.php/PTES_Technical_Guidelines' },
+      { id: 'post', title: 'Post Exploitation', description: 'Confirm the value of any compromised system is assessed within the rules of engagement, covering infrastructure analysis, high-value targets and further access where authorised, with client data protected throughout. Done when activity and evidence are recorded.', ref_url: 'http://www.pentest-standard.org/index.php/PTES_Technical_Guidelines' },
+      { id: 'cleanup', title: 'Post Exploitation: cleanup', description: 'Confirm accounts, files, tools and configuration changes made during testing are removed or reverted, and anything that could not be is reported to the client. Done when the cleanup record is complete.' },
+      { id: 'report-exec', title: 'Reporting: executive summary', description: 'Confirm the executive summary sets out the goals, overall posture, risk and recommendations in business terms for a non-technical reader. Done when it has been reviewed.' },
+      { id: 'report-tech', title: 'Reporting: technical report', description: 'Confirm the technical report records the scope, method, each finding with its evidence, risk rating and remediation, and what was not tested. Done when it has passed QA.' }
+    ]
+  },
+  std_nist_sp800_115_v1: {
+    kind: 'checklist',
+    name: 'Technical Security Testing (NIST SP 800-115)',
+    description: 'Coverage tracker based on NIST SP 800-115, Technical Guide to Information Security Testing and Assessment (2008): its planning, discovery, attack and reporting phases, and the review, target identification and validation techniques it names. The number in each title points to the section. Tick each item once covered or recorded as not applicable. For technique, follow the linked guide.',
+    category: 'Standards',
+    source: 'std_nist_sp800_115_v1',
+    source_url: 'https://csrc.nist.gov/publications/detail/sp/800-115/final',
+    items: [
+      { id: 'planning', title: 'Planning (section 6 and the planning phase)', description: 'Confirm the assessment policy, priorities, chosen techniques, logistics, plan and legal considerations are settled, with the rules agreed and approval given in writing before any testing. Done when the plan is approved.' },
+      { id: 'doc-review', title: 'Documentation review (3.1)', description: 'Confirm security policies, architecture, procedures and plans are reviewed for gaps and accuracy. Done when the review is recorded.' },
+      { id: 'log-review', title: 'Log review (3.2)', description: 'Confirm logs show that security controls record the expected events and that logging follows policy. Done when the review is recorded.' },
+      { id: 'ruleset', title: 'Ruleset review (3.3)', description: 'Confirm firewall, router and other filtering rulesets are reviewed for gaps, redundant rules and rules broader than intended. Done when deviations are recorded.' },
+      { id: 'config-review', title: 'System configuration review (3.4)', description: 'Confirm system settings are compared with the organisation\'s hardening baseline or policy. Done when deviations are recorded.' },
+      { id: 'sniffing', title: 'Network sniffing (3.5)', description: 'Confirm traffic is captured passively, where authorised, to spot cleartext protocols, unexpected services and unauthorised devices. Done when observations are recorded.' },
+      { id: 'integrity', title: 'File integrity checking (3.6)', description: 'Confirm whether file integrity checking is in place and detects changes to important files. Done when the review is recorded.' },
+      { id: 'net-discovery', title: 'Network discovery (4.1)', description: 'Confirm active or passive discovery has identified the live hosts across the in-scope ranges. Done when coverage is recorded.' },
+      { id: 'ports', title: 'Network port and service identification (4.2)', description: 'Confirm open ports, services and versions are identified on the discovered hosts. Done when the inventory is recorded.' },
+      { id: 'vuln-scan', title: 'Vulnerability scanning (4.3)', description: 'Confirm authorised vulnerability scanning has covered the discovered hosts and its output is validated rather than reported as found. Done when validated results are recorded.' },
+      { id: 'wireless', title: 'Wireless scanning (4.4)', description: 'Confirm passive and active wireless scanning, device location tracking and Bluetooth scanning are covered where wireless is in scope. Done when results, or a not-applicable note, are recorded.' },
+      { id: 'passwords', title: 'Password cracking (5.1)', description: 'Confirm any password cracking is authorised, limited to hashes obtained in scope, and that hashes and recovered passwords are handled securely. Done when password strength findings are recorded.' },
+      { id: 'pt-discovery', title: 'Penetration testing: discovery phase (5.2.1)', description: 'Confirm information gathering and scanning, then vulnerability analysis against known vulnerability sources, are complete for the in-scope targets. Done when candidate vulnerabilities are listed.' },
+      { id: 'pt-attack', title: 'Penetration testing: attack phase (5.2.1)', description: 'Confirm candidate vulnerabilities are verified by authorised attack attempts, with anything learnt from access gained fed back into discovery. Done when each attempt and its outcome is recorded.' },
+      { id: 'social', title: 'Social engineering (5.3)', description: 'Confirm any social engineering is authorised, uses approved pretexts and is aimed at user awareness and whether staff follow procedure. Done when results are recorded.' },
+      { id: 'execution', title: 'Assessment execution (section 7)', description: 'Confirm coordination with the organisation during testing, analysis of results, and secure collection, storage, transmission and destruction of assessment data. Done when data handling is recorded.' },
+      { id: 'reporting', title: 'Reporting and mitigation (section 8 and the reporting phase)', description: 'Confirm updates are given during testing and the final report sets out findings, risk ratings and mitigation recommendations, with remediation tracked afterwards. Done when the report is delivered.' }
+    ]
+  },
+  web_owasp_asvs5_v1: {
+    kind: 'checklist',
+    name: 'Application Security Verification (OWASP ASVS 5.0)',
+    description: 'Coverage tracker based on the OWASP Application Security Verification Standard 5.0.0 (May 2025), one item per chapter. Agree the target level (1, 2 or 3) first, and note that some requirements can only be verified with documentation or code access rather than black-box testing. For the requirements, follow the linked chapter.',
+    category: 'Web and API',
+    phase_hint: 'Web Application',
+    source: 'web_owasp_asvs5_v1',
+    source_url: 'https://owasp.org/www-project-application-security-verification-standard/',
+    items: [
+      { id: 'v1', title: 'V1 Encoding and Sanitization', description: 'Confirm output encoding, injection prevention, sanitisation, memory-safe string handling and safe deserialisation wherever untrusted data is processed. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x10-V1-Encoding-and-Sanitization.md' },
+      { id: 'v2', title: 'V2 Validation and Business Logic', description: 'Confirm input validation, business logic security and anti-automation controls. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x11-V2-Validation-and-Business-Logic.md' },
+      { id: 'v3', title: 'V3 Web Frontend Security', description: 'Confirm cookie setup, browser security headers, origin separation, external resource integrity and protection against content being interpreted in unintended ways. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x12-V3-Web-Frontend-Security.md' },
+      { id: 'v4', title: 'V4 API and Web Service', description: 'Confirm web service security, HTTP message structure validation, and GraphQL and WebSocket controls where they are used. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x13-V4-API-and-Web-Service.md' },
+      { id: 'v5', title: 'V5 File Handling', description: 'Confirm file upload, storage and download are handled safely. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x14-V5-File-Handling.md' },
+      { id: 'v6', title: 'V6 Authentication', description: 'Confirm password security, the lifecycle and recovery of authentication factors, multi-factor and out-of-band mechanisms, and identity provider integration. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x15-V6-Authentication.md' },
+      { id: 'v7', title: 'V7 Session Management', description: 'Confirm session security, timeouts, termination, defences against session abuse and federated re-authentication. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x16-V7-Session-Management.md' },
+      { id: 'v8', title: 'V8 Authorization', description: 'Confirm authorisation is designed and enforced at function, object and field level, covering insecure direct object references. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x17-V8-Authorization.md' },
+      { id: 'v9', title: 'V9 Self-contained Tokens', description: 'Confirm self-contained tokens such as JWTs and SAML assertions are checked for source, integrity and content before they are trusted. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x18-V9-Self-contained-Tokens.md' },
+      { id: 'v10', title: 'V10 OAuth and OIDC', description: 'Confirm OAuth clients, resource servers and authorisation servers, OIDC clients, OpenID providers and consent management, wherever they are used. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x19-V10-OAuth-and-OIDC.md' },
+      { id: 'v11', title: 'V11 Cryptography', description: 'Confirm a cryptographic inventory, sound implementation, approved algorithms, hashing, random values and public key use. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x20-V11-Cryptography.md' },
+      { id: 'v12', title: 'V12 Secure Communication', description: 'Confirm TLS for external HTTPS and for service-to-service traffic follows current guidance. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x21-V12-Secure-Communication.md' },
+      { id: 'v13', title: 'V13 Configuration', description: 'Confirm backend communication settings, secret management and that nothing leaks unintended information. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x22-V13-Configuration.md' },
+      { id: 'v14', title: 'V14 Data Protection', description: 'Confirm sensitive data is identified and protected on the server and in the client. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x23-V14-Data-Protection.md' },
+      { id: 'v15', title: 'V15 Secure Coding and Architecture', description: 'Confirm architecture and dependency management, defensive coding and safe concurrency. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x24-V15-Secure-Coding-and-Architecture.md' },
+      { id: 'v16', title: 'V16 Security Logging and Error Handling', description: 'Confirm security events are logged, the logs are protected, and errors are handled without leaking detail. Done when the chapter is verified at the agreed level.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x25-V16-Security-Logging-and-Error-Handling.md' },
+      { id: 'v17', title: 'V17 WebRTC', description: 'Confirm TURN servers, media and signalling are secured where WebRTC is used. Done when the chapter is verified at the agreed level, or recorded as not applicable.', ref_url: 'https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x26-V17-WebRTC.md' }
+    ]
+  },
+  web_owasp_api_top10_2023_v1: {
+    kind: 'checklist',
+    name: 'API Security Testing (OWASP API Security Top 10 2023)',
+    description: 'Coverage tracker for an API phase based on the OWASP API Security Top 10 2023, one item per risk. Tick a risk once every in-scope endpoint it applies to has been tested against it. For technique, follow the linked project.',
+    category: 'Web and API',
+    phase_hint: 'API',
+    source: 'web_owasp_api_top10_2023_v1',
+    source_url: 'https://owasp.org/www-project-api-security/',
+    items: [
+      { id: 'api1', title: 'API1:2023 Broken Object Level Authorization', description: 'Confirm every endpoint that takes an object identifier checks that the caller may access that object, tested across users and roles. Done when each such endpoint is covered.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
+      { id: 'api2', title: 'API2:2023 Broken Authentication', description: 'Confirm authentication endpoints, recovery flows and token handling resist credential attacks and token compromise. Done when each authentication path is covered.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
+      { id: 'api3', title: 'API3:2023 Broken Object Property Level Authorization', description: 'Confirm responses expose only the properties the caller may see, and requests cannot set properties the caller may not change. Done when each object type is covered.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
+      { id: 'api4', title: 'API4:2023 Unrestricted Resource Consumption', description: 'Confirm limits on request rate, request body size, page size and paid third-party actions such as SMS or email are enforced, tested within agreed limits. Done when the limits are recorded.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
+      { id: 'api5', title: 'API5:2023 Broken Function Level Authorization', description: 'Confirm administrative and privileged functions reject callers without the right role, across HTTP methods and API versions. Done when each privileged function is covered.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
+      { id: 'api6', title: 'API6:2023 Unrestricted Access to Sensitive Business Flows', description: 'Confirm flows that would harm the business if automated, such as purchasing, booking or posting, have protection suited to that risk. Done when each sensitive flow is reviewed.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
+      { id: 'api7', title: 'API7:2023 Server Side Request Forgery', description: 'Confirm any feature that fetches a user-supplied URL validates the destination and cannot be used to reach internal services. Done when each such feature is covered.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
+      { id: 'api8', title: 'API8:2023 Security Misconfiguration', description: 'Confirm hardening, transport security, CORS, error handling and permitted HTTP methods across the API stack follow current guidance. Done when deviations are recorded.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
+      { id: 'api9', title: 'API9:2023 Improper Inventory Management', description: 'Confirm hosts, API versions and environments are documented, and old versions and debug endpoints are retired or protected. Done when the inventory is reconciled with what was found.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' },
+      { id: 'api10', title: 'API10:2023 Unsafe Consumption of APIs', description: 'Confirm data received from third-party APIs is validated and treated as untrusted, over secure transport. Done when each integration is reviewed.', ref_url: 'https://api-security.owasp.org/editions/2023/en/0x11-t10/' }
+    ]
+  },
+  web_owasp_top10_2025_v1: {
+    kind: 'checklist',
+    name: 'Web Application Risks (OWASP Top 10 2025)',
+    description: 'Coverage tracker based on the OWASP Top 10 2025, one item per category, for confirming each category has been considered and for grouping findings for the reader. The Top 10 is an awareness list, not a test method: drive the testing from the OWASP WSTG checklist. For detail, follow the linked category.',
+    category: 'Web and API',
+    phase_hint: 'Web Application',
+    source: 'web_owasp_top10_2025_v1',
+    source_url: 'https://top10.owasp.org/2025/',
+    items: [
+      { id: 'a01', title: 'A01:2025 Broken Access Control', description: 'Confirm access is denied by default and enforced on the server across roles, objects and functions, including server-side request forgery, which now sits in this category. Done when each role and object path is covered.', ref_url: 'https://top10.owasp.org/2025/A01_2025-Broken_Access_Control/' },
+      { id: 'a02', title: 'A02:2025 Security Misconfiguration', description: 'Confirm hardening across the stack, with no default accounts, unnecessary features, verbose errors or missing security headers, and XML parsers configured safely. Done when deviations are recorded.', ref_url: 'https://top10.owasp.org/2025/A02_2025-Security_Misconfiguration/' },
+      { id: 'a03', title: 'A03:2025 Software Supply Chain Failures', description: 'Confirm components are known, supported and patched, and that the build, dependency and distribution chain is controlled. Done when the component review is recorded.', ref_url: 'https://top10.owasp.org/2025/A03_2025-Software_Supply_Chain_Failures/' },
+      { id: 'a04', title: 'A04:2025 Cryptographic Failures', description: 'Confirm data in transit and at rest is protected with current algorithms, protocols and key handling, with no sensitive data sent in cleartext. Done when gaps are recorded.', ref_url: 'https://top10.owasp.org/2025/A04_2025-Cryptographic_Failures/' },
+      { id: 'a05', title: 'A05:2025 Injection', description: 'Confirm untrusted input cannot change the meaning of queries or commands, covering SQL, NoSQL, OS command, LDAP and expression language injection and cross-site scripting. Done when each in-scope input is covered.', ref_url: 'https://top10.owasp.org/2025/A05_2025-Injection/' },
+      { id: 'a06', title: 'A06:2025 Insecure Design', description: 'Confirm the design includes the controls the business risk calls for, such as limits on abuse of workflows, rather than relying on implementation alone. Done when design weaknesses are recorded.', ref_url: 'https://top10.owasp.org/2025/A06_2025-Insecure_Design/' },
+      { id: 'a07', title: 'A07:2025 Authentication Failures', description: 'Confirm resistance to credential stuffing and brute force, no default or known-breached passwords, safe credential recovery and effective multi-factor authentication. Done when each authentication path is covered.', ref_url: 'https://top10.owasp.org/2025/A07_2025-Authentication_Failures/' },
+      { id: 'a08', title: 'A08:2025 Software or Data Integrity Failures', description: 'Confirm code, updates, pipeline artefacts and serialised data are checked for integrity before they are trusted. Done when the review is recorded.', ref_url: 'https://top10.owasp.org/2025/A08_2025-Software_or_Data_Integrity_Failures/' },
+      { id: 'a09', title: 'A09:2025 Security Logging and Alerting Failures', description: 'Confirm security events are logged, protected and alerted on, and record whether the testing itself raised alerts. Done when the review is recorded.', ref_url: 'https://top10.owasp.org/2025/A09_2025-Security_Logging_and_Alerting_Failures/' },
+      { id: 'a10', title: 'A10:2025 Mishandling of Exceptional Conditions', description: 'Confirm errors and unexpected conditions fail closed, do not leak detail and leave the application in a known state. Done when the review is recorded.', ref_url: 'https://top10.owasp.org/2025/A10_2025-Mishandling_of_Exceptional_Conditions/' }
+    ]
+  },
+  ai_owasp_llm_top10_2026_v1: {
+    kind: 'checklist',
+    name: 'LLM Application Testing (OWASP GenAI LLM Top 10 2026)',
+    description: 'Coverage tracker for an application built on a large language model, based on the OWASP GenAI LLM Top 10 2026 (published August 2026), one item per risk. Where the model acts as an agent with tools and memory, the project points to its separate Agentic Top 10 as well. For technique, follow the linked list.',
+    category: 'AI applications',
+    source: 'ai_owasp_llm_top10_2026_v1',
+    source_url: 'https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/',
+    items: [
+      { id: 'llm01', title: 'LLM01:2026 Prompt Injection', description: 'Confirm direct input, retrieved content, tool output, images, audio and stored memory cannot make the model act outside its intended behaviour. Done when each input route is covered.' },
+      { id: 'llm02', title: 'LLM02:2026 Sensitive Information Disclosure', description: 'Confirm confidential data cannot leak through answers, tool-call arguments, retrieved content, logs or other side channels. Done when each channel is reviewed.' },
+      { id: 'llm03', title: 'LLM03:2026 Excessive Agency', description: 'Confirm the tools the model can call have only the functions, permissions and autonomy they need, with human approval for high-impact actions. Done when each tool is reviewed.' },
+      { id: 'llm04', title: 'LLM04:2026 Supply Chain', description: 'Confirm third-party models, datasets, adapters and model artefacts are sourced and verified, and cannot be swapped for something else. Done when each component is reviewed.' },
+      { id: 'llm05', title: 'LLM05:2026 Data and Model Poisoning', description: 'Confirm data and model artefacts are protected wherever they are ingested or reused, from training and fine-tuning to retrieval and model distribution. Done when the review is recorded.' },
+      { id: 'llm06', title: 'LLM06:2026 Unbounded Consumption', description: 'Confirm limits on input size, request rate and cost prevent denial of service, runaway spend and model cloning, tested within agreed limits. Done when the limits are recorded.' },
+      { id: 'llm07', title: 'LLM07:2026 Misinformation', description: 'Confirm incorrect or unsupported output cannot be acted on unchecked by people, workflows or agents that rely on it. Done when the review is recorded.' },
+      { id: 'llm08', title: 'LLM08:2026 Hidden Context Exposure', description: 'Confirm system instructions, tool schemas and other hidden context hold nothing that helps an attacker if extracted, and no control relies on it staying hidden. Done when the review is recorded.' },
+      { id: 'llm09', title: 'LLM09:2026 Vector and Embedding Weaknesses', description: 'Confirm retrieval stores, vector-backed memory and semantic caches enforce access control and resist injected or poisoned content. Done when the review is recorded.' },
+      { id: 'llm10', title: 'LLM10:2026 Improper Output Handling', description: 'Confirm model output is validated and encoded before it reaches browsers, databases, shells or other systems. Done when each output path is covered.' }
+    ]
+  },
+  adv_mitre_attack_enterprise_v1: {
+    kind: 'checklist',
+    name: 'Adversary Simulation Coverage (MITRE ATT&CK Enterprise)',
+    description: 'Coverage tracker for an adversary simulation based on the MITRE ATT&CK Enterprise matrix, one item per tactic. There are fifteen as of ATT&CK v20, since v19 split Defense Evasion into Stealth and Defense Impairment. Tick a tactic once the agreed techniques under it have been exercised or recorded as out of scope, and note technique IDs in the evidence. For techniques, follow the linked matrix.',
+    category: 'Adversary simulation',
+    phase_hint: 'Red Team',
+    source: 'adv_mitre_attack_enterprise_v1',
+    source_url: 'https://attack.mitre.org/tactics/enterprise/',
+    items: [
+      { id: 'ta0043', title: 'Reconnaissance (TA0043)', description: 'Confirm the information an adversary would gather before acting has been collected within agreed limits. Done when the planned techniques are exercised or recorded as out of scope.', ref_url: 'https://attack.mitre.org/tactics/TA0043/' },
+      { id: 'ta0042', title: 'Resource Development (TA0042)', description: 'Confirm the infrastructure, accounts and capabilities the simulation uses are set up, recorded and ready to be removed afterwards. Done when the inventory is recorded.', ref_url: 'https://attack.mitre.org/tactics/TA0042/' },
+      { id: 'ta0001', title: 'Initial Access (TA0001)', description: 'Confirm the agreed entry routes have been attempted and their outcomes recorded. Done when each planned route is covered.', ref_url: 'https://attack.mitre.org/tactics/TA0001/' },
+      { id: 'ta0002', title: 'Execution (TA0002)', description: 'Confirm running adversary-controlled code on target systems has been exercised within the rules of engagement. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0002/' },
+      { id: 'ta0003', title: 'Persistence (TA0003)', description: 'Confirm any persistence placed was approved and recorded, and is removed at the end. Done when every item placed is accounted for.', ref_url: 'https://attack.mitre.org/tactics/TA0003/' },
+      { id: 'ta0004', title: 'Privilege Escalation (TA0004)', description: 'Confirm attempts to gain higher permissions have been exercised and recorded. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0004/' },
+      { id: 'ta0005', title: 'Stealth (TA0005)', description: 'Confirm techniques for blending in with normal activity, without weakening defences, have been exercised and recorded for the blue team. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0005/' },
+      { id: 'ta0112', title: 'Defense Impairment (TA0112)', description: 'Confirm any weakening of security controls, monitoring or tooling was explicitly approved, recorded and reversed. Done when each change is accounted for.', ref_url: 'https://attack.mitre.org/tactics/TA0112/' },
+      { id: 'ta0006', title: 'Credential Access (TA0006)', description: 'Confirm attempts to obtain credentials have been exercised, with any credentials captured stored securely and reported. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0006/' },
+      { id: 'ta0007', title: 'Discovery (TA0007)', description: 'Confirm discovery of systems, accounts and network layout from inside the environment has been exercised and recorded. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0007/' },
+      { id: 'ta0008', title: 'Lateral Movement (TA0008)', description: 'Confirm movement between systems towards the objectives has been exercised and recorded. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0008/' },
+      { id: 'ta0009', title: 'Collection (TA0009)', description: 'Confirm data gathering is limited to what proves the objective, with any real data handled under the agreed rules. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0009/' },
+      { id: 'ta0011', title: 'Command and Control (TA0011)', description: 'Confirm the command and control channels used are recorded, with whether each was detected. Done when every channel is accounted for.', ref_url: 'https://attack.mitre.org/tactics/TA0011/' },
+      { id: 'ta0010', title: 'Exfiltration (TA0010)', description: 'Confirm exfiltration is simulated with agreed marker data unless real data has been explicitly authorised. Done when the planned techniques are covered.', ref_url: 'https://attack.mitre.org/tactics/TA0010/' },
+      { id: 'ta0040', title: 'Impact (TA0040)', description: 'Confirm impact is demonstrated only as agreed, usually by proving access rather than by disrupting services. Done when the agreed demonstration is recorded.', ref_url: 'https://attack.mitre.org/tactics/TA0040/' }
+    ]
+  },
+  adv_red_team_engagement_v1: {
+    kind: 'checklist',
+    name: 'Threat-Led Red Team Engagement',
+    description: 'Coverage tracker for an intelligence-led red team engagement, shaped on the phases that TIBER-EU (updated in February 2025 to align with DORA threat-led penetration testing) and the Bank of England\'s CBEST share: preparation and scoping, threat intelligence, planning, testing, and closure with replay. Each framework names its own documents and roles; for those, follow the linked framework.',
+    category: 'Adversary simulation',
+    phase_hint: 'Red Team',
+    source: 'adv_red_team_engagement_v1',
+    source_url: 'https://www.ecb.europa.eu/paym/cyber-resilience/tiber-eu/html/index.en.html',
+    items: [
+      { id: 'control-team', title: 'Control team and sponsor in place', description: 'Confirm a senior sponsor and a small control team (the Control Team in TIBER-EU, the Control Group in CBEST) run the engagement, and that the blue team is not told. Done when names, roles and secrecy arrangements are recorded.' },
+      { id: 'authority', title: 'Regulator or test authority engaged where required', description: 'Confirm whether the engagement runs under a framework that involves a regulator or test authority, and that they have been notified. Done when their role is recorded.' },
+      { id: 'scope', title: 'Scope of critical functions and supporting systems', description: 'Confirm the critical business functions or services in scope, and the systems that support them, are agreed in a written scope specification. Done when the scope is signed off.' },
+      { id: 'providers', title: 'Providers and contracts', description: 'Confirm the threat intelligence and red team providers are engaged under contracts that cover authorisation, liability and data handling, and meet any framework requirements for providers. Done when contracts are signed.' },
+      { id: 'risk', title: 'Risk management and stop arrangements', description: 'Confirm a risk management plan sets out limits, how testing is paused or stopped, and how a real incident or critical finding is handled. Done when the plan is approved.', ref_url: 'https://www.bankofengland.co.uk/financial-stability/operational-resilience-of-the-financial-sector/cbest-threat-intelligence-led-assessments-implementation-guide' },
+      { id: 'threat-intel', title: 'Targeted threat intelligence', description: 'Confirm threat intelligence on the organisation identifies the relevant threat actors, their likely methods and the exposed attack surface. Done when the threat intelligence report is accepted.' },
+      { id: 'scenarios', title: 'Attack scenarios selected', description: 'Confirm scenarios are drawn from the threat intelligence and agreed with the control team, and with the authority where one is involved. Done when the scenarios are recorded.' },
+      { id: 'test-plan', title: 'Red team test plan', description: 'Confirm the test plan sets out scenarios, objectives (flags), milestones, how leg-ups are requested and timings, and is approved before testing. Done when the approved plan is on file.' },
+      { id: 'comms', title: 'Communication during testing', description: 'Confirm regular update meetings with the control team, a running log of actions, and an agreed response if the blue team detects the test. Done when the arrangements are in use.' },
+      { id: 'execution', title: 'Active testing within the plan', description: 'Confirm testing follows the approved plan and scope, for the agreed period (TIBER-EU sets a minimum of 12 weeks), with a timestamped log of every action for the replay. Done when testing closes with the log complete.', ref_url: 'https://www.ecb.europa.eu/pub/pdf/other/ecb.tiber_eu_framework_2025~b32eff9a10.en.pdf' },
+      { id: 'leg-ups', title: 'Leg-ups logged and approved', description: 'Confirm every leg-up given to the red team was approved by the control team and logged with its reason. Done when the log is complete.' },
+      { id: 'rt-report', title: 'Red team report', description: 'Confirm the report describes each attack path, the objectives reached, the timeline of actions and the weaknesses that made them possible. Done when it is delivered to the control team.' },
+      { id: 'bt-report', title: 'Blue team account of detection and response', description: 'Confirm the blue team\'s view of what it detected and how it responded is captured against the red team timeline (TIBER-EU calls this the Blue Team Test Report). Done when it is recorded.', ref_url: 'https://www.ecb.europa.eu/pub/pdf/other/ecb.tiber_eu_framework_2025~b32eff9a10.en.pdf' },
+      { id: 'replay', title: 'Replay and purple teaming', description: 'Confirm the red and blue teams walk through the attack step by step, then work together on the gaps it exposed. Done when the sessions are held and their findings recorded.', ref_url: 'https://www.ecb.europa.eu/pub/pdf/other/ecb.tiber_eu_framework_2025~b32eff9a10.en.pdf' },
+      { id: 'remediation', title: 'Remediation plan', description: 'Confirm a remediation plan with owners and dates is agreed for the weaknesses found and tracked afterwards. Done when the plan is approved.' },
+      { id: 'closure', title: 'Summary, attestation and lessons learned', description: 'Confirm the closing summary, any attestation or regulator debrief, and feedback on how the engagement ran are complete. Done when the engagement is formally closed.' }
+    ]
+  },
+  comp_pci_dss_11_4_v1: {
+    kind: 'checklist',
+    name: 'Penetration Testing for PCI DSS (v4.0.1 Requirement 11.4)',
+    description: 'Coverage tracker for the penetration testing PCI DSS v4.0.1 Requirement 11.4 asks for, one item per sub-requirement, with the methodology requirement (11.4.1) split into its parts. Use it to check the test, its scope and the retest evidence will stand up to an assessor. For the requirement text and testing procedures, follow the linked standard.',
+    category: 'Compliance',
+    source: 'comp_pci_dss_11_4_v1',
+    source_url: 'https://www.pcisecuritystandards.org/document_library/',
+    items: [
+      { id: 'method', title: '11.4.1 Methodology defined, documented and implemented', description: 'Confirm the entity has a written penetration testing methodology based on industry-accepted approaches, and that this test follows it. Done when the methodology is referenced in the report.' },
+      { id: 'method-coverage', title: '11.4.1 Coverage of the perimeter, critical systems and segmentation', description: 'Confirm the methodology covers the entire cardholder data environment perimeter and critical systems, testing from both inside and outside the network, and validation of any segmentation and scope-reduction controls. Done when coverage is mapped to the scope.' },
+      { id: 'method-layers', title: '11.4.1 Application-layer and network-layer testing', description: 'Confirm application-layer testing covers at least the vulnerabilities listed in Requirement 6.2.4, and network-layer testing covers the components that support network functions and operating systems. Done when both layers are evidenced.' },
+      { id: 'method-records', title: '11.4.1 Recent threats, risk approach and retention', description: 'Confirm threats and vulnerabilities from the last 12 months are reviewed, the approach to assessing and addressing exploitable findings is documented, and results and remediation records are kept for at least 12 months. Done when each is evidenced.' },
+      { id: 'internal', title: '11.4.2 Internal penetration testing', description: 'Confirm internal testing follows the methodology at least once every 12 months and after any significant infrastructure or application upgrade or change, by a qualified and organisationally independent tester (not necessarily a QSA). Done when dates and tester independence are recorded.' },
+      { id: 'external', title: '11.4.3 External penetration testing', description: 'Confirm external testing follows the methodology at least once every 12 months and after any significant infrastructure or application upgrade or change, by a qualified and organisationally independent tester. Done when dates and tester independence are recorded.' },
+      { id: 'correct-retest', title: '11.4.4 Exploitable findings corrected and retested', description: 'Confirm exploitable vulnerabilities and security weaknesses are corrected in line with the entity\'s risk ranking under Requirement 6.3.1, and that testing is repeated to verify the corrections. Done when retest evidence is on file for every exploitable finding.' },
+      { id: 'segmentation', title: '11.4.5 Segmentation testing', description: 'Confirm, where segmentation isolates the cardholder data environment, that every segmentation control and method in use is tested at least once every 12 months and after changes, showing it works and isolates the environment from all out-of-scope systems. Done when results are recorded per control.' },
+      { id: 'sp-segmentation', title: '11.4.6 Service providers: segmentation every six months', description: 'Confirm, for a service provider that uses segmentation, that segmentation testing runs at least once every six months and after any change to segmentation controls. Done when the dates are recorded.' },
+      { id: 'multi-tenant', title: '11.4.7 Multi-tenant service providers support customer testing', description: 'Confirm a multi-tenant service provider supports its customers\' external penetration testing, by providing evidence of testing that meets 11.4.3 and 11.4.4 or by giving prompt access to test. Mandatory since 31 March 2025. Done when the arrangement is recorded.' }
+    ]
+  },
+  infra_active_directory_v1: {
+    kind: 'checklist',
+    name: 'Active Directory Security Review',
+    description: 'Coverage tracker for an Active Directory review within an internal infrastructure phase, going deeper than the internal checklist: privileged groups, tiering, delegation, Kerberos, permissions, certificate services, Group Policy, password policy, LAPS and legacy protocols. Each item is confirmed against current Microsoft guidance, with exceptions recorded. For technique, follow the linked guidance.',
+    category: 'Infrastructure',
+    phase_hint: 'Internal Infrastructure',
+    source: 'infra_active_directory_v1',
+    source_url: 'https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/best-practices-for-securing-active-directory',
+    items: [
+      { id: 'priv-groups', title: 'Privileged group membership', description: 'Confirm membership of Enterprise Admins, Domain Admins, Schema Admins, Administrators, the Account, Backup, Server and Print Operators groups, DnsAdmins and Group Policy Creator Owners is minimal and justified. Done when every member is accounted for.', ref_url: 'https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/appendix-b--privileged-accounts-and-groups-in-active-directory' },
+      { id: 'tiering', title: 'Tiering and privileged account protection', description: 'Confirm privileged accounts are separate from day-to-day accounts, sign in only to systems at their own tier, and are in the Protected Users group or marked as sensitive and not delegable where compatible. Done when exceptions are recorded.', ref_url: 'https://learn.microsoft.com/en-us/security/privileged-access-workstations/overview' },
+      { id: 'delegation', title: 'Kerberos delegation', description: 'Confirm unconstrained delegation is limited to domain controllers, and constrained and resource-based constrained delegation exist only where needed and point only at the intended services. Done when every delegation is justified.' },
+      { id: 'kerberos', title: 'Kerberos hardening', description: 'Confirm accounts with service principal names have long random passwords or are group managed service accounts, no account skips Kerberos pre-authentication, RC4 use is restricted in line with current Microsoft guidance, and the krbtgt password has been changed in line with policy. Done when exceptions are recorded.' },
+      { id: 'acls', title: 'Directory permissions', description: 'Confirm no unprivileged user or group holds control over privileged objects, Group Policy objects or the domain itself, such as reset password, group membership, permission or ownership changes, or directory replication rights, and that AdminSDHolder keeps its default permissions. Done when risky permissions are recorded.' },
+      { id: 'adcs', title: 'Certificate Services (AD CS)', description: 'Confirm certificate templates, certificate authority settings, enrolment endpoints and PKI object permissions are checked against the escalation classes catalogued since SpecterOps\' Certified Pre-Owned research (ESC1 to ESC8 in the original paper, extended by later research). Done when each class is checked or ruled out.', ref_url: 'https://specterops.io/research/certified-pre-owned/' },
+      { id: 'gpo', title: 'Group Policy and SYSVOL', description: 'Confirm Group Policy objects and SYSVOL hold no stored credentials, such as legacy Group Policy Preferences passwords, and that rights to edit or link GPOs are restricted. Done when findings are recorded.' },
+      { id: 'password-policy', title: 'Password policy', description: 'Confirm the domain and any fine-grained password policies set length, lockout or throttling and screening of common passwords in line with current NCSC and NIST guidance. Done when gaps are recorded.' },
+      { id: 'laps', title: 'Local administrator passwords (LAPS)', description: 'Confirm local administrator passwords are unique per machine and rotated by Windows LAPS or legacy LAPS, and that read access to them is restricted. Done when coverage and access are recorded.', ref_url: 'https://learn.microsoft.com/en-us/windows-server/identity/laps/laps-overview' },
+      { id: 'legacy', title: 'Legacy authentication and name resolution', description: 'Confirm LM and NTLMv1 are disabled, NTLM use is restricted, and LLMNR, NetBIOS name service and WPAD fallbacks are disabled where they are not needed. Done when exceptions are recorded.' },
+      { id: 'signing', title: 'SMB signing, LDAP signing and channel binding', description: 'Confirm SMB signing is required, and LDAP signing and channel binding are enforced on domain controllers. Done when exceptions are recorded.' },
+      { id: 'accounts', title: 'Stale and weakly configured accounts', description: 'Confirm inactive and orphaned accounts are removed or disabled, and no account has the password-not-required flag or a non-expiring password without a recorded reason. Done when exceptions are recorded.' },
+      { id: 'machine-quota', title: 'Machine account quota', description: 'Confirm ordinary users cannot add computers to the domain, by reducing ms-DS-MachineAccountQuota from its default of 10, unless there is a reason. Done when the setting is recorded.' },
+      { id: 'trusts', title: 'Domain and forest trusts', description: 'Confirm each trust is still needed, and that SID filtering and selective authentication are applied where appropriate. Done when every trust is recorded.' },
+      { id: 'dc-hardening', title: 'Domain controller hardening', description: 'Confirm domain controllers are supported, patched, run only the roles they need and are administered only from tier 0 systems. Done when exceptions are recorded.' },
+      { id: 'monitoring', title: 'Monitoring of directory changes', description: 'Confirm changes to privileged groups, Group Policy, certificate services and other sensitive objects are logged and alerted on. Done when coverage is recorded.' }
+    ]
+  },
+  cloud_kubernetes_v1: {
+    kind: 'checklist',
+    name: 'Kubernetes and Container Review (CIS, NSA and CISA)',
+    description: 'Coverage tracker for a Kubernetes cluster and its workloads, following the areas of the CIS Kubernetes Benchmark and the NSA and CISA Kubernetes Hardening Guide (v1.2). For a managed service such as EKS, AKS or GKE, use the provider-specific CIS Benchmark for the parts the provider runs. The CIS numbers in titles point to benchmark sections. For each control, follow the linked benchmark.',
+    category: 'Cloud and containers',
+    source: 'cloud_kubernetes_v1',
+    source_url: 'https://www.cisecurity.org/benchmark/kubernetes',
+    items: [
+      { id: 'inventory', title: 'Cluster inventory and benchmark choice', description: 'Confirm the clusters, versions and node pools in scope, whether the control plane is self-managed or provider-managed, and which benchmark applies. Done when scope and benchmark are recorded.' },
+      { id: 'cp-files', title: 'Control plane node configuration files (CIS 1.1)', description: 'Confirm ownership and permissions on control plane manifests, configuration files and certificate material are restricted. Done when deviations are recorded.' },
+      { id: 'api-server', title: 'API server (CIS 1.2)', description: 'Confirm anonymous access is disabled where possible, authorisation includes Node and RBAC and is never AlwaysAllow, admission plugins are set, secrets are encrypted at rest, and audit logging and TLS are configured. Done when deviations are recorded.' },
+      { id: 'cm-scheduler', title: 'Controller manager and scheduler (CIS 1.3 and 1.4)', description: 'Confirm profiling is off, both components bind only to localhost, and the controller manager uses separate service account credentials. Done when deviations are recorded.' },
+      { id: 'etcd', title: 'etcd (CIS 2)', description: 'Confirm etcd requires TLS with client certificate authentication for clients and peers, uses its own certificate authority and is reachable only from the control plane. Done when deviations are recorded.' },
+      { id: 'user-auth', title: 'Authentication and authorisation for users (CIS 3.1)', description: 'Confirm people authenticate through an identity provider rather than client certificates, service account tokens or bootstrap tokens. Done when deviations are recorded.' },
+      { id: 'audit', title: 'Audit logging (CIS 3.2)', description: 'Confirm an audit policy records security-relevant requests and that audit logs are sent off the cluster and monitored. Done when coverage is recorded.' },
+      { id: 'kubelet', title: 'Worker nodes and kubelet (CIS 4.1 and 4.2)', description: 'Confirm kubelet anonymous access is off, authorisation is Webhook rather than AlwaysAllow, the read-only port is disabled, certificates rotate and node configuration files are locked down. Done when deviations are recorded.' },
+      { id: 'rbac', title: 'RBAC and service accounts (CIS 5.1)', description: 'Confirm cluster-admin is used only where needed; wildcards, access to secrets, pod creation and bind, impersonate and escalate rights are minimal; default service accounts are unused and tokens are mounted only where needed. Done when over-privilege is recorded.' },
+      { id: 'pod-security', title: 'Pod security (CIS 5.2)', description: 'Confirm a policy mechanism such as Pod Security Admission blocks privileged containers, host namespaces, privilege escalation, root containers, added capabilities, hostPath volumes and host ports except where justified. Done when exceptions are recorded.' },
+      { id: 'images-runtime', title: 'Images and container hardening', description: 'Confirm images come from trusted registries and are scanned and minimal, containers run as non-root with read-only root file systems where possible, and seccomp profiles apply. Done when gaps are recorded.', ref_url: 'https://media.defense.gov/2022/Aug/29/2003066362/1/1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF' },
+      { id: 'network', title: 'Network policies and segmentation (CIS 5.3)', description: 'Confirm the network plugin supports network policies, every namespace has policies that deny by default and allow only needed traffic, and nodes are segmented from other networks. Done when open paths are recorded.' },
+      { id: 'secrets', title: 'Secrets management (CIS 5.4)', description: 'Confirm secrets are mounted as files rather than environment variables, access to them is restricted, and external secret storage is considered. Done when gaps are recorded.' },
+      { id: 'admission', title: 'Admission control and image provenance (CIS 5.5)', description: 'Confirm admission controls enforce image provenance and policy, and ordinary users cannot change webhook configurations. Done when the review is recorded.' },
+      { id: 'namespaces', title: 'Namespaces, resource limits and general policies (CIS 5.6)', description: 'Confirm workloads are separated by namespace with the default namespace unused, and resource quotas and limits stop one workload starving others. Done when gaps are recorded.' },
+      { id: 'cloud-metadata', title: 'Cloud metadata and provider access', description: 'Confirm pods cannot reach the cloud instance metadata service or provider credentials unless they need them, and workload identities have least privilege. Done when exposure is recorded.', ref_url: 'https://media.defense.gov/2022/Aug/29/2003066362/1/1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF' },
+      { id: 'upgrades', title: 'Version support and upgrades', description: 'Confirm the Kubernetes version and add-ons are supported and patched, with a regular upgrade process. Done when gaps are recorded.', ref_url: 'https://media.defense.gov/2022/Aug/29/2003066362/1/1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF' }
+    ]
+  },
+  people_social_engineering_v1: {
+    kind: 'checklist',
+    name: 'Social Engineering and Phishing Assessment',
+    description: 'Coverage tracker for a social engineering or phishing phase, from authorisation to reporting, drawing on the PTES pre-engagement guidance and the NCSC\'s phishing guidance. It records how the assessment is approved, run safely and reported. For the defensive context, follow the linked guidance.',
+    category: 'People and physical',
+    phase_hint: 'Social Engineering',
+    source: 'people_social_engineering_v1',
+    source_url: 'https://www.ncsc.gov.uk/guidance/phishing',
+    items: [
+      { id: 'authorisation', title: 'Written authorisation from the right person', description: 'Confirm someone with authority over the people and systems in scope has authorised the assessment in writing, and that HR and legal have been consulted. Done when the authorisation is on file.' },
+      { id: 'objectives', title: 'Objectives and measures agreed', description: 'Confirm what the assessment is for, such as awareness, reporting or technical controls, and how results will be measured, counting reports as well as clicks. Done when the objectives are recorded.', ref_url: 'https://www.ncsc.gov.uk/guidance/phishing' },
+      { id: 'targets', title: 'Scope of targets', description: 'Confirm the people or groups, channels (email, phone, SMS or in person) and dates in scope, and any exclusions the client asks for. Done when the target list is approved.' },
+      { id: 'pretexts', title: 'Pretexts approved', description: 'Confirm each pretext is approved in advance, avoids themes likely to cause distress such as health, bereavement, pay or redundancy, and does not impersonate a third party without its agreement. Done when approved pretexts are recorded.', ref_url: 'http://www.pentest-standard.org/index.php/Pre-engagement' },
+      { id: 'infrastructure', title: 'Sending infrastructure', description: 'Confirm the domains, mail servers, phone numbers and landing pages used are set up for this engagement, secured, and recorded so they can be taken down afterwards. Done when the inventory is recorded.' },
+      { id: 'coordination', title: 'Coordination with mail and security teams', description: 'Confirm who at the client knows, and whether any filtering exceptions are used, so results are read correctly and real incidents are not confused with the test. Done when the arrangement is recorded.' },
+      { id: 'data-handling', title: 'Safe handling of captured data', description: 'Confirm landing pages record that a submission happened without keeping the password, and any personal data collected is minimised, encrypted and deleted on an agreed date in line with UK GDPR. Done when the data handling plan is agreed.' },
+      { id: 'tracking', title: 'Tracking and evidence', description: 'Confirm what is tracked (delivery, opens, clicks, submissions and reports) and that each event keeps a timestamp and evidence. Done when tracking is tested before launch.' },
+      { id: 'escalation', title: 'Escalation and stop arrangements', description: 'Confirm a client contact is reachable throughout, how a worried or distressed member of staff is looked after, and how the campaign is stopped at short notice. Done when contacts and the stop process are agreed.' },
+      { id: 'test-run', title: 'Test run before launch', description: 'Confirm the campaign is tested end to end against an approved test recipient before it reaches staff. Done when the test run succeeds.' },
+      { id: 'reporting', title: 'Reporting without blame', description: 'Confirm results are reported at the level of teams, processes and controls rather than to discipline individuals, with reporting behaviour shown alongside clicks. Done when the report is reviewed.', ref_url: 'https://www.ncsc.gov.uk/guidance/phishing' },
+      { id: 'close-down', title: 'Close-down and debrief', description: 'Confirm the infrastructure is taken down, collected data is deleted as agreed, and staff are told about the exercise supportively if the client wishes. Done when close-down is recorded.' }
+    ]
+  },
+  people_physical_v1: {
+    kind: 'checklist',
+    name: 'Physical Security Assessment',
+    description: 'Coverage tracker for a physical security phase, from authorisation to evidence handling. It records what was assessed and how safely, with controls compared against the guidance of the UK National Protective Security Authority (NPSA). For control guidance, follow the linked source.',
+    category: 'People and physical',
+    phase_hint: 'Physical',
+    source: 'people_physical_v1',
+    source_url: 'https://www.npsa.gov.uk/',
+    items: [
+      { id: 'letter', title: 'Authorisation letter carried', description: 'Confirm every tester carries a signed authorisation letter naming them, the sites and the dates, with a client contact who can confirm it at any time testing runs. Done when each tester has a copy.' },
+      { id: 'site-authority', title: 'Authority over every site', description: 'Confirm the signatory has authority over each site, and that landlords, shared-building managers or security contractors have agreed where the client does not control the premises. Done when consent for each site is on file.' },
+      { id: 'roe', title: 'Rules of engagement', description: 'Confirm permitted times, areas and techniques, and anything ruled out such as forced entry or particular areas, are agreed in writing. Done when the rules are signed.' },
+      { id: 'safety', title: 'Safety and escalation', description: 'Confirm how testers identify themselves if challenged or detained, who they call, and how police involvement or a safety issue is handled. Done when every tester knows the process.' },
+      { id: 'recon', title: 'Reconnaissance within limits', description: 'Confirm site observation and open-source research stay within agreed limits and avoid recording members of the public. Done when observations are recorded.' },
+      { id: 'perimeter', title: 'Perimeter', description: 'Confirm fences, gates, barriers, lighting and perimeter detection are assessed for gaps. Done when findings are recorded.' },
+      { id: 'entry-points', title: 'Entry points', description: 'Confirm doors, windows, loading bays, roof and service access are assessed for weaknesses and for whether they are monitored. Done when findings are recorded.' },
+      { id: 'tailgating', title: 'Tailgating and reception', description: 'Confirm whether staff and reception challenge people following others through controlled doors or arriving without an appointment. Done when attempts and outcomes are recorded.' },
+      { id: 'badges', title: 'Badges and access control', description: 'Confirm badge technology, reader configuration, visitor passes and the handling of lost or unreturned badges resist misuse. Done when findings are recorded.' },
+      { id: 'internal', title: 'Internal controls', description: 'Confirm internal doors, secure rooms, server and communications rooms, clear desks, screen locking and unattended network ports are assessed. Done when findings are recorded.' },
+      { id: 'detection', title: 'Detection and response', description: 'Confirm whether CCTV, alarms, guards and the control room detected the activity, and how quickly they responded. Done when detections are recorded against the timeline.' },
+      { id: 'evidence', title: 'Evidence handling', description: 'Confirm photographs and recordings are limited to what the report needs, avoid capturing members of the public where possible, and are stored encrypted and deleted on an agreed date. Done when the evidence log is complete.' },
+      { id: 'items', title: 'Items taken or left', description: 'Confirm anything taken as proof of access or left as a marker is logged, returned or removed, and reported. Done when every item is accounted for.' }
+    ]
+  },
+  dev_iot_istg_v1: {
+    kind: 'checklist',
+    name: 'IoT Device Testing (OWASP ISTG)',
+    description: 'Coverage tracker for an IoT device based on the OWASP IoT Security Testing Guide (ISTG v1.0.1), one item per component in its catalogue of test cases. Agree the physical and authorisation access levels first, since they decide which components can be tested. For test cases, follow the linked guide.',
+    category: 'Mobile and devices',
+    source: 'dev_iot_istg_v1',
+    source_url: 'https://owasp.org/www-project-iot-security-testing-guide/',
+    items: [
+      { id: 'access-levels', title: 'Access levels agreed (PA-1 to PA-4, AA-1 to AA-4)', description: 'Confirm the physical access level (remote, local, non-invasive or invasive) and the authorisation access level (unauthorised up to manufacturer) the test assumes, and whether devices may be opened or damaged. Done when the levels are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
+      { id: 'proc', title: 'Processing Units (ISTG-PROC)', description: 'Confirm access control and privilege escalation on the processing unit, the implementation of its instructions and its protection against side-channel attacks are assessed where invasive access is in scope. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
+      { id: 'mem', title: 'Memory (ISTG-MEM)', description: 'Confirm memory does not disclose source code, binaries, implementation detail or user data, and holds no unencrypted secrets or weak cryptography. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
+      { id: 'fw', title: 'Firmware (ISTG-FW)', description: 'Confirm the firmware is up to date, carries no unnecessary software, holds no hardcoded or unencrypted secrets and uses current cryptography. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
+      { id: 'fw-inst', title: 'Installed Firmware (ISTG-FW[INST])', description: 'Confirm access to the running firmware and privilege escalation within it are controlled, user data is protected, and the bootloader checks signatures. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
+      { id: 'fw-updt', title: 'Firmware Update Mechanism (ISTG-FW[UPDT])', description: 'Confirm updates are authorised, signed, encrypted, sent securely, verified before install and protected against rollback. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
+      { id: 'des', title: 'Data Exchange Services (ISTG-DES)', description: 'Confirm the device\'s network services enforce authorisation, disclose no implementation or user data, are up to date, protect confidential data, use current cryptography, keep to the intended business logic and validate input. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
+      { id: 'int', title: 'Internal Interfaces (ISTG-INT, including I2C and UART)', description: 'Confirm internal interfaces such as I2C buses and UART consoles give no unauthorised access, disclose no data and validate input. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
+      { id: 'phy', title: 'Physical Interfaces (ISTG-PHY)', description: 'Confirm external physical ports enforce authorisation, protect secrets, use current cryptography and validate input. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
+      { id: 'wrls', title: 'Wireless Interfaces (ISTG-WRLS)', description: 'Confirm wireless interfaces enforce authorisation, protect secrets, use current cryptography and resist input and logic abuse. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' },
+      { id: 'ui', title: 'User Interfaces (ISTG-UI)', description: 'Confirm the interfaces used to manage the device, such as web pages, apps or on-device menus, enforce authorisation, protect secrets, use current cryptography and validate input. Done when results are recorded.', ref_url: 'https://owasp.org/owasp-istg/' }
+    ]
+  },
+  dev_thick_client_v1: {
+    kind: 'checklist',
+    name: 'Thick Client Application Testing',
+    description: 'Coverage tracker for a desktop (thick client) application, built around the OWASP Desktop App Security Top 10 (2021, an incubator project) plus the client-side areas a desktop test also needs. For technique, follow the linked project.',
+    category: 'Mobile and devices',
+    source: 'dev_thick_client_v1',
+    source_url: 'https://owasp.org/www-project-desktop-app-security-top-10/',
+    items: [
+      { id: 'architecture', title: 'Architecture and trust boundaries', description: 'Confirm whether the client talks to an application server or straight to a database, which components run locally, and where trust is placed. Done when the architecture is recorded.' },
+      { id: 'traffic', title: 'DA7 Insecure Communication', description: 'Confirm traffic between client and server is encrypted with certificate validation, and that the server does not trust what the client sends. Done when protocols and endpoints are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
+      { id: 'injection', title: 'DA1 Injections', description: 'Confirm input that reaches databases, commands or interpreters, from the client or through its server, is handled safely. Done when each input is covered.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
+      { id: 'auth-session', title: 'DA2 Broken Authentication & Session Management', description: 'Confirm sign-in, session handling and any offline or cached authentication cannot be bypassed from the client. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
+      { id: 'data-exposure', title: 'DA3 Sensitive Data Exposure', description: 'Confirm credentials, connection strings, keys and personal data are not exposed in local files, the registry, logs, memory or the binary itself. Done when the locations checked are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
+      { id: 'crypto', title: 'DA4 Improper Cryptography Usage', description: 'Confirm the application uses current algorithms, with keys that are not hardcoded or recoverable from the client. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
+      { id: 'authz', title: 'DA5 Improper Authorization', description: 'Confirm authorisation is enforced on the server, so hidden or disabled client features cannot be switched on to gain access. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
+      { id: 'misconfig', title: 'DA6 Security Misconfiguration', description: 'Confirm installation folders, files, services and registry keys have safe permissions and the application runs with no more privilege than it needs. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
+      { id: 'library-loading', title: 'Library loading', description: 'Confirm the application and its installer load libraries only from protected locations, so a low-privileged user cannot replace or plant them. Done when results are recorded.' },
+      { id: 'code-quality', title: 'DA8 Poor Code Quality', description: 'Confirm binary protections such as ASLR, DEP and code signing are in place, and the application handles unexpected input and errors safely. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
+      { id: 'components', title: 'DA9 Using Components with Known Vulnerabilities', description: 'Confirm bundled libraries, frameworks and runtimes are supported and patched. Done when the component inventory is recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' },
+      { id: 'updates', title: 'Update mechanism', description: 'Confirm updates are downloaded securely and verified, for example by signature, before they are installed. Done when results are recorded.' },
+      { id: 'ipc', title: 'Local services and inter-process communication', description: 'Confirm local services, named pipes, sockets and other channels the application exposes enforce authorisation and validate input. Done when results are recorded.' },
+      { id: 'logging', title: 'DA10 Insufficient Logging & Monitoring', description: 'Confirm security events are logged on the server side and logs do not hold sensitive data. Done when results are recorded.', ref_url: 'https://owasp.org/www-project-desktop-app-security-top-10/' }
     ]
   },
 };
@@ -3338,6 +3728,7 @@ window._clientAssessmentsOn = _clientAssessmentsOn;
 function libraryEnabled(){return _modOn('library_enabled')}
 function invoicesEnabled(){return _modOn('invoices_enabled')}
 function feedbackEnabled(){return _modOn('feedback_enabled')}
+function testingCalendarEnabled(){return _modOn('testing_calendar_enabled')}
 function meetingsEnabled(){return _modOn('meetings_enabled')}
 function scanningEnabled(){return _modOn('scanning_enabled')}
 function qaEnabled(){return _modOn('qa_enabled')}
@@ -5969,8 +6360,8 @@ function _findingBulkBarHtml(isClient, opts) {
     if (!_scanBar && _anySelectedRetestable()) h += '<button class="btn btn-primary btn-sm" onclick="_bulkRetestFindings()" style="white-space:nowrap">' + IC.refresh + ' ' + (isClient ? 'Request Retest' : 'Mark for Retest') + '</button>';
 
     if (!isClient && canEdit()) {
-      h += '<button class="btn btn-secondary btn-sm" onclick="_bulkSetFindingVisibility(true)" style="white-space:nowrap">Show to client</button>';
-      h += '<button class="btn btn-secondary btn-sm" onclick="_bulkSetFindingVisibility(false)" style="white-space:nowrap">Hide from client</button>';
+      
+      
 
       if (!_scanBar) {
         h += '<button class="btn btn-secondary btn-sm" onclick="_bulkSetFindingDraft(true)" style="white-space:nowrap">Mark as draft</button>';
@@ -27320,6 +27711,18 @@ function viewFinding(fid, aid, _waited) {
   render();
   window.scrollTo(0, 0);
 }
+async function viewClient(id) {
+  _showLoading();
+  try {
+    var c = (S.data.clients || []).find(function(x) { return x.id === id; });
+    if (!c) { toast('Client not found', 'error'); return; }
+    S.currentClient = c;
+    S.page = 'client-detail';
+    pushNavHistory();
+    render();
+  } catch(e) { toast('Error loading client', 'error');
+  } finally { _hideLoading(); }
+}
 function _widgetsForRole(role) {
   var out = [];
   for (var id in _DASH_WIDGETS) {
@@ -27524,6 +27927,11 @@ function renderAssessments() {
 
   return h;
 }
+var _CLIENT_SORTS = [
+  { v: 'new', label: 'Newest', cmp: _cmpDateDesc('created_at') },
+  { v: 'name', label: 'Name', cmp: _cmpText(function (c) { return c.name; }) },
+  { v: 'old', label: 'Oldest', cmp: _cmpDateAsc('created_at') },
+];
 function _assTime(a, field) {
   var d = a && a[field];
   var t = d ? new Date(d).getTime() : NaN;
@@ -29526,7 +29934,10 @@ function renderAssessmentDetail() {
       });
       h += '</div>';
     } else {
-      h += '<p class="text-muted">No additional evidence yet.' + (canEdit() ? ' Add tool outputs, scan results, or additional documentation.' : '') + '</p>';
+
+      var _apxFilesOn = (typeof _smEnabled !== 'function') || _smEnabled('files');
+      h += '<p class="text-muted">No appendices yet.' + (canEdit() ? ' Add screenshots, tool output, scan results and anything else the report should carry.'
+        + (_apxFilesOn ? ' Videos and other files go in ' + esc(_smLabel('files')) + '.' : '') : '') + '</p>';
     }
     h += '</div></div>';
   }
@@ -30166,6 +30577,76 @@ function renderFindingDetail() {
 
   return h;
 }
+function renderClients() {
+  var list = S.data.clients;
+  var q = S.searchQuery.toLowerCase();
+  if (q) list = list.filter(function(c) { return (c.name || '').toLowerCase().indexOf(q) >= 0; });
+
+  var h = '<div class="page-header">';
+  if (canManage() || isContractor()) h += '<button class="btn btn-primary" onclick="openM(\'client\')">' + IC.plus + ' New Client</button>';
+  h += '</div>';
+
+  var _colAssess = typeof assessmentsEnabled !== 'function' || assessmentsEnabled();
+  var _colScans = typeof scanningEnabled === 'function' && scanningEnabled();
+  h += '<div class="card"><div class="card-header"><span class="card-title">' + IC.client + ' Clients</span><span class="badge">' + list.length + '</span></div>'
+    + _chipBarHtml('cl-list', [], _CLIENT_SORTS)
+    + '<div class="mob-table"><table class="dt"><thead><tr><th class="c-main">Client</th><th class="c-break">Contact</th>'
+    + (_colAssess ? '<th>Assessments</th>' : '')
+    + (_colScans ? '<th>Scans</th>' : '')
+    + '<th>Actions</th></tr></thead><tbody>';
+
+  var _sortedClients = _ffSortApply('cl-list', list, _CLIENT_SORTS);
+  _sortedClients.forEach(function(c) {
+    var ca = S.data.assessments.filter(function(a) { return a.client_id === c.id; });
+
+    var cs = (typeof _scanRunsForClient === 'function') ? _scanRunsForClient(c.id) : [];
+
+    h += '<tr><td class="clickable" onclick="viewClient(\'' + c.id + '\')">' + _plCompanyHtml(c) + (_coStaff() ? _coPeerSlot('clients', c.id) : '') + '</td>';
+    h += '<td>' + _plContactHtml(c) + '</td>';
+    if (_colAssess) h += '<td>' + ca.length + '</td>';
+    if (_colScans) h += '<td>' + cs.length + '</td>';
+    h += '<td><div class="flex gap-1">';
+    h += '<button class="btn btn-ghost btn-sm" onclick="viewClient(\'' + c.id + '\')" title="View">' + IC.eye + '</button>';
+    if (canManage() || (isContractor() && c.created_by === S.profile.id)) h += '<button class="btn btn-ghost btn-sm" onclick="openM(\'client\',\'' + c.id + '\')" title="Edit">' + IC.edit + '</button>';
+    if (canManage()) h += '<button class="btn btn-ghost btn-sm" onclick="deleteClient(\'' + c.id + '\')" title="Delete" style="color:var(--red-text)">' + IC.trash + '</button>';
+    h += '</div></td></tr>';
+  });
+
+  if (!list.length) h += '<tr><td colspan="' + (2 + (_colAssess ? 1 : 0) + (_colScans ? 1 : 0) + 1)
+    + '" class="empty">No clients yet</td></tr>';
+  h += '</tbody></table></div>';
+
+  h += '<div class="mob-cards" style="display:none">';
+  if (!list.length) h += '<div class="empty">No clients yet</div>';
+  _sortedClients.forEach(function(c) {
+    var ca = S.data.assessments.filter(function(a) { return a.client_id === c.id; });
+    h += '<div class="mob-card" style="cursor:pointer" onclick="viewClient(\'' + c.id + '\')">';
+    h += '<div class="mob-card-head">' + _plCompanyHtml(c) + '</div>';
+    h += '<div class="mob-card-meta">';
+    if (c.contact_name || c.contact_email) h += '<span>' + esc(c.contact_name || c.contact_email) + '</span>';
+    h += '</div>';
+    var _cs2 = (typeof _scanRunsForClient === 'function') ? _scanRunsForClient(c.id) : [];
+    h += '<div class="mob-card-badges">';
+    if (_colAssess) h += '<span class="badge" style="font-size:0.7rem">' + ca.length + ' assessment' + (ca.length !== 1 ? 's' : '') + '</span>';
+    if (_colScans) h += '<span class="badge" style="font-size:0.7rem">' + _cs2.length + ' scan' + (_cs2.length !== 1 ? 's' : '') + '</span>';
+    h += '</div>';
+    h += '</div>';
+  });
+  h += '</div></div>';
+  return h;
+
+}
+async function _setClientAssessments(clientId, on) {
+  var c = (S.data.clients || []).find(function (x) { return x.id === clientId; });
+  if (!c) return;
+  var r = await api('clients', 'update', { assessments_enabled: !!on }, { id: clientId });
+  if (r) {
+    c.assessments_enabled = !!on;
+    toast(on ? 'Assessments on for them' : 'Assessments off for them', 'success');
+  }
+  render();
+}
+window._setClientAssessments = _setClientAssessments;
 function _fmtBytes(n) {
   n = Number(n) || 0;
   if (n < 1024) return n + ' B';
@@ -31351,6 +31832,456 @@ function renderApproveTargetModal() {
     + '</button></div>';
   return h;
 }
+function renderClientDetail() {
+  if (_isPendingDetailRestore('client-detail')) return _renderRestorePlaceholder();
+  var c = S.currentClient;
+  if (!c) return '<div class="empty-page"><p>No client selected</p><button class="btn btn-secondary" onclick="nav(\'clients\')">View Clients</button></div>';
+
+  var ca = S.data.assessments.filter(function(a) { return a.client_id === c.id && !_isArchived(a); });
+  var cf = S.data.findings.filter(function(f) {
+    var a = (S.data.assessments || []).find(function(x) { return x.id === f.assessment_id; });
+    return a && a.client_id === c.id;
+  });
+  var openFindings = cf.filter(function(f) { return f.status === 'open'; });
+  var cnt = {critical:0, high:0, medium:0, low:0};
+  openFindings.forEach(function(f) { var sv = (f.severity||'').toLowerCase(); if (cnt[sv] !== undefined) cnt[sv]++; });
+
+  var h = '<div class="page-header"><div><h1 class="page-title">' + esc(c.name) + '</h1>';
+  h += '<p class="page-sub">' + esc(c.contact_name || '') + '</p></div>';
+  h += '<div class="flex gap-2">';
+
+  var _cdMine = canManage() || (isContractor() && c.created_by === S.profile.id);
+  if (_cdMine && proposalsEnabled()) {
+    h += '<button class="btn btn-primary" onclick="S.currentClient=(S.data.clients || []).find(function(x){return x.id===\'' + c.id + '\'});openM(\'proposal\')">' + IC.doc + ' New Proposal</button>';
+  }
+  if (_cdMine && _clientAssessmentsOn(c.id)) {
+    h += '<button class="btn btn-primary" onclick="S.currentClient=(S.data.clients || []).find(function(x){return x.id===\'' + c.id + '\'});openM(\'assessment\')">' + IC.assess + ' New Assessment</button>';
+  }
+  if (canManage() && invoicesEnabled()) {
+    h += '<button class="btn btn-primary" onclick="S.currentClient=(S.data.clients || []).find(function(x){return x.id===\'' + c.id + '\'});openM(\'invoice\')">' + IC.cash + ' New Invoice</button>';
+  }
+  if (_cdMine) {
+
+    h += '<button class="btn btn-secondary" onclick="openM(\'client\',\'' + c.id + '\')">' + IC.edit + ' Edit</button>';
+  }
+  h += '</div></div>';
+
+  var remediated = cf.filter(function(f) { return f.status === 'remediated' || f.status === 'part_remediated'; }).length;
+  var clientInvoices = (S.data.invoices || []).filter(function(inv) { return inv.client_id === c.id; });
+  var outstanding = clientInvoices.filter(function(inv) { return inv.status === 'sent' || inv.status === 'overdue'; });
+  var outstandingTotal = _invGross(outstanding);
+  var outstandingTotal_txt = _invTotalText(outstanding);
+
+  var _cdStats = '';
+  if (assessmentsEnabled()) _cdStats += '<div class="stat"><div class="stat-label">Assessments</div><div class="stat-value">' + ca.length + '</div></div>';
+
+  if (_findingsAreaOn() && _mayOpenWork()) {
+    _cdStats += '<div class="stat"><div class="stat-label">Open Findings</div><div class="stat-value' + (openFindings.length ? ' high' : '') + '">' + openFindings.length + '</div></div>';
+    _cdStats += '<div class="stat"><div class="stat-label">Remediated</div><div class="stat-value" style="color:var(--green)">' + remediated + '</div></div>';
+  }
+  if (invoicesEnabled()) _cdStats += '<div class="stat"><div class="stat-label">Outstanding</div><div class="stat-value' + (outstandingTotal > 0 ? ' medium' : '') + '">' + outstandingTotal_txt + '</div></div>';
+  if (_cdStats) h += '<div class="stats">' + _cdStats + '</div>';
+
+  if (c.contact_name || c.contact_email) {
+    h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.mail + ' Contact</span></div><div class="card-body pl-contact">';
+    h += _plPersonHtml({ name: c.contact_name, email: c.contact_email });
+    if (c.contact_email) h += '<a class="btn btn-secondary btn-sm" href="mailto:' + esc(c.contact_email) + '">' + IC.mail + ' Email</a>';
+    h += '</div></div>';
+  }
+
+  var clientUsers = getClientUsers(c.id);
+  if (false) {
+    h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.user + ' Portal Users</span><span class="badge">' + clientUsers.length + '</span>'
+      + (canManage() && clientUsers.length ? '<button class="btn btn-secondary btn-sm pl-add" onclick="openM(\'clientuser\',\'' + c.id + '\')">' + IC.plus + ' Add person</button>' : '') + '</div>';
+    if (clientUsers.length > 0) {
+
+      var _cuActs = canManage();
+      h += '<table class="dt"><thead><tr><th class="c-main c-break">Name</th>' + (_cuActs ? '<th>Actions</th>' : '') + '</tr></thead><tbody>';
+      clientUsers.forEach(function(u) {
+        h += '<tr><td>' + _plPersonHtml(u) + '</td>';
+        if (!_cuActs) { h += '</tr>'; return; }
+        h += '<td><div class="pl-acts">';
+        h += '<button class="btn btn-ghost btn-sm" onclick="adminResetMfa(\'' + u.id + '\', ' + jsArg(u.name) + ')" title="Reset MFA" style="color:#d97706">' + IC.key + '</button>';
+
+        if (canChangeUserEmail(u)) {
+
+          h += '<button class="btn btn-ghost btn-sm" onclick="openM(\'useremail\',\'' + u.id + '\')" title="Change sign-in email">' + IC.mail + '</button>';
+        }
+        h += _sendButtons(u, false);
+        h += '<button class="btn btn-ghost btn-sm btn-danger" onclick="deleteClientUser(\'' + u.id + '\')" title="Remove Access">' + IC.trash + '</button>';
+        h += '</div></td></tr>';
+      });
+      h += '</tbody></table>';
+    } else {
+      h += '<div class="pl-empty">Nobody can sign in to ' + esc(c.name) + '\u2019s portal yet.'
+        + '<button class="btn btn-primary btn-sm" onclick="openM(\'clientuser\',\'' + c.id + '\')">' + IC.plus + ' Add a person</button></div>';
+    }
+    h += '</div>';
+  }
+
+  if (!isClient() && canManage() && _findingsAreaOn()) h += _trackerSettingsHtml(c.id);
+
+  if (typeof scanningEnabled === 'function' && scanningEnabled() && canManage()) {
+
+    var _waiting = (_selfScanModuleOn() && _selfScanHolds()) ? _scanRunsWaiting(c.id) : [];
+    if (_waiting.length) {
+      h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.eye
+        + ' Scans waiting for you</span><span class="badge warn">' + _waiting.length + '</span></div><div class="card-body">';
+      h += '<p class="sub-text" style="margin-top:0">Finished, and not yet visible to them.</p>';
+      _waiting.forEach(function (r) { h += _ssRunRowHtml(r, { release: true }); });
+      h += '</div></div>';
+    }
+  }
+
+  if (proposalsEnabled()) {
+  var proposals = (S.data.proposals || []).filter(function(p) { return p.client_id === c.id && !_isArchived(p); }).sort(function(a, b) { return new Date(b.created_at || 0) - new Date(a.created_at || 0); });
+  var _pDraft = proposals.filter(function(p) { return p.status === 'draft'; });
+  var _pPending = proposals.filter(function(p) { return p.status === 'pending_signature'; });
+  var _pOther = proposals.filter(function(p) { return p.status !== 'draft' && p.status !== 'pending_signature'; });
+
+  h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.proposal + ' Proposals</span><span class="badge">' + proposals.length + '</span>';
+  h += '</div>';
+
+  var _cdpDocxOn = !!_getDocxTemplateMeta('proposal');
+
+  function _cpThead(section) {
+    var hdr = '';
+    if (_cdpDocxOn) {
+      if (section === 'awaiting') hdr = 'Reminder';
+      else if (section === 'ready_to_send') hdr = 'Download DOCX, upload PDF, then send';
+      else if (section === 'signed') hdr = 'Download';
+    }
+    if (_cdpDocxOn) {
+
+      return '<thead><tr>' + (_idsOn('assessment') ? '<th>ID</th>' : '') + '<th class="c-main">Title</th><th>Cost</th><th class="c-nw">Date</th><th>' + (hdr ? '<span style="font-size:0.7rem;color:var(--gray);font-weight:500">' + hdr + '</span>' : '') + '</th><th>Actions</th></tr></thead>';
+    }
+    return '<thead><tr>' + (_idsOn('assessment') ? '<th>ID</th>' : '') + '<th class="c-main">Title</th><th>Cost</th><th class="c-nw">Date</th><th></th><th>Actions</th></tr></thead>';
+  }
+  var _cpTh = _cpThead('ready_to_send');
+
+  if (_pPending.length) {
+    h += '<div style="padding:0.75rem 1rem;border-bottom:1px solid var(--border)">';
+    h += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem"><span style="font-weight:600;font-size:0.8rem;color:var(--yellow)">' + IC.sign + ' Awaiting Signature</span></div>';
+    h += '<div class="mob-table"><table class="dt">' + _cpThead('awaiting') + '<tbody>';
+    _pPending.forEach(function(p) {
+      var pCode = _idsOn('assessment') ? (p.job_code || '') : '';
+      h += '<tr>';
+      if (_idsOn('assessment')) h += '<td class="mono refcode">' + esc(pCode || '-') + '</td>';
+      h += '<td>' + esc(p.title || 'Proposal') + '</td>';
+      h += '<td class="mono">' + _curSym() + (p.cost || 0).toLocaleString() + '</td>';
+      h += '<td class="mono" style="font-size:0.8em">' + fmtDate(p.sent_at || p.created_at) + '</td>';
+      h += '<td>' + ((canManage() && _canNotifyClient('proposal_sent')) ? '<button class="btn btn-primary btn-table" onclick="resendProposalReminder(\'' + p.id + '\')">' + IC.send + ' Reminder</button>' : '') + '</td>';
+      h += '<td><div class="flex gap-1">';
+      h += '<button class="btn btn-ghost btn-table" onclick="downloadProposal(\'' + p.id + '\')" title="PDF">' + IC.dl + '</button>';
+      if (canManage()) h += '<button class="btn btn-ghost btn-table" onclick="reopenProposal(\'' + p.id + '\')" title="Reopen as Draft">' + IC.edit + '</button>';
+      if (canManage()) h += '<button class="btn btn-ghost btn-table" onclick="archiveProposal(\'' + p.id + '\')" title="Archive" style="color:var(--gray)">' + IC.x + '</button>';
+      h += '</div></td>';
+      h += '</tr>';
+    });
+    h += '</tbody></table></div></div>';
+  }
+
+  if (_pDraft.length) {
+    h += '<div style="padding:0.75rem 1rem;border-bottom:1px solid var(--border)">';
+    h += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem"><span style="font-weight:600;font-size:0.8rem;color:var(--accent)">' + IC.send + ' Ready to Send</span></div>';
+    h += '<div class="mob-table"><table class="dt">' + _cpThead('ready_to_send') + '<tbody>';
+    _pDraft.forEach(function(p) {
+      var pCode = _idsOn('assessment') ? (p.job_code || '') : '';
+      var _cpPdfReady = !!_uploadedPdfs['proposal_' + p.id];
+      h += '<tr>';
+      if (_idsOn('assessment')) h += '<td class="mono refcode">' + esc(pCode || '-') + '</td>';
+      h += '<td>' + esc(p.title || 'Proposal') + '</td>';
+      h += '<td class="mono">' + _curSym() + (p.cost || 0).toLocaleString() + '</td>';
+      h += '<td class="mono" style="font-size:0.8em">' + fmtDate(p.created_at) + '</td>';
+      h += '<td onclick="event.stopPropagation()">';
+      if (_getDocxTemplateMeta('proposal')) {
+        h += '<div style="display:flex;align-items:center;gap:0.25rem;flex-wrap:wrap">';
+        h += _renderDocxDownloadButton('proposal', p.id, 'genProposalDOCX', {label:'DOCX',style:'font-size:0.65rem;padding:0.15rem 0.35rem'});
+        if (_cpPdfReady) {
+          h += '<button class="btn btn-secondary btn-sm" onclick="downloadProposalPdf(\'' + p.id + '\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.dl + ' PDF</button>';
+          h += '<button class="btn btn-ghost btn-sm" onclick="uploadFinalPdf(\'proposal\',\'' + p.id + '\',\'Proposal\')" style="font-size:0.6rem;padding:0.1rem 0.3rem">Replace</button>';
+          if (canManage()) h += '<button class="btn btn-ghost btn-sm" onclick="deleteFinalPdf(\'proposal\',\'' + p.id + '\')" style="font-size:0.6rem;padding:0.1rem 0.3rem;color:var(--red-text)">Remove</button>';
+          h += '<button class="btn btn-primary btn-sm" onclick="sendForSigning(\'' + p.id + '\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.send + ' Send</button>';
+        } else {
+          h += '<button class="btn btn-secondary btn-sm" onclick="uploadFinalPdf(\'proposal\',\'' + p.id + '\',\'Proposal\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.upload + ' PDF</button>';
+        }
+        h += '</div>';
+      } else {
+        h += '<button class="btn btn-primary btn-sm" onclick="sendForSigning(\'' + p.id + '\')" style="font-size:0.7rem">' + IC.send + ' Send</button>';
+      }
+      h += '</td>';
+      h += '<td><div class="flex gap-1">';
+      h += '<button class="btn btn-ghost btn-sm" onclick="openM(\'proposal\',\'' + p.id + '\',\'' + c.id + '\')" title="Edit">' + IC.edit + '</button>';
+      if (canManage()) h += '<button class="btn btn-ghost btn-sm" onclick="archiveProposal(\'' + p.id + '\')" title="Archive" style="color:var(--gray)">' + IC.x + '</button>';
+      h += '</div></td>';
+      h += '</tr>';
+    });
+    h += '</tbody></table></div></div>';
+  }
+
+  if (_pOther.length) {
+    h += '<div style="padding:0.75rem 1rem;border-bottom:1px solid var(--border)">';
+    h += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem"><span style="font-weight:600;font-size:0.8rem;color:var(--green)">' + IC.check + ' Signed</span></div>';
+    h += '<div class="mob-table"><table class="dt">' + _cpThead('signed') + '<tbody>';
+    _pOther.forEach(function(p) {
+      var pAssessment = (S.data.assessments || []).find(function(a) { return a.id === p.assessment_id; });
+      if (!pAssessment) pAssessment = (S.data.assessments || []).find(function(a) { return a.proposal_id === p.id; });
+      var pCode = p.job_code || (pAssessment ? (_assCodeOf(pAssessment, c)) : null);
+      h += pAssessment && _mayOpenWork() ? '<tr style="cursor:pointer" onclick="viewAssessment(\'' + pAssessment.id + '\')">' : '<tr>';
+      if (_idsOn('assessment')) h += '<td class="mono refcode">' + esc(pCode || '-') + '</td>';
+      h += '<td>' + (pAssessment ? '<strong>' + esc(pAssessment.name) + '</strong>' : esc(p.title || 'Proposal')) + '</td>';
+      h += '<td class="mono">' + _curSym() + (p.cost || 0).toLocaleString() + '</td>';
+      h += '<td class="mono" style="font-size:0.8em">' + fmtDate(p.signed_at || p.created_at) + '</td>';
+      h += '<td></td>';
+      h += '<td><div class="flex gap-1" onclick="event.stopPropagation()">';
+      h += '<button class="btn btn-ghost btn-sm" onclick="downloadProposal(\'' + p.id + '\')" title="Download">' + IC.dl + '</button>';
+      if (canManage()) h += '<button class="btn btn-ghost btn-sm" onclick="duplicateProposal(\'' + p.id + '\')" title="Duplicate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>';
+      if (canManage()) h += '<button class="btn btn-ghost btn-sm" onclick="archiveProposal(\'' + p.id + '\')" title="Archive" style="color:var(--gray)">' + IC.x + '</button>';
+      h += '</div></td>';
+      h += '</tr>';
+    });
+    h += '</tbody></table></div></div>';
+  } else if (!_pDraft.length && !_pPending.length) {
+    h += '<div class="card-body"><div class="empty">No proposals yet</div></div>';
+  }
+  h += '</div>';
+  }
+
+  if (canManage() && scanningEnabled()) h += _ssClientScopeCard(c.id);
+
+  var _cdAssOn = c.assessments_enabled !== false;
+
+  if (assessmentsEnabled() || ca.length) {
+  h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.assess + ' Assessments</span><span class="badge">' + ca.length + '</span></div>';
+  if (false) {
+    h += '<div class="card-body" style="padding-bottom:0">'
+      + '<div class="checkbox-row"><input type="checkbox" id="clAssessOn"'
+      + (_cdAssOn ? ' checked' : '')
+      + ' onchange="_setClientAssessments(\'' + esc(c.id) + '\', this.checked)">'
+      + '<label for="clAssessOn">This customer may have assessments</label></div>'
+      + (_cdAssOn ? '' : '<p class="sub-text" style="margin:0.3rem 0 0">The assessments area is '
+        + 'hidden for them and their portal users. Nothing below is deleted, and the documents '
+        + 'they already have stay downloadable.</p>')
+      + '</div>';
+  }
+  var _loaVcd = (S.data.settings || {}).loa_visibility || 'internal';
+  var _showLoaCd = _loaVcd === 'enabled' || _loaVcd === 'internal';
+  var _showPropCd = proposalsEnabled();
+  var _showFbCd = feedbackEnabled();
+
+  var _cdEn = function(k) { return typeof _smEnabled !== 'function' || _smEnabled(k); };
+
+  var _cdWork = _mayOpenWork();
+  var _cdColFindings = _cdWork && _cdEn('findings');
+  var _cdColComments = _cdWork && _cdEn('comments');
+  var _cdColReport = _cdWork && _cdEn('doc_report');
+  var _cdColProp = _showPropCd && _cdEn('doc_proposal');
+  var _cdColLoa = _cdWork && _showLoaCd && _cdEn('doc_attestation');
+  h += '<div class="mob-table"><table class="dt"><thead><tr>';
+  if (_idsOn('assessment')) h += '<th>ID</th>';
+  h += '<th class="c-main">Assessment</th>';
+  h += '<th>Status</th>';
+  if (_cdColFindings) h += '<th>Findings</th>';
+  if (_cdColComments) h += '<th>' + IC.chat + '</th>';
+  if (_cdColProp) h += '<th>Proposal</th>';
+  if (_cdColReport) h += '<th>Report</th>';
+  if (_cdColLoa) h += '<th>LoA</th>';
+  if (_showFbCd) h += '<th>Feedback</th>';
+  if (canManage()) h += '<th>Actions</th>';
+  h += '</tr></thead><tbody>';
+  ca.forEach(function(a) {
+    var af = getAssessmentFindings(a.id);
+    var aCode = _assCodeOf(a, c);
+    h += _cdWork ? '<tr style="cursor:pointer" onclick="viewAssessment(\'' + a.id + '\')">' : '<tr>';
+    if (_idsOn('assessment')) h += '<td class="mono refcode">' + esc(aCode || '-') + '</td>';
+    h += '<td><strong>' + esc(a.name) + '</strong></td>';
+    h += '<td>' + renderMergedStatus(a, false) + '</td>';
+    if (_cdColFindings) h += '<td>' + af.length + '</td>';
+
+    var _cdCmts = (S.data.assessment_comments || []).filter(function(cm) { return cm.assessment_id === a.id; });
+    var _cdMyId = S.profile ? S.profile.id : '';
+    var _cdRIds = _getReadNotifIds();
+    var _cdUnread = _cdCmts.filter(function(cm) { return cm.user_id !== _cdMyId && _cdRIds.indexOf(cm.id) < 0; }).length;
+    if (_cdColComments) {
+    if (_cdCmts.length) {
+      h += '<td class="clickable" onclick="event.stopPropagation();goToAssessmentComments(\'' + a.id + '\')" style="white-space:nowrap">';
+      if (_cdUnread > 0) {
+        h += '<span style="display:inline-flex;align-items:center;gap:0.3rem"><span style="background:var(--notification-color);color:#fff;font-size:0.65rem;font-weight:700;padding:0.1rem 0.4rem;border-radius:8px;font-family:JetBrains Mono,monospace">' + _cdUnread + '</span><span style="font-size:0.72rem;color:var(--gray)">' + _cdCmts.length + '</span></span>';
+      } else {
+        h += '<span style="font-size:0.78rem;color:var(--gray)">' + _cdCmts.length + '</span>';
+      }
+      h += '</td>';
+    } else {
+      h += '<td><span style="font-size:0.72rem;color:var(--gray)">-</span></td>';
+    }
+    }
+    if (_cdColProp) h += '<td onclick="event.stopPropagation()">' + renderProposalColumn(a, false) + '</td>';
+    if (_cdColReport) h += '<td onclick="event.stopPropagation()">' + renderReportColumn(a) + '</td>';
+    if (_cdColLoa) h += '<td onclick="event.stopPropagation()">' + renderLoAColumn(a) + '</td>';
+    if (_showFbCd) h += '<td onclick="event.stopPropagation()">' + renderFeedbackStatus(a, false) + '</td>';
+    if (canManage()) h += '<td onclick="event.stopPropagation()"><div class="flex gap-1"><button class="btn btn-ghost btn-sm" onclick="archiveAssessment(\'' + a.id + '\')" title="Archive" style="color:var(--gray)">' + IC.x + '</button><button class="btn btn-ghost btn-sm" onclick="deleteAssessment(\'' + a.id + '\')" title="Delete" style="color:var(--red-text)">' + IC.trash + '</button></div></td>';
+    h += '</tr>';
+  });
+  var _cdColCount = 3 + (_idsOn('assessment') ? 1 : 0) + (_cdColFindings ? 1 : 0) + (_cdColComments ? 1 : 0) + (_cdColProp ? 1 : 0) + (_cdColReport ? 1 : 0) + (_cdColLoa ? 1 : 0) + (_showFbCd ? 1 : 0) + (canManage() ? 1 : 0);
+  if (!ca.length) h += '<tr><td colspan="' + _cdColCount + '" class="empty">No assessments yet</td></tr>';
+  h += '</tbody></table></div>';
+
+  h += '<div class="mob-cards" style="display:none">';
+  if (!ca.length) h += '<div class="empty">No assessments yet</div>';
+  ca.forEach(function(a) {
+    var af = getAssessmentFindings(a.id);
+    var aCode = _assCodeOf(a, c);
+    h += _cdWork ? '<div class="mob-card" style="cursor:pointer" onclick="viewAssessment(\'' + a.id + '\')">' : '<div class="mob-card">';
+    h += '<div class="mob-card-head"><div class="mob-card-title">' + esc(a.name) + '</div><div class="mob-card-sub">' + esc(aCode || '') + '</div></div>';
+    h += '<div class="mob-card-meta">' + '' + '</div>';
+    h += '<div class="mob-card-badges">' + renderMergedStatus(a, false);
+    if (af.length) h += ' <span class="badge" style="font-size:0.7rem">' + af.length + ' finding' + (af.length !== 1 ? 's' : '') + '</span>';
+    h += '</div></div>';
+  });
+  h += '</div></div>';
+  }
+
+  if (invoicesEnabled()) {
+  var clientInvoices = (S.data.invoices || []).filter(function(inv) { return inv.client_id === c.id && !_isArchived(inv); }).sort(function(a, b) { return new Date(b.created_at || 0) - new Date(a.created_at || 0); });
+  if (clientInvoices.length || canManage()) {
+    var _cdIsClient = S.profile && S.profile.role === 'client';
+    var _cdDocxOn = !!_getDocxTemplateMeta('invoice');
+    h += '<div class="card"><div class="card-header"><span class="card-title">' + IC.doc + ' Invoices</span><span class="badge">' + clientInvoices.length + '</span></div>';
+    h += '<div class="mob-table"><table class="dt"><thead><tr>';
+    if (_cdIsClient) {
+      h += '<th>ID</th><th class="c-main">Assessment</th><th>Amount</th><th class="c-nw">Due</th><th>Status</th>';
+      h += '<th>Actions</th>';
+    } else if (_cdDocxOn) {
+
+      h += '<th>ID</th><th class="c-main">Assessment</th><th>Amount</th><th class="c-nw">Due</th><th>Status</th>';
+      h += '<th></th>';
+      if (canManage() || isContractor()) h += '<th>Actions</th>';
+    } else {
+      h += '<th>ID</th><th class="c-main">Assessment</th><th>Amount</th><th class="c-nw">Due</th><th>Status</th>';
+      h += '<th></th>';
+      if (canManage() || isContractor()) h += '<th>Actions</th>';
+    }
+    h += '</tr></thead><tbody>';
+    clientInvoices.forEach(function(inv) {
+      var invAss = inv.assessment_id ? (S.data.assessments || []).find(function(a) { return a.id === inv.assessment_id; }) : null;
+      var pst = inv.status || 'draft';
+      var statusBadge = badge(pst === 'paid' ? 'success' : pst === 'overdue' ? 'high' : pst === 'sent' ? 'open' : pst, pst.replace(/_/g, ' '));
+      var _invPdfReady = !!_uploadedPdfs['invoice_' + inv.id];
+      h += '<tr>';
+      h += '<td class="mono refcode">' + esc(inv.invoice_number || '-') + _xeroBadgeHtml(inv.id) + '</td>';
+      h += '<td>' + (invAss ? (_mayOpenWork() ? '<span class="clickable" onclick="viewAssessment(\'' + invAss.id + '\')">' + esc(invAss.name) + '</span>' : esc(invAss.name)) : '<span style="color:var(--gray)">\u2014</span>') + '</td>';
+      h += '<td class="mono">' + _invAmountText(inv) + '</td>';
+      h += '<td class="mono" style="font-size:0.85em">' + (inv.due_date ? fmtDate(inv.due_date) : '\u2014') + '</td>';
+      h += '<td>' + statusBadge + '</td>';
+
+      if (_cdIsClient) {
+
+        h += '<td><div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap" onclick="event.stopPropagation()">';
+        h += '<button class="btn btn-ghost btn-table" onclick="openM(\'invoiceview\',\'' + inv.id + '\')" title="View">' + IC.eye + '</button>';
+
+        if (_cdDocxOn && _invPdfReady) {
+          h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')" title="Download PDF">' + IC.dl + ' PDF</button>';
+        } else {
+          h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')" title="Download PDF">' + IC.dl + ' PDF</button>';
+        }
+        if (pst === 'sent' || pst === 'overdue') {
+          if (hasStripe()) h += '<button class="btn btn-primary btn-table" onclick="payInvoice(\'' + inv.id + '\')">' + IC.cash + ' Pay</button>';
+          if (hasBankPayment()) h += '<button class="btn btn-success btn-table" onclick="markPaidByBank(\'' + inv.id + '\')" title="I\'ve paid by bank transfer">' + IC.check + ' Bank</button>';
+        }
+        h += '</div></td>';
+        h += '</tr>';
+        return;
+      }
+
+      h += '<td onclick="event.stopPropagation()">';
+      if (pst === 'draft' && _cdDocxOn) {
+        h += '<div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap">';
+        h += _renderDocxDownloadButton('invoice', inv.id, 'downloadInvoice', {label:'DOCX',cls:'btn-table'});
+        if (_invPdfReady) {
+          h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+          if (canManage()) {
+            h += '<button class="btn btn-ghost btn-table" onclick="uploadFinalPdf(\'invoice\',\'' + inv.id + '\',\'Invoice\')">Replace</button>';
+            h += '<button class="btn btn-ghost btn-table" onclick="deleteFinalPdf(\'invoice\',\'' + inv.id + '\')" style="color:var(--red-text)">Remove</button>';
+            h += '<button class="btn btn-primary btn-table" onclick="sendInvoice(\'' + inv.id + '\')">' + IC.send + ' Send</button>';
+          }
+        } else if (canManage()) {
+          h += '<button class="btn btn-secondary btn-table" onclick="uploadFinalPdf(\'invoice\',\'' + inv.id + '\',\'Invoice\')">' + IC.upload + ' PDF</button>';
+        }
+        h += '</div>';
+      } else if (pst === 'draft') {
+        h += '<div style="display:flex;align-items:center;gap:0.35rem">';
+        h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        if (canManage()) h += '<button class="btn btn-primary btn-table" onclick="sendInvoice(\'' + inv.id + '\')">' + IC.send + ' Send</button>';
+        h += '</div>';
+      } else if (pst === 'sent' || pst === 'overdue') {
+        h += '<div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap">';
+        if (_cdDocxOn && _invPdfReady) {
+          h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        } else {
+          h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        }
+        if (canManage() && _canNotifyClient('invoice_sent')) h += '<button class="btn btn-primary btn-table" onclick="resendInvoiceReminder(\'' + inv.id + '\')" title="Send payment reminder to client">' + IC.send + ' Reminder</button>';
+        h += '</div>';
+      } else if (pst === 'pending_bank_verification') {
+        h += '<div style="display:flex;align-items:center;gap:0.35rem">';
+        if (_cdDocxOn && _invPdfReady) h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        else h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        if (canManage()) h += '<button class="btn btn-success btn-table" onclick="confirmBankPayment(\'' + inv.id + '\')" title="Verify bank payment received">' + IC.check + ' Verify</button>';
+        h += '</div>';
+      } else if (pst === 'pending_payment_confirmation') {
+        h += '<div style="display:flex;align-items:center;gap:0.35rem">';
+        if (_cdDocxOn && _invPdfReady) h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        else h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        if (canManage() && (S.profile.role === 'senior' || S.profile.role === 'admin')) h += '<button class="btn btn-success btn-table" onclick="confirmPayment(\'' + inv.id + '\')" title="Confirm payment received">' + IC.check + ' Confirm</button>';
+        h += '</div>';
+      } else if (pst === 'paid') {
+        if (_cdDocxOn && _invPdfReady) h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        else h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+      }
+      h += '</td>';
+
+      if (canManage() || isContractor()) {
+        h += '<td><div style="display:flex;align-items:center;gap:0.25rem" onclick="event.stopPropagation()">';
+        h += '<button class="btn btn-ghost btn-table" onclick="openM(\'invoiceview\',\'' + inv.id + '\')" title="View">' + IC.eye + '</button>';
+        if (canManage() && (pst === 'draft' || pst === 'sent')) h += '<button class="btn btn-ghost btn-table" onclick="openM(\'invoice\',\'' + inv.id + '\')" title="Edit">' + IC.edit + '</button>';
+
+        if (canManage() && S._xeroStatus && S._xeroStatus.is_active && pst !== 'draft') {
+          var _xLink = (S._xeroLinks || {})[inv.id];
+          var _xTitle = _xLink ? 'Re-push to Xero (currently: ' + (_xLink.external_number || _xLink.external_id || '?') + ')' : 'Push to Xero';
+          h += '<button class="btn btn-ghost btn-table" onclick="pushInvoiceToXeroNow(\'' + inv.id + '\')" title="' + esc(_xTitle) + '" style="color:#13B5EA">' + (_xLink ? IC.refresh : IC.send) + '</button>';
+          if (_xLink) {
+
+            h += '<button class="btn btn-ghost btn-table" onclick="pullInvoiceFromXeroNow(\'' + inv.id + '\')" title="Sync latest state from Xero" style="color:#13B5EA">' + IC.dl + '</button>';
+
+            h += '<button class="btn btn-ghost btn-table" onclick="viewInvoiceInXero(\'' + inv.id + '\')" title="Open in Xero" style="color:#13B5EA">↗</button>';
+          }
+        }
+        if (canManage()) h += '<button class="btn btn-ghost btn-table" onclick="archiveInvoice(\'' + inv.id + '\')" title="Archive" style="color:var(--gray)">' + IC.x + '</button>';
+        h += '</div></td>';
+      }
+      h += '</tr>';
+    });
+    if (!clientInvoices.length) {
+
+      var _cdEmptyCols = 6;
+      if (!_cdIsClient && (canManage() || isContractor())) _cdEmptyCols++;
+      h += '<tr><td colspan="' + _cdEmptyCols + '" class="empty">No invoices yet</td></tr>';
+    }
+    h += '</tbody></table></div>';
+    h += '<div class="mob-cards" style="display:none">';
+    clientInvoices.forEach(function(inv) {
+      var pst = inv.status || 'draft';
+      h += '<div class="mob-card" onclick="openM(\'invoiceview\',\'' + inv.id + '\')">';
+      h += '<div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:0.25rem"><span class="mono refcode">' + esc(inv.invoice_number || 'Invoice') + '</span>' + _xeroBadgeHtml(inv.id) + '' + badge(pst === 'paid' ? 'success' : pst, pst.replace(/_/g, ' ')) + '</div>';
+      h += '<div class="mono" style="color:var(--accent)">' + _invAmountText(inv) + '</div>';
+      h += '</div>';
+    });
+    h += '</div></div>';
+  }
+  }
+
+  return h;
+}
 function handOverAccount(userId) {
   var u = (S.data.users || []).find(function (x) { return String(x.id) === String(userId); });
   if (!canHandOverTo(u)) return;
@@ -32091,6 +33022,307 @@ function emptyAssessmentArchive() {
       toast(items.length+' deleted','success'); await refreshAndStay();
     } catch(e) { toast('Error: '+e.message,'error'); } finally { _hideLoading(); }
   });
+}
+function getWeekStart(offset) {
+  var d = new Date();
+  d.setHours(0, 0, 0, 0);
+  var day = d.getDay();
+  var diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  d.setDate(diff + (offset * 7));
+  return d;
+}
+function fmtDateISO(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function calFilterChange() {
+  var sel = document.getElementById('calFilterSelect');
+  if (!sel) return;
+  var v = sel.value;
+  if (v === 'everyone') { S.calFilter = 'everyone'; S.calFilterUsers = []; }
+  else if (v === 'me') { S.calFilter = 'me'; S.calFilterUsers = [S.profile.id]; }
+  else { S.calFilter = 'user'; S.calFilterUsers = [v]; }
+  render();
+}
+function calFilterToggleUser(userId) {
+  var idx = S.calFilterUsers.indexOf(userId);
+  if (idx >= 0) S.calFilterUsers.splice(idx, 1);
+  else S.calFilterUsers.push(userId);
+  S.calFilter = S.calFilterUsers.length > 0 ? 'custom' : 'everyone';
+  render();
+}
+function renderCalendarPage(mode) {
+  var testingMode = mode === 'testing';
+  if (!testingMode && !meetCalendarEnabled()) {
+    return '<div class="empty-page"><h2>Sales Calendar Disabled</h2><p>The sales calendar is switched off. An admin can switch it on in Settings, Feature Modules.</p></div>';
+  }
+  var staff = (S.data.users || []).filter(function(p) { return p.role !== 'client' && p.role !== 'marketing' && (p.active || p.role === 'contractor')
+    && (p.role !== 'contractor' || contractorsEnabled()); });
+
+  if (isContractor()) staff = staff.filter(function(p) { return p.id === S.profile.id || (!!_conMyTeam() && p.contractor_team_id === _conMyTeam()); });
+
+  var allAssessments = _workAssessments().filter(function(a) { return !_isArchived(a); });
+  var allMeetings = (S.data.meetings || []).filter(function(m) { return m.status !== 'cancelled' && m.status !== 'no_show'; });
+  var allAtt = S.data.meeting_attendees || [];
+  var weekStart = getWeekStart(S.calWeekOffset);
+  var days = [];
+  for (var i = 0; i < 7; i++) { var d = new Date(weekStart); d.setDate(d.getDate() + i); days.push(d); }
+  var dayStrs = days.map(fmtDateISO);
+  var todayStr = fmtDateISO(new Date());
+  var dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  var monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  var showUsers = staff;
+  if (S.calFilter === 'me') showUsers = staff.filter(function(u) { return u.id === S.profile.id; });
+  else if (S.calFilter === 'user' || S.calFilter === 'custom') showUsers = staff.filter(function(u) { return S.calFilterUsers.indexOf(u.id) >= 0; });
+  var showUserIds = showUsers.map(function(u) { return u.id; });
+
+  var statusColors = { draft: '#525252', active: '#3b82f6', completed: '#22c55e', delivered: '#16a34a', cancelled: '#991b1b' };
+  var statusLabels = { draft: 'Pending', active: 'Active', completed: 'Completed', delivered: 'Delivered' };
+  var needsLead = allAssessments.filter(function(a) { return !a.lead_id && _assTier(a) !== 2; });
+
+  var h = '<div class="page-header" style="flex-wrap:wrap;gap:0.5rem"><div style="display:flex;align-items:center;gap:0.5rem">';
+  h += '<button class="btn btn-ghost btn-sm" onclick="S.calWeekOffset--;render()" style="padding:4px 6px"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg></button>';
+  h += '<button class="btn btn-ghost btn-sm" onclick="S.calWeekOffset=0;render()" style="font-size:0.72rem;font-family:JetBrains Mono,monospace;padding:4px 8px">Today</button>';
+  h += '<button class="btn btn-ghost btn-sm" onclick="S.calWeekOffset++;render()" style="padding:4px 6px"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg></button>';
+  h += '<span class="mono" style="font-size:0.82rem;font-weight:600;margin-left:0.3rem">' + days[0].getDate() + ' ' + monthNames[days[0].getMonth()] + ' - ' + days[6].getDate() + ' ' + monthNames[days[6].getMonth()] + ' ' + days[6].getFullYear() + '</span>';
+  h += '</div>';
+
+  h += '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">';
+  h += '<select id="calFilterSelect" aria-label="Whose calendar" onchange="calFilterChange()" style="padding:0.25rem 0.5rem;font-size:0.75rem;background:var(--card);border:1px solid var(--border);color:var(--white);border-radius:4px">';
+  h += '<option value="everyone"' + (S.calFilter === 'everyone' ? ' selected' : '') + '>Everyone</option>';
+  h += '<option value="me"' + (S.calFilter === 'me' ? ' selected' : '') + '>Just Me</option>';
+  staff.forEach(function(u) {
+    var sel = (S.calFilter === 'user' && S.calFilterUsers.indexOf(u.id) >= 0) ? ' selected' : '';
+    h += '<option value="' + u.id + '"' + sel + '>' + esc(u.name) + '</option>';
+  });
+  h += '</select>';
+  h += '<div style="display:flex;gap:2px;flex-wrap:wrap">';
+  staff.forEach(function(u) {
+    var active = S.calFilter === 'everyone' || S.calFilterUsers.indexOf(u.id) >= 0;
+    var c = _userColor(u.id, staff);
+    h += '<button onclick="calFilterToggleUser(\'' + u.id + '\')" class="btn btn-ghost btn-sm" style="font-size:0.62rem;padding:1px 7px;border-radius:10px;line-height:1.6;' + (active ? 'background:' + c + ';color:#fff;border-color:' + c : 'opacity:0.35') + '">' + esc(_personName(u.name)) + '</button>';
+  });
+  h += '</div></div></div>';
+
+  if (testingMode) {
+
+    h += '<div class="card mb-4" style="overflow-x:auto;padding:0">';
+    h += '<table style="width:100%;min-width:560px;border-collapse:collapse;table-layout:fixed">';
+
+    h += '<thead><tr>';
+    h += '<th style="width:140px;min-width:140px;padding:10px 12px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--gray);border-bottom:2px solid var(--border);text-align:left">Tester</th>';
+    days.forEach(function(d, i) {
+      var isToday = dayStrs[i] === todayStr;
+      var isWe = i >= 5;
+      h += '<th style="padding:8px 4px;text-align:center;border-bottom:2px solid var(--border);border-left:1px solid var(--border);' + (isToday ? 'background:rgba(234,179,8,0.06)' : '') + (isWe ? ';opacity:0.4' : '') + '">';
+      h += '<div style="font-size:0.6rem;color:' + (isToday ? 'var(--yellow)' : 'var(--gray)') + ';text-transform:uppercase;letter-spacing:0.05em">' + dayNames[i] + '</div>';
+      h += '<div style="font-size:0.95rem;font-weight:700;font-family:JetBrains Mono,monospace;' + (isToday ? 'color:var(--yellow)' : '') + '">' + d.getDate() + '</div>';
+      h += '</th>';
+    });
+    h += '</tr></thead><tbody>';
+
+    if (showUsers.length === 0) {
+      h += '<tr><td colspan="8" style="padding:2rem;text-align:center;color:var(--gray)">Select users to view their schedule</td></tr>';
+    }
+
+    showUsers.forEach(function(user) {
+      var isMe = user.id === S.profile.id;
+      var userAssessments = allAssessments.filter(function(a) { return a.lead_id === user.id && a.status !== 'cancelled'; });
+
+      var activeCount = userAssessments.filter(function(a) { return _assTier(a) !== 2; }).length;
+
+      var lanes = [];
+      userAssessments.filter(function(a) {
+        return a.start_date && a.end_date && a.start_date <= a.end_date && a.start_date <= dayStrs[6] && a.end_date >= dayStrs[0];
+      }).sort(function(x, y) {
+        return x.start_date < y.start_date ? -1 : x.start_date > y.start_date ? 1 : (x.end_date > y.end_date ? -1 : x.end_date < y.end_date ? 1 : 0);
+      }).forEach(function(a) {
+        var from = 0; while (dayStrs[from] < a.start_date) from++;
+        var to = 6; while (dayStrs[to] > a.end_date) to--;
+        var bar = { a: a, from: from, to: to };
+        for (var li = 0; li < lanes.length; li++) {
+          if (lanes[li][lanes[li].length - 1].to < from) { lanes[li].push(bar); return; }
+        }
+        lanes.push([bar]);
+      });
+      if (!lanes.length) lanes.push([]);
+      var busy = [0, 0, 0, 0, 0, 0, 0];
+      lanes.forEach(function(lane) { lane.forEach(function(b) { for (var k = b.from; k <= b.to; k++) busy[k] = 1; }); });
+
+      lanes.forEach(function(lane, li) {
+        var last = li === lanes.length - 1;
+        var under = last ? 'border-bottom:1px solid var(--border);' : '';
+        h += '<tr style="' + (isMe ? 'background:rgba(234,179,8,0.03)' : '') + '">';
+
+        if (li === 0) {
+          h += '<td rowspan="' + lanes.length + '" style="padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top">';
+          h += '<div style="display:flex;align-items:center;gap:8px">';
+
+          h += _teamAvatarHtml(user, 'cal-av');
+          h += '<div style="min-width:0">';
+          h += '<div style="font-size:0.82rem;font-weight:600;overflow-wrap:anywhere">' + esc(user.name) + (isMe ? ' <span style="font-size:0.6rem;color:var(--yellow);font-weight:400;white-space:nowrap">(you)</span>' : '') + '</div>';
+          h += '<div style="font-size:0.65rem;color:var(--gray)">' + (activeCount > 0 ? activeCount + ' booked' : 'Available') + '</div>';
+          h += '</div></div></td>';
+        }
+
+        var emptyDay = function(di) {
+          var isToday = dayStrs[di] === todayStr;
+          var isWe = di >= 5;
+          var s = '<td style="padding:4px;' + under + 'border-left:1px solid var(--border);vertical-align:top;' + (isToday ? 'background:rgba(234,179,8,0.04)' : '') + (isWe ? ';background:rgba(255,255,255,0.01)' : '') + '">';
+
+          if (li === 0 && !isWe && !busy[di]) s += '<div style="height:100%;min-height:48px;display:flex;align-items:center;justify-content:center;opacity:0.15;font-size:0.65rem;color:var(--gray)">-</div>';
+          else s += '<div style="min-height:48px"></div>';
+          return s + '</td>';
+        };
+
+        var d = 0;
+        lane.forEach(function(bar) {
+          for (; d < bar.from; d++) h += emptyDay(d);
+          var a = bar.a;
+          var sc = _userColor(a.lead_id, staff);
+          var cn = getClientName(a.client_id);
+
+          var opens = a.start_date >= dayStrs[0];
+          var closes = a.end_date <= dayStrs[6];
+          var brdL = opens ? '5px' : '0';
+          var brdR = closes ? '5px' : '0';
+          h += '<td colspan="' + (bar.to - bar.from + 1) + '" style="padding:4px;' + under + 'border-left:1px solid var(--border);vertical-align:top">';
+          h += '<div onclick="viewAssessment(\'' + a.id + '\')" style="cursor:pointer;padding:6px 8px 5px;background:' + sc + '18;border-radius:' + brdL + ' ' + brdR + ' ' + brdR + ' ' + brdL + ';border-left:' + (opens ? '3px solid ' + sc : 'none') + ';border-right:' + (closes ? '2px solid ' + sc + '40' : 'none') + ';min-height:44px;display:flex;flex-direction:column;justify-content:center;transition:background 0.15s" onmouseenter="this.style.background=\'' + sc + '28\'" onmouseleave="this.style.background=\'' + sc + '18\'" title="' + esc(a.name) + ' - ' + esc(cn) + ' (' + a.status + ')&#10;' + fmtDate(a.start_date) + ' → ' + fmtDate(a.end_date) + '">';
+          h += '<div style="font-size:0.72rem;font-weight:700;color:' + sc + ';line-height:1.25;overflow-wrap:anywhere">' + esc(a.name) + '</div>';
+          h += '<div style="font-size:0.62rem;color:var(--gray);line-height:1.25;overflow-wrap:anywhere;margin-top:1px">' + esc(cn) + '</div>';
+          
+          h += '</div></td>';
+          d = bar.to + 1;
+        });
+        for (; d < 7; d++) h += emptyDay(d);
+        h += '</tr>';
+      });
+    });
+
+    h += '</tbody></table></div>';
+
+    if (canManage() && needsLead.length > 0) {
+      var testers = staff.filter(function(p) { return p.active; });
+      var contractors = (S.data.users || []).filter(function(p) { return p.role === 'contractor'; });
+      h += '<div class="card"><div class="card-header"><span class="card-title">' + IC.user + ' Unassigned Assessments</span><span class="badge badge-warn">' + needsLead.length + '</span></div>';
+      h += '<table class="dt"><thead><tr>' + (_idsOn('assessment') ? '<th>ID</th>' : '') + '<th class="c-main">Assessment</th><th>Client</th><th>Dates</th><th>Assign To</th></tr></thead><tbody>';
+      needsLead.forEach(function(a) {
+        var clName = getClientName(a.client_id);
+        var _uaCl = (S.data.clients || []).find(function(c) { return c.id === a.client_id; });
+        var _uaCode = _assCodeOf(a, _uaCl);
+        h += '<tr style="background:rgba(var(--notification-color-rgb,249,115,22),0.08)">';
+        if (_idsOn('assessment')) h += '<td class="mono refcode" style="border-left:3px solid var(--notification-color)">' + esc(_uaCode || '-') + '</td>';
+        h += '<td class="clickable" onclick="viewAssessment(\'' + a.id + '\')"><strong>' + esc(a.name) + '</strong></td>';
+        h += '<td>' + esc(clName) + '</td>';
+        h += '<td class="mono small-text">' + fmtDate(a.start_date) + (a.end_date ? ' - ' + fmtDate(a.end_date) : '') + '</td>';
+        h += '<td><select class="form-select inline-select" id="assign_' + a.id + '" style="font-size:0.8rem;padding:4px">';
+        h += '<option value="">Select...</option>';
+        testers.forEach(function(t) {
+          var load = allAssessments.filter(function(x) { return x.lead_id === t.id && _assTier(x) !== 2; }).length;
+          h += '<option value="' + t.id + '">' + esc(t.name) + (load > 0 ? ' (' + load + ' booked)' : '') + '</option>';
+        });
+        contractors.forEach(function(t) {
+          if (testers.some(function(s) { return s.id === t.id; })) return;
+          var load = allAssessments.filter(function(x) { return x.lead_id === t.id && _assTier(x) !== 2; }).length;
+          h += '<option value="' + t.id + '">' + esc(t.name) + ' (external' + (load > 0 ? ', ' + load + ' booked' : '') + ')</option>';
+        });
+        h += '</select> <button class="btn btn-primary btn-sm" onclick="assignLead(\'' + a.id + '\')">' + IC.check + '</button></td>';
+        h += '</tr>';
+      });
+      h += '</tbody></table></div>';
+    }
+
+    h += '<div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.5rem;padding:0.5rem;font-size:0.68rem;color:var(--gray)">';
+    [].forEach(function(s) {
+      h += '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:12px;height:12px;border-radius:3px;background:' + (statusColors[s] || '#525252') + '25;border-left:3px solid ' + (statusColors[s] || '#525252') + '"></span>' + (statusLabels[s] || s) + '</span>';
+    });
+    h += '</div>';
+
+    return h;
+  }
+
+  var timeSlots = [];
+  for (var hr = 8; hr < 18; hr++) { timeSlots.push(String(hr).padStart(2, '0') + ':00'); timeSlots.push(String(hr).padStart(2, '0') + ':30'); }
+
+  var cellH = 28;
+  var colW = 'calc((100% - 52px) / 7)';
+
+  h += '<div class="card mb-4" style="overflow-x:auto;padding:0">';
+  h += '<div style="position:relative;min-width:700px">';
+
+  h += '<div style="display:flex;border-bottom:2px solid var(--border)">';
+  h += '<div style="width:52px;flex-shrink:0;padding:6px 0;text-align:center;font-size:0.6rem;color:var(--gray);text-transform:uppercase"></div>';
+  days.forEach(function(d, i) {
+    var isToday = dayStrs[i] === todayStr;
+    var isWe = i >= 5;
+    h += '<div style="flex:1;padding:6px 4px;text-align:center;border-left:1px solid var(--border);' + (isToday ? 'background:rgba(234,179,8,0.08)' : '') + (isWe ? ';opacity:0.5' : '') + '">';
+    h += '<div style="font-size:0.65rem;color:' + (isToday ? 'var(--yellow)' : 'var(--gray)') + ';text-transform:uppercase;letter-spacing:0.05em">' + dayNames[i] + '</div>';
+    h += '<div style="font-size:0.95rem;font-weight:700;font-family:JetBrains Mono,monospace;' + (isToday ? 'color:var(--yellow)' : '') + '">' + d.getDate() + '</div>';
+    h += '</div>';
+  });
+  h += '</div>';
+
+  h += '<div style="position:relative">';
+  timeSlots.forEach(function(t, ti) {
+    var isHour = t.endsWith(':00');
+    h += '<div style="display:flex;height:' + cellH + 'px;border-bottom:1px ' + (isHour ? 'solid' : 'dotted') + ' ' + (isHour ? 'var(--border)' : 'rgba(255,255,255,0.03)') + '">';
+    h += '<div style="width:52px;flex-shrink:0;padding-right:6px;text-align:right;font-size:0.62rem;font-family:JetBrains Mono,monospace;color:var(--gray);line-height:' + cellH + 'px">' + (isHour ? t : '') + '</div>';
+    days.forEach(function(d, di) {
+      var isToday = dayStrs[di] === todayStr;
+      h += '<div style="flex:1;border-left:1px solid var(--border);' + (isToday ? 'background:rgba(234,179,8,0.03)' : '') + '"></div>';
+    });
+    h += '</div>';
+  });
+
+  allMeetings.forEach(function(mtg) {
+    var di = dayStrs.indexOf(mtg.meeting_date);
+    if (di < 0) return;
+    var mtgAtt = allAtt.filter(function(a) { return a.meeting_id === mtg.id && a.status === 'joined'; });
+    var mtgUserIds = mtgAtt.map(function(a) { return a.user_id; });
+    if (mtg.assigned_to) mtgUserIds.push(mtg.assigned_to);
+    var visible = S.calFilter === 'everyone' || mtgUserIds.some(function(uid) { return showUserIds.indexOf(uid) >= 0; });
+    if (!visible) return;
+
+    var tp = mtg.meeting_time ? mtg.meeting_time.split(':') : ['09', '00'];
+    var mtgHr = parseInt(tp[0]) || 9;
+    var mtgMin = parseInt(tp[1]) || 0;
+    if (mtgHr < 8) mtgHr = 8;
+    var slotIdx = Math.max(0, (mtgHr - 8) * 2 + (mtgMin >= 30 ? 1 : 0));
+    var durSlots = Math.max(1, Math.ceil((mtg.duration_minutes || 30) / 30));
+    var top = slotIdx * cellH;
+    var height = durSlots * cellH;
+
+    var left = 'calc(52px + ' + di + ' * ' + colW + ' + 2px)';
+    var width = 'calc(' + colW + ' - 6px)';
+
+    var pc = '#6264a7';
+    var pLabels = { teams: 'Teams' };
+    var attInitials = mtgAtt.map(function(a) { return (_nameNow(a.user_id, a.user_name) || '?')[0]; }).join('');
+
+    h += '<div onclick="joinMeetingLink(\'' + mtg.id + '\')" style="position:absolute;top:' + top + 'px;left:' + left + ';width:' + width + ';min-height:' + Math.max(height - 1, cellH - 1) + 'px;background:' + pc + '22;border:1px solid ' + pc + '55;border-left:3px solid ' + pc + ';cursor:pointer;z-index:5;border-radius:3px;overflow:hidden;display:flex;flex-direction:column;justify-content:center;padding:2px 6px" title="' + esc(mtg.client_name) + ' - ' + esc(mtg.meeting_time) + ' (' + (pLabels[mtg.meeting_type] || 'Teams') + ')' + (mtg.meeting_link ? '&#10;Click to join' : '&#10;Click to edit') + '">';
+    h += '<div style="font-size:0.6rem;font-weight:700;color:' + pc + ';line-height:1.2;overflow-wrap:anywhere">' + esc(mtg.client_name) + '</div>';
+    if (height >= cellH * 2) {
+      h += '<div style="font-size:0.52rem;color:var(--gray);overflow-wrap:anywhere">' + esc(mtg.meeting_time) + ' ' + (pLabels[mtg.meeting_type] || '') + (attInitials ? ' · ' + attInitials : '') + '</div>';
+    }
+    if (mtg.meeting_link && height >= cellH * 3) {
+      h += '<div style="font-size:0.5rem;color:' + pc + ';opacity:0.7;margin-top:1px">Click to join</div>';
+    }
+    h += '</div>';
+  });
+
+  h += '</div></div></div>';
+
+  h += '<div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.5rem;padding:0.5rem;font-size:0.68rem;color:var(--gray)">';
+  h += '<span style="display:inline-flex;align-items:center;gap:3px"><span style="width:10px;height:10px;border-radius:2px;background:#6264a730;border:1px solid #6264a7"></span>Microsoft Teams</span>';
+  h += '</div>';
+
+  return h;
+}
+function _userColor(userId, staff) {
+  var colors = ['#3b82f6', '#991b1b', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#06b6d4'];
+  var idx = 0;
+  for (var i = 0; i < staff.length; i++) { if (staff[i].id === userId) { idx = i; break; } }
+  return colors[idx % colors.length];
 }
 function _stripAiHeadings(html) {
   if (!html || typeof html !== 'string') return html || '';
@@ -36355,7 +37587,8 @@ async function _aiVerifyUrls(urls, signal) {
       body: JSON.stringify({ urls: urls }),
       signal: signal || undefined
     });
-    if (!resp.ok) return { valid: urls, dead: [] };
+
+    if (!resp.ok) return { valid: urls, dead: [], unchecked: true };
     var data = await resp.json();
     var valid = [], dead = [];
     (data.results || []).forEach(function (r) { if (r.valid) valid.push(r.url); else dead.push(r.url); });
@@ -36363,8 +37596,12 @@ async function _aiVerifyUrls(urls, signal) {
   } catch (e) {
 
     if (signal && signal.aborted) throw e;
-    return { valid: urls, dead: [] };
+    return { valid: urls, dead: [], unchecked: true };
   }
+}
+function _refsAddedSaid(n, checked) {
+  return checked && checked.unchecked ? n + ' reference' + (n !== 1 ? 's' : '') + ' added'
+    : n + ' verified reference' + (n !== 1 ? 's' : '') + ' added';
 }
 async function generateKBRefs(o) {
   var quiet = _genQuiet(o);
@@ -36418,8 +37655,8 @@ async function generateKBRefs(o) {
       var have = el.value.trim() ? el.value.trim().split('\n').map(function (s) { return s.trim(); }).filter(Boolean) : [];
       checked.valid.forEach(function (u) { if (have.indexOf(u) === -1) have.push(u); });
       el.value = have.join('\n');
-      return _genSaid(o, checked.valid.length + ' verified reference' + (checked.valid.length !== 1 ? 's' : '') + ' added', 'success',
-        checked.valid.length + ' checked' + (dead ? ', ' + dead + ' broken left out' : ''));
+      return _genSaid(o, _refsAddedSaid(checked.valid.length, checked), 'success',
+        checked.unchecked ? checked.valid.length + ' added, the links not checked' : checked.valid.length + ' checked' + (dead ? ', ' + dead + ' broken left out' : ''));
     }
   } catch(e) { return _genFailed(o, 'AI refs error: ', e); }
   } finally {
@@ -36743,8 +37980,8 @@ async function generateRefs(o) {
         if (existingUrls.indexOf(u) === -1) existingUrls.push(u);
       });
       refsEl.value = existingUrls.join('\n');
-      return _genSaid(o, validUrls.length + ' verified reference' + (validUrls.length !== 1 ? 's' : '') + ' added', 'success',
-        validUrls.length + ' checked' + (dead ? ', ' + dead + ' broken left out' : ''));
+      return _genSaid(o, _refsAddedSaid(validUrls.length, checked), 'success',
+        checked.unchecked ? validUrls.length + ' added, the links not checked' : validUrls.length + ' checked' + (dead ? ', ' + dead + ' broken left out' : ''));
     }
   } catch(e) { return _genFailed(o, 'AI refs error: ', e); }
   } finally {
@@ -37620,10 +38857,6 @@ function renderSettings__portal() {
     h += '</div>';
   }
 
-  if (_themeMode() !== 'light' && _themeMode() !== 'dark') h += '<div style="flex:1 1 100%;margin:0.1rem 0 0;font-size:0.7rem;color:var(--gray);line-height:1.5">'
-    + 'Upload either one and it is used on both themes. Upload both and each theme '
-    + 'gets its own.</div>';
-
   h += '<div style="flex:1 1 110px;min-width:110px"><label class="form-label" style="margin-bottom:0.15rem;font-size:0.8rem">Favicon <span style="font-weight:400;font-size:0.6rem;color:var(--gray)">ICO/PNG</span></label>';
   h += '<div style="font-size:0.65rem;color:var(--gray);margin-bottom:0.3rem">Recommended: 32×32px, square 1:1</div>';
   var _favPreview = s.favicon_url || null;
@@ -37643,6 +38876,10 @@ function renderSettings__portal() {
     h += '</label>';
   }
   h += '</div>';
+
+  if (_themeMode() !== 'light' && _themeMode() !== 'dark') h += '<div style="flex:1 1 100%;margin:0.1rem 0 0;font-size:0.7rem;color:var(--gray);line-height:1.5">'
+    + 'Upload either logo and it is used on both themes. Upload both and each theme '
+    + 'gets its own.</div>';
   h += '</div>';
   h += '</div>';
 
@@ -38556,91 +39793,7 @@ function renderSettings__portal() {
 
   if (_crbEnabled) {
 
-    var _allImported = Object.keys(CHECKLIST_RUNBOOK_LIBRARY).every(function(key) {
-      var tpl = CHECKLIST_RUNBOOK_LIBRARY[key];
-      return (S.data.checklists_runbooks || []).some(function(t) { return t.source === tpl.source; });
-    });
-    if (!_allImported) {
-      var _libKeys = Object.keys(CHECKLIST_RUNBOOK_LIBRARY);
-      var _isImported = function(key) {
-        var tpl = CHECKLIST_RUNBOOK_LIBRARY[key];
-        return (S.data.checklists_runbooks || []).some(function(t) { return t.source === tpl.source; });
-      };
-      var _pending = _libKeys.filter(function(key) { return !_isImported(key); });
-      h += '<div style="margin-bottom:1.5rem">';
-      h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.3rem">';
-      h += '<div style="font-weight:600;font-size:0.85rem">Curated library</div>';
-      if (_pending.length > 1) h += '<button class="btn btn-ghost btn-sm" style="font-size:0.72rem;white-space:nowrap" onclick="importAllCuratedChecklists()">Import all (' + _pending.length + ')</button>';
-      h += '</div>';
-      h += '<div style="font-size:0.78rem;color:var(--gray);margin-bottom:0.9rem">One template for each assessment phase type. When you attach templates to a phase, the one for that phase type is suggested first. Importing copies a template into your library, where you can edit it freely without affecting the source. Opt-in, and deletable at any time.</div>';
-
-      var _ptOrder = (_phaseTypes || []).map(function(t) { return String(t.name || '').toLowerCase(); });
-      var _ptIdx = function(key) {
-        var i = _ptOrder.indexOf(String(CHECKLIST_RUNBOOK_LIBRARY[key].phase_hint || '').toLowerCase());
-        return i === -1 ? 9999 : i;
-      };
-      _pending.sort(function(a, b) { return _ptIdx(a) - _ptIdx(b); });
-      h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:0.6rem">';
-      _pending.forEach(function(key) {
-        var tpl = CHECKLIST_RUNBOOK_LIBRARY[key];
-        var count = (tpl.items || []).length;
-        var noun = tpl.kind === 'runbook' ? ' step' : ' item';
-        var offered = _ptIdx(key) !== 9999;
-        h += '<div data-crb-lib="' + esc(key) + '" style="display:flex;flex-direction:column;padding:0.7rem 0.85rem;background:var(--bg);border:1px solid var(--border);border-radius:8px;gap:0.4rem">';
-        if (tpl.phase_hint) {
-          h += '<div><span data-crb-phase style="font-size:0.66rem;font-weight:700;padding:2px 8px;border-radius:10px;background:' + (offered ? 'rgba(var(--accent-rgb,26,115,232),0.12);color:var(--accent)' : 'rgba(0,0,0,0.06);color:var(--gray)') + ';letter-spacing:0.02em">' + esc(tpl.phase_hint) + ' phase</span>';
-          if (!offered) h += ' <span style="font-size:0.66rem;color:var(--gray)">not one of your phase types</span>';
-          h += '</div>';
-        }
-        h += '<div style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;font-weight:600;flex-wrap:wrap">' + esc(tpl.name);
-        h += '<span style="font-size:0.65rem;font-weight:600;padding:1px 6px;border-radius:10px;background:rgba(0,0,0,0.06);color:var(--gray);text-transform:uppercase;letter-spacing:0.04em">' + esc(tpl.kind) + '</span>';
-        h += '<span style="font-size:0.68rem;color:var(--gray)">' + count + noun + (count === 1 ? '' : 's') + '</span></div>';
-        h += '<div style="font-size:0.75rem;color:var(--gray);line-height:1.45;flex:1">' + esc(tpl.description) + '</div>';
-        h += '<div><button class="btn btn-sm btn-primary" style="white-space:nowrap" onclick="importCuratedChecklist(\'' + esc(key) + '\')">Import</button></div>';
-        h += '</div>';
-      });
-      h += '</div>';
-      h += '</div>';
-    }
-
-    h += '<div>';
-    h += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem">';
-    h += '<div style="font-weight:600;font-size:0.85rem">Your templates</div>';
-
-    h += '<div style="display:flex;gap:0.4rem;flex-wrap:wrap"><button class="btn btn-sm" id="crbxOpen" onclick="openChecklistTransfer()">Import and export</button>';
-    h += '<button class="btn btn-sm btn-primary" onclick="openChecklistEditor(null)">+ New template</button></div>';
-    h += '</div>';
-    var tpls = (S.data.checklists_runbooks || []).slice().sort(function(a, b) {
-      return (a.name || '').localeCompare(b.name || '');
-    });
-    if (!tpls.length) {
-      h += '<div style="padding:1.5rem;text-align:center;color:var(--gray);font-size:0.85rem;background:var(--bg);border:1px dashed var(--border);border-radius:8px">No templates yet. Import from the library above or create your own.</div>';
-    } else {
-      h += '<div style="display:flex;flex-direction:column;gap:0.5rem">';
-      tpls.forEach(function(t) {
-        var itemCount = (t.items || []).length;
-        h += '<div style="display:flex;align-items:center;justify-content:space-between;padding:0.7rem 0.85rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;gap:0.75rem">';
-        h += '<div style="flex:1;min-width:0">';
-        h += '<div style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;font-weight:600">' + esc(t.name);
-        h += '<span style="font-size:0.7rem;font-weight:500;padding:1px 6px;border-radius:10px;background:rgba(0,0,0,0.06);color:var(--gray);text-transform:uppercase;letter-spacing:0.04em">' + esc(t.kind) + '</span>';
-        
-        if (t.audit_ticks) h += '<span style="font-size:0.7rem;font-weight:500;padding:1px 6px;border-radius:10px;background:rgba(59,130,246,0.1);color:#1d4ed8">Audited</span>';
-        h += '</div>';
-        var subBits = [];
-        if (t.phase_hint) subBits.push('Phase: ' + esc(t.phase_hint));
-        subBits.push(itemCount + (t.kind === 'runbook' ? ' step' + (itemCount === 1 ? '' : 's') : ' item' + (itemCount === 1 ? '' : 's')));
-        if (t.source && t.source !== 'custom') subBits.push(esc(t.source));
-        h += '<div style="font-size:0.72rem;color:var(--gray);margin-top:2px">' + subBits.join(' &middot; ') + '</div>';
-        h += '</div>';
-        h += '<div style="display:flex;gap:0.4rem;flex-shrink:0">';
-        h += '<button class="btn btn-sm" onclick="openChecklistEditor(\'' + esc(t.id) + '\')">Edit</button>';
-        h += '<button class="btn btn-sm" onclick="duplicateChecklistTemplate(\'' + esc(t.id) + '\')">Duplicate</button>';
-        h += '<button class="btn btn-sm btn-danger" onclick="deleteChecklistTemplate(\'' + esc(t.id) + '\')">Delete</button>';
-        h += '</div></div>';
-      });
-      h += '</div>';
-    }
-    h += '</div>';
+    h += _crbShelvesHtml();
   } else {
     h += '<button class="btn btn-primary" onclick="saveChecklistFeatureToggle(true)">Enable to start using checklists &amp; runbooks</button>';
   }
@@ -40407,10 +41560,10 @@ function renderSettings__portal() {
   h += '</div></div>';
 
   h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Restore a Backup</span></div><div class="card-body">';
-  h += '<p class="set-p">Brings back a backup made above (the .zip, or a .json from before backups included files). Records are merged: one already here with the same ID is left as it is, and the rest are added. Settings and branding take the backup\u2019s values.' + '' + '</p>';
+  h += '<p class="set-p">Brings back a backup made above (the .zip, or a .json from before backups included files). Records are merged: one already here with the same ID is left as it is, and the rest are added. Before anything is written you see what is in it and choose what comes across: the team (and whether they are emailed), the work, and for settings and branding, the backup\u2019s or this portal\u2019s.' + '' + '</p>';
   h += '<div class="set-warn-line">A restore cannot be undone, so download a backup of everything as it is now first.</div>';
   h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
-  h += '<label class="btn btn-secondary" style="cursor:pointer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Choose a Backup File<input type="file" accept=".zip,.json,application/zip,application/json" onchange="importAllData(event)" style="display:none"></label>';
+  h += '<label class="btn btn-secondary" style="cursor:pointer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Choose a Backup File<input type="file" accept=".zip,.json,application/zip,application/json" onchange="_irvChoose(this)" style="display:none"></label>';
   h += '<span id="import_status" role="status" style="font-size:0.78rem;color:var(--gray)">' + esc(S._importStatus || '') + '</span></div>';
   h += '</div></div>';
   }
@@ -42582,12 +43735,199 @@ async function saveChecklistFeatureToggle(enabled) {
   }
 }
 window.saveChecklistFeatureToggle = saveChecklistFeatureToggle;
+var _CRB_CATS = ['Standards', 'Web and API', 'Infrastructure', 'Cloud and containers', 'Mobile and devices', 'People and physical', 'Adversary simulation', 'Compliance', 'AI applications'];
+function _crbLibState() { return S._crbLib || (S._crbLib = { tab: '', q: '', cat: '', kind: '' }); }
+function _crbLibAdded(tpl) {
+  return (S.data.checklists_runbooks || []).find(function (t) { return t.source === tpl.source; }) || null;
+}
+function _crbLibKeyFor(source) {
+  if (!source) return null;
+  return Object.keys(CHECKLIST_RUNBOOK_LIBRARY).find(function (k) { return CHECKLIST_RUNBOOK_LIBRARY[k].source === source; }) || null;
+}
+function _crbLibHost(url) {
+  var m = /^https?:\/\/(?:www\.)?([^\/?#:]+)/i.exec(String(url || ''));
+  return m ? m[1] : '';
+}
+function _crbPhaseIdx(hint) {
+  var lc = String(hint || '').toLowerCase();
+  if (!lc) return -1;
+  var types = (typeof _phaseTypes !== 'undefined' && _phaseTypes) || [];
+  for (var i = 0; i < types.length; i++) if (String(types[i].name || '').toLowerCase() === lc) return i;
+  return -1;
+}
+function _crbLibOrder() {
+  var all = Object.keys(CHECKLIST_RUNBOOK_LIBRARY);
+  var pos = {};
+  all.forEach(function (k, i) { pos[k] = i; });
+  return all.slice().sort(function (a, b) {
+    var A = CHECKLIST_RUNBOOK_LIBRARY[a], B = CHECKLIST_RUNBOOK_LIBRARY[b];
+    var ca = _CRB_CATS.indexOf(A.category), cb = _CRB_CATS.indexOf(B.category);
+    if (ca === -1) ca = 99; if (cb === -1) cb = 99;
+    if (ca !== cb) return ca - cb;
+    var pa = _crbPhaseIdx(A.phase_hint), pb = _crbPhaseIdx(B.phase_hint);
+    if (pa === -1) pa = 999; if (pb === -1) pb = 999;
+    if (pa !== pb) return pa - pb;
+    return pos[a] - pos[b];
+  });
+}
+function _crbLibKeys(useQuery) {
+  var st = _crbLibState();
+  var words = String(st.q || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return _crbLibOrder().filter(function (k) {
+    var t = CHECKLIST_RUNBOOK_LIBRARY[k];
+    if (st.cat && t.category !== st.cat) return false;
+    if (st.kind && t.kind !== st.kind) return false;
+    if (!useQuery || !words.length) return true;
+    var hay = [t.name, t.description, t.category, t.phase_hint, _crbLibHost(t.source_url)]
+      .concat((t.items || []).map(function (it) { return it.title; })).join(' ').toLowerCase();
+    return words.every(function (w) { return hay.indexOf(w) >= 0; });
+  });
+}
+function _crbKindWords(t, n) {
+  var rb = t.kind === 'runbook';
+  return (rb ? 'Runbook' : 'Checklist') + ', ' + n + (rb ? ' step' : ' item') + (n === 1 ? '' : 's');
+}
+function _crbLibCardHtml(k) {
+  var t = CHECKLIST_RUNBOOK_LIBRARY[k];
+  var got = _crbLibAdded(t);
+  var host = _crbLibHost(t.source_url);
+  var h = '<div class="crbl-card' + (got ? ' is-added' : '') + '" data-crb-lib="' + esc(k) + '">';
+  h += '<div class="crbl-top"><span class="crbl-cat">' + esc(t.category || 'Other') + '</span><span class="crbl-kind">' + _crbKindWords(t, (t.items || []).length) + '</span></div>';
+  h += '<div class="crbl-name">' + esc(t.name) + '</div>';
+  h += '<div class="crbl-desc">' + esc(t.description || '') + '</div>';
+  var meta = [];
+  if (t.phase_hint) meta.push('<span data-crb-phase>' + esc(t.phase_hint) + ' phase</span>' + (_crbPhaseIdx(t.phase_hint) === -1 ? '&nbsp;<span class="is-other">(not one of your phase types)</span>' : ''));
+  if (host) meta.push('Reference: ' + esc(host));
+  if (meta.length) h += '<div class="crbl-meta">' + meta.join('<i aria-hidden="true"></i>') + '</div>';
+  h += '<div class="crbl-acts"><button type="button" class="btn btn-sm btn-ghost" onclick="openCrbPreview(\'' + esc(k) + '\')">Preview</button>';
+  h += got
+    ? '<span class="crbl-added">' + IC.check + ' In your templates</span><button type="button" class="btn btn-sm" onclick="openChecklistEditor(\'' + esc(got.id) + '\')">Open</button>'
+    : '<button type="button" class="btn btn-sm btn-primary" onclick="importCuratedChecklist(\'' + esc(k) + '\')">Add to my templates</button>';
+  return h + '</div></div>';
+}
+function _crbLibGridHtml() {
+  var keys = _crbLibKeys(true);
+  if (!keys.length) return '<div class="crbl-empty">Nothing in the library matches that. Try another word, or another category.</div>';
+  return keys.map(_crbLibCardHtml).join('');
+}
+function _crbLibCountHtml() {
+  var keys = _crbLibKeys(true);
+  var todo = keys.filter(function (k) { return !_crbLibAdded(CHECKLIST_RUNBOOK_LIBRARY[k]); }).length;
+  var total = Object.keys(CHECKLIST_RUNBOOK_LIBRARY).length;
+  return '<span>' + (keys.length === total ? 'All ' + total + ' shown' : keys.length + ' of ' + total + ' shown') + '</span>'
+    + (todo > 1 ? '<button type="button" class="btn btn-sm btn-ghost" onclick="importAllCuratedChecklists(true)">Add these ' + todo + ' to my templates</button>' : '');
+}
+function _crbLibraryHtml() {
+  var st = _crbLibState();
+  var all = Object.keys(CHECKLIST_RUNBOOK_LIBRARY);
+  var nRb = all.filter(function (k) { return CHECKLIST_RUNBOOK_LIBRARY[k].kind === 'runbook'; }).length;
+  var nCl = all.length - nRb;
+  var h = '<div class="crbl">';
+  h += '<p class="crbl-sub">' + nCl + ' checklist' + (nCl === 1 ? '' : 's') + (nRb ? ' and ' + nRb + ' runbook' + (nRb === 1 ? '' : 's') : '')
+    + ' built on the published standards testers work to, from OSSTMM, PTES and NIST SP 800-115 to OWASP, MITRE ATT&amp;CK, CIS and PCI DSS. Adding one copies it into your templates, to change as you like and attach to a phase. '
+    + 'Each follows its standard\'s own structure; the reference it links to has the detail.</p>';
+  h += '<div class="crbl-tools"><div class="crbl-search">' + IC.search + '<input type="search" id="crbLibQ" placeholder="Search the library, e.g. OSSTMM, API, Active Directory" value="' + esc(st.q || '') + '" oninput="_crbLibFilter(\'q\', this.value)" aria-label="Search the methodology library"></div>';
+  if (nRb && nCl) {
+    h += '<div class="irv-seg" role="radiogroup" aria-label="Kind">' + [['', 'All'], ['checklist', 'Checklists'], ['runbook', 'Runbooks']].map(function (o) {
+      var on = (st.kind || '') === o[0];
+      return '<button type="button" role="radio" aria-checked="' + on + '" class="irv-seg-b' + (on ? ' is-on' : '') + '" onclick="_crbLibFilter(\'kind\', \'' + o[0] + '\')">' + o[1] + '</button>';
+    }).join('') + '</div>';
+  }
+  h += '</div>';
+  h += '<div class="crbl-cats" role="radiogroup" aria-label="Category">';
+  h += '<button type="button" role="radio" aria-checked="' + !st.cat + '" class="crbl-chip' + (!st.cat ? ' is-on' : '') + '" onclick="_crbLibFilter(\'cat\', \'\')">All <span>' + all.length + '</span></button>';
+  _CRB_CATS.forEach(function (c) {
+    var n = all.filter(function (k) { return CHECKLIST_RUNBOOK_LIBRARY[k].category === c; }).length;
+    if (!n) return;
+    var on = st.cat === c;
+    h += '<button type="button" role="radio" aria-checked="' + on + '" class="crbl-chip' + (on ? ' is-on' : '') + '" onclick="_crbLibFilter(\'cat\', \'' + esc(c) + '\')">' + esc(c) + ' <span>' + n + '</span></button>';
+  });
+  h += '</div>';
+  h += '<div class="crbl-count" id="crbLibCount">' + _crbLibCountHtml() + '</div>';
+  h += '<div class="crbl-grid" id="crbLibGrid">' + _crbLibGridHtml() + '</div>';
+  return h + '</div>';
+}
+function _crbMineHtml(tpls) {
+  var h = '<div class="crbl-mine-head"><p class="crbl-sub" style="margin:0">Yours to change. Attach them to a phase of an assessment, and the testers tick them off there.</p>';
+  h += '<div style="display:flex;gap:0.4rem;flex-wrap:wrap"><button class="btn btn-sm" id="crbxOpen" onclick="openChecklistTransfer()">Import and export</button>';
+  h += '<button class="btn btn-sm btn-primary" onclick="openChecklistEditor(null)">+ New template</button></div></div>';
+  if (!tpls.length) {
+    return h + '<div class="crbl-none">No templates yet. <a href="#" onclick="event.preventDefault();_crbLibFilter(\'tab\', \'library\')">Add one from the methodology library</a>, or create your own.</div>';
+  }
+  h += '<div class="crbl-mine">';
+  tpls.forEach(function (t) {
+    var n = (t.items || []).length;
+    var sub = [];
+    if (t.phase_hint) sub.push(esc(t.phase_hint) + ' phase');
+    sub.push(n + (t.kind === 'runbook' ? ' step' : ' item') + (n === 1 ? '' : 's'));
+    if (_crbLibKeyFor(t.source)) sub.push('From the library');
+    h += '<div class="crbl-row"><div class="crbl-row-t"><div class="crbl-row-n">' + esc(t.name) + '<span class="crbl-tag">' + (t.kind === 'runbook' ? 'Runbook' : 'Checklist') + '</span>';
+    
+    if (t.audit_ticks) h += '<span class="crbl-tag crbl-tag--aud">Audited</span>';
+    h += '</div><div class="crbl-row-s">' + sub.join(' &middot; ') + '</div></div>';
+    h += '<div class="crbl-row-a"><button class="btn btn-sm" onclick="openChecklistEditor(\'' + esc(t.id) + '\')">Edit</button>'
+      + '<button class="btn btn-sm" onclick="duplicateChecklistTemplate(\'' + esc(t.id) + '\')">Duplicate</button>'
+      + '<button class="btn btn-sm btn-danger" onclick="deleteChecklistTemplate(\'' + esc(t.id) + '\')">Delete</button></div></div>';
+  });
+  return h + '</div>';
+}
+function _crbShelvesHtml() {
+  var st = _crbLibState();
+  var tpls = (S.data.checklists_runbooks || []).slice().sort(function (a, b) { return (a.name || '').localeCompare(b.name || ''); });
+
+  var tab = st.tab || (st.tab = tpls.length ? 'mine' : 'library');
+  var nLib = Object.keys(CHECKLIST_RUNBOOK_LIBRARY).length;
+  var h = '<div class="crbl-shelf"><div class="irv-seg" role="tablist" aria-label="Checklists and runbooks">';
+  h += '<button type="button" role="tab" aria-selected="' + (tab === 'mine') + '" class="irv-seg-b' + (tab === 'mine' ? ' is-on' : '') + '" data-crb-shelf="mine" onclick="_crbLibFilter(\'tab\', \'mine\')">Your templates<span>' + tpls.length + '</span></button>';
+  h += '<button type="button" role="tab" aria-selected="' + (tab === 'library') + '" class="irv-seg-b' + (tab === 'library' ? ' is-on' : '') + '" data-crb-shelf="library" onclick="_crbLibFilter(\'tab\', \'library\')">Methodology library<span>' + nLib + '</span></button>';
+  h += '</div></div>';
+  return h + (tab === 'library' ? _crbLibraryHtml() : _crbMineHtml(tpls));
+}
+function _crbLibFilter(k, v) {
+  var st = _crbLibState();
+  st[k] = v;
+  if (k === 'q') {
+    var g = document.getElementById('crbLibGrid'); if (g) g.innerHTML = _crbLibGridHtml();
+    var c = document.getElementById('crbLibCount'); if (c) c.innerHTML = _crbLibCountHtml();
+    return;
+  }
+  render(true);
+}
+window._crbLibFilter = _crbLibFilter;
+function openCrbPreview(key) {
+  var t = CHECKLIST_RUNBOOK_LIBRARY[key];
+  if (!t) return;
+  var got = _crbLibAdded(t);
+  var rb = t.kind === 'runbook';
+  var host = _crbLibHost(t.source_url);
+  var h = '<div class="modal-header"><div><div class="crbl-top" style="justify-content:flex-start;margin-bottom:0.35rem"><span class="crbl-cat">' + esc(t.category || 'Other') + '</span>'
+    + '<span class="crbl-kind">' + _crbKindWords(t, (t.items || []).length) + '</span></div>'
+    + '<h2 class="modal-title">' + esc(t.name) + '</h2></div><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
+  h += '<div class="modal-body">';
+  h += '<p class="crbl-prev-d">' + esc(t.description || '') + '</p>';
+  var line = [];
+  if (host) line.push('Reference: <a href="' + esc(_crbSafeUrl(t.source_url) || '#') + '" target="_blank" rel="noopener noreferrer">' + esc(host) + '</a>');
+  if (t.phase_hint) line.push('For ' + esc(t.phase_hint) + ' phases' + (_crbPhaseIdx(t.phase_hint) === -1 ? ' (not one of your phase types)' : ''));
+  if (line.length) h += '<p class="crbl-prev-s">' + line.join(' &middot; ') + '</p>';
+  h += '<ol class="crbl-items">' + (t.items || []).map(function (it) {
+    var x = '<li><div class="crbl-item-t">' + esc(it.title || '') + '</div>';
+    var d = rb ? it.body : it.description;
+    if (d) x += '<div class="crbl-item-d">' + esc(String(d).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()) + '</div>';
+    return x + '</li>';
+  }).join('') + '</ol></div>';
+  h += '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:0.5rem"><button class="btn btn-ghost" onclick="closeM()">Close</button>'
+    + (got ? '<button class="btn btn-secondary" onclick="closeM();openChecklistEditor(\'' + esc(got.id) + '\')">Open your copy</button>'
+           : '<button class="btn btn-primary" onclick="closeM();importCuratedChecklist(\'' + esc(key) + '\')">Add to my templates</button>') + '</div>';
+  S.modal = { type: '_custom', html: h, cls: 'crbl-prev-modal' };
+  render(true);
+}
+window.openCrbPreview = openCrbPreview;
 async function importCuratedChecklist(libraryKey) {
   var tpl = CHECKLIST_RUNBOOK_LIBRARY[libraryKey];
   if (!tpl) { toast('Unknown template', 'error'); return; }
 
   var existing = (S.data.checklists_runbooks || []).find(function(t) { return t.source === tpl.source; });
-  if (existing) { toast('Already imported', 'info'); return; }
+  if (existing) { toast('Already in your templates', 'info'); return; }
   _showLoading();
   try {
 
@@ -42597,7 +43937,7 @@ async function importCuratedChecklist(libraryKey) {
     if (res.data && res.data[0]) {
       S.data.checklists_runbooks.push(res.data[0]);
     }
-    toast('Imported "' + tpl.name + '"', 'success');
+    toast('Added "' + tpl.name + '" to your templates', 'success');
     render();
   } catch (err) {
     console.error('importCuratedChecklist:', err);
@@ -42605,12 +43945,12 @@ async function importCuratedChecklist(libraryKey) {
   } finally { _hideLoading(); }
 }
 window.importCuratedChecklist = importCuratedChecklist;
-async function importAllCuratedChecklists() {
-  var keys = Object.keys(CHECKLIST_RUNBOOK_LIBRARY).filter(function(key) {
+async function importAllCuratedChecklists(onlyShown) {
+  var keys = (onlyShown ? _crbLibKeys(true) : Object.keys(CHECKLIST_RUNBOOK_LIBRARY)).filter(function(key) {
     var tpl = CHECKLIST_RUNBOOK_LIBRARY[key];
     return !(S.data.checklists_runbooks || []).some(function(t) { return t.source === tpl.source; });
   });
-  if (!keys.length) { toast('Everything is already imported', 'info'); return; }
+  if (!keys.length) { toast('Those are all in your templates already', 'info'); return; }
   _showLoading();
   var added = 0;
   try {
@@ -42620,7 +43960,7 @@ async function importAllCuratedChecklists() {
       if (res.error) { toast('Import failed: ' + _errMsg(res.error), 'error'); break; }
       if (res.data && res.data[0]) { S.data.checklists_runbooks.push(res.data[0]); added++; }
     }
-    if (added) toast('Imported ' + added + ' template' + (added === 1 ? '' : 's'), 'success');
+    if (added) toast('Added ' + added + ' template' + (added === 1 ? '' : 's') + ' to your templates', 'success');
     render();
   } catch (err) {
     console.error('importAllCuratedChecklists:', err);
@@ -42873,7 +44213,8 @@ var defaultTemplates = {
     heading_retest_summary: 'Retest Summary',
     heading_findings_summary: 'Findings Summary',
     heading_appendices: 'Appendices',
-    heading_additional_evidence: 'Additional Evidence',
+
+    heading_additional_evidence: 'Appendices',
     heading_severity_scale: 'Severity Rating Scale',
 
     col_id: 'ID',
@@ -43855,7 +45196,8 @@ function _renderTextTab(tpl) {
   h += _tplI('heading_retest_summary', 'Retest Summary', tpl.heading_retest_summary, _d.heading_retest_summary);
   h += _tplI('heading_findings_summary', 'Findings Summary', tpl.heading_findings_summary, _d.heading_findings_summary);
   h += _tplI('heading_appendices', 'Appendices', tpl.heading_appendices, _d.heading_appendices);
-  h += _tplI('heading_additional_evidence', 'Additional Evidence', tpl.heading_additional_evidence, _d.heading_additional_evidence);
+
+  h += _tplI('heading_additional_evidence', 'Engagement Appendices', _apxHeadingSaved(tpl), _d.heading_additional_evidence);
   h += _tplI('heading_severity_scale', 'Severity Rating Scale', tpl.heading_severity_scale, _d.heading_severity_scale);
   h += '</div></details>';
 
@@ -44812,7 +46154,7 @@ function renderModal() {
     case 'meeting': return '<div class="modal-overlay"><div class="modal-content modal-lg">' + renderMeetingModal() + '</div></div>';
 
     case 'templateeditor': return '<div class="modal-overlay"><div class="modal-content modal-xl">' + renderTemplateEditorModal() + '</div></div>';
-    case '_custom': return '<div class="modal-overlay"><div class="modal-content">' + (S.modal.html || '') + '</div></div>';
+    case '_custom': return '<div class="modal-overlay"><div class="modal-content' + (S.modal.cls ? ' ' + esc(S.modal.cls) : '') + '">' + (S.modal.html || '') + '</div></div>';
     default: content = '<p>Unknown modal type</p>';
   }
 
@@ -46537,6 +47879,15 @@ function _pfPickFilter(inp) {
   if (none) none.hidden = any;
 }
 window._pfPickFilter = _pfPickFilter;
+function _plCompanyHtml(c) {
+  return '<div class="pl-person"><div class="pl-who"><div class="pl-name">' + esc(c.name || '') + '</div></div></div>';
+}
+function _plContactHtml(c) {
+  var n = c.contact_name || '', e = c.contact_email || '';
+  if (!n && !e) return '';
+  return '<div class="pl-who"><div class="pl-name pl-name-plain">' + esc(n || e) + '</div>'
+    + (n && e ? '<div class="pl-email">' + esc(e) + '</div>' : '') + '</div>';
+}
 function renderClientModal() {
   var m = S.modal;
   var c = m.id ? (S.data.clients || []).find(function(x) { return x.id === m.id; }) : null;
@@ -47089,6 +48440,35 @@ async function saveAssessment() {
     }
   } finally { _hideLoading(); }
 }
+function _personSendHtml(id) {
+  if (typeof _irvIsTool === 'function' && _irvIsTool()) return '';
+  return '<label class="irv-chk inv-send"><input type="checkbox" id="' + id + '" checked onchange="_personSendSaid(this)">'
+    + '<span><strong>Email them an invitation</strong> with a link to sign in.</span></label>'
+    + '<p class="pf-hint inv-send-hint">Untick to add them without an email. They can sign in from the sign-in page with their email address when they are ready, or you can send the invitation later with Resend invite.</p>';
+}
+function _personSendSaid(cb) {
+  var on = !!cb.checked;
+  var m = cb.closest('.modal-content');
+  if (!m) return;
+  var b = m.querySelector('.modal-footer .btn-primary');
+  if (b) b.textContent = on ? 'Add and invite' : 'Add without an email';
+  var sub = m.querySelector('.pf-sub');
+  if (sub) {
+    if (!sub.hasAttribute('data-was')) sub.setAttribute('data-was', sub.textContent);
+    sub.textContent = on ? sub.getAttribute('data-was') : 'Their account is made, and nobody is emailed.';
+  }
+}
+window._personSendSaid = _personSendSaid;
+function _personSendOn(id) { var el = document.getElementById(id); return !el || !!el.checked; }
+async function _personAddOnly(email, name, role, clientId) {
+  var r = await supabaseClient.rpc('rpc_create_auth_user', { p_email: email, p_name: name, p_role: role, p_client_id: clientId || null });
+  var err = r.error ? _errMsg(r.error) : (r.data && r.data.error) || '';
+  if (err) { toast('Could not add ' + name + ': ' + err, 'error', 9000); return null; }
+  return { success: true, user_id: r.data && r.data.user_id, none: true };
+}
+function _personAddedSaid(name) {
+  toast(name + ' is added, and nobody was emailed. Send them an invitation with Resend invite when you are ready.', 'success', 9000);
+}
 function renderInviteModal() {
 
   var _invCon = !!(S.modal && S.modal.extra === 'contractor' && contractorsEnabled());
@@ -47117,6 +48497,7 @@ function renderInviteModal() {
       + _conTeams().map(function (t) { return '<option value="' + esc(t.id) + '">' + esc(t.name) + '</option>'; }).join('')
       + '</select><div class="pf-hint">They see the engagements handed to their team as well as the ones they lead.</div></div>';
   }
+  h += _personSendHtml('inv_send');
   h += '</div>';
   h += '<div class="modal-footer"><button class="btn btn-secondary" onclick="closeM()">Cancel</button><button class="btn btn-primary" onclick="inviteUser()">Add and invite</button></div>';
   requestAnimationFrame(function () {
@@ -48541,7 +49922,8 @@ function _smDefs__portal() {
     { key: 'retest_summary',    label: 'Retest Summary',         col: 'retest_summary', def: true, text: true, ai: true, icon: 'refresh',   client: true },
     { key: 'executive_summary', label: 'Executive Summary',      col: 'exec_summary',   def: true, text: true, ai: true, icon: 'filtext',   client: true },
     { key: 'findings',          label: 'Findings',               def: true, icon: 'alert',     client: true },
-    { key: 'evidence',          label: 'Additional Evidence',    def: true, icon: 'paperclip' },
+
+    { key: 'evidence',          label: 'Appendices',             def: true, icon: 'paperclip' },
     { key: 'files',             label: 'Files',                  def: true, icon: 'paperclip' },
     { key: 'comments',          label: 'Comments',               def: true, icon: 'chat',      client: true }
   ];
@@ -48761,6 +50143,11 @@ function _smLabel(key) {
   if (c && typeof c.label === 'string' && c.label.trim()) return c.label.trim();
   return _smLabelDefault(key);
 }
+function _apxHeadingSaved(tpl) {
+  var v = String((tpl && tpl.heading_additional_evidence) || '').trim();
+  return v === 'Additional Evidence' ? '' : v;
+}
+window._apxHeadingSaved = _apxHeadingSaved;
 function _docSecHeading(key, tplHeading, def) {
   var lab = '';
   try { lab = String(_smLabel(key) || '').trim(); } catch (e) { lab = ''; }
@@ -53600,11 +54987,17 @@ function _wpsFragmentToHtml(xml, rels, imgSink, alignOf, captionSink, orderedOf,
       var _cTxt = [];
       var _cre = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:br\s*\/>/g, _cm;
       while ((_cm = _cre.exec(pXml))) _cTxt.push(_cm[1] === undefined ? '\n' : _cm[1]);
-      var _code = _cTxt.join('').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-      if (_code.trim()) {
-        if (listOpen) { var _cc = '</' + listOpen + '>'; listOpen = ''; return _cc + '<pre>' + _code + '</pre>'; }
-        return '<pre>' + _code + '</pre>';
+      var _code = _cTxt.join('');
+      var _cc = '';
+      if (listOpen) { _cc = '</' + listOpen + '>'; listOpen = ''; }
+      if (!_code.trim()) return _cc + '<pre><code></code></pre>';
+      var _clead = '';
+      if (pendingBlank) {
+        if (seenContent) { for (var _cb = 0; _cb < pendingBlank; _cb++) _clead += '<p><br></p>'; }
+        pendingBlank = 0;
       }
+      seenContent = true;
+      return _clead + _cc + '<pre><code>' + _code + '</code></pre>';
     }
 
     var isList = /<w:numPr>/.test(pXml) || /ListParagraph/i.test(sid);
@@ -53618,6 +55011,8 @@ function _wpsFragmentToHtml(xml, rels, imgSink, alignOf, captionSink, orderedOf,
     var inner = runsToHtml(pXml, _pSty);
     if (!inner.trim() && !/<img/.test(inner)) {
       if (listOpen) { var c = '</' + listOpen + '>'; listOpen = ''; return c; }
+
+      if (_pSty && _pSty.mono && !_asHead) return '<pre><code></code></pre>';
 
       pendingBlank++;
       return '';
@@ -53757,17 +55152,14 @@ function _pntlFoldCodeBlocks(html) {
   do {
     before = s;
 
-    s = s.replace(/<\/code><\/pre>\s*(?:<p>(?:\s|&nbsp;)*<\/p>\s*)?<pre><code>/g, '\n');
+    s = s.replace(/(?:<\/code>)?<\/pre>\s*(?:<p>(?:\s|&nbsp;)*<\/p>\s*)?<pre>(?:<code>)?/g, '\n');
   } while (s !== before);
 
   s = s.replace(/<pre>([\s\S]*?)<\/pre>/g, function (m, inner) {
-    return '<pre>' + inner.replace(/<\/?code\b[^>]*>/g, function (tag, off) {
-
-      return (off === 0 || /^<\/code>$/.test(tag) && off === inner.length - 7) ? tag : '';
-    }) + '</pre>';
+    return '<pre><code>' + inner.replace(/<\/?code\b[^>]*>/g, '') + '</code></pre>';
   });
 
-  s = s.replace(/<pre>(?!<code>)([\s\S]*?)<\/pre>/g, '<pre><code>$1</code></pre>');
+  s = s.replace(/<pre><code>\s*<\/code><\/pre>/g, '');
 
   var runRe = /(?:<p>\s*<code>[\s\S]*?<\/code>\s*<\/p>\s*){2,}/g;
   s = s.replace(runRe, function (block) {
@@ -53805,7 +55197,9 @@ function _syncStyleSig(html) {
 
   var s2 = String(html == null ? '' : html)
     .replace(/<div\b[^>]*\bclass="[^"]*\bcode-block\b[^"]*"[^>]*>([\s\S]*?)<\/div>/gi, '<pre>$1</pre>')
-    .replace(/(<pre\b[^>]*>)\s*<code\b[^>]*>/gi, '$1').replace(/<\/code>\s*(<\/pre>)/gi, '$1');
+    .replace(/(<pre\b[^>]*>)\s*<code\b[^>]*>/gi, '$1').replace(/<\/code>\s*(<\/pre>)/gi, '$1')
+
+    .replace(/<\/pre>\s*<pre\b[^>]*>/gi, '\n');
   _PNTL_STYLE_TAGS.lastIndex = 0;
   while ((m = _PNTL_STYLE_TAGS.exec(s2))) {
     var tg = m[1].toLowerCase();
@@ -53951,19 +55345,6 @@ function _pntlOutbound(key, value) {
   if (key === 'caveats' || key === 'notes') return String(v);
   return v;
 }
-function _pntlEvidenceText(ev) {
-  var v = ev;
-  if (typeof v === 'string') {
-    var t = v.trim();
-    if (t.charAt(0) === '[') { try { v = JSON.parse(t); } catch (e) { return v; } }
-    else return v;
-  }
-  if (!Array.isArray(v)) return '';
-  return v.map(function (b) {
-    if (!b || b.type === 'image') return '';
-    return String(b.content || '');
-  }).join(' ');
-}
 var _PNTL_FULL_COL_PX = 567;
 function _pntlImgHeightOf(g) {
   if (!g || !g.h || !g.w) return 0;
@@ -53994,6 +55375,8 @@ function _pntlEvidenceShape(ev) {
 
   return v.map(function (b) {
     if (b && b.type === 'image') return 'i';
+
+    if (b && (b.type === 'text' || b.type === 'code')) return String(b.content || '').trim() ? 't' : '';
     return String((b && b.content) || '').replace(/<[^>]*>/g, '').replace(/&nbsp;|\u00a0/gi, ' ').trim() ? 't' : '';
   }).join('').replace(/t+/g, 't');
 }
@@ -54015,12 +55398,32 @@ function _pntlEvidenceImageCount(ev) {
   if (!Array.isArray(v)) return 0;
   return v.filter(function (b) { return b && b.type === 'image'; }).length;
 }
+function _pntlEvidenceAsRead(ev) {
+  var v = ev;
+  if (typeof v === 'string') {
+    var t = v.trim();
+    if (t.charAt(0) === '[') { try { v = JSON.parse(t); } catch (e) { return v; } }
+    else return v;
+  }
+  if (!Array.isArray(v)) return '';
+  var e3 = function (x) { return String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  return v.map(function (b) {
+    if (!b) return '';
+    var c = String(b.content || '');
+    if (b.type === 'html') return c;
+    if (b.type !== 'text' && b.type !== 'code') return '';
+    var cap = b.caption ? '<p>' + e3(b.caption) + '</p>' : '';
+    if (_evTextIsCode(b)) return '<pre><code>' + e3(c) + '</code></pre>' + cap;
+    if (!c.trim()) return '<p><br></p>' + cap;
+    return '<p>' + e3(c).replace(/\r?\n/g, '<br>') + '</p>' + cap;
+  }).join('');
+}
 function _pntlEvidenceSame(html, imgs, cur) {
   imgs = imgs || [];
   var blocks = [];
   try { blocks = _evBlocks(cur).filter(function (b) { return b && b.type === 'image'; }); } catch (e) { blocks = []; }
   var capsOf = function (list) { return list.map(function (x) { return _syncNorm((x && x.caption) || ''); }).join('|'); };
-  return _syncSame(html, _pntlEvidenceText(cur))
+  return _syncSame(html, _pntlEvidenceAsRead(cur))
     && imgs.length === _pntlEvidenceImageCount(cur)
     && _pntlRegionShape(html, imgs) === _pntlEvidenceShape(cur)
     && _pntlImgSizeSig(imgs) === _pntlEvidenceSizeSig(cur)
@@ -54267,7 +55670,7 @@ function _syncBuildProposals(regions, a, imgFor) {
         var text = _syncPlainOf(raw);
         if (!text && !images.length) {
 
-          if (!_syncNorm(_pntlEvidenceText(cur)) && !_pntlEvidenceImageCount(cur)) return;
+          if (!_syncNorm(_pntlEvidenceAsRead(cur)) && !_pntlEvidenceImageCount(cur)) return;
           changes.push({ field: key, label: 'Evidence', col: col, kind: 'evidence', clears: true,
             current: cur, proposed: { html: '', images: [] } });
           return;
@@ -55808,7 +57211,8 @@ window.downloadEditedReport = downloadEditedReport;
 async function clearEditedReport(assessmentId) {
   var a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; });
   if (!a || !a.edited_docx_path) return;
-  if (!(await confirmAsync('The uploaded file stays in the assessment files. It just stops being the one people download.',
+
+  if (!(await confirmAsync('Downloading the report makes it from the engagement again. The file you uploaded stops being the one people download.',
     { title: 'Go back to a generated report?', confirmText: 'Use a generated one' }))) return;
   _showLoading();
   try {
@@ -57705,6 +59109,45 @@ async function addTimelineEvent(assessmentId, eventText, customTimestamp, subjec
     console.warn('Timeline error:', e);
   }
 }
+async function assignLead(assessmentId, email, shown) {
+  var testerId = (document.getElementById('assign_' + assessmentId) || {}).value || '';
+  if (!testerId) { toast('Please select a tester', 'error'); return; }
+
+  if (arguments.length < 3) { var _aS = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; }); shown = _aS ? (_aS.lead_id || null) : null; }
+
+  if (email === undefined && _emailsOn('tester_assigned')) {
+    var _t = (S.data.users || []).find(function(p) { return p.id === testerId; });
+    var _a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; });
+    var _nm = _t && _t.name ? _t.name : 'The tester';
+    confirmDialog('Assign ' + _nm + '?', esc(_nm) + ' is emailed that they lead ' + esc((_a && _a.name) || 'this assessment') + '.',
+      function () { return assignLead(assessmentId, true, shown); }, null,
+      _emailChoice('tester_assigned', 'Assign', function () { return assignLead(assessmentId, false, shown); }));
+    return;
+  }
+  _showLoading();
+  try {
+
+  try {
+
+    var _mvL = await _coMove('assessments', assessmentId, { lead_id: testerId }, { from: { lead_id: shown }, what: 'The lead tester',
+      why: function (row, who, already) {
+        if (already) return 'That tester is already the lead.';
+        var nm = getTesterName(row.lead_id);
+        return (who ? who + ' assigned ' : 'A lead tester was assigned ') + (nm ? (who ? nm : '(' + nm + ')') + ' ' : '') + 'a moment ago, so it was left as it is.';
+      } });
+    if (!_mvL.ok) return;
+    var tester = (S.data.users || []).find(function(p) { return p.id === testerId; });
+    await addTimelineEvent(assessmentId, 'Lead tester assigned: ' + (tester ? tester.name : 'Unknown'), null, tester ? tester.id : null);
+    var a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; });
+    if (a && tester && email !== false) { try { await notifyTesterAssigned(a, tester); } catch(ne) {} }
+    toast(email === false ? 'Lead tester assigned, without emailing them' : 'Lead tester assigned', 'success');
+    await refreshAndStay();
+    _scheduleNudge();
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  }
+} finally { _hideLoading(); }
+}
 async function assignTester(assessmentId, email) {
   _showLoading();
   try {
@@ -57761,7 +59204,9 @@ async function inviteUser() {
 
   try {
     var _invTeam = role === 'contractor' ? ((document.getElementById('inv_team') || {}).value || '') : '';
-    var result = await adminApi('invite_user', { email: email, name: name, role: role, password_login: (S.data.settings || {}).password_login_enabled === true });
+    var result = _personSendOn('inv_send')
+      ? await adminApi('invite_user', { email: email, name: name, role: role, password_login: (S.data.settings || {}).password_login_enabled === true })
+      : await _personAddOnly(email, name, role, null);
     if (result) {
 
       if (_invTeam && result.user_id) {
@@ -57769,10 +59214,12 @@ async function inviteUser() {
           var _tr = await supabaseClient.from('profiles').update({ contractor_team_id: _invTeam }).eq('id', result.user_id).select('id');
           if (_tr.error || !(_tr.data && _tr.data.length)) throw (_tr.error || new Error('not saved'));
         } catch (_te) {
-          toast(name + ' is invited but not yet in ' + (_conTeamName(_invTeam) || 'the team') + '. Add them to it on the External tab.', 'error', 9000);
+          toast(name + (result.none ? ' is added' : ' is invited') + ' but not yet in ' + (_conTeamName(_invTeam) || 'the team') + '. Add them to it on the External tab.', 'error', 9000);
         }
       }
-      if (result.warning) {
+      if (result.none) {
+        _personAddedSaid(name);
+      } else if (result.warning) {
 
         toast('Account created, but the invitation email to ' + email + ' did not go: ' + result.warning + ' Send it again with Resend invite.', 'error', 14000);
       } else if (result.invite_job) {
@@ -68071,9 +69518,11 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
   var appendices = [];
   try { appendices = a.appendices ? (typeof a.appendices === 'string' ? JSON.parse(a.appendices) : a.appendices) : []; } catch(e) {}
 
+  var _apxOne = false;
   if (appendices.length && _secInDocs('evidence')) {
     doc.addPage(); pg++; y = topMg;
-    var _hdAE = _docSecHeading('evidence', tpl.heading_additional_evidence, 'Additional Evidence');
+    var _hdAE = _docSecHeading('evidence', _apxHeadingSaved(tpl), 'Appendices');
+    _apxOne = String(_hdAE).trim().toLowerCase() === String(tpl.heading_appendices || 'Appendices').trim().toLowerCase();
     var _snAE = _tocPush(_hdAE, pg, 0);
     doc.setTextColor(accentRgb[0], accentRgb[1], accentRgb[2]);
     doc.setFont(_headFont, 'bold');
@@ -68141,13 +69590,19 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
     addFooter();
   }
 
+  if (_apxOne && !(tpl.appendix_order || ['qa', 'methodology', 'dos', 'tc']).some(function (k) {
+    return ['qa', 'methodology', 'dos', 'tc'].indexOf(k) >= 0 && tpl['appendix_' + k] !== false;
+  }) && tpl.show_severity_scale === false) return;
   doc.addPage(); pg++; y = topMg;
+
+  if (!_apxOne) {
   _tocPush(tpl.heading_appendices || 'Appendices', pg, 0);
   doc.setTextColor(accentRgb[0], accentRgb[1], accentRgb[2]);
   doc.setFont(_headFont, 'bold');
   doc.setFontSize(_headFS + 2);
   doc.text(tpl.heading_appendices || 'Appendices', mg, y);
   y += 10;
+  }
 
   function _parseAppendixLinks(fieldVal, defaultLinks) {
     if (!fieldVal && defaultLinks) return defaultLinks;
@@ -68533,6 +69988,46 @@ async function _listAllStoragePaths(bucket, prefix) {
   }
   return out;
 }
+var _RESTORE_MIME = {
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  doc: 'application/msword', xls: 'application/vnd.ms-excel', pdf: 'application/pdf',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon',
+  bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff',
+  mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', avi: 'video/x-msvideo',
+  mp3: 'audio/mpeg', wav: 'audio/wav',
+  txt: 'text/plain', log: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json', xml: 'application/xml', html: 'text/html',
+  zip: 'application/zip', gz: 'application/gzip', '7z': 'application/x-7z-compressed', pcap: 'application/vnd.tcpdump.pcap',
+  nessus: 'application/xml'
+};
+function _restoreMimeFor(bucket, path) {
+  if (bucket === 'templates') return _RESTORE_MIME.docx;
+  var ext = String(path || '').split('/').pop().split('.').pop().toLowerCase();
+  return _RESTORE_MIME[ext] || 'application/octet-stream';
+}
+window._restoreMimeFor = _restoreMimeFor;
+function _restoreWhatFile(bucket, path) {
+  var n = String(path || '').split('/').pop();
+  if (bucket === 'templates') return 'a Word template (' + n + ')';
+  if (bucket === 'avatars') return 'a profile picture';
+  return 'a file (' + n + ')';
+}
+function _restoreTableWords(table, n) {
+  var W = { profiles: ['person', 'people'], clients: ['client', 'clients'], assessments: ['assessment', 'assessments'], findings: ['finding', 'findings'],
+    kb_entries: ['Library entry', 'Library entries'], checklists_runbooks: ['checklist', 'checklists'], assessment_comments: ['comment', 'comments'],
+    assessment_files: ['file record', 'file records'], qa_comments: ['QA comment', 'QA comments'], timeline_events: ['timeline entry', 'timeline entries'] };
+  var w = W[table] || [table.replace(/_/g, ' ') + ' row', table.replace(/_/g, ' ') + ' rows'];
+  return n === 1 ? w[0] : w[1];
+}
+function _restoreWhatSaid(what, n) {
+  var seen = {};
+  var list = (what || []).filter(function (w) { if (seen[w]) return false; seen[w] = 1; return true; });
+  if (!list.length) return n + ' item' + (n === 1 ? '' : 's') + ' (the browser console names them)';
+  var shown = list.slice(0, 4).join(', ');
+  return shown + (list.length > 4 ? ', and ' + (list.length - 4) + ' more' : '');
+}
+window._restoreWhatSaid = _restoreWhatSaid;
 async function exportAllData() {
   if (!S.profile || S.profile.role !== 'admin') { toast('Admin access required', 'error'); return; }
   var _expBtn = document.getElementById('btn_export_data');
@@ -68544,7 +70039,9 @@ async function exportAllData() {
 
   _SET_WRITE_ONLY.forEach(function(k){ delete _expSettings[k]; });
   var data = {
-    _meta: { exported_at: new Date().toISOString(), portal: window.location.hostname, version: '1.0' },
+
+    _meta: { exported_at: new Date().toISOString(), portal: window.location.hostname, version: '1.0',
+      product: (typeof REPORTER !== 'undefined' && REPORTER) ? 'pental-report' : 'pental', app_version: (typeof REPORTER !== 'undefined' && REPORTER && REPORTER.version) || (typeof PENTAL_BUILD === 'string' ? PENTAL_BUILD.split(' ')[0] : '') },
     settings: _expSettings,
     clients: S.data.clients || [],
     assessments: S.data.assessments || [],
@@ -68610,13 +70107,18 @@ async function exportAllData() {
     if (_expBtn) { _expBtn.disabled = false; _expBtn.innerHTML = _expOrig; }
   }
 }
-async function importAllData(evt) {
+async function importAllData(evt, opts) {
   if (!S.profile || S.profile.role !== 'admin') { toast('Admin access required', 'error'); return; }
+  opts = opts || {};
+  var C = opts.choices || null;
   var file = evt.target.files && evt.target.files[0];
   if (!file) return;
 
-  var statusEl = { set textContent(v) { S._importStatus = v; var el = document.getElementById('import_status'); if (el) el.textContent = v; } };
+  var statusEl = { set textContent(v) { S._importStatus = v; var el = document.getElementById('import_status'); if (el) el.textContent = v;
+    var mv = document.getElementById('mvzStatus'); if (mv) { mv.textContent = v; mv.hidden = !v; }
+    var rv = document.getElementById('irvStatus'); if (rv) rv.textContent = v; } };
   if (statusEl) statusEl.textContent = 'Reading file...';
+  var _ownSpin = false;
 
   try {
     var _isZip = /\.zip$/i.test(file.name) || file.type === 'application/zip' || file.type === 'application/x-zip-compressed';
@@ -68641,16 +70143,17 @@ async function importAllData(evt) {
 
     var _importWhen = data._meta.exported_at ? fmtDate(data._meta.exported_at) : 'an unknown date';
     var _importMsg = 'This will merge <strong>' + (data.clients || []).length + '</strong> clients, <strong>' + (data.assessments || []).length + '</strong> assessments, <strong>' + (data.findings || []).length + '</strong> findings, <strong>' + (data.proposals || []).length + '</strong> proposals, <strong>' + (data.invoices || []).length + '</strong> invoices, and <strong>' + (data.kb_entries || []).length + '</strong> Library entries into your portal, restore <strong>' + (data.profiles || []).length + '</strong> user accounts, and restore your settings and branding. Existing records with the same ID are skipped; settings are overwritten with the exported values.';
-    if (!(await confirmAsync(_importMsg, { title: 'Import data from ' + _importWhen + '?', confirmText: 'Import', variant: 'warn' }))) {
+    if (!opts.skipConfirm && !(await confirmAsync(_importMsg, { title: 'Import data from ' + _importWhen + '?', confirmText: 'Import', variant: 'warn' }))) {
       if (statusEl) statusEl.textContent = 'Cancelled';
       evt.target.value = '';
       return;
     }
 
     if (statusEl) statusEl.textContent = 'Importing...';
-    _showLoading();
 
-    var stats = { inserted: 0, skipped: 0, errors: 0 };
+    if (!C) { _showLoading(); _ownSpin = true; }
+
+    var stats = { inserted: 0, skipped: 0, errors: 0, what: [] };
 
     var _idMap = {};
     try {
@@ -68661,7 +70164,13 @@ async function importAllData(evt) {
         if (_h && String(_h) !== String(p.id)) _idMap[p.id] = _h;
       });
     } catch (e) { _idMap = {}; }
+
+    if (C) (data.profiles || []).forEach(function (p) {
+      if (!p || !p.id || _idMap[p.id]) return;
+      if (!C.team || (C.people && (C.people[p.id] === 'out' || C.people[p.id] === false))) _idMap[p.id] = S.profile.id;
+    });
     var _hasIdMap = Object.keys(_idMap).length > 0;
+    var _restoredPeople = [];
     var _remapIds = function (v) {
       if (typeof v === 'string') return Object.prototype.hasOwnProperty.call(_idMap, v) ? _idMap[v] : v;
       if (Array.isArray(v)) return v.map(_remapIds);
@@ -68676,6 +70185,18 @@ async function importAllData(evt) {
       delete _s.id; delete _s.created_at; delete _s.updated_at; delete _s.tenant_id;
       delete _s.row_version;
 
+      delete _s.account_owner_id; delete _s.plan_max_users; delete _s.plan_max_clients;
+
+      if (C || opts.fromReport) {
+
+        var _mineS = Object.assign({}, S.data.settings || {});
+        try {
+          var _mr = await supabaseClient.from('settings').select('pdf_templates').limit(1).maybeSingle();
+          if (_mr && !_mr.error && _mr.data) _mineS.pdf_templates = _mr.data.pdf_templates;
+        } catch (e) {  }
+        _s = _irvSettings(_s, C, !!opts.fromReport, _mineS);
+      }
+
       ['smtp_pass','stripe_secret_key','stripe_webhook_secret','ai_api_key','ai_custom_headers','teams_client_secret','zoom_client_secret','smtp_pass_enc','stripe_secret_key_enc','stripe_webhook_secret_enc','ai_api_key_enc','teams_client_secret_enc','zoom_client_secret_enc','slack_bot_token_enc'].forEach(function(k) { delete _s[k]; });
       try {
         var _sid = (S.data.settings && S.data.settings.id) || null;
@@ -68684,21 +70205,28 @@ async function importAllData(evt) {
           if (_er && _er.data && _er.data.id) _sid = _er.data.id;
         }
         var _sres;
+        if (!Object.keys(_s).length) _s = null;
         var _sWrite = async function () {
+          if (!_s) return { error: null };
           return _sid ? await supabaseClient.from('settings').update(_s).eq('id', _sid) : await supabaseClient.from('settings').insert(_s);
         };
         _sres = await _sWrite();
 
         for (var _sd = 0; _sres && _sres.error && _sd < 20; _sd++) {
-          var _sm = /Could not find the '([^']+)' column/.exec(String(_sres.error.message || ''));
+          var _smsg = String(_sres.error.message || '');
+
+          var _sg = /account_owner_id is set from the billing record/.test(_smsg) ? ['account_owner_id']
+            : /Plan limits are set by your subscription/.test(_smsg) ? ['plan_max_users', 'plan_max_clients'] : null;
+          if (_sg && _sg.some(function (k) { return k in _s; })) { _sg.forEach(function (k) { delete _s[k]; }); _sres = await _sWrite(); continue; }
+          var _sm = /Could not find the '([^']+)' column/.exec(_smsg);
           if (!_sm || !(_sm[1] in _s)) break;
           console.warn('import settings: this database has no ' + _sm[1] + ' column, restoring without it');
           delete _s[_sm[1]];
           _sres = await _sWrite();
         }
-        if (_sres && _sres.error) { stats.errors++; console.error('settings import:', _sres.error.message); }
+        if (_sres && _sres.error) { stats.errors++; stats.what.push('your settings (' + _sres.error.message + ')'); console.error('settings import:', _sres.error.message); }
         else { stats.inserted++; }
-      } catch (e) { stats.errors++; console.error('settings import failed:', e); }
+      } catch (e) { stats.errors++; stats.what.push('your settings'); console.error('settings import failed:', e); }
     }
 
     async function _importRows(tableName, rows) {
@@ -68725,13 +70253,19 @@ async function importAllData(evt) {
           chunk.forEach(function (r) { delete r[_m[1]]; });
           error = (await supabaseClient.from(tableName).upsert(chunk, { onConflict: 'id', ignoreDuplicates: true })).error;
         }
-        if (error) { stats.errors += chunk.length; console.error('import ' + tableName + ':', error.message); } else { stats.inserted += chunk.length; }
+        if (error) { stats.errors += chunk.length; stats.what.push(chunk.length + ' ' + _restoreTableWords(tableName, chunk.length)); console.error('import ' + tableName + ':', error.message); } else { stats.inserted += chunk.length; }
       }
     }
 
-    await _importRows('clients', data.clients);
+    var _irvSkip = function (table) {
+      if (!C) return false;
+      if (table === 'kb_entries') return !C.library;
+      if (table === 'checklists_runbooks' || table === 'assessment_phase_checklist_state') return !C.checklists;
+      return !C.work;
+    };
+    if (!_irvSkip('clients')) await _importRows('clients', data.clients);
 
-    var _profiles = data.profiles || [];
+    var _profiles = (C && !C.team) ? [] : (data.profiles || []);
     if (_profiles.length) {
       if (statusEl) statusEl.textContent = 'Restoring users (' + _profiles.length + ')...';
       for (var pi = 0; pi < _profiles.length; pi++) {
@@ -68749,10 +70283,12 @@ async function importAllData(evt) {
             p_client_id: _pf.client_id || null,
             p_active: (_pf.active === false ? false : true)
           });
-          if (_rr && _rr.error) { stats.errors++; console.error('restore user:', _rr.error.message); }
-          else if (_rr && _rr.data && _rr.data.error) { stats.errors++; console.error('restore user:', _rr.data.error); }
-          else { stats.inserted++; }
-        } catch (e) { stats.errors++; console.error('restore user failed:', e); }
+          if (_rr && _rr.error) { stats.errors++; stats.what.push(_pf.name || _pf.email); console.error('restore user:', _rr.error.message); }
+          else if (_rr && _rr.data && _rr.data.error) { stats.errors++; stats.what.push(_pf.name || _pf.email); console.error('restore user:', _rr.data.error); }
+
+          else if (_rr && _rr.data && _rr.data.skipped) { stats.skipped++; }
+          else { stats.inserted++; _restoredPeople.push({ id: _pf.id, name: _pf.name || '', email: _pf.email }); }
+        } catch (e) { stats.errors++; stats.what.push(_pf.name || _pf.email); console.error('restore user failed:', e); }
       }
     }
 
@@ -68778,6 +70314,7 @@ async function importAllData(evt) {
     ];
 
     for (var i = 0; i < tables.length; i++) {
+      if (_irvSkip(tables[i].table)) continue;
       await _importRows(tables[i].table, data[tables[i].key]);
     }
 
@@ -68797,16 +70334,20 @@ async function importAllData(evt) {
         if (!_objPath) continue;
 
         if (_BACKUP_BUCKETS.indexOf(_bkt) === -1) { continue; }
+
+        if (C && ((_bkt === 'templates' && C.report === 'keep') || (_bkt === 'assessment-files' && !C.work) || (_bkt === 'avatars' && !C.team))) { continue; }
         if (statusEl) statusEl.textContent = 'Restoring files (' + (_si + 1) + '/' + _sfiles.length + ')...';
         try {
-          var _blob = await _ent.async('blob');
-          var _up = await supabaseClient.storage.from(_bkt).upload(_objPath, _blob, { upsert: true });
-          if (_up && _up.error) { _upFail++; console.error('upload ' + _rel + ':', _up.error.message); } else { _upOk++; }
-        } catch (e) { _upFail++; console.error('upload failed ' + _rel + ':', e); }
+
+          var _ctype = _restoreMimeFor(_bkt, _objPath);
+          var _blob = new Blob([await _ent.async('arraybuffer')], { type: _ctype });
+          var _up = await supabaseClient.storage.from(_bkt).upload(_objPath, _blob, { upsert: true, contentType: _ctype });
+          if (_up && _up.error) { _upFail++; stats.what.push(_restoreWhatFile(_bkt, _objPath)); console.error('upload ' + _rel + ':', _up.error.message); } else { _upOk++; }
+        } catch (e) { _upFail++; stats.what.push(_restoreWhatFile(_bkt, _objPath)); console.error('upload failed ' + _rel + ':', e); }
       }
       if (_sfiles.length) { stats.inserted += _upOk; if (_upFail) stats.errors += _upFail; }
 
-      try {
+      if (!C || C.branding !== 'keep') try {
         var _brandCols = [['logo_url', 'logo'], ['logo_url_light', 'logo-light'], ['favicon_url', 'favicon']];
         var _brandUpd = {};
         for (var _bc = 0; _bc < _brandCols.length; _bc++) {
@@ -68821,28 +70362,31 @@ async function importAllData(evt) {
           try {
             _brandUpd[_brandCols[_bc][0]] = await _uploadBranding(_brandCols[_bc][1], _bDataUrl);
             stats.inserted++;
-          } catch (e) { stats.errors++; console.error('restore ' + _brandCols[_bc][0] + ':', e && e.message || e); }
+          } catch (e) { stats.errors++; stats.what.push(_brandCols[_bc][1] === 'favicon' ? 'your favicon' : 'your logo'); console.error('restore ' + _brandCols[_bc][0] + ':', e && e.message || e); }
         }
         if (Object.keys(_brandUpd).length) {
 
           var _bSid = (S.data.settings && S.data.settings.id) || (await _ensureSettingsId());
           var _bRes = _bSid ? await supabaseClient.from('settings').update(_brandUpd).eq('id', _bSid) : { error: new Error('no settings row') };
-          if (_bRes && _bRes.error) { stats.errors++; console.error('restore logos:', _bRes.error.message || _bRes.error); }
+          if (_bRes && _bRes.error) { stats.errors++; stats.what.push('your logos'); console.error('restore logos:', _bRes.error.message || _bRes.error); }
           else { try { if (window._dbBranding) Object.assign(window._dbBranding, _brandUpd); _reverseSync(_brandUpd); } catch (e) {} }
         }
-      } catch (e) { stats.errors++; console.error('restore logos failed:', e); }
+      } catch (e) { stats.errors++; stats.what.push('your logos'); console.error('restore logos failed:', e); }
     }
 
-    if (statusEl) statusEl.textContent = 'Restored: ' + stats.inserted + ' records and files, ' + stats.errors + ' errors';
-    toast('Backup restored: ' + stats.inserted + ' records and files' + (stats.errors > 0 ? ', ' + stats.errors + ' could not be written (the browser console names them)' : ''), stats.errors > 0 ? 'warning' : 'success');
+    var _whatSaid = _restoreWhatSaid(stats.what, stats.errors);
+    S._importFailed = stats.errors ? stats.what.slice() : [];
+    if (statusEl) statusEl.textContent = 'Restored: ' + stats.inserted + ' records and files' + (stats.errors ? '. Not written: ' + _whatSaid : ', everything written');
+    if (!opts.quiet) toast('Backup restored: ' + stats.inserted + ' records and files' + (stats.errors > 0 ? '. Not written: ' + _whatSaid : ''), stats.errors > 0 ? 'warning' : 'success');
     evt.target.value = '';
     await loadAllData();
+    return { ok: true, stats: stats, people: _restoredPeople };
   } catch (e) {
     toast('The restore stopped: ' + e.message, 'error');
     if (statusEl) statusEl.textContent = 'Stopped: ' + e.message;
     evt.target.value = '';
   } finally {
-    _hideLoading();
+    if (_ownSpin) _hideLoading();
   }
 }
 async function downloadAllPDFs(type) {
@@ -69036,6 +70580,84 @@ function _setDocxTheme(tpl) {
   _docxTheme = { accent: ac, header: hc, headerText: ht, border: 'D1D5DB', subtle: '64748B', body: '1E293B' };
 }
 var _docxStyleOverride = null;
+function _scanTemplateStyles(zip) {
+  _docxStyles = { codeBlock: 'CodeBlock', inlineCode: 'InlineCode', caption: 'Caption', listBullet: 'ListBullet', h1: 'Heading1', h2: 'Heading2', h3: 'Heading3', h4: 'Heading4', body: 'Normal', figure: '' };
+  var styFile = zip.file('word/styles.xml');
+  if (!styFile) return;
+  var xml = styFile.asText();
+
+  var monoRe = /consolas|courier|cascadia|monaco|menlo|lucida\s*console|source\s*code|fira\s*(code|mono)|dejavu\s*sans\s*mono|jetbrains\s*mono|roboto\s*mono|ibm\s*plex\s*mono|sf\s*mono|inconsolata|space\s*mono|ubuntu\s*mono|liberation\s*mono|andale\s*mono|monaco|monospace/i;
+
+  var cbNameRe = /code\s*block|^code$|source\s*code|preformatted|preformat|html\s*pre|console|terminal|listing|verbatim|snippet|af\s*code|codeblock/i;
+
+  var icNameRe = /inline\s*code|code\s*char|verbatim\s*char|^code$|monospace/i;
+
+  var blockRe = /<w:style\b([^>]*)>([\s\S]*?)<\/w:style>/g;
+  var cbCands = [], icCands = [], cbByFont = null, icByFont = null, m;
+  while ((m = blockRe.exec(xml)) !== null) {
+    var attrs = m[1] || '', body = m[2] || '';
+    var idM = attrs.match(/w:styleId="([^"]+)"/);
+    if (!idM) continue;
+    var id = idM[1];
+    var typeM = attrs.match(/w:type="([^"]+)"/);
+    var type = typeM ? typeM[1] : 'paragraph';
+    var nameM = body.match(/<w:name w:val="([^"]+)"/);
+    var name = nameM ? nameM[1].toLowerCase() : '';
+    var hasMono = monoRe.test(body);
+    if (type === 'character') {
+      if (icNameRe.test(name)) icCands.push(id);
+      else if (hasMono && !icByFont) icByFont = id;
+    } else {
+      if (cbNameRe.test(name)) cbCands.push(id);
+      else if (hasMono && !cbByFont) cbByFont = id;
+      if (name === 'caption') _docxStyles.caption = id;
+      else if (/list\s*bullet/i.test(name)) _docxStyles.listBullet = id;
+      else if (name === 'heading 1') _docxStyles.h1 = id;
+      else if (name === 'heading 2') _docxStyles.h2 = id;
+      else if (name === 'heading 3') _docxStyles.h3 = id;
+      else if (name === 'heading 4') _docxStyles.h4 = id;
+      else if (name === 'normal' || name === 'default paragraph' || name === 'body text' || name === 'body') _docxStyles.body = id;
+    }
+  }
+
+  if (_docxStyles.body === 'Normal' && /w:styleId="AFNormal"/.test(xml)) _docxStyles.body = 'AFNormal';
+
+  if (!_docxStyles.figure) {
+    var figRe = /<w:style\b[^>]*w:type="paragraph"[^>]*w:styleId="([^"]+)"[^>]*>([\s\S]*?)<\/w:style>/g, fm;
+    while ((fm = figRe.exec(xml)) !== null) {
+      var fname = (fm[2].match(/<w:name w:val="([^"]+)"/) || [, ''])[1].toLowerCase();
+      if (/^(af\s*)?(images?|figures?|screenshots?)$/.test(fname) || /image|figure/.test(fname)) {
+        if (/<w:jc w:val="center"/.test(fm[2])) { _docxStyles.figure = fm[1]; break; }
+        if (!_docxStyles.figure) _docxStyles.figure = fm[1];
+      }
+    }
+  }
+
+  function pick(cands, pentalId, fontFb) {
+    var native = cands.filter(function(c) { return c !== pentalId; });
+    if (native.length) return native[0];
+    if (cands.length) return cands[0];
+    if (fontFb) return fontFb;
+    return pentalId;
+  }
+
+  cbCands.sort(function (a, b) {
+    var an = /code\s*block|codeblock|af\s*code/i.test(a) ? 0 : 1;
+    var bn = /code\s*block|codeblock|af\s*code/i.test(b) ? 0 : 1;
+    return an - bn;
+  });
+  _docxStyles.codeBlock = pick(cbCands, 'CodeBlock', cbByFont);
+  _docxStyles.inlineCode = pick(icCands, 'InlineCode', icByFont);
+
+  try {
+    var ov = (typeof _docxStyleOverride === 'object' && _docxStyleOverride) ? _docxStyleOverride : null;
+    if (ov) {
+      ['codeBlock', 'inlineCode', 'caption', 'listBullet', 'h1', 'h2', 'h3', 'h4', 'body'].forEach(function(k) {
+        if (ov[k] && xml.indexOf('w:styleId="' + ov[k] + '"') !== -1) _docxStyles[k] = ov[k];
+      });
+    }
+  } catch (e) {}
+}
 var _CF_ALIAS = {
   custom_cf_likelihood: 'likelihood',
   custom_likelihood: 'likelihood',
@@ -69623,6 +71245,11 @@ function _docxCaptionStyle() {
   return (_docxStyles && (_docxStyles.figure || _docxStyles.caption)) || 'Caption';
 }
 window._docxCaptionStyle = _docxCaptionStyle;
+function _evTextIsCode(ev) {
+  if (!ev) return false;
+  if (ev.type === 'code' || ev.isCode) return true;
+  return !!(ev.content && String(ev.content).match(/^(GET |POST |PUT |DELETE |PATCH |HTTP\/|Host: |Content-Type: |Cookie: |Authorization: |\$ |# |SELECT |INSERT |UPDATE |DELETE FROM)/im));
+}
 function _evidenceToWps(evidence) {
 
   if (typeof evidence === 'string') {
@@ -69632,15 +71259,20 @@ function _evidenceToWps(evidence) {
   var wps = [];
   if (!evidence || !evidence.length) return wps;
   evidence.forEach(function(ev, idx) {
-    if (ev.type === 'text') {
-      var isCode = ev.isCode || (ev.content && ev.content.match(/^(GET |POST |PUT |DELETE |PATCH |HTTP\/|Host: |Content-Type: |Cookie: |Authorization: |\$ |# |SELECT |INSERT |UPDATE |DELETE FROM)/im));
+    if (ev.type === 'text' || ev.type === 'code') {
+      var isCode = _evTextIsCode(ev);
       if (isCode) {
         var lines = (ev.content || '').split('\n');
         lines.forEach(function(line) {
           wps.push('<w:p><w:pPr><w:pStyle w:val="' + _docxStyles.codeBlock + '"/></w:pPr><w:r><w:t xml:space="preserve">' + _xmlEsc(line) + '</w:t></w:r></w:p>');
         });
       } else {
-        wps.push('<w:p><w:pPr><w:pStyle w:val="' + _docxStyles.body + '"/></w:pPr><w:r><w:t xml:space="preserve">' + _xmlEsc(ev.content || '') + '</w:t></w:r></w:p>');
+
+        var tl = String(ev.content || '').split(/\r?\n/);
+        wps.push('<w:p>' + (_docxStyles.body ? '<w:pPr><w:pStyle w:val="' + _docxStyles.body + '"/></w:pPr>' : '')
+          + tl.map(function (line, li) {
+            return (li ? '<w:r><w:br/></w:r>' : '') + '<w:r><w:t xml:space="preserve">' + _xmlEsc(line) + '</w:t></w:r>';
+          }).join('') + '</w:p>');
       }
       var cap = ev.caption || '';
       if (cap) wps.push('<w:p><w:pPr><w:pStyle w:val="' + _docxCaptionStyle() + '"/></w:pPr><w:r><w:t>' + _xmlEsc(cap) + '</w:t></w:r></w:p>');
@@ -70248,7 +71880,9 @@ function _injectSummarySections(zip, data) {
     }
 
     var bodyStyle = '';
-    if (startIdx !== -1) {
+
+    if (execTokIdx !== -1 && !isHeadingP(paras[execTokIdx])) bodyStyle = pStyleOf(paras[execTokIdx]);
+    else if (startIdx !== -1) {
       for (var k = startIdx + 1; k < paras.length; k++) {
         var bm = paras[k].match(/<w:pStyle w:val="([^"]+)"/);
         if (bm && !/heading/i.test(bm[1])) { bodyStyle = bm[1]; break; }
@@ -80680,6 +82314,410 @@ async function _fsiRead(aid, phase, inputEl) {
   openM('scanimport');
 }
 window._fsiRead = _fsiRead;
+var _MVZ_ZIP_IC = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M10 6h1M10 9h1M10 12h1"/><rect x="9" y="14" width="3" height="4" rx="1"/></svg>';
+var _IRV_GROUPS = {
+  branding: ['accent_color', 'color_bg', 'color_border', 'color_card', 'color_hover', 'color_muted', 'color_primary', 'color_secondary', 'color_text',
+    'favicon_url', 'favicon_data', 'logo_url', 'logo_url_light', 'logo_data', 'font_body', 'font_display', 'font_mono', 'severity_colors', 'severity_style',
+    'theme_dark', 'theme_light', 'theme_mode', 'notification_color', 'toast_success_color', 'refcode_bold', 'portal_title',
+    'login_button_text', 'login_custom_text', 'login_show_company_name', 'login_show_logo', 'login_show_title', 'login_subtitle', 'login_support_email', 'login_title'],
+  fields: ['finding_fields', 'summary_fields', 'summary_sections', 'standard_field_prompts', 'exec_summary_prompt', 'retest_summary_prompt', 'notes_prompt',
+    'caveats_prompt', 'finding_desc_prompt', 'finding_rem_prompt', 'cvss_version', 'finding_default_draft', 'assessment_types', 'vuln_report_fields', 'library_enabled'],
+  report: ['pdf_templates', 'pdf_font_body', 'pdf_font_heading', 'pdf_logo_variant', 'filename_templates', 'final_pdf_names', 'date_format'],
+  company: ['company_name', 'company_email', 'company_phone', 'company_website', 'company_address', 'company_number', 'company_ending', 'public_ip'],
+  ai: ['ai_provider', 'ai_custom_model', 'ai_custom_url', 'ai_custom_format', 'ai_custom_max_tokens', 'ai_parallel_requests', 'ai_requests_per_minute', 'ai_ollama_num_ctx']
+};
+function _irvGroupOf(col) {
+  for (var g in _IRV_GROUPS) if (_IRV_GROUPS[g].indexOf(col) >= 0) return g;
+  return null;
+}
+function _irvMergePdfTemplates(mine, theirs, mode) {
+  mine = (mine && typeof mine === 'object') ? mine : {};
+  theirs = (theirs && typeof theirs === 'object') ? theirs : {};
+  if (mode === 'replace') return Object.assign({}, theirs);
+  var out = Object.assign({}, mine);
+  Object.keys(theirs).forEach(function (k) {
+    if (/^docx_templates_/.test(k) && Array.isArray(theirs[k])) {
+      var list = Array.isArray(out[k]) ? out[k].slice() : [];
+      var ids = {};
+      list.forEach(function (t) { if (t && t.id) ids[t.id] = 1; });
+      theirs[k].forEach(function (t) { if (t && !(t.id && ids[t.id])) list.push(t); });
+      out[k] = list;
+    } else if (/^docx_default_/.test(k)) {
+      if (!out[k]) out[k] = theirs[k];
+    } else if (!(k in out) || out[k] == null || out[k] === '') {
+      out[k] = theirs[k];
+    }
+  });
+  return out;
+}
+function _irvSettings(s, C, fromReport, mine) {
+  mine = mine || {};
+  var out = {};
+  Object.keys(s || {}).forEach(function (k) {
+    var g = _irvGroupOf(k);
+    if (!g) { if (!fromReport && !(C && C.other === 'keep')) out[k] = s[k]; return; }
+    var choice = C ? C[g] : 'replace';
+    if (choice === 'keep') return;
+    if (k === 'pdf_templates') { out.pdf_templates = _irvMergePdfTemplates(mine.pdf_templates, s.pdf_templates, choice === 'replace' ? 'replace' : 'add'); return; }
+    if (g === 'report' && choice === 'add' && mine[k] != null && mine[k] !== '') return;
+    out[k] = s[k];
+  });
+  return out;
+}
+window._irvSettings = _irvSettings;
+window._irvMergePdfTemplates = _irvMergePdfTemplates;
+var _IRV_IC = {
+  team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  work: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>',
+  library: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>',
+  checklists: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg>',
+  branding: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 0 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h2.4A5.6 5.6 0 0 0 22 9.8C22 5.5 17.5 2 12 2z"/></svg>',
+  fields: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h7"/></svg>',
+  report: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M8 13l2 5 2-4 2 4 2-5"/></svg>',
+  company: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M12 6h.01M16 6h.01M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01"/></svg>',
+  ai: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15.5l-1.9-4.6L5.5 9l4.6-1.4z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>',
+  other: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>'
+};
+var _irvIsTool = function () { return typeof REPORTER !== 'undefined' && !!REPORTER; };
+var _IRV_ROLE = { admin: 'Admin', senior: 'Senior', standard: 'Standard', sales: 'Sales', marketing: 'Marketing', contractor: 'External', client: 'Client' };
+var _irvN = function (n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); };
+async function _irvRead(file, source) {
+  var name = String(file.name || '');
+  var data = null, zip = null, files = [];
+  if (/\.zip$/i.test(name) || file.type === 'application/zip' || file.type === 'application/x-zip-compressed') {
+    await _ensureJSZip();
+    zip = await JSZip.loadAsync(file);
+    var df = zip.file('data.json');
+    data = df ? JSON.parse(await df.async('string')) : null;
+    zip.forEach(function (p, e) { if (!e.dir && p.indexOf('storage/') === 0) files.push(p); });
+  } else {
+    data = JSON.parse(await file.text());
+  }
+  if (!data || typeof data !== 'object' || !data._meta) return null;
+  var meta = data._meta || {};
+
+  var fromReport = !_irvIsTool() && (source === 'report' || meta.product === 'pental-report');
+  var st = data.settings || {};
+  var mineS = S.data.settings || {};
+  var here = {};
+  (S.data.users || []).forEach(function (u) { if (u && u.email) here[String(u.email).trim().toLowerCase()] = u; });
+  var me = String((S.profile && S.profile.email) || '').trim().toLowerCase();
+  var people = (data.profiles || []).filter(function (p) { return p && p.id && p.email && p.role !== 'client'; }).map(function (p) {
+    var e = String(p.email).trim().toLowerCase();
+    return { id: p.id, name: p.name || p.email, email: p.email, role: p.role || 'standard', here: !!here[e], you: e === me, active: p.active !== false };
+  });
+  var tpls = [];
+  var pt = st.pdf_templates || {};
+  Object.keys(pt).forEach(function (k) {
+    var m = /^docx_templates_(.+)$/.exec(k);
+    if (m && Array.isArray(pt[k])) pt[k].forEach(function (t) { if (t && t.name) tpls.push({ name: t.name, type: m[1] }); });
+  });
+  var ff = st.finding_fields || {}, sf = st.summary_fields || {};
+  var prompts = ['exec_summary_prompt', 'retest_summary_prompt', 'notes_prompt', 'caveats_prompt', 'finding_desc_prompt', 'finding_rem_prompt']
+    .filter(function (k) { return String(st[k] || '').trim(); }).length;
+
+  var logo = '', logoLight = '';
+  try {
+    var pick = async function (url) {
+      var m = /\/storage\/v1\/object\/public\/branding\/([^?#]+)/.exec(String(url || ''));
+      var ent = m && zip && zip.file('storage/branding/' + decodeURIComponent(m[1]));
+      return ent ? URL.createObjectURL(await ent.async('blob')) : (/^data:image\//.test(String(url || '')) ? String(url) : '');
+    };
+    logo = await pick(st.logo_url);
+    logoLight = await pick(st.logo_url_light);
+  } catch (e) {  }
+  var has = function (g) { return _IRV_GROUPS[g].some(function (k) { var v = st[k]; return v != null && v !== '' && !(typeof v === 'object' && !Object.keys(v).length); }); };
+  var mineHas = function (g) { return _IRV_GROUPS[g].some(function (k) { var v = mineS[k]; return v != null && v !== '' && !(typeof v === 'object' && !Object.keys(v).length); }); };
+  var other = fromReport ? 0 : Object.keys(st).filter(function (k) { return !_irvGroupOf(k) && ['id', 'created_at', 'updated_at', 'tenant_id', 'row_version', 'account_owner_id', 'plan_max_users', 'plan_max_clients'].indexOf(k) < 0; }).length;
+  var plan = {
+    file: file, name: name, fromReport: fromReport, when: meta.exported_at || '', from: meta.portal || '',
+    people: people, newPeople: people.filter(function (p) { return !p.here; }),
+    counts: {
+      clients: (data.clients || []).length, assessments: (data.assessments || []).length, findings: (data.findings || []).length,
+      files: files.filter(function (f) { return f.indexOf('storage/assessment-files/') === 0; }).length,
+      comments: (data.assessment_comments || []).length, library: (data.kb_entries || []).length, checklists: (data.checklists_runbooks || []).length,
+      proposals: (data.proposals || []).length, invoices: (data.invoices || []).length
+    },
+    tpls: tpls, fields: { custom: (ff.custom || []).length, sections: (sf.custom || []).length, prompts: prompts },
+    branding: { logo: logo, logoLight: logoLight, accent: st.accent_color || '', font: st.font_display || st.font_body || '' },
+    company: st.company_name || '', ai: st.ai_provider || '',
+    has: { branding: has('branding'), fields: has('fields'), report: has('report'), company: has('company'), ai: has('ai') }, other: other,
+    seats: { cap: Number(mineS.plan_max_users) || 0, used: (S.data.users || []).filter(function (u) { return u && u.active !== false && u.role !== 'client'; }).length }
+  };
+
+  var C = {
+    team: people.length > 0, people: {},
+    work: true, library: true, checklists: true,
+    branding: 'replace', fields: 'replace', report: fromReport ? 'add' : 'replace',
+    company: fromReport && mineS.company_name && plan.company && mineS.company_name !== plan.company ? 'keep' : 'replace',
+    ai: fromReport && mineS.ai_provider && mineS.ai_provider !== st.ai_provider ? 'keep' : 'replace',
+    other: 'replace'
+  };
+
+  var free = plan.seats.cap ? Math.max(0, plan.seats.cap - plan.seats.used) : Infinity;
+  plan.newPeople.forEach(function (p) { var on = p.active && free > 0; C.people[p.id] = on ? 'add' : 'out'; if (on) free--; });
+  return { plan: plan, choices: C };
+}
+function _irvShow() {
+  var b = document.querySelector('.irv-body');
+  var top = b ? b.scrollTop : 0;
+  S.modal = { type: '_custom', html: _irvHtml(), cls: 'irv-modal' };
+
+  render(true);
+  var b2 = document.querySelector('.irv-body');
+  if (b2 && top) b2.scrollTop = top;
+}
+async function _irvOpen(file, source) {
+  _showLoading();
+  var r = null;
+  try { r = await _irvRead(file, source); } catch (e) { r = null; }
+  finally { _hideLoading(); }
+  if (!r) {
+    toast('That file is not a Pental backup.' + (typeof assessmentsEnabled === 'function' && assessmentsEnabled() && !_irvIsTool() ? ' To bring work across from another product, use Coming from another platform, at the top of this tab.' : ''), 'error');
+    S._importStatus = 'Not a Pental backup';
+    var st0 = document.getElementById('import_status');
+    if (st0) st0.textContent = S._importStatus;
+    return false;
+  }
+  S._irv = { plan: r.plan, c: r.choices, phase: 'review', result: null };
+  _irvShow();
+  return true;
+}
+window._irvOpen = _irvOpen;
+function _irvChoose(input) {
+  var f = input && input.files && input.files[0];
+  if (input) input.value = '';
+  if (f) _irvOpen(f, 'backup');
+}
+window._irvChoose = _irvChoose;
+function _irvSet(key, value) {
+  var X = S._irv;
+  if (!X || X.phase !== 'review') return;
+  X.c[key] = value;
+  _irvShow();
+}
+function _irvHow(how) { return how === 'invite' && !_irvIsTool() ? 'invite' : how === 'add' || how === 'invite' ? 'add' : 'out'; }
+function _irvPerson(id, how) {
+  var X = S._irv;
+  if (!X || X.phase !== 'review') return;
+  X.c.people[id] = _irvHow(how);
+  _irvShow();
+}
+function _irvPeopleAll(how) {
+  var X = S._irv;
+  if (!X || X.phase !== 'review') return;
+  X.plan.newPeople.forEach(function (p) { X.c.people[p.id] = _irvHow(how); });
+  _irvShow();
+}
+function _irvIn(C, p) { return !!C.team && (C.people[p.id] === 'add' || C.people[p.id] === 'invite'); }
+window._irvSet = _irvSet;
+window._irvPerson = _irvPerson;
+window._irvPeopleAll = _irvPeopleAll;
+function _irvSummary(P, C) {
+  var bits = [];
+  var ppl = P.newPeople.filter(function (p) { return _irvIn(C, p); }).length;
+  if (ppl) bits.push(_irvN(ppl, 'person', 'people'));
+  if (C.work && P.counts.assessments) bits.push(_irvN(P.counts.assessments, 'engagement') + ' with ' + _irvN(P.counts.findings, 'finding'));
+  if (C.library && P.counts.library) bits.push(_irvN(P.counts.library, 'Library entry', 'Library entries'));
+  if (C.checklists && P.counts.checklists) bits.push(_irvN(P.counts.checklists, 'checklist or runbook', 'checklists and runbooks'));
+  if (C.report !== 'keep' && P.tpls.length) bits.push(_irvN(P.tpls.length, 'Word template'));
+  var s = bits.length ? 'Brings ' + bits.join(', ').replace(/, ([^,]*)$/, ' and $1') : 'Brings no records';
+  var uses = [];
+  if (P.has.branding && C.branding !== 'keep') uses.push('branding');
+  if (P.has.fields && C.fields !== 'keep') uses.push('fields and prompts');
+  if (uses.length) s += ', and uses the backup’s ' + uses.join(' and ');
+  var inv = (!_irvIsTool() && C.team) ? P.newPeople.filter(function (p) { return C.people[p.id] === 'invite'; }).length : 0;
+  if (inv) s += '. Emails ' + _irvN(inv, 'invitation') + (inv < ppl ? ', and nobody else' : '');
+  else if (ppl && !_irvIsTool()) s += '. Nobody is emailed';
+  return s + '.';
+}
+function _irvSeg(key, cur, opts) {
+  return '<div class="irv-seg" role="radiogroup">' + opts.map(function (o) {
+    var on = cur === o[0];
+    return '<button type="button" role="radio" aria-checked="' + on + '" class="irv-seg-b' + (on ? ' is-on' : '') + '" onclick="_irvSet(\'' + key + '\',\'' + o[0] + '\')">' + esc(o[1]) + '</button>';
+  }).join('') + '</div>';
+}
+function _irvSwitch(key, on) {
+  return '<label class="irv-sw"><input type="checkbox"' + (on ? ' checked' : '') + ' onchange="_irvSet(\'' + key + '\',this.checked)"><span class="irv-sw-t" aria-hidden="true"></span><span class="sr-only">Bring this across</span></label>';
+}
+function _irvRow(icon, title, sub, control, body, off) {
+  return '<div class="irv-row' + (off ? ' is-off' : '') + '"><div class="irv-row-h"><div class="irv-ic" aria-hidden="true">' + icon + '</div>'
+    + '<div class="irv-row-t"><div class="irv-row-title">' + title + '</div>' + (sub ? '<div class="irv-row-sub">' + sub + '</div>' : '') + '</div>'
+    + '<div class="irv-row-c">' + control + '</div></div>' + (body ? '<div class="irv-row-b">' + body + '</div>' : '') + '</div>';
+}
+function _irvHtml() {
+  var X = S._irv;
+  if (!X) return '';
+  var P = X.plan, C = X.c;
+  var src = P.fromReport ? 'Pental Report' : 'the backup';
+  var h = '<div class="irv">';
+  h += '<div class="irv-head"><div class="irv-head-ic" aria-hidden="true">' + _MVZ_ZIP_IC + '</div><div>'
+    + '<h2 class="irv-title">' + (P.fromReport ? 'Bring your work across from Pental Report' : 'Restore a backup') + '</h2>'
+    + '<p class="irv-sub">' + esc(P.name) + (P.when ? ', made ' + esc(fmtDate(P.when)) : '') + '. '
+    + (X.phase === 'review' ? 'Choose what comes across and what stays as it is here. Nothing is written until you press Bring it across.' : '') + '</p></div>'
+    + (X.phase === 'running' ? '' : '<button class="btn-close" onclick="_irvClose()" title="Close">&times;</button>') + '</div>';
+
+  if (X.phase === 'running') {
+    h += '<div class="irv-run"><div class="irv-bar"><span></span></div><p class="irv-run-t" id="irvStatus" role="status">' + esc(S._importStatus || 'Starting...') + '</p>'
+      + '<p class="irv-run-n">Keep this page open until it finishes.</p></div></div>';
+    return h;
+  }
+  if (X.phase === 'done') return h + _irvDoneHtml(X) + '</div>';
+
+  h += '<div class="irv-body">';
+
+  if (P.people.length) {
+    var newN = P.newPeople.length;
+    var chosen = P.newPeople.filter(function (p) { return _irvIn(C, p); }).length;
+    var tool = _irvIsTool();
+    var how = tool ? [['add', 'Add'], ['out', 'Leave out']] : [['invite', 'Invite'], ['add', 'Add only'], ['out', 'Leave out']];
+    var seg = function (cur, label, call) {
+      return '<div class="irv-seg irv-seg--sm" role="radiogroup" aria-label="' + esc(label) + '">' + how.map(function (o) {
+        var on = cur === o[0];
+        return '<button type="button" role="radio" aria-checked="' + on + '" class="irv-seg-b' + (on ? ' is-on' : '') + '" data-irv-how="' + o[0] + '" onclick="' + call(o[0]) + '">' + o[1] + '</button>';
+      }).join('') + '</div>';
+    };
+    var body = '';
+    if (newN > 1) {
+      var all = P.newPeople.map(function (p) { return C.people[p.id]; });
+      var same = all.every(function (v) { return v === all[0]; }) ? all[0] : '';
+      body += '<div class="irv-pbulk"><span>Everyone new</span>' + seg(same, 'Everyone new', function (v) { return '_irvPeopleAll(\'' + v + '\')'; }) + '</div>';
+    }
+    body += '<ul class="irv-people">' + P.people.map(function (p) {
+      var c = C.people[p.id];
+      var tag = p.you ? '<span class="irv-tag">You</span>' : p.here ? '<span class="irv-tag">Already here</span>' : (!p.active ? '<span class="irv-tag">Deactivated</span>' : '<span></span>');
+      var ctl = p.here ? '<span class="irv-pbox irv-pbox--here" aria-hidden="true">' + IC.check + '</span>'
+        : seg(c, p.name, function (v) { return '_irvPerson(\'' + esc(p.id) + '\',\'' + v + '\')'; });
+      return '<li class="irv-person' + (!p.here && c === 'out' ? ' is-off' : '') + '" data-irv-person="' + esc(p.id) + '"><span class="irv-pn">' + esc(p.name) + '</span>'
+        + '<span class="irv-pe">' + esc(p.email) + '</span><span class="irv-pr">' + esc(_IRV_ROLE[p.role] || p.role) + '</span>' + tag + '<span class="irv-pc">' + ctl + '</span></li>';
+    }).join('') + '</ul>';
+    if (P.seats.cap && newN && P.seats.used + chosen > P.seats.cap) {
+      body += '<p class="irv-warn">Your plan has ' + _irvN(P.seats.cap, 'tester seat') + ' and ' + P.seats.used + ' are in use, so ' + _irvN(Math.max(0, P.seats.cap - P.seats.used), 'more person', 'more people')
+        + ' can come across. Leave someone out, or add seats under Billing first.</p>';
+    }
+    if (newN) {
+      body += tool
+        ? '<p class="irv-note"><strong>Add</strong> makes their account: each signs in with a password link, which the key beside their name on Team makes. <strong>Leave out</strong> makes no account, and what they did comes across in your name.</p>'
+        : '<p class="irv-note"><strong>Invite</strong> makes their account and emails them a link to sign in. <strong>Add only</strong> makes their account and emails nobody: they can sign in from the sign-in page with their email address, or you can invite them later from Users. <strong>Leave out</strong> makes no account, and what they did comes across in your name.</p>';
+    }
+    h += _irvRow(_IRV_IC.team, 'Your team', P.people.length === newN ? _irvN(newN, 'person', 'people') : _irvN(P.people.length, 'person', 'people') + ', ' + (P.people.length - newN) + ' already here',
+      _irvSwitch('team', C.team), C.team ? body : '', !C.team);
+  }
+
+  var w = P.counts;
+  if (w.clients || w.assessments) {
+    h += _irvRow(_IRV_IC.work, 'Clients, engagements and findings',
+      [_irvN(w.clients, 'client'), _irvN(w.assessments, 'engagement'), _irvN(w.findings, 'finding'), w.files ? _irvN(w.files, 'file') : '', w.comments ? _irvN(w.comments, 'comment') : ''].filter(Boolean).join(', ')
+        + '. Anything already here with the same record is left as it is.',
+      _irvSwitch('work', C.work), '', !C.work);
+  }
+  if (w.library) h += _irvRow(_IRV_IC.library, 'Library', _irvN(w.library, 'entry', 'entries'), _irvSwitch('library', C.library), '', !C.library);
+  if (w.checklists) h += _irvRow(_IRV_IC.checklists, 'Checklists and runbooks', _irvN(w.checklists, 'template'), _irvSwitch('checklists', C.checklists), '', !C.checklists);
+
+  var useKeep = [['replace', 'Use ' + (P.fromReport ? 'Pental Report’s' : 'the backup’s')], ['keep', 'Keep this portal’s']];
+  if (P.has.branding) {
+    var b = P.branding;
+    var prev = '<div class="irv-brand">' + (b.logo ? '<span class="irv-logo irv-logo--d"><img src="' + esc(b.logo) + '" alt="The logo for dark pages"></span>' : '')
+      + (b.logoLight ? '<span class="irv-logo irv-logo--l"><img src="' + esc(b.logoLight) + '" alt="The logo for light pages"></span>' : '')
+      + (b.accent ? '<span class="irv-swatch" style="background:' + esc(/^#[0-9a-f]{3,8}$/i.test(b.accent) ? b.accent : '#888') + '"></span><span class="irv-mono">' + esc(b.accent) + '</span>' : '')
+      + (b.font ? '<span class="irv-mono">' + esc(b.font) + '</span>' : '') + '</div>';
+    h += _irvRow(_IRV_IC.branding, 'Branding', 'Logos, colours, fonts and the sign-in page', _irvSeg('branding', C.branding, useKeep), C.branding !== 'keep' ? prev : '', C.branding === 'keep');
+  }
+  if (P.has.fields) {
+    var f = P.fields;
+    h += _irvRow(_IRV_IC.fields, 'Fields, sections and prompts',
+      [f.custom ? _irvN(f.custom, 'field') + ' of your own' : '', f.sections ? _irvN(f.sections, 'section') + ' of your own' : '', f.prompts ? _irvN(f.prompts, 'prompt') + ' you rewrote' : ''].filter(Boolean).join(', ') || 'How findings and engagements are laid out',
+      _irvSeg('fields', C.fields, useKeep), '', C.fields === 'keep');
+  }
+  if (P.has.report) {
+    var tl = P.tpls.length ? P.tpls.map(function (t) { return esc(t.name); }).join(', ') : '';
+    h += _irvRow(_IRV_IC.report, 'Word templates and report design', (P.tpls.length ? _irvN(P.tpls.length, 'Word template') + ': ' + tl : 'The built-in PDF’s design') + ', file names and dates',
+      _irvSeg('report', C.report, [['add', 'Add beside yours'], ['replace', 'Replace yours'], ['keep', 'Leave out']]),
+      C.report === 'add' ? '<p class="irv-note">Your own stay, with yours still the default where you have one.</p>' : C.report === 'replace' ? '<p class="irv-note">Yours are replaced by the backup’s.</p>' : '', C.report === 'keep');
+  }
+  if (P.has.company) h += _irvRow(_IRV_IC.company, 'Company details', (P.company ? esc(P.company) + ', ' : '') + 'contact details and testing IPs', _irvSeg('company', C.company, useKeep), '', C.company === 'keep');
+  var _aiName = { anthropic: 'Anthropic', openai: 'OpenAI', groq: 'Groq', ollama: 'Ollama', custom: 'your own endpoint', 'custom-openai': 'your own endpoint', 'custom-anthropic': 'your own endpoint' }[String(P.ai || '').toLowerCase()] || P.ai;
+  if (P.has.ai) h += _irvRow(_IRV_IC.ai, 'AI settings', (P.ai ? 'Provider: ' + esc(_aiName) + '. ' : '') + 'The key stays behind: add it under Settings, AI.', _irvSeg('ai', C.ai, useKeep), '', C.ai === 'keep');
+  if (P.other) h += _irvRow(_IRV_IC.other, 'Everything else in Settings', _irvN(P.other, 'setting') + ': modules, notifications, automation and the rest', _irvSeg('other', C.other, [['replace', 'Restore the backup’s'], ['keep', 'Keep this portal’s']]), '', C.other === 'keep');
+  h += '</div>';
+  h += '<div class="irv-foot"><p class="irv-sum">' + esc(_irvSummary(P, C)) + '</p>'
+    + '<div class="irv-acts"><button type="button" class="btn btn-ghost" onclick="_irvClose()">Cancel</button>'
+    + '<button type="button" class="btn btn-primary irv-go" onclick="_irvGo()">' + (P.fromReport ? 'Bring it across' : 'Restore it') + '</button></div></div>';
+  return h + '</div>';
+}
+function _irvDoneHtml(X) {
+  var r = X.result || {};
+  var F = r.failed || [];
+  var h = '<div class="irv-done">';
+  h += '<div class="irv-done-ic' + (F.length || r.error ? ' is-part' : '') + '" aria-hidden="true">' + (F.length || r.error ? '!' : IC.check) + '</div>';
+  if (r.error) {
+    h += '<h3 class="irv-done-h">The restore stopped</h3><p class="irv-done-p">' + esc(r.error) + '. What was written before it stopped is kept; choose the same file again to carry on.</p>';
+  } else {
+    h += '<h3 class="irv-done-h">' + (X.plan.fromReport ? 'Your work is here' : 'Restored') + '</h3>';
+    h += '<p class="irv-done-p">' + esc(r.said || 'Everything you chose came across.') + '</p>';
+    if (F.length) h += '<p class="irv-done-p irv-done-fail"><strong>Not written:</strong> ' + esc(_restoreWhatSaid(F, F.length)) + '. Choose the same file again to try those once more: what is already here is left as it is.</p>';
+    if (r.invited) {
+      h += '<p class="irv-done-p">' + (r.invited.sent.length ? '<strong>Invitations sent</strong> to ' + esc(r.invited.sent.join(', ')) + '.' : '')
+        + (r.invited.failed.length ? ' <strong>Not sent</strong> to ' + esc(r.invited.failed.join(', ')) + ': send them from Users.' : '') + '</p>';
+    }
+    if (r.added && r.added.length) {
+      h += '<p class="irv-done-p"><strong>Added without an email:</strong> ' + esc(r.added.join(', ')) + '. '
+        + (_irvIsTool() ? 'Each signs in with a password link from Team.' : 'Invite them from Users when you are ready.') + '</p>';
+    }
+  }
+  h += '<div class="irv-acts irv-acts--done"><button type="button" class="btn btn-ghost" onclick="_irvClose()">Close</button>'
+    + '<button type="button" class="btn btn-secondary" onclick="_irvClose();nav(\'users\')">See your team</button>'
+    + '<button type="button" class="btn btn-primary" onclick="_irvClose();nav(\'assessments\')">Open the assessments</button></div>';
+  return h + '</div>';
+}
+function _irvClose() {
+  var X = S._irv;
+  if (X && X.phase === 'running') return;
+  try { if (X && X.plan && X.plan.branding) { [X.plan.branding.logo, X.plan.branding.logoLight].forEach(function (u) { if (/^blob:/.test(String(u || ''))) URL.revokeObjectURL(u); }); } } catch (e) {}
+  S._irv = null;
+  closeM();
+}
+window._irvClose = _irvClose;
+async function _irvGo() {
+  var X = S._irv;
+  if (!X || X.phase !== 'review') return;
+  var P = X.plan, C = X.c;
+  X.phase = 'running';
+  S._importStatus = 'Starting...';
+  _irvShow();
+  var out = null;
+  try {
+    out = await importAllData({ target: { files: [P.file], value: '' } }, { choices: C, fromReport: P.fromReport, skipConfirm: true, quiet: true });
+  } catch (e) { out = { error: e && e.message || String(e) }; }
+  var res = { failed: (out && out.stats && out.stats.errors) ? (out.stats.what || []).slice() : [] };
+  if (!out || !out.ok) res.error = (out && out.error) || String(S._importStatus || 'it could not be read');
+  else {
+    var n = out.stats.inserted;
+    res.said = (P.fromReport ? 'Everything you chose from Pental Report is here' : 'The backup is restored') + ': ' + _irvN(n, 'record and file', 'records and files') + ' written.';
+  }
+
+  var toInvite = [];
+  if (out && out.ok && C.team && out.people && out.people.length) {
+    toInvite = _irvIsTool() ? [] : out.people.filter(function (p) { return C.people[p.id] === 'invite'; });
+    res.added = out.people.filter(function (p) { return C.people[p.id] === 'add'; }).map(function (p) { return p.name || p.email; });
+  }
+  if (toInvite.length) {
+    res.invited = { sent: [], failed: [] };
+    for (var i = 0; i < toInvite.length; i++) {
+      var p = toInvite[i];
+      var el = document.getElementById('irvStatus');
+      if (el) el.textContent = 'Inviting ' + (p.name || p.email) + ' (' + (i + 1) + '/' + toInvite.length + ')...';
+      var r = null;
+      try { r = await adminApi('resend_invite', { user_id: p.id }, { raw: true }); } catch (e) { r = null; }
+      (r && r._ok && r.success ? res.invited.sent : res.invited.failed).push(p.name || p.email);
+    }
+  }
+  if (P.fromReport && out && out.ok) S._migRestored = { file: P.name, failed: res.failed.slice() };
+  X.result = res;
+  X.phase = 'done';
+  _irvShow();
+}
+window._irvGo = _irvGo;
 function _migSeverity(value, opts) {
 
   var v = String(value == null ? '' : value).replace(/<[^>]+>/g, ' ').toLowerCase()

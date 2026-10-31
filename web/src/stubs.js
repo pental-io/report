@@ -16,6 +16,7 @@ var _TRACKER_COLS = '';
 function _attestationOn() { return false; }
 async function _bulkRaiseFindingTickets() { return Promise.resolve(null); }
 function _canDeliverNow() { return false; }
+function _canNotifyClient() { return false; }
 function _checkInvoicePdfCache() { return; }
 function _checkProposalPdfCache() { return; }
 function _clientDocDownloadHtml() { return ''; }
@@ -40,8 +41,10 @@ async function _finishDocsConnect() { return; }
 async function _finishXeroConnect() { return Promise.resolve(null); }
 function _initProposalPhases() { return; }
 function _invAmountText() { return; }
+function _invGross() { return; }
 function _invMoney() { return; }
 function _invTeamShown() { return; }
+function _invTotalText() { return; }
 function _isScanFinding() { return false; }
 function _kitMail() { return; }
 function _lfPaintQa() { return; }
@@ -95,9 +98,11 @@ function _scanImportParse() { return {}; }
 function _scanMapTargets() { return; }
 function _scanProvidersHtml() { return; }
 function _scanRunAsAssessment() { return null; }
+function _scanRunsForClient() { return []; }
+function _scanRunsWaiting() { return; }
 function _scanStoredMap() { return; }
-function _scanTemplateStyles() { return; }
 function _scansNeedingFinalPdf() { return []; }
+function _selfScanHolds() { return false; }
 function _selfScanModuleOn() { return false; }
 async function _showPushToken() { return Promise.resolve(null); }
 function _ssApplianceAdd() { return; }
@@ -109,6 +114,7 @@ async function _ssApplyKbLink() { return Promise.resolve(null); }
 function _ssAtPerPaint() { return; }
 function _ssCadenceFor() { return; }
 function _ssCfg() { return {}; }
+function _ssClientScopeCard() { return ''; }
 async function _ssDownloadScanReport() { return Promise.resolve(null); }
 async function _ssLinkToKb() { return Promise.resolve(null); }
 function _ssMoney() { return ''; }
@@ -117,6 +123,7 @@ async function _ssProposeTarget() { return Promise.resolve(null); }
 async function _ssRenameRun() { return Promise.resolve(null); }
 function _ssRunFindings() { return; }
 function _ssRunName() { return ''; }
+function _ssRunRowHtml() { return; }
 function _ssRunSummaryHtml() { return ''; }
 async function _ssSaveTarget() { return Promise.resolve(null); }
 function _ssTargetWords() { return {}; }
@@ -126,16 +133,21 @@ function _stripeStateHtml() { return ''; }
 async function _syncPendingPictures() { return; }
 async function _syncRecordChanges() { return 0; }
 function _ticketsAfterRemediation() { return; }
+function _trackerSettingsHtml() { return ''; }
 async function _trialExpiredAddPayment() { return; }
+function _xeroBadgeHtml() { return ''; }
 function _xeroNote() { return ''; }
 function _xeroWhyWords() { return ''; }
 function addProposalPhase() { return; }
+function archiveInvoice() { return; }
+function archiveProposal() { return; }
 function canSeeProposals() { return; }
 function clearLoaSignature() { return; }
 async function confirmBankPayment() { return; }
 async function confirmPayment() { return; }
 async function connectXero() { return Promise.resolve(null); }
 async function createInvoice() { return; }
+async function deleteClientUser() { return; }
 async function deleteInvoice() { return Promise.resolve(null); }
 async function deleteProposal() { return Promise.resolve(null); }
 async function deliverReport() { return; }
@@ -151,10 +163,12 @@ async function genAttestationPDF() { return null; }
 async function genInvoicePDF() { return null; }
 async function genProposalDOCX() { return Promise.resolve(null); }
 async function genProposalPDF() { return null; }
+function getClientUsers() { return []; }
 function getQAChanges() { return []; }
 function hasBankPayment() { return false; }
 function hasStripe() { return; }
 function isContractor() { return; }
+function joinMeetingLink() { return; }
 async function loadXeroStatus() { return Promise.resolve(null); }
 async function loadXeroSyncLog() { return Promise.resolve(null); }
 async function markInvoicePaid() { return Promise.resolve(null); }
@@ -168,15 +182,14 @@ function payInvoice() { return; }
 function pdfFromDocxAttestation() { return null; }
 function pdfFromDocxInvoice() { return; }
 function pdfFromDocxProposal() { return; }
+async function pullInvoiceFromXeroNow() { return Promise.resolve(null); }
+async function pushInvoiceToXeroNow() { return Promise.resolve(null); }
 async function pushMissingToXero() { return Promise.resolve(null); }
 async function removeLoASignature() { return Promise.resolve(null); }
 function removeProposalPhase() { return; }
 async function renderApplyConfirmation() { return ''; }
-function renderCalendarPage() { return ''; }
-function renderClientDetail() { return ''; }
 function renderClientFindings() { return ''; }
 function renderClientUserModal() { return ''; }
-function renderClients() { return ''; }
 function renderCollectorTokenModal() { return; }
 function renderContactsPage() { return ''; }
 function renderContractorsPage() { return ''; }
@@ -221,7 +234,10 @@ function renderSubscriptionPage() { return ''; }
 function renderTrackerModal() { return; }
 function renderViewContractorModal() { return ''; }
 function renderWithdrawDeliveryModal() { return ''; }
+function reopenProposal() { return; }
 async function reopenQAApproval() { return Promise.resolve(null); }
+function resendInvoiceReminder() { return; }
+function resendProposalReminder() { return; }
 async function resubmitToQA() { return Promise.resolve(null); }
 async function retryFailedXeroTasks() { return Promise.resolve(null); }
 async function saveLoASettings() { return Promise.resolve(null); }
@@ -238,6 +254,5 @@ async function startQAReview() { return Promise.resolve(null); }
 async function submitForQA() { return Promise.resolve(null); }
 function switchLoaSigTab() { return; }
 async function testStripeConnection() { return Promise.resolve(null); }
-function testingCalendarEnabled() { return; }
 function uploadLoASignature() { return; }
-async function viewClient() { return; }
+function viewInvoiceInXero() { return; }

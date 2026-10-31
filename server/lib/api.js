@@ -244,7 +244,12 @@ export class Api {
     if (fn === 'sessions') return this.sessions(req, res);
     if (fn === 'usage') return sendJson(res, 200, { ok: true, usage: {} });
     if (fn === 'env-check') return sendJson(res, 200, { ok: true });
-    if (fn === 'check-urls') return sendJson(res, 200, { results: [] });
+    // 1977: links are not checked from a firm's own server, which would mean
+    // fetching whatever addresses an AI reply names from inside its network.
+    // An empty list here read as "none of them work", so the references a
+    // finding's Generate, Generate all and the library's Generate all wrote
+    // were all dropped: no answer is an answer the app keeps every link on.
+    if (fn === 'check-urls') return sendJson(res, 501, { error: 'Pental Report does not check links' });
     return sendJson(res, 404, { error: 'Not part of Pental Report' });
   }
 

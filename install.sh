@@ -13,7 +13,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 set -eu
 
-VERSION="0.1.6"
+VERSION="0.1.7"
 REPO="pental-io/report"
 IMAGE="ghcr.io/pental-io/report"
 

@@ -1,7 +1,8 @@
 // THE REPORTER'S NAVIGATION.
 //
-// The portal's own sidebar, with Pental Report's pages: engagements, findings,
-// the library, your profile, and for administrators the team and settings.
+// The portal's own sidebar, with Pental Report's pages: clients, the testing
+// calendar, engagements, findings, the library, your profile, and for
+// administrators the team and settings.
 //
 // SPDX-License-Identifier: AGPL-3.0-only
 
@@ -20,6 +21,9 @@ function renderSidebar() {
     ? '<img data-themed-logo loading="eager" decoding="sync" src="' + esc(logo) + '" style="height:auto;max-height:48px;max-width:200px;object-fit:contain">'
     : (companyName ? _reporterMark(28) + '<span>' + esc(companyName) + '</span>' : _reporterLockup(26));
   h += '</a></div><nav class="nav"><div class="nav-section">';
+  // 1977: clients and the testing calendar, in the order Pental's sidebar has them.
+  h += b('clients', S.page === 'clients' || S.page === 'client-detail', IC.client, 'Clients');
+  h += b('calendar', S.page === 'calendar', IC.cal, 'Calendar');
   h += b('assessments', onAss, IC.assess || IC.doc, 'Assessments');
   h += b('all-findings', S.page === 'all-findings', IC.alert, 'Findings');
   h += b('library', S.page === 'library', IC.library, 'Library');
@@ -70,15 +74,21 @@ function _reporterMove() {
   // trial itself, not the pricing page; then the one place it goes, which
   // the new portal's setup asks for as one of its steps.
   var steps = '<ol class="rp-move-steps">'
-    + '<li><strong>Download everything from here.</strong> One file with your team, clients, assessments, findings, Library, '
-    + 'custom fields, sections, prompts, templates and uploaded files. Your AI key stays behind.'
+    // 1977: [stated] Arian: "clear that you need to upload the zip". The
+    // file is named for what it is, and where it goes is the step after next.
+    + '<li><strong>Download everything from here.</strong> One .zip file, named pental-backup and the date, with your team, '
+    + 'clients, assessments, findings, Library, custom fields, sections, prompts, Word templates and uploaded files. Keep it as it is: '
+    + 'there is no need to unzip it. Your AI key stays behind.'
     + (admin ? '<div><button type="button" class="btn btn-primary btn-sm" id="rpMoveExport">Download Everything</button></div>'
              : '<div class="rp-hint">An administrator downloads it.</div>')
     + '</li>'
     + '<li><strong>Start your free trial of Pental.</strong> Free from the day your portal goes live, with no card required.'
     + '<div><a class="btn btn-secondary btn-sm" target="_blank" rel="noopener" href="' + esc(_reporterLink('/login?trial=1', 'move')) + '">Start Free Trial</a></div></li>'
-    + '<li><strong>Choose the file in your portal\'s setup.</strong> Its Bring Your Data Across step restores it whole, or later '
-    + 'Settings, Data. Your work arrives as it is here, and your team signs in with a password link.</li>'
+    + '<li><strong>Upload the .zip in your new portal.</strong> Its setup asks for it at Bring Your Data Across, under '
+    // 1977: each of the team invited by email, added without one or left
+    // out, as the new portal's review asks (v60.19).
+    + 'Moving from Pental Report, and it is on Settings, Data later too. Your work arrives as it is here, and you choose what comes across '
+    + 'and, person by person, whether each of your team is invited by email, added without one, or left out.</li>'
     + '</ol>';
   // 1975, after the first sync: [stated] Arian, of "clients read their
   // reports": "read their reports should say read their findings, sell the
@@ -92,8 +102,8 @@ function _reporterMove() {
     + 'it is written up, and nothing unfinished goes into the report.</li>'
     + '<li><strong>QA before anything goes out.</strong> One review queue, your own checklist, comments and suggested '
     + 'edits on the words themselves, and an optional AI reviewer.</li>'
-    + '<li><strong>Credentials and scheduling.</strong> Clients send their test credentials encrypted, for your lead '
-    + 'tester to view once, and a testing calendar shows who is testing what, and when.</li>'
+    + '<li><strong>Credentials.</strong> Clients send their test credentials encrypted, for your lead tester to view '
+    + 'once, and are reminded by email before an authenticated test starts while theirs are still outstanding.</li>'
     + '<li><strong>And the rest.</strong> Attestation letters, findings pushed to your clients\' Jira, ServiceNow and '
     + 'other trackers with their state read back, and scanner output imported as findings.</li>'
     + '</ul>';

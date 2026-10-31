@@ -4092,6 +4092,225 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
 .mig-done-ic{flex-shrink:0;width:26px;height:26px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center}
 .mig-done-ic svg{width:14px;height:14px}
 .mig-done-acts{display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.55rem}
+/* 1977: a restore that wrote all but some names what it could not. */
+.mig-done--part{border-color:rgba(234,179,8,0.45);background:rgba(234,179,8,0.08)}
+.mig-done--part .mig-done-ic{background:#eab308;color:#111;font-weight:800;font-size:0.85rem}
+/* 1977: MOVING FROM PENTAL REPORT. [stated] Arian: "should be clear on pental
+   modern and beautiful where to upload the zip and clear that you need to
+   upload the zip". The three steps in a row, then one box for the .zip: drop
+   it on the box or choose it, with what the restore is doing under it. */
+.mvz-steps{display:flex;flex-wrap:wrap;gap:0.45rem 0.5rem;margin:0 0 0.9rem;padding:0;list-style:none;counter-reset:none}
+.mvz-steps li{display:flex;align-items:center;gap:0.5rem;padding:0.38rem 0.75rem 0.38rem 0.4rem;border-radius:999px;
+  border:1px solid var(--border);background:var(--hover);font-size:0.8rem;line-height:1.35;color:var(--text)}
+.mvz-steps li b{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:20px;height:20px;border-radius:50%;
+  background:var(--accent);color:#fff;font-size:0.7rem;font-weight:800}
+.mvz-steps li strong{font-weight:700}
+.mvz{position:relative;display:flex;gap:1rem;align-items:flex-start;padding:1.15rem 1.2rem;border-radius:14px;
+  border:1.5px dashed rgba(var(--accent-rgb),0.55);
+  background:linear-gradient(180deg,rgba(var(--accent-rgb),0.09),rgba(var(--accent-rgb),0.025));
+  transition:border-color .15s ease,background .15s ease,box-shadow .15s ease}
+.mvz.is-over{border-style:solid;border-color:var(--accent);background:rgba(var(--accent-rgb),0.15);
+  box-shadow:0 0 0 4px rgba(var(--accent-rgb),0.12)}
+.mvz.is-busy{opacity:0.85}
+.mvz-ic{flex-shrink:0;display:flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:12px;
+  background:rgba(var(--accent-rgb),0.16);color:var(--accent)}
+.mvz-b{min-width:0;flex:1}
+.mvz-h{margin:0 0 0.3rem;font-size:1rem;font-weight:700;color:var(--text);line-height:1.35}
+.mvz-p{margin:0 0 0.8rem;font-size:0.85rem;line-height:1.6;color:var(--gray);max-width:70ch}
+.mvz-p strong{color:var(--text)}
+.mvz-p code{font-family:var(--font-mono);font-size:0.8em;padding:0.05rem 0.35rem;border-radius:5px;
+  background:rgba(var(--accent-rgb),0.12);color:var(--text)}
+.mvz-acts{display:flex;align-items:center;flex-wrap:wrap;gap:0.6rem 0.9rem}
+.mvz-btn{cursor:pointer}
+.mvz-btn.disabled{opacity:0.6;pointer-events:none}
+.mvz-or{font-size:0.8rem;color:var(--gray)}
+.mvz-err{margin:0.75rem 0 0;padding:0.55rem 0.75rem;border-radius:8px;font-size:0.82rem;line-height:1.5;color:var(--text);
+  background:rgba(var(--red-rgb),0.12);border:1px solid rgba(var(--red-rgb),0.4)}
+.mvz-st{margin:0.75rem 0 0;font-size:0.82rem;color:var(--text);font-weight:600}
+.mvz-st[hidden]{display:none}
+@media (max-width:600px){.mvz{flex-direction:column;gap:0.7rem;padding:1rem}.mvz-steps li{width:100%;border-radius:10px}}
+.mvz-ic svg{width:22px;height:22px}
+.sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+/* 1977: THE REVIEW BEFORE A RESTORE (_irvHtml). What is in the backup, part
+   by part, each with its own choice, and one sentence of what the choices
+   bring; then what it is doing; then what came across. */
+.modal-content.irv-modal{max-width:880px;padding:0;display:flex;flex-direction:column;overflow:hidden}
+.irv{display:flex;flex-direction:column;min-height:0;max-height:min(90vh,100%)}
+.irv-head{display:flex;align-items:flex-start;gap:0.9rem;padding:1.25rem 1.4rem 1rem;border-bottom:1px solid var(--border)}
+.irv-head>div:nth-child(2){flex:1;min-width:0}
+.irv-head-ic{flex-shrink:0;display:flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:12px;
+  background:rgba(var(--accent-rgb),0.15);color:var(--accent)}
+.irv-head-ic svg{width:22px;height:22px}
+.irv-title{margin:0 0 0.2rem;font-size:1.12rem;font-weight:700;color:var(--text);line-height:1.3}
+.irv-sub{margin:0;font-size:0.84rem;line-height:1.55;color:var(--gray)}
+.irv-body{flex:1;min-height:0;overflow:auto;padding:1rem 1.4rem;display:flex;flex-direction:column;gap:0.6rem}
+.irv-row{border:1px solid var(--border);border-radius:12px;background:var(--hover);transition:opacity .15s ease,border-color .15s ease}
+.irv-row:not(.is-off){border-color:rgba(var(--accent-rgb),0.28)}
+.irv-row.is-off{opacity:0.62}
+.irv-row-h{display:flex;align-items:center;gap:0.8rem;padding:0.8rem 0.9rem}
+.irv-ic{flex-shrink:0;display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;
+  background:rgba(var(--accent-rgb),0.13);color:var(--accent)}
+.irv-ic svg{width:18px;height:18px}
+.irv-row.is-off .irv-ic{background:var(--hover);color:var(--gray)}
+.irv-row-t{flex:1;min-width:0}
+.irv-row-title{font-size:0.92rem;font-weight:700;color:var(--text)}
+.irv-row-sub{font-size:0.8rem;line-height:1.45;color:var(--gray);margin-top:0.1rem}
+.irv-row-c{flex-shrink:0}
+.irv-row-b{padding:0 0.9rem 0.85rem 3.7rem}
+.irv-seg{display:inline-flex;padding:3px;border-radius:999px;background:var(--bg);border:1px solid var(--border);gap:2px}
+.irv-seg-b{appearance:none;border:0;background:transparent;color:var(--gray);font:inherit;font-size:0.76rem;font-weight:600;
+  padding:0.36rem 0.75rem;border-radius:999px;cursor:pointer;white-space:nowrap;transition:background .15s ease,color .15s ease}
+.irv-seg-b:hover{color:var(--text)}
+.irv-seg-b.is-on{background:var(--accent);color:#fff}
+.irv-seg-b:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.irv-sw{position:relative;display:inline-flex;align-items:center;cursor:pointer}
+.irv-sw input{position:absolute;opacity:0;width:1px;height:1px}
+.irv-sw-t{width:40px;height:22px;border-radius:999px;background:var(--border);position:relative;transition:background .15s ease}
+.irv-sw-t::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,0.3);transition:transform .15s ease}
+.irv-sw input:checked+.irv-sw-t{background:var(--accent)}
+.irv-sw input:checked+.irv-sw-t::after{transform:translateX(18px)}
+.irv-sw input:focus-visible+.irv-sw-t{outline:2px solid var(--accent);outline-offset:2px}
+.irv-people{list-style:none;margin:0 0 0.6rem;padding:0;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--card)}
+.irv-person{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr) auto auto auto;align-items:center;gap:0.6rem;
+  padding:0.5rem 0.75rem;font-size:0.82rem;border-top:1px solid var(--border)}
+.irv-person:first-child{border-top:0}
+/* 1977: a person left out is dimmed, their choice is not. */
+.irv-person.is-off .irv-pn,.irv-person.is-off .irv-pe,.irv-person.is-off .irv-pr{opacity:0.5}
+.irv-pc{display:flex;justify-content:flex-end}
+.irv-seg--sm{padding:2px}
+.irv-seg--sm .irv-seg-b{padding:0.24rem 0.62rem;font-size:0.72rem}
+.irv-pbulk{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.4rem 0.75rem;margin:0 0 0.55rem;
+  font-size:0.8rem;font-weight:600;color:var(--text)}
+.irv-pcheck{width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin:0}
+.irv-pbox{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:4px;color:var(--green)}
+.irv-pbox svg{width:14px;height:14px}
+.irv-pn{font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.irv-pe{color:var(--gray);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.irv-pr{font-size:0.72rem;color:var(--gray);text-transform:capitalize}
+.irv-tag{font-size:0.66rem;font-weight:700;padding:0.12rem 0.5rem;border-radius:999px;background:rgba(var(--accent-rgb),0.12);color:var(--accent);white-space:nowrap}
+.irv-note{margin:0.35rem 0 0;font-size:0.78rem;line-height:1.5;color:var(--gray)}
+.irv-warn{margin:0.2rem 0 0.4rem;padding:0.5rem 0.7rem;border-radius:8px;font-size:0.8rem;line-height:1.5;color:var(--text);
+  background:rgba(234,179,8,0.1);border:1px solid rgba(234,179,8,0.35)}
+.irv-notify{margin-top:0.7rem;padding:0.7rem 0.8rem;border-radius:10px;background:var(--card);border:1px solid var(--border)}
+.irv-chk{display:flex;align-items:flex-start;gap:0.55rem;cursor:pointer;font-size:0.84rem;line-height:1.5;color:var(--text)}
+.irv-chk input{margin-top:3px;accent-color:var(--accent);width:16px;height:16px;flex-shrink:0}
+.irv-brand{display:flex;align-items:center;flex-wrap:wrap;gap:0.6rem}
+.irv-logo{display:inline-flex;align-items:center;justify-content:center;height:40px;padding:0.35rem 0.7rem;border-radius:8px;border:1px solid var(--border)}
+.irv-logo--d{background:#0f1720}
+.irv-logo--l{background:#fff}
+.irv-logo img{max-height:28px;max-width:150px;object-fit:contain;display:block}
+.irv-swatch{width:22px;height:22px;border-radius:6px;border:1px solid var(--border)}
+.irv-mono{font-family:var(--font-mono);font-size:0.74rem;color:var(--gray)}
+.irv-foot{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem 1rem;padding:0.95rem 1.4rem;
+  border-top:1px solid var(--border);background:var(--card)}
+.irv-sum{flex:1 1 300px;margin:0;font-size:0.82rem;line-height:1.5;color:var(--text)}
+.irv-acts{display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap}
+.irv-run{padding:2.2rem 1.4rem 2.4rem;text-align:center}
+.irv-bar{position:relative;height:6px;border-radius:999px;background:var(--hover);overflow:hidden;max-width:420px;margin:0 auto 1.1rem}
+.irv-bar span{position:absolute;top:0;bottom:0;width:38%;border-radius:999px;background:var(--accent);animation:irvbar 1.3s ease-in-out infinite}
+@keyframes irvbar{0%{left:-38%}100%{left:100%}}
+@media (prefers-reduced-motion:reduce){.irv-bar span{animation:none;left:0;width:100%;opacity:0.6}}
+.irv-run-t{margin:0;font-size:0.92rem;font-weight:600;color:var(--text)}
+.irv-run-n{margin:0.4rem 0 0;font-size:0.8rem;color:var(--gray)}
+.irv-done{padding:1.6rem 1.4rem 1.3rem;text-align:center}
+.irv-done-ic{display:inline-flex;align-items:center;justify-content:center;width:52px;height:52px;border-radius:50%;background:var(--green);color:#fff;margin-bottom:0.7rem}
+.irv-done-ic svg{width:26px;height:26px}
+.irv-done-ic.is-part{background:#eab308;color:#111;font-size:1.4rem;font-weight:800}
+.irv-done-h{margin:0 0 0.4rem;font-size:1.1rem;font-weight:700;color:var(--text)}
+.irv-done-p{margin:0 auto 0.5rem;max-width:62ch;font-size:0.86rem;line-height:1.6;color:var(--gray)}
+.irv-done-p strong{color:var(--text)}
+.irv-done-fail{color:var(--text)}
+.irv-acts--done{justify-content:center;margin-top:1rem}
+@media (max-width:640px){
+  .irv-head,.irv-body,.irv-foot{padding-left:1rem;padding-right:1rem}
+  .irv-row-h{flex-wrap:wrap}
+  .irv-row-c{width:100%;padding-left:2.8rem}
+  .irv-row-b{padding-left:0.9rem}
+  .irv-person{display:flex;flex-wrap:wrap;align-items:center;gap:0.3rem 0.6rem}
+  .irv-pn{flex:1 1 auto;min-width:0}
+  .irv-pe{order:3;flex:1 1 100%}
+  .irv-pc{order:4;flex:1 1 100%;justify-content:flex-start}
+}
+/* 1977: a tester from another product added as a person (`renderMigrateModal`). */
+.mig-row--new{flex-wrap:wrap}
+.mig-new-person{flex:1 1 100%;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:0.45rem;margin-top:0.45rem}
+.mig-new-said{grid-column:1/-1;font-size:0.76rem;color:var(--gray);line-height:1.45}
+.mig-done-people{margin-top:0.45rem;font-size:0.82rem;line-height:1.55}
+@media (max-width:600px){.mig-new-person{grid-template-columns:1fr}}
+/* 1977: adding a person: whether they are emailed (`_invSendHtml`). */
+.inv-send{margin-top:0.9rem}
+.inv-send-hint{margin:0.3rem 0 0 1.75rem}
+/* 1977: THE METHODOLOGY LIBRARY (_crbLibraryHtml). [stated] Arian: "make the
+   whole area there into a library that is seamless and cleaner". Your
+   templates and the library as two shelves of one card; the library searched,
+   narrowed by category, each template a card that says what it is based on,
+   with every item a press away before it is added. */
+.crbl-shelf{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.6rem 1rem;margin:0 0 1rem}
+.crbl-shelf .irv-seg-b span{margin-left:0.35rem;font-size:0.7rem;opacity:0.75}
+.crbl-sub{margin:0 0 0.9rem;font-size:0.82rem;line-height:1.6;color:var(--gray);max-width:78ch}
+.crbl-tools{display:flex;flex-wrap:wrap;align-items:center;gap:0.6rem;margin:0 0 0.7rem}
+.crbl-search{position:relative;flex:1 1 260px;min-width:0}
+.crbl-search svg{position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);width:15px;height:15px;color:var(--gray);pointer-events:none}
+.crbl-search input{width:100%;box-sizing:border-box;padding:0.55rem 0.8rem 0.55rem 2.15rem;border-radius:10px;border:1px solid var(--border);
+  background:var(--bg);color:var(--text);font:inherit;font-size:0.86rem}
+.crbl-search input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),0.15)}
+.crbl-cats{display:flex;flex-wrap:wrap;gap:0.4rem;margin:0 0 0.85rem}
+.crbl-chip{appearance:none;display:inline-flex;align-items:center;gap:0.4rem;padding:0.32rem 0.72rem;border-radius:999px;cursor:pointer;
+  border:1px solid var(--border);background:var(--bg);color:var(--text);font:inherit;font-size:0.76rem;font-weight:600;
+  transition:background .15s ease,border-color .15s ease,color .15s ease}
+.crbl-chip span{font-size:0.68rem;font-weight:700;color:var(--gray)}
+.crbl-chip:hover{border-color:rgba(var(--accent-rgb),0.45)}
+.crbl-chip.is-on{background:rgba(var(--accent-rgb),0.14);border-color:rgba(var(--accent-rgb),0.55);color:var(--accent)}
+.crbl-chip.is-on span{color:var(--accent)}
+.crbl-chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.crbl-count{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;min-height:30px;margin:0 0 0.6rem;font-size:0.78rem;color:var(--gray)}
+.crbl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:0.7rem}
+.crbl-card{display:flex;flex-direction:column;gap:0.45rem;padding:0.9rem 1rem 0.85rem;border-radius:12px;border:1px solid var(--border);
+  background:var(--hover);transition:border-color .15s ease}
+.crbl-card:hover{border-color:rgba(var(--accent-rgb),0.45)}
+.crbl-card.is-added{background:var(--bg)}
+.crbl-top{display:flex;align-items:center;justify-content:space-between;gap:0.5rem}
+.crbl-cat{font-size:0.68rem;font-weight:700;padding:0.12rem 0.55rem;border-radius:999px;background:rgba(var(--accent-rgb),0.12);color:var(--accent);white-space:nowrap}
+.crbl-kind{font-size:0.72rem;color:var(--gray);white-space:nowrap}
+.crbl-name{font-size:0.93rem;font-weight:700;line-height:1.35;color:var(--text)}
+.crbl-desc{flex:1;font-size:0.8rem;line-height:1.5;color:var(--gray);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.crbl-meta{display:flex;flex-wrap:wrap;align-items:center;gap:0.2rem 0.5rem;font-size:0.72rem;color:var(--gray)}
+.crbl-meta i{display:inline-block;width:3px;height:3px;border-radius:50%;background:currentColor;opacity:0.6}
+.crbl-meta .is-other{opacity:0.75}
+.crbl-acts{display:flex;align-items:center;flex-wrap:wrap;gap:0.45rem;margin-top:0.25rem}
+.crbl-added{display:inline-flex;align-items:center;gap:0.3rem;margin-left:auto;font-size:0.76rem;font-weight:600;color:var(--green)}
+.crbl-added svg{width:14px;height:14px}
+.crbl-empty{grid-column:1/-1;padding:1.6rem 1rem;text-align:center;font-size:0.85rem;color:var(--gray);border:1px dashed var(--border);border-radius:12px}
+/* Your templates, as rows. */
+.crbl-mine-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin:0 0 0.7rem}
+.crbl-mine{display:flex;flex-direction:column;gap:0.5rem}
+.crbl-row{display:flex;align-items:center;gap:0.8rem;padding:0.75rem 0.9rem;border-radius:10px;border:1px solid var(--border);background:var(--bg)}
+.crbl-row-t{flex:1;min-width:0}
+.crbl-row-n{display:flex;align-items:center;flex-wrap:wrap;gap:0.4rem;font-size:0.88rem;font-weight:600;color:var(--text)}
+.crbl-row-s{margin-top:0.15rem;font-size:0.74rem;color:var(--gray)}
+.crbl-tag{font-size:0.66rem;font-weight:700;padding:0.1rem 0.5rem;border-radius:999px;background:var(--hover);color:var(--gray);white-space:nowrap}
+.crbl-tag--vis{background:rgba(34,197,94,0.12);color:var(--green)}
+.crbl-tag--aud{background:rgba(59,130,246,0.12);color:#3b82f6}
+.crbl-row-a{display:flex;gap:0.4rem;flex-shrink:0}
+.crbl-none{padding:1.6rem 1rem;text-align:center;font-size:0.85rem;line-height:1.6;color:var(--gray);border:1px dashed var(--border);border-radius:12px}
+.crbl-none a{color:var(--accent);font-weight:600}
+/* The preview. */
+.modal-content.crbl-prev-modal{max-width:760px}
+.crbl-prev-d{margin:0 0 0.5rem;font-size:0.86rem;line-height:1.6;color:var(--text)}
+.crbl-prev-s{margin:0 0 1rem;font-size:0.8rem;color:var(--gray)}
+.crbl-prev-s a{color:var(--accent)}
+.crbl-items{margin:0;padding:0 0 0 1.4rem;display:flex;flex-direction:column;gap:0.7rem}
+.crbl-items li{padding-left:0.2rem}
+.crbl-items li::marker{color:var(--gray);font-size:0.8rem;font-weight:700}
+.crbl-item-t{font-size:0.87rem;font-weight:600;line-height:1.4;color:var(--text)}
+.crbl-item-d{margin-top:0.15rem;font-size:0.8rem;line-height:1.55;color:var(--gray)}
+@media (max-width:600px){
+  .crbl-row{flex-direction:column;align-items:stretch}
+  .crbl-row-a{justify-content:flex-end}
+  .crbl-shelf .irv-seg{width:100%}
+  .crbl-shelf .irv-seg-b{flex:1}
+}
 /* 1819: one line of caution on a settings card, without an icon font or emoji. */
 .set-warn-line{font-size:0.8rem;line-height:1.5;color:var(--text);padding:0.5rem 0.7rem;border-radius:8px;margin:0 0 0.8rem;
   background:rgba(234,179,8,0.08);border:1px solid rgba(234,179,8,0.28);border-left:3px solid #eab308}
