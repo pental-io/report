@@ -39,7 +39,6 @@ function _emailSignatureHtml() { return ''; }
 function _findingTicketsHtml() { return ''; }
 async function _finishDocsConnect() { return; }
 async function _finishXeroConnect() { return Promise.resolve(null); }
-function _initProposalPhases() { return; }
 function _invAmountText() { return; }
 function _invGross() { return; }
 function _invMoney() { return; }
@@ -138,7 +137,6 @@ async function _trialExpiredAddPayment() { return; }
 function _xeroBadgeHtml() { return ''; }
 function _xeroNote() { return ''; }
 function _xeroWhyWords() { return ''; }
-function addProposalPhase() { return; }
 function archiveInvoice() { return; }
 function archiveProposal() { return; }
 function canSeeProposals() { return; }
@@ -186,7 +184,6 @@ async function pullInvoiceFromXeroNow() { return Promise.resolve(null); }
 async function pushInvoiceToXeroNow() { return Promise.resolve(null); }
 async function pushMissingToXero() { return Promise.resolve(null); }
 async function removeLoASignature() { return Promise.resolve(null); }
-function removeProposalPhase() { return; }
 async function renderApplyConfirmation() { return ''; }
 function renderClientFindings() { return ''; }
 function renderClientUserModal() { return ''; }

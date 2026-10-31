@@ -847,6 +847,48 @@ function _newPhaseId() {
     return v.toString(16);
   });
 }
+function _initProposalPhases(p) {
+  if (p && p.phases && Array.isArray(p.phases) && p.phases.length > 0) {
+    window._proposalPhases = p.phases.map(function(ph) {
+      var clone = Object.assign({}, ph);
+
+      clone.test_days = parseFloat(clone.test_days) || 5;
+
+      if (!clone.phase_id) clone.phase_id = _newPhaseId();
+      return clone;
+    });
+  } else if (p) {
+    window._proposalPhases = [{
+      phase_id: _newPhaseId(),
+      type: (p.type && p.type !== 'Multiple') ? p.type : 'Web Application',
+      test_days: parseFloat(p.test_days) || 5,
+      scope: p.scope || ''
+    }];
+  } else {
+    window._proposalPhases = [{
+      phase_id: _newPhaseId(),
+      type: _phaseTypes[0] ? _phaseTypes[0].name : 'Web Application',
+      test_days: _phaseTypes[0] ? _phaseTypes[0].days : 5,
+      scope: ''
+    }];
+  }
+}
+function addProposalPhase() {
+  var phases = window._proposalPhases || [];
+
+  var usedTypes = phases.map(function(ph) { return ph.type; });
+  var nextType = _phaseTypes.find(function(t) { return usedTypes.indexOf(t.name) === -1; }) || _phaseTypes[0] || {name:'Assessment',days:5};
+  phases.push({ phase_id: _newPhaseId(), type: nextType.name, test_days: nextType.days, scope: '' });
+  window._proposalPhases = phases;
+  _rerenderPhases();
+}
+function removeProposalPhase(idx) {
+  var phases = window._proposalPhases || [];
+  if (phases.length <= 1) { toast('At least one phase is required', 'error'); return; }
+  phases.splice(idx, 1);
+  window._proposalPhases = phases;
+  _rerenderPhases();
+}
 function _phAddCrb(phaseIdx, templateId) {
   if (!templateId) return;
   var phases = window._proposalPhases || [];
@@ -33400,7 +33442,9 @@ function _apiCardBody() {
   if (!s.enabled) {
     h += '<div class="api-note">The API is switched off. ' + (s.admin ? '<a href="#" onclick="event.preventDefault();S.settingsTab=\'api\';nav(\'settings\')">Turn it on in Settings, API</a>.' : 'An administrator turns it on in Settings, API.') + '</div>';
   } else if (!s.my_role_allowed) {
-    h += '<div class="api-note">Your role cannot make API keys here. An administrator can allow it in Settings, API.</div>';
+
+    var _canAsk = _apiRoles().some(function (r) { return !!S.profile && r[0] === S.profile.role; });
+    h += '<div class="api-note">Your role cannot make API keys here.' + (_canAsk ? ' An administrator can allow it in Settings, API.' : '') + '</div>';
   } else {
     h += '<button class="btn btn-primary btn-sm" onclick="openApiKeyMake()">' + IC.plus + ' Make a key</button>';
   }
