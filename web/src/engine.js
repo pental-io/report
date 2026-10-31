@@ -960,7 +960,8 @@ window._assessmentAddCrb = _assessmentAddCrb;
 async function _crbAddForPhase(libKey, assessmentId, phaseIdx) {
   var tpl = CHECKLIST_RUNBOOK_LIBRARY[libKey];
   if (!tpl) { toast('Unknown template', 'error'); return; }
-  var row = (S.data.checklists_runbooks || []).find(function(t) { return t.source === tpl.source; });
+
+  var row = (S.data.checklists_runbooks || []).find(function(t) { return t.source === tpl.source; }) || _crbLibOlder(tpl);
   if (!row) {
     _showLoading();
     try {
@@ -1546,14 +1547,20 @@ function _renderPhaseChecklistsPanel(assessment, phase, phaseIdx, isClient) {
   var _phTypeLc = String(phase.type || '').toLowerCase();
 
   var _phReal = Array.isArray(assessment.phases) ? !!assessment.phases[phaseIdx] : (phaseIdx === 0);
-  var libMatchKey = (canWrite && _phReal && _phTypeLc && typeof CHECKLIST_RUNBOOK_LIBRARY === 'object')
-    ? (Object.keys(CHECKLIST_RUNBOOK_LIBRARY).find(function(k) { return String(CHECKLIST_RUNBOOK_LIBRARY[k].phase_hint || '').toLowerCase() === _phTypeLc; }) || null)
-    : null;
+  var _libOn = !!(canWrite && _phReal && _phTypeLc && typeof CHECKLIST_RUNBOOK_LIBRARY === 'object');
+  var _libAdded = function (k) {
+    var b = _crbLibBase(CHECKLIST_RUNBOOK_LIBRARY[k].source);
+    return allTemplates.some(function (t) { return _crbLibBase(t.source) === b; });
+  };
 
-  var libMatchKeys = libMatchKey ? [libMatchKey].concat(Object.keys(CHECKLIST_RUNBOOK_LIBRARY).filter(function(k) {
-    var x = CHECKLIST_RUNBOOK_LIBRARY[k];
-    return x.kind === 'runbook' && String(x.phase_hint || '').toLowerCase() === _phTypeLc;
-  }).slice(0, 1)) : [];
+  var _libFirst = function (runbook) {
+    return _libOn ? Object.keys(CHECKLIST_RUNBOOK_LIBRARY).filter(function (k) {
+      var x = CHECKLIST_RUNBOOK_LIBRARY[k];
+      return (x.kind === 'runbook') === runbook && String(x.phase_hint || '').toLowerCase() === _phTypeLc && _libAdded(k);
+    }).slice(0, 1) : [];
+  };
+  var libMatchKeys = _libFirst(false).concat(_libFirst(true));
+  var libMatchKey = libMatchKeys[0] || null;
 
   if (!attachedIds.length && (!canWrite || (!allTemplates.length && !libMatchKey))) return '';
 
@@ -1728,7 +1735,7 @@ function _renderPhaseChecklistsPanel(assessment, phase, phaseIdx, isClient) {
       h += '</div>';
     } else if (!templates.length && !_showSuggest) {
 
-      h += '<div style="font-size:0.78rem;color:var(--gray);padding:0.5rem 0.75rem;background:var(--bg);border:1px dashed var(--border);border-radius:6px">No templates yet. <a href="#" onclick="event.preventDefault();S.settingsTab=\'checklists\';S.page=\'settings\';render()" style="color:var(--accent)">Create one in Settings</a></div>';
+      h += '<div style="font-size:0.78rem;color:var(--gray);padding:0.5rem 0.75rem;background:var(--bg);border:1px dashed var(--border);border-radius:6px">No templates yet.' + (canAccessPage('settings') ? ' <a href="#" onclick="event.preventDefault();S.settingsTab=\'checklists\';S.page=\'settings\';render()" style="color:var(--accent)">Create one in Settings</a>' : ' An administrator adds them in Settings.') + '</div>';
     }
   }
   h += '</div>';
@@ -2007,7 +2014,7 @@ function _renderPhaseCards(viewOnly) {
       });
       h += '<div class="form-group" style="margin-top:0.5rem;margin-bottom:0"><label class="form-label" style="font-size:0.78rem">Checklists &amp; Runbooks</label>';
       if (!allTemplates.length) {
-        h += '<div style="font-size:0.75rem;color:var(--gray);padding:0.4rem 0.6rem;background:var(--card);border:1px solid var(--border);border-radius:4px">No templates yet. <a href="#" onclick="event.preventDefault();S.settingsTab=\'checklists\';S.page=\'settings\';closeM();render()" style="color:var(--accent)">Create one in Settings</a></div>';
+        h += '<div style="font-size:0.75rem;color:var(--gray);padding:0.4rem 0.6rem;background:var(--card);border:1px solid var(--border);border-radius:4px">No templates yet.' + (canAccessPage('settings') ? ' <a href="#" onclick="event.preventDefault();S.settingsTab=\'checklists\';S.page=\'settings\';closeM();render()" style="color:var(--accent)">Create one in Settings</a>' : ' An administrator adds them in Settings.') + '</div>';
       } else {
 
         h += '<div id="phCrbChips_' + idx + '" style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.3rem;min-height:24px">';
@@ -4612,12 +4619,18 @@ function contractorsLibraryOn() { var s = S.data && S.data.settings; return !(s 
 window._conOnWork = _conOnWork;
 window._conTeamName = _conTeamName;
 var _ASSESS_PAGES = ['assessments', 'assessment-detail', 'finding-detail', 'retests'];
+var _CLIENT_PAGES = ['dashboard', 'scans', 'scan-detail', 'proposals', 'signatures', 'assessments', 'assessment-detail',
+  'finding-detail', 'findings', 'invoices', 'my-profile'];
 function canAccessPage(page) {
   if (!S.profile) return page === 'dashboard';
 
   if (_PORTAL_PAGES.indexOf(page) < 0) return false;
 
+  if (S.profile.role === 'client' && _CLIENT_PAGES.indexOf(page) < 0) return false;
+
   if (page === 'settings') return S.profile.role === 'admin';
+
+  if (page === 'report-builder') return canManage();
 
   if (page === 'users' || page === 'subscription') return canManage();
 
@@ -12655,8 +12668,9 @@ function _rbAiLineHtml() {
   if (!_rbAiConnected()) {
     return '<div class="rb-ai-line off"><span class="rb-ai-dot" aria-hidden="true"></span><div class="rb-ai-say">'
       + '<strong>No AI provider connected</strong>'
-      + '<span>You can still place every field yourself. <a href="#" onclick="event.preventDefault();S.settingsTab=\'ai\';nav(\'settings\')">'
-      + 'Connect one in Settings</a> and the builder does it for you.</span></div></div>';
+      + '<span>You can still place every field yourself. ' + (canAccessPage('settings')
+        ? '<a href="#" onclick="event.preventDefault();S.settingsTab=\'ai\';nav(\'settings\')">Connect one in Settings</a> and the builder does it for you.'
+        : 'Once an administrator connects one in Settings, the builder does it for you.') + '</span></div></div>';
   }
   var on = _rbAutoBuildOn();
   return '<div class="rb-ai-line"><span class="rb-ai-dot" aria-hidden="true"></span><div class="rb-ai-say">'
@@ -26634,7 +26648,7 @@ var _FEATURE_MODULES = [
     { key: 'dashboard_enabled',    label: 'Dashboard',      desc: 'Landing page with an overview of active work.', def: true },
     { key: 'qa_enabled',           label: 'QA Queue',       desc: 'A second pair of eyes on a report before it goes out: comments, suggested changes, and sign-off. Turn it off if reports go straight from the tester to the client.', def: true },
 
-    { key: 'enable_checklists_runbooks', label: 'Checklists & Runbooks', desc: 'Methodology checklists and step-by-step runbooks attached to assessment phases, with an opt-in library holding a checklist for each phase type (web, internal, external, cloud, mobile, wireless) that is suggested on matching phases. Fully editable and deletable.', def: true },
+    { key: 'enable_checklists_runbooks', label: 'Checklists & Runbooks', desc: 'Methodology checklists and step-by-step runbooks attached to assessment phases, with an opt-in library holding a checklist for each phase type (web, internal, external, cloud, mobile, wireless), each suggested on matching phases once added. Fully editable and deletable.', def: true },
 
     { key: 'assessments_enabled',  label: 'Assessments', desc: 'Engagements, phases, findings and the reports that come out of them. Off hides the area and its navigation; nothing is deleted and existing documents stay downloadable. Only turn this off if you sell scanning alone.', def: true },
     { key: 'library_enabled',      label: 'Library', desc: 'Your own library of reusable findings, with descriptions and remediation your team has already agreed. Off hides the area; the entries are kept.', def: true },
