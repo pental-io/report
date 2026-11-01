@@ -4238,6 +4238,22 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
 .irv-done-p{margin:0 auto 0.5rem;max-width:62ch;font-size:0.86rem;line-height:1.6;color:var(--gray)}
 .irv-done-p strong{color:var(--text)}
 .irv-done-fail{color:var(--text)}
+/* 1978: THE REVIEW OF A TEMPLATE BROUGHT ACROSS (_ftvHtml). What each of its
+   placeholders became, side by side, and what was left out and why. */
+.ftv-map{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:0.32rem 0.9rem;align-items:baseline;
+  padding:0.6rem 0.75rem;border:1px solid var(--border);border-radius:10px;background:var(--card);max-height:300px;overflow:auto}
+.ftv-mh{font-size:0.72rem;font-weight:700;color:var(--gray);padding-bottom:0.25rem;border-bottom:1px solid var(--border)}
+.ftv .ftv-map .ftv-from,.ftv .ftv-map .ftv-code{font-family:var(--font-mono);font-size:0.74rem;line-height:1.45;color:var(--text);
+  overflow-wrap:anywhere;background:none;border:0;padding:0;border-radius:0;font-variant-ligatures:none}
+.ftv .ftv-map .ftv-from{color:var(--gray)}
+.ftv-to{font-size:0.8rem;line-height:1.45;color:var(--gray);overflow-wrap:anywhere}
+.ftv-fields{margin:0;padding-left:1.1rem;font-size:0.84rem;line-height:1.6;color:var(--text)}
+@media (max-width:640px){
+  .ftv-map{grid-template-columns:minmax(0,1fr)}
+  .ftv-mh:nth-child(2){display:none}
+  .ftv-to{margin-bottom:0.4rem}
+  .ftv .irv-row-b{padding-left:0.9rem}
+}
 .irv-acts--done{justify-content:center;margin-top:1rem}
 @media (max-width:640px){
   .irv-head,.irv-body,.irv-foot{padding-left:1rem;padding-right:1rem}

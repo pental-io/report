@@ -73110,7 +73110,10 @@ function _addTocBookmarks(docXml) {
     else h.secNum = secNum.main + '.' + secNum.sub + '.' + secNum.subsub;
   });
 
-  for (var i = headings.length - 1; i >= 0; i--) {
+  var _ftOrigNums = typeof _ftFrom === 'function' && !!_ftFrom(docXml);
+  if (_ftOrigNums) headings.forEach(function (h) { h.secNum = ''; });
+
+  for (var i = _ftOrigNums ? -1 : headings.length - 1; i >= 0; i--) {
     var h = headings[i];
 
     var pXml2 = docXml.substring(h.pStart, h.pEnd);
@@ -73160,7 +73163,7 @@ function _addTocBookmarks(docXml) {
     var isH2 = hd.level === 1;
     var isH3 = hd.level === 2;
     var tocStyle = isH1 ? 'TOC1' : isH2 ? 'TOC2' : 'TOC3';
-    var tocLabel = hd.secNum + '  ' + hd.text;
+    var tocLabel = hd.secNum ? hd.secNum + '  ' + hd.text : hd.text;
     tocXml += '<w:p><w:pPr><w:pStyle w:val="' + tocStyle + '"/>';
     tocXml += '<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9026"/></w:tabs>';
     tocXml += '</w:pPr>';
@@ -73226,6 +73229,10 @@ function _injectSummarySections(zip, data) {
     var f = zip.file('word/document.xml'); if (!f) return;
     var orig = f.asText();
     var xml = orig;
+
+    var _sdl = null;
+    try { _sdl = typeof _dtplDelims === 'function' ? _dtplDelims(zip) : null; } catch (e) {}
+    var _stok = function (t) { return _sdl ? _sdl.start + String(t).replace(/^\{|\}$/g, '') + _sdl.end : t; };
     function pText(p) { return (p.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []).map(function(x){ return x.replace(/<[^>]*>/g, ''); }).join('').trim(); }
 
     var execLabel = String(data.heading_exec_summary || 'Executive Summary');
@@ -73250,15 +73257,15 @@ function _injectSummarySections(zip, data) {
     if (injSrc) {
       injSrc.forEach(function(s) {
         if (!s || !s.token) return;
-        if (xml.indexOf(s.token) !== -1) return;
+        if (xml.indexOf(s.token) !== -1 || xml.indexOf(_stok(s.token)) !== -1) return;
         if (s.key === 'retest_summary' && /retest\s+summary/i.test(xml.replace(/<[^>]+>/g, ' '))) return;
-        toInject.push({ label: String(s.label || 'Summary'), token: s.token });
+        toInject.push({ label: String(s.label || 'Summary'), token: _stok(s.token), custom: /^\{custom_summary_/.test(s.token) });
       });
     } else {
-      var hasRetestToken = xml.indexOf('{retest_summary}') !== -1;
+      var hasRetestToken = xml.indexOf('{retest_summary}') !== -1 || xml.indexOf(_stok('{retest_summary}')) !== -1;
       var retestHeadingPresent = /retest\s+summary/i.test(xml.replace(/<[^>]+>/g, ' '));
       if (data.show_retest_summary !== false && !!data.has_retest_summary && !hasRetestToken && !retestHeadingPresent) {
-        toInject.push({ label: String(data.heading_retest_summary || 'Retest Summary'), token: '{retest_summary}' });
+        toInject.push({ label: String(data.heading_retest_summary || 'Retest Summary'), token: _stok('{retest_summary}') });
       }
     }
     if (!toInject.length) { if (xml !== orig) zip.file('word/document.xml', xml); return; }
@@ -73298,7 +73305,7 @@ function _injectSummarySections(zip, data) {
 
     var execTokIdx = -1;
     for (var t1 = 0; t1 < paras.length; t1++) {
-      if (paras[t1].indexOf('{executive_summary}') !== -1 || paras[t1].indexOf('{@execSummaryNotesStyled') !== -1) { execTokIdx = t1; break; }
+      if (paras[t1].indexOf('{executive_summary}') !== -1 || paras[t1].indexOf(_stok('{executive_summary}')) !== -1 || paras[t1].indexOf('{@execSummaryNotesStyled') !== -1) { execTokIdx = t1; break; }
     }
     var execHeadIdx = -1;
     if (execTokIdx !== -1) {
@@ -73375,7 +73382,7 @@ function _injectSummarySections(zip, data) {
     })(hStyle);
     var sectionXml = toInject.map(function(s) {
       var lbl = s.label.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      var _hs = (s.token && s.token.indexOf('{custom_summary_') === 0) ? _subHeadStyle : hStyle;
+      var _hs = (s.custom || (s.token && s.token.indexOf('{custom_summary_') === 0)) ? _subHeadStyle : hStyle;
       return '<w:p><w:pPr><w:pStyle w:val="' + _hs + '"/></w:pPr><w:r><w:t xml:space="preserve">' + lbl + '</w:t></w:r></w:p>'
            + '<w:p>' + contentPPr + '<w:r><w:t xml:space="preserve">' + s.token + '</w:t></w:r></w:p>';
     }).join('');
@@ -73398,7 +73405,9 @@ function _injectSummarySections(zip, data) {
     var _allP = xml.match(/<w:p\b[\s\S]*?<\/w:p>/g) || [];
 
     var _loopOpen = null, _lpAt = 0;
-    for (var _li = 0; _li < _allP.length; _li++) {
+
+    var _ftOrig = typeof _ftFrom === 'function' && !!_ftFrom(xml);
+    for (var _li = 0; _li < (_ftOrig ? 0 : _allP.length); _li++) {
       var _lpPos = xml.indexOf(_allP[_li], _lpAt);
       if (_lpPos !== -1) _lpAt = _lpPos + _allP[_li].length;
       if (/\{#\s*(findings|vulnerabilities|phase_findings)\b/i.test(_allP[_li]) && !(_lpPos !== -1 && _pntlInsideCell(xml, _lpPos))) { _loopOpen = _li; break; }
@@ -73414,7 +73423,7 @@ function _injectSummarySections(zip, data) {
       }
     }
 
-    var fh = _findFindingsHeading(_allP);
+    var fh = _ftOrig ? null : _findFindingsHeading(_allP);
     if (fh) {
       var _fhIdx = _allP.indexOf(fh);
       var _loopBreaks = false;
@@ -73716,6 +73725,7 @@ async function _fillTemplateAndDownload(templateBuf, data, filename, _docType, _
     throw friendly;
   }
 
+  try { if (typeof _ftDeriveLists === 'function') _ftDeriveLists(zip, data); } catch (e) { console.warn('[DOCX] named lists skipped:', e && e.message); }
   data = _xmlSafeDeep(data);
   doc.render(data);
   var filledZip = doc.getZip();
@@ -73760,6 +73770,8 @@ async function _fillTemplateAndDownload(templateBuf, data, filename, _docType, _
   try { var _chg=_rebuildSeverityCharts(filledZip, data); if(_chg && _chg.length) console.warn('[Chart] rebuilt severity chart(s):', _chg.join(', ')); } catch(e) { console.warn('[Chart] rebuild error:', e && e.message); }
 
   _applySeverityColors(filledZip);
+
+  try { if (typeof _ftShades === 'function') _ftShades(filledZip); } catch (e) { console.warn('[DOCX] cell shading skipped:', e && e.message); }
 
   _fixInvisibleCellText(filledZip);
 
@@ -76770,22 +76782,6 @@ async function _saveDocxTemplateData(type, meta) {
   if (!s || !s.id) {
     throw new Error('Settings row not loaded, cannot save template. Refresh and try again.');
   }
-  if (!s.pdf_templates) s.pdf_templates = {};
-
-  if (s.pdf_templates['docx_template_' + type] && !s.pdf_templates['docx_templates_' + type]) {
-    var leg = s.pdf_templates['docx_template_' + type];
-    s.pdf_templates['docx_templates_' + type] = [Object.assign({
-      id: 'legacy',
-      name: leg.filename || (type.charAt(0).toUpperCase() + type.slice(1) + ' Template'),
-    }, leg)];
-    if (!s.pdf_templates['docx_default_' + type]) s.pdf_templates['docx_default_' + type] = 'legacy';
-    delete s.pdf_templates['docx_template_' + type];
-  }
-
-  if (!Array.isArray(s.pdf_templates['docx_templates_' + type])) {
-    s.pdf_templates['docx_templates_' + type] = [];
-  }
-  var arr = s.pdf_templates['docx_templates_' + type];
 
   if (meta) {
 
@@ -76814,6 +76810,30 @@ async function _saveDocxTemplateData(type, meta) {
         throw new Error('Could not upload template to Storage. ' + (e.message || e) + '. Run migration to add the "templates" bucket if missing.');
       }
     }
+  }
+
+  s = S.data.settings;
+  if (!s || !s.id) {
+    throw new Error('Settings row not loaded, cannot save template. Refresh and try again.');
+  }
+  if (!s.pdf_templates) s.pdf_templates = {};
+
+  if (s.pdf_templates['docx_template_' + type] && !s.pdf_templates['docx_templates_' + type]) {
+    var leg = s.pdf_templates['docx_template_' + type];
+    s.pdf_templates['docx_templates_' + type] = [Object.assign({
+      id: 'legacy',
+      name: leg.filename || (type.charAt(0).toUpperCase() + type.slice(1) + ' Template'),
+    }, leg)];
+    if (!s.pdf_templates['docx_default_' + type]) s.pdf_templates['docx_default_' + type] = 'legacy';
+    delete s.pdf_templates['docx_template_' + type];
+  }
+
+  if (!Array.isArray(s.pdf_templates['docx_templates_' + type])) {
+    s.pdf_templates['docx_templates_' + type] = [];
+  }
+  var arr = s.pdf_templates['docx_templates_' + type];
+
+  if (meta) {
 
     var idx = arr.findIndex(function(t){ return t.id === meta.id; });
     if (idx >= 0) arr[idx] = meta;
@@ -77083,6 +77103,1376 @@ window.addEventListener('resize', function() {
   for (var i = 0; i < all.length; i++) all[i].style.display = 'none';
   _closeFileMenuInPicker();
 });
+var _FT_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+var _FT_W14 = 'http://schemas.microsoft.com/office/word/2010/wordml';
+var _FT_XML = 'http://www.w3.org/XML/1998/namespace';
+var _FT_NONE = 'ft_none';
+var _FT_SEVS = ['critical', 'high', 'medium', 'low', 'info'];
+function _ftParts(zip) {
+  return Object.keys(zip.files).filter(function (n) {
+    return /^word\/(document|header\d*|footer\d*|footnotes|endnotes)\.xml$/.test(n);
+  }).sort(function (a, b) {
+    var ra = a === 'word/document.xml' ? 0 : 1, rb = b === 'word/document.xml' ? 0 : 1;
+    return ra - rb || (a < b ? -1 : a > b ? 1 : 0);
+  });
+}
+function _ftDecode(s) {
+  return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, function (m, d) { return String.fromCharCode(+d); })
+    .replace(/&#x([0-9a-f]+);/gi, function (m, h) { return String.fromCharCode(parseInt(h, 16)); })
+    .replace(/&amp;/g, '&');
+}
+function _ftParaTexts(xml) {
+  return String(xml).split(/<\/w:p>/).map(function (chunk) {
+    return (chunk.match(/<w:t(?:\s[^>]*[^\/>])?>[\s\S]*?<\/w:t>/g) || []).map(function (t) {
+      return _ftDecode(t.replace(/^<w:t(?:\s[^>]*[^\/>])?>/, '').replace(/<\/w:t>$/, ''));
+    }).join('');
+  });
+}
+function _ftQuotes(s) { return String(s).replace(/[‘’‚′]/g, "'").replace(/[“”„″]/g, '"'); }
+var _FT_PD_SIGNS = [
+  /\{@[^{}]*\|\s*convertHTML/, /\|\s*convertDate(Locale)?\b/, /\|\s*changeID\b/, /\{%+\s*[\w.]+\s*\}/,
+  /\{-w:(p|tr)\s/, /\{[#\/^]?\s*cvss4?(Obj)?\.\w+/, /\{\s*identifier\b/, /\{[#\/]\s*[\w]+\.text\s*\}/,
+  /\{\s*(creator|company|client)\.\w+\s*\}/, /\{\s*(auditType|date_start|date_end|vulnType)\b/,
+  /\{@\s*\$pageBreakExceptLast\s*\}/, /\{[#\/]\s*(observation|poc|retestDescription)\s*\}/
+];
+var _FT_GW_SIGNS = [
+  /\{\{-?\s*(?:[pr]\s+)?\w+\.(title|severity|description|cvss_score)/, /_rt\s*-?\}\}/, /\bfor\s+\w+\s+in\s+findings\b/,
+  /\{\{-?\s*(client|project|company|totals|recipient)\.\w+/, /\{\{-?\s*report_date\b/, /\{%tr\s/, /\{\{p\s/, /\{%-?\s*cellbg\s/,
+  /\bfilter_(severity|type|tags)\s*\(/, /\bfor\s+\w+\s+in\s+(team|client\.contacts|objectives|targets|infrastructure\.)/
+];
+function _ftDetect(zip) {
+  var pd = 0, gw = 0, jinja = 0;
+  _ftParts(zip).forEach(function (n) {
+    var f = zip.file(n);
+    if (!f) return;
+    _ftParaTexts(f.asText()).forEach(function (t) {
+      if (!t || t.indexOf('{') < 0) return;
+      if (/\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}/.test(t)) jinja++;
+      _FT_GW_SIGNS.forEach(function (re) { if (re.test(t)) gw++; });
+      _FT_PD_SIGNS.forEach(function (re) { if (re.test(t)) pd++; });
+    });
+  });
+  if (jinja && gw >= 2) return 'ghostwriter';
+  if (!jinja && pd >= 2) return 'pwndoc';
+  return null;
+}
+function _ftIs(n, local) { return !!n && n.nodeType === 1 && n.namespaceURI === _FT_W && n.localName === local; }
+function _ftUp(n, local) { var a = n && n.parentNode; while (a && !_ftIs(a, local)) a = a.parentNode; return a || null; }
+function _ftKids(n, local) {
+  var out = [];
+  for (var c = n.firstChild; c; c = c.nextSibling) if (_ftIs(c, local)) out.push(c);
+  return out;
+}
+function _ftParas(doc) {
+  var all = doc.getElementsByTagNameNS(_FT_W, 'p'), out = [];
+  for (var i = 0; i < all.length; i++) {
+    var p = all[i], ts = p.getElementsByTagNameNS(_FT_W, 't'), nodes = [];
+    for (var j = 0; j < ts.length; j++) if (_ftUp(ts[j], 'p') === p) nodes.push(ts[j]);
+    out.push({ p: p, nodes: nodes, text: nodes.map(function (n) { return n.textContent; }).join('') });
+  }
+  return out;
+}
+function _ftSetText(n, t) {
+  while (n.firstChild) n.removeChild(n.firstChild);
+  n.appendChild(n.ownerDocument.createTextNode(t));
+  if (/^\s|\s$/.test(t)) n.setAttributeNS(_FT_XML, 'xml:space', 'preserve');
+}
+function _ftSplice(P, s, e, rep) {
+  var pos = 0, put = null, n = P.nodes.length;
+  for (var i = 0; i < n; i++) {
+    var node = P.nodes[i], t = node.textContent, a = pos, b = pos + t.length;
+    pos = b;
+    var hit = s === e ? (!put && s >= a && (s < b || (s === b && i === n - 1))) : (b > s && a < e);
+    if (!hit) continue;
+    var ls = Math.max(s, a) - a, le = Math.min(e, b) - a;
+    var nt = t.slice(0, ls) + (put ? '' : rep) + t.slice(le);
+    if (!put) put = node;
+    if (nt !== t) _ftSetText(node, nt);
+  }
+  if (!put && rep) {
+
+    var doc = P.p.ownerDocument;
+    var r = doc.createElementNS(_FT_W, 'w:r');
+    var pPr = _ftKids(P.p, 'pPr')[0];
+    var mark = pPr && _ftKids(pPr, 'rPr')[0];
+    if (mark) {
+      var rPr = doc.createElementNS(_FT_W, 'w:rPr');
+      for (var c = mark.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType === 1 && !/^(ins|del|moveFrom|moveTo|rPrChange)$/.test(c.localName)) rPr.appendChild(c.cloneNode(true));
+      }
+      if (rPr.firstChild) r.appendChild(rPr);
+    }
+    var tn = doc.createElementNS(_FT_W, 'w:t');
+    _ftSetText(tn, rep);
+    r.appendChild(tn);
+    P.p.appendChild(r);
+    P.nodes.push(tn);
+    put = tn;
+  }
+  P.text = P.nodes.map(function (x) { return x.textContent; }).join('');
+  return put;
+}
+function _ftHasMore(p) {
+  var probe = ['drawing', 'pict', 'object', 'fldChar', 'fldSimple', 'instrText', 'sectPr', 'footnoteReference', 'endnoteReference'];
+  for (var i = 0; i < probe.length; i++) if (p.getElementsByTagNameNS(_FT_W, probe[i]).length) return true;
+  var brs = p.getElementsByTagNameNS(_FT_W, 'br');
+  for (var j = 0; j < brs.length; j++) if (brs[j].getAttributeNS(_FT_W, 'type') === 'page' || brs[j].getAttribute('w:type') === 'page') return true;
+  return false;
+}
+function _ftEmptyLike(p) {
+  var q = p.cloneNode(false);
+  try { q.removeAttributeNS(_FT_W14, 'paraId'); q.removeAttributeNS(_FT_W14, 'textId'); } catch (e) {}
+  var pPr = _ftKids(p, 'pPr')[0];
+  if (pPr) {
+    var cp = pPr.cloneNode(true);
+    var sp = _ftKids(cp, 'sectPr');
+    sp.forEach(function (x) { cp.removeChild(x); });
+    q.appendChild(cp);
+  }
+  return q;
+}
+function _ftDropPara(p) {
+  if (!p.parentNode) return;
+  var parent = p.parentNode;
+
+  var keep = _ftKids(p, 'pPr').some(function (x) { return _ftKids(x, 'sectPr').length; })
+    || (_ftIs(parent, 'tc') && _ftKids(parent, 'p').length < 2);
+  if (!keep) { parent.removeChild(p); return; }
+  for (var c = p.firstChild; c;) { var nx = c.nextSibling; if (!_ftIs(c, 'pPr')) p.removeChild(c); c = nx; }
+}
+function _ftLex(src) {
+  var s = String(src || ''), i = 0, out = [];
+  while (i < s.length) {
+    var c = s.charAt(i);
+    if (/\s/.test(c)) { i++; continue; }
+    if (c === '"' || c === "'") {
+      var j = i + 1, v = '';
+      while (j < s.length && s.charAt(j) !== c) { if (s.charAt(j) === '\\' && j + 1 < s.length) j++; v += s.charAt(j); j++; }
+      out.push({ t: 'str', v: v }); i = j + 1; continue;
+    }
+    var m = /^\d+(?:\.\d+)?/.exec(s.slice(i));
+    if (m) { out.push({ t: 'num', v: m[0] }); i += m[0].length; continue; }
+    m = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/.exec(s.slice(i));
+    if (m) { out.push({ t: /^(not|and|or|in|is)$/.test(m[0]) ? 'kw' : 'id', v: m[0] }); i += m[0].length; continue; }
+    var two = s.substr(i, 2);
+    if (/^(==|!=|>=|<=|&&|\|\|)$/.test(two)) { out.push({ t: 'op', v: two }); i += 2; continue; }
+    out.push({ t: 'op', v: c }); i++;
+  }
+  return out;
+}
+function _ftIsOp(tk, v) { return !!tk && tk.t === 'op' && tk.v === v; }
+function _ftGroup(toks, i) {
+  var open = toks[i].v, close = open === '(' ? ')' : ']', depth = 0, args = [], cur = [];
+  for (var j = i; j < toks.length; j++) {
+    var tk = toks[j];
+    if (tk.t === 'op' && (tk.v === '(' || tk.v === '[')) { depth++; if (depth === 1) continue; }
+    if (tk.t === 'op' && (tk.v === ')' || tk.v === ']')) { depth--; if (depth === 0) { if (cur.length) args.push(cur); return { args: args, i: j + 1, close: tk.v === close }; } }
+    if (depth === 1 && _ftIsOp(tk, ',')) { args.push(cur); cur = []; continue; }
+    cur.push(tk);
+  }
+  return { args: args, i: toks.length, close: false };
+}
+function _ftStrs(group) {
+
+  var out = [];
+  (group || []).forEach(function (a) { a.forEach(function (tk) { if (tk.t === 'str') out.push(tk.v); }); });
+  return out;
+}
+function _ftChain(toks, i, jinja) {
+  var tk = toks[i];
+  if (!tk) return null;
+  var node;
+  if (tk.t === 'id') node = { path: tk.v };
+  else if (tk.t === 'str') node = { lit: tk.v };
+  else if (tk.t === 'num') node = { num: +tk.v };
+  else if (_ftIsOp(tk, '.')) node = { path: '.' };
+  else if (_ftIsOp(tk, '[')) { var g0 = _ftGroup(toks, i); node = { list: _ftStrs(g0.args) }; i = g0.i - 1; }
+  else return null;
+  i++;
+  while (toks[i] && (_ftIsOp(toks[i], '(') || _ftIsOp(toks[i], '['))) { node.call = true; i = _ftGroup(toks, i).i; }
+  node.filters = [];
+  while (_ftIsOp(toks[i], '|') && toks[i + 1] && toks[i + 1].t === 'id') {
+    var f = { name: toks[i + 1].v, args: [], strs: [] };
+    i += 2;
+    if (jinja) {
+      if (_ftIsOp(toks[i], '(')) { var g = _ftGroup(toks, i); f.args = g.args; f.strs = _ftStrs(g.args); i = g.i; }
+    } else {
+      while (_ftIsOp(toks[i], ':') && toks[i + 1]) { f.args.push([toks[i + 1]]); if (toks[i + 1].t === 'str') f.strs.push(toks[i + 1].v); i += 2; }
+    }
+    node.filters.push(f);
+  }
+  return { node: node, i: i };
+}
+function _ftExpr(src, jinja) {
+  var toks = _ftLex(_ftQuotes(src)), i = 0, neg = false;
+  while (toks[i] && ((toks[i].t === 'kw' && toks[i].v === 'not') || _ftIsOp(toks[i], '!'))) { neg = !neg; i++; }
+  var L = _ftChain(toks, i, jinja);
+  if (!L) return null;
+  i = L.i;
+  if (i >= toks.length) return { neg: neg, left: L.node };
+  var op = toks[i];
+  if (op.t === 'op' && /^(==|!=|>|<|>=|<=)$/.test(op.v)) {
+    var R = _ftChain(toks, i + 1, jinja);
+    if (!R || R.i !== toks.length) return { bad: true };
+    return { neg: neg, left: L.node, op: op.v, right: R.node };
+  }
+  if (op.t === 'kw' && op.v === 'is') {
+    var rest = toks.slice(i + 1).map(function (x) { return x.v; }).join(' ');
+    if (rest === 'defined' || rest === 'not none') return { neg: neg, left: L.node };
+    if (rest === 'not defined' || rest === 'none') return { neg: !neg, left: L.node };
+  }
+  return { bad: true };
+}
+function _ftSevWord(v) {
+  var k = String(v || '').toLowerCase().trim();
+  if (k === 'informational' || k === 'none' || k === 'information') k = 'info';
+  return _FT_SEVS.indexOf(k) >= 0 ? k : '';
+}
+function _ftMigNorm(name) {
+  return String(name == null ? '' : name)
+    .replace(/[_\-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function _ftCustoms() { try { return (typeof _ffCustom === 'function' ? _ffCustom() : []) || []; } catch (e) { return []; } }
+function _ftField(st, label) {
+  var key = _ftMigNorm(label);
+  var hit = _ftCustoms().filter(function (f) { return f && f.label && _ftMigNorm(f.label) === key; })[0];
+  var id = hit ? hit.id : 'mig_' + key.replace(/ /g, '_').slice(0, 40);
+  if (!st.R.fields[id]) st.R.fields[id] = { id: id, label: hit ? hit.label : label, exists: !!hit, enable: !!hit && hit.enabled === false };
+  return 'custom_' + id;
+}
+function _ftPdKey(label, finding) {
+  var k = String(label || '').toLowerCase();
+  try { k = k.normalize('NFD').replace(/[̀-ͯ]/g, ''); } catch (e) {}
+  k = k.replace(/\s/g, '');
+  return finding ? k.replace(/[^\w]/g, '_') : k;
+}
+function _ftCustomByPdKey(st, key) {
+  var hit = _ftCustoms().filter(function (f) { return f && f.label && _ftPdKey(f.label, true) === key; })[0];
+  if (!hit) return '';
+  return _ftField(st, hit.label);
+}
+function _ftSection(name) {
+  var k = _ftMigNorm(name);
+  if (/^(executive summary|exec summary|summary|management summary)$/.test(k)) return 'executive_summary';
+  if (k === 'retest summary' || k === 'retest') return 'retest_summary';
+  if (k === 'caveats' || k === 'notes') return k;
+  var list = [];
+  try { list = (typeof _smCustomEnabled === 'function' ? _smCustomEnabled() : []) || []; } catch (e) {}
+  var cs = list.filter(function (c) { return c && (_ftMigNorm(c.label) === k || _ftPdKey(c.label) === String(name).toLowerCase()); })[0];
+  return cs ? 'custom_summary_' + cs.id : '';
+}
+var _FT_HAS = {
+  cvss: 'has_cvss', cvss_score: 'has_cvss', cvss_vector: 'has_cvss', cwe: 'has_cwe', category: 'has_category',
+  description: 'has_description', remediation: 'has_remediation', evidence_content: 'has_evidence', impact: 'has_impact',
+  retest_results: 'has_retests', retest_status: 'has_retests', phase: 'has_phase',
+  findings: 'has_findings', critical_findings: 'has_critical', high_findings: 'has_high', medium_findings: 'has_medium',
+  low_findings: 'has_low', info_findings: 'has_info', team: 'has_team', testers: 'has_testers', qa_reviewers: 'has_qa_reviewer',
+  scope_items: 'has_scope', client_contacts: 'has_client_contacts', references_list: 'references', executive_summary: 'has_executive_summary',
+  retest_summary: 'has_retest_summary', caveats: 'has_caveats', notes: 'has_notes',
+  total_findings: 'has_findings', critical_count: 'has_critical', high_count: 'has_high', medium_count: 'has_medium',
+  low_count: 'has_low', info_count: 'has_info', team_count: 'has_team', scope_count: 'has_scope'
+};
+function _ftHasKey(key) {
+  if (_FT_HAS[key]) return _FT_HAS[key];
+  var m = /^custom_(?!summary_)(.+)$/.exec(key);
+  if (m) return 'has_custom_' + m[1];
+  if (/^has_|^is_|^same_|^retest_(fixed|part_fixed|not_fixed|accepted)$/.test(key)) return key;
+  return key;
+}
+function _ftDone(st, from, to) {
+  from = String(from).replace(/\s+/g, ' ').trim();
+  if (!st.R.done[from]) st.R.done[from] = to;
+}
+function _ftGone(st, from, why) {
+  from = String(from).replace(/\s+/g, ' ').trim();
+  if (!st.R.gone[from]) st.R.gone[from] = why || 'Pental has nothing that means the same';
+}
+function _ftSevList(sevs) {
+  var set = _FT_SEVS.filter(function (s) { return sevs.indexOf(s) >= 0; });
+  if (!set.length) return _FT_NONE;
+  if (set.length === _FT_SEVS.length) return 'findings';
+  if (set.length === 1) return set[0] + '_findings';
+  return 'findings_' + set.join('_');
+}
+function _ftSlug(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''); }
+function _ftCatList(cats) {
+  var slugs = cats.map(_ftSlug).filter(Boolean);
+  return slugs.length ? 'findings_cat__' + slugs.join('__') : _FT_NONE;
+}
+function _ftCountOf(list) {
+  if (!list || list === _FT_NONE) return '';
+  var m = /^(critical|high|medium|low|info)_findings$/.exec(list);
+  if (m) return m[1] + '_count';
+  var fixed = { findings: 'total_findings', team: 'team_count', scope_items: 'scope_count', testers: 'testers_count', client_contacts: 'client_contacts_count' }[list];
+  if (fixed) return fixed;
+  if (/^findings_/.test(list)) return 'count_' + list;
+  return '';
+}
+function _ftHasOf(list) {
+  if (_FT_HAS[list]) return _FT_HAS[list];
+  if (/^findings_/.test(list)) return 'has_' + list;
+  return '';
+}
+function _ftApplyFilters(st, d, filters) {
+  var out;
+  if (d == null) return { none: 'not a value this could read' };
+  if (typeof d === 'string') out = { key: d };
+  else if (d.none) return { none: d.none, list: d.list ? _FT_NONE : undefined, unknown: !!d.unknown };
+  else if (d.list) out = { list: d.list, ctx: d.ctx, value: d.value };
+  else if (d.rich) out = { key: typeof d.rich === 'string' ? d.rich : _ftField(st, d.rich.field), rich: true };
+  else if (d.field) out = { key: _ftField(st, d.field) };
+  else if (d.shade) out = { shade: true };
+  else if (d.cond) out = { key: d.cond };
+  else if (d.key) out = { key: d.key };
+  else return { none: 'not a value this could read' };
+  out.notes = [];
+  (filters || []).some(function (f) {
+    var n = f.name;
+    if (/^(convertDate|convertDateLocale|format_datetime|safe|e|escape|string|trim|strip_html|striptags|convertHTML|NewLines|s|p|int|float|list)$/.test(n)) return false;
+    if (n === 'changeID') { out.notes.push('numbered the way Pental numbers findings'); return false; }
+    if (n === 'd' || n === 'default') { out.notes.push('without the text it fell back to when empty'); return false; }
+    if (n === 'upper') { out.caps = true; return false; }
+    if (n === 'length' || n === 'count') {
+      var ck = out.list ? _ftCountOf(out.list) : '';
+      if (n === 'count' && out.list === 'findings' && f.strs[0]) { var cs = _ftSevWord(f.strs[0]); ck = cs ? cs + '_count' : ''; }
+      if (!ck) { out = { none: 'a count of something Pental does not count' }; return true; }
+      out = { key: ck, notes: out.notes };
+      return false;
+    }
+    if (n === 'filter_severity' && out.list === 'findings') { out.list = _ftSevList(f.strs.map(_ftSevWord).filter(Boolean)); return false; }
+    if (n === 'filter_type' && out.list === 'findings') { out.list = _ftCatList(f.strs); return false; }
+    if (n === 'selectattr' && f.strs.length >= 3 && /^(finding_type|severity)$/.test(f.strs[0]) && /^(==|eq|equalto)$/.test(f.strs[1])) {
+
+      var cm = /^findings_cat__(.+)$/.exec(out.list || '');
+      if (f.strs[0] === 'severity' && out.list === 'findings') { out.list = _ftSevList([_ftSevWord(f.strs[2])].filter(Boolean)); return false; }
+      if (f.strs[0] === 'finding_type' && (out.list === 'findings' || cm)) {
+        out.list = !cm || cm[1].split('__').indexOf(_ftSlug(f.strs[2])) >= 0 ? _ftCatList([f.strs[2]]) : _FT_NONE;
+        return false;
+      }
+    }
+    if (n === 'where' && out.list === 'findings' && f.strs[0]) {
+      var wx = _ftExpr(f.strs[0], false);
+      var ws = wx && wx.op === '==' && wx.left.path && /(^|\.)(baseSeverity|severity)$/.test(wx.left.path) && wx.right && wx.right.lit != null ? _ftSevWord(wx.right.lit) : '';
+      if (ws) { out.list = _ftSevList([ws]); return false; }
+      out = { none: 'a list narrowed in a way Pental cannot repeat' }; return true;
+    }
+    if (out.list && /^(sort|sortArrayByField|reverse|unique)$/.test(n)) { out.notes.push('in Pental\u2019s order'); return false; }
+    if (out.list && /^(filter_type|filter_tags|selectattr|rejectattr|where|groupBy|select|map|batch|slice)$/.test(n)) {
+      out = { none: 'a list narrowed in a way Pental cannot repeat' }; return true;
+    }
+    if (n === 'join' && out.list) {
+      if (out.value) { out = { key: out.value, notes: out.notes.concat(['one per line']) }; return false; }
+      out = { none: 'a list joined into one line' }; return true;
+    }
+    out.notes.push('without its ' + n + ' filter');
+    return false;
+  });
+  return out;
+}
+function _ftCondTo(st, ex, resolve) {
+  if (!ex || ex.bad) return null;
+  var L = ex.left;
+  var V = L.path ? _ftApplyFilters(st, resolve(L.path), L.filters) : null;
+  var key = V && V.key ? V.key : '';
+  var inv = function (n) { return !!n !== !!ex.neg; };
+  if (ex.op === '==' || ex.op === '!=') {
+    var R = ex.right, lit = R.lit != null ? String(R.lit) : R.num != null ? String(R.num) : null, ne = ex.op === '!=';
+    if (lit != null && /^(severity|severity_title|severity_upper|severity_plain)$/.test(key)) {
+      var sv = _ftSevWord(lit);
+      return sv ? { key: 'is_' + sv, neg: inv(ne) } : { konst: inv(ne) };
+    }
+    if (lit != null && key === 'retest_status' && st.kind === 'pwndoc') {
+      var rk = { ok: 'retest_fixed', ko: 'retest_not_fixed', partial: 'retest_part_fixed' }[lit];
+      return rk ? { key: rk, neg: inv(ne) } : null;
+    }
+    if (lit != null && V && V.lang) return { konst: inv(/^en\b/i.test(lit) === !ne) };
+    if (L.path && /^language$/.test(L.path) && lit != null && st.kind === 'pwndoc') return { konst: inv(/^en\b/i.test(lit) === !ne) };
+    if (R.path && key) {
+      var V2 = _ftApplyFilters(st, resolve(R.path), R.filters);
+      var pair = [key, V2 && V2.key || ''].sort().join('|');
+      if (pair === 'end_year|start_year') return { key: 'same_year', neg: inv(ne) };
+      if (pair === 'end_month|start_month') return { key: 'same_month', neg: inv(ne) };
+    }
+    if (lit != null && (lit === '0' || lit === '') && key && _FT_HAS[key]) return { key: _FT_HAS[key], neg: inv(!ne) };
+    return null;
+  }
+  if (ex.op === '>' || ex.op === '>=') {
+    var n = ex.right.num;
+    if ((ex.op === '>' && n === 0) || (ex.op === '>=' && n === 1)) {
+      var hk = key ? (_FT_HAS[key] || (/^count_(findings_.+)$/.test(key) ? 'has_' + key.slice(6) : '')) : '';
+      if (hk) return { key: hk, neg: !!ex.neg };
+    }
+    return null;
+  }
+  if (ex.op) return null;
+
+  if (!V || V.none) return V && V.none && !V.unknown ? { konst: !!ex.neg, why: V.none } : null;
+  if (V.list) { var hl = _ftHasOf(V.list); return hl ? { key: hl, neg: !!ex.neg } : (V.list === _FT_NONE ? { konst: !!ex.neg, why: 'a list Pental has nothing for' } : null); }
+  if (V.shade) return null;
+  if (key) return { key: _ftHasKey(key), neg: !!ex.neg };
+  return null;
+}
+var _FT_CVSS3 = ['AV', 'AC', 'PR', 'UI', 'S', 'C', 'I', 'A', 'E', 'RL', 'RC', 'CR', 'IR', 'AR', 'MAV', 'MAC', 'MPR', 'MUI', 'MS', 'MC', 'MI', 'MA'];
+var _FT_CVSS4 = ['AV', 'AC', 'AT', 'PR', 'UI', 'VC', 'VI', 'VA', 'SC', 'SI', 'SA', 'S', 'AU', 'R', 'V', 'RE', 'U', 'MAV', 'MAC', 'MAT', 'MPR', 'MUI', 'MVC', 'MVI', 'MVA', 'MSC', 'MSI', 'MSA', 'CR', 'IR', 'AR', 'E'];
+var _FT_NO_LOGO = { none: 'the client\u2019s logo: Pental keeps no logo for a client' };
+var _FT_PD = {
+  root: {
+    name: 'assessment_name', auditType: 'assessment_type', date: 'report_date', date_start: 'start_date', date_end: 'end_date',
+    'company.name': 'client_name', 'company.shortName': 'client_name', 'company.logo': _FT_NO_LOGO, 'company.logo_small': _FT_NO_LOGO,
+    'client.firstname': 'client_contact_first_name', 'client.lastname': 'client_contact_last_name',
+    'client.email': 'client_contact_email', 'client.phone': 'client_contact_phone', 'client.cell': 'client_contact_phone',
+    'client.title': { none: 'the client contact\u2019s job title: Pental does not keep one' },
+    'creator.firstname': 'lead_tester_first_name', 'creator.lastname': 'lead_tester_last_name', 'creator.username': 'lead_tester_name',
+    'creator.email': 'lead_tester_email', 'creator.phone': 'lead_tester_phone', 'creator.role': 'lead_tester_title',
+    language: { lang: true },
+    findings: { list: 'findings', ctx: 'finding' },
+    scope: { list: 'scope_items', ctx: 'scope' },
+    collaborators: { list: 'testers', ctx: 'person' },
+    reviewers: { list: 'qa_reviewers', ctx: 'person' },
+    categories: { list: 'finding_categories', ctx: 'category' },
+    cvss: { obj: true }, cvss4: { obj: true }, company: { obj: true }, client: { obj: true }, creator: { obj: true }
+  },
+  scope: { name: 'item', hosts: { none: 'a scope entry\u2019s hosts and services: Pental keeps each entry as one line', list: true } },
+  person: { firstname: 'first_name', lastname: 'last_name', username: 'name', email: 'email', phone: 'phone', jobTitle: 'title', role: 'title' },
+  category: { categoryName: 'category_name', categoryFindings: { list: 'category_findings', ctx: 'finding' } },
+  reference: { '.': 'reference', 'this': 'reference' },
+  finding: {
+    title: 'title', category: 'category', identifier: 'finding_code', affected: 'affected_hosts',
+    vulnType: { field: 'Vulnerability type' },
+    description: { rich: 'description' }, observation: { rich: { field: 'Observation' } }, remediation: { rich: 'remediation' },
+    poc: { rich: 'evidence_content' }, retestDescription: { rich: 'retest_results' },
+    remediationComplexity: { field: 'Remediation complexity' }, priority: { field: 'Remediation priority' },
+    references: { list: 'references_list', ctx: 'reference', value: 'references' },
+    retestStatus: 'retest_status',
+    status: { none: 'whether the finding was still being written in PwnDoc' },
+    cvss: { obj: true, cond: 'has_cvss' }, cvss4: { obj: true, cond: 'has_cvss' }, cvssObj: { obj: true }, cvss4Obj: { obj: true },
+    'cvss.vectorString': 'cvss_vector', 'cvss.baseMetricScore': 'cvss_score', 'cvss.baseSeverity': 'severity_title',
+    'cvss.cellColor': { shade: true }, 'cvss.temporalCellColor': { shade: true }, 'cvss.environmentalCellColor': { shade: true },
+    'cvss.temporalMetricScore': { none: 'a temporal CVSS score: Pental keeps the base score' },
+    'cvss.temporalSeverity': { none: 'a temporal CVSS severity: Pental keeps the base score' },
+    'cvss.environmentalMetricScore': { none: 'an environmental CVSS score: Pental keeps the base score' },
+    'cvss.environmentalSeverity': { none: 'an environmental CVSS severity: Pental keeps the base score' },
+    'cvss4.vectorString': 'cvss_vector', 'cvss4.baseScore': 'cvss_score', 'cvss4.baseSeverity': 'severity_title', 'cvss4.cellColor': { shade: true }
+  }
+};
+function _ftPdLook(st, ctx, path) {
+  var T = _FT_PD[ctx] || {};
+  if (Object.prototype.hasOwnProperty.call(T, path)) return T[path];
+  if (ctx === 'finding') {
+    var m = /^(cvss4?)Obj\.(\w+)$/.exec(path);
+    if (m) {
+      var keys = m[1] === 'cvss4' ? _FT_CVSS4 : _FT_CVSS3;
+      return keys.indexOf(m[2]) >= 0 ? (m[1] === 'cvss4' ? 'cvss4_' : 'cvss_') + m[2].toLowerCase() : null;
+    }
+    if (/^\w+$/.test(path) && !Object.prototype.hasOwnProperty.call(_FT_PD.root, path)) {
+      var c = _ftCustomByPdKey(st, path);
+      if (c) return c;
+    }
+  }
+  if (ctx === 'root') {
+    var sm = /^(\w+)\.(\w+)$/.exec(path);
+    if (sm && !/^(company|client|creator|cvss|cvss4|cvssObj|cvss4Obj|findings|scope)$/.test(sm[1])) {
+      var sec = _ftSection(sm[1]);
+      if (sm[2] === 'name') return sec === 'executive_summary' ? 'heading_exec_summary' : { none: 'a section\u2019s name' };
+      return sec ? { rich: sec } : null;
+    }
+    if (/^\w+$/.test(path)) { var s2 = _ftSection(path); if (s2) return { rich: s2 }; }
+  }
+  return null;
+}
+function _ftPdResolve(st, path) {
+  for (var i = st.stack.length - 1; i >= 0; i--) {
+    var fr = st.stack[i];
+    if (fr.obj) { var d0 = _ftPdLook(st, fr.objCtx, fr.obj + '.' + path); if (d0) return d0; continue; }
+    if (!fr.ctx) continue;
+    var d = _ftPdLook(st, fr.ctx, path);
+    if (d) return d;
+  }
+  return null;
+}
+function _ftAlone(t) { return t.P.tagCount === 1 && t.P.orig.replace(/\s+/g, '') === t.raw.replace(/\s+/g, ''); }
+function _ftPdTag(st, t) {
+  var body = _ftQuotes(t.body).trim(), c0 = body.charAt(0);
+  var top = st.stack[st.stack.length - 1];
+  var resolve = function (p) { return _ftPdResolve(st, p); };
+
+  if (top.drop) {
+    t.rep = '';
+    if (c0 === '#' || c0 === '^' || /^-w:/.test(body)) st.stack.push({ drop: true, open: t });
+    else if (c0 === '/') { var fr0 = st.stack.pop(); if (!st.stack[st.stack.length - 1].drop) _ftDropRange(st, fr0.open, t); }
+    return;
+  }
+  if (c0 === '@') {
+    var inner = body.slice(1).trim();
+    t.only = true;
+    if (inner === '$pageBreakExceptLast') {
+      var lp = null;
+      for (var k = st.stack.length - 1; k >= 0 && !lp; k--) if (st.stack[k].list) lp = st.stack[k].list;
+      if (lp === 'findings') { t.rep = ''; t.pageBreakUnlessLast = true; _ftDone(st, t.raw, 'a page break after each finding but the last'); }
+      else { t.rep = ''; _ftGone(st, t.raw, 'a page break between items of a list Pental numbers differently'); }
+      return;
+    }
+    var ex = _ftExpr(inner, false);
+    if (top.rich && ex && !ex.op && ex.left.path === 'text') {
+      t.rep = '{' + top.richKey + '}';
+      _ftDone(st, '{#' + top.src + '}{@text | convertHTML}{#images}\u2026{/' + top.src + '}', t.rep);
+      return;
+    }
+    var v = ex && !ex.op && !ex.bad && ex.left.path ? _ftApplyFilters(st, resolve(ex.left.path), ex.left.filters) : null;
+    if (v && v.shade) { t.rep = '{severity_shade}'; _ftDone(st, t.raw, 'the cell shaded in the finding\u2019s severity colour'); return; }
+    if (v && v.key) { t.rep = '{' + v.key + '}'; _ftDone(st, t.raw, t.rep); return; }
+    t.rep = ''; _ftGone(st, t.raw, v && v.none);
+    return;
+  }
+  if (c0 === '%') {
+    var nm = body.replace(/^%+/, '').trim();
+    t.rep = '';
+    var dn = nm === 'image' ? null : resolve(nm);
+    _ftGone(st, t.raw, nm === 'image' ? 'a field\u2019s pictures, which Pental places with the field' : (dn && dn.none) || 'a picture Pental has no value for');
+    return;
+  }
+  var dash = /^-(w:\w+)\s+([\s\S]+)$/.exec(body);
+  if (c0 === '#' || c0 === '^' || dash) {
+    var inv = c0 === '^';
+    var src = dash ? dash[2].trim() : body.slice(1).trim();
+    var pre = dash ? '-' + dash[1] + ' ' : '';
+    var ex2 = _ftExpr(src, false);
+    var plain = ex2 && !ex2.bad && !ex2.op && ex2.left.path;
+    if (top.rich && plain && ex2.left.path === 'images') { t.rep = ''; st.stack.push({ drop: true, open: t }); return; }
+    var d = plain ? resolve(ex2.left.path) : null;
+    if (d && d.rich && !inv && !dash && !ex2.left.filters.length) {
+      var rk = typeof d.rich === 'string' ? d.rich : _ftField(st, d.rich.field);
+      st.stack.push({ rich: true, richKey: rk, src: src, ctx: 'block', open: t });
+      t.rep = '';
+      st.ops.dropIfEmpty.push(t.P);
+      return;
+    }
+    if (d && d.obj && !ex2.left.filters.length) {
+
+      var ok = d.cond || _FT_HAS[ex2.left.path] || '';
+      var frame = { obj: ex2.left.path, objCtx: _FT_PD.finding[ex2.left.path] ? 'finding' : 'root', src: src, open: t };
+      if (ok && !dash) { t.rep = '{' + (inv ? '^' : '#') + ok + '}'; frame.close = '{/' + ok + '}'; }
+      else { t.rep = ''; frame.close = ''; }
+      st.stack.push(frame);
+      return;
+    }
+    var v2 = plain ? _ftApplyFilters(st, d, ex2.left.filters) : null;
+    if (v2 && v2.list) {
+      st.stack.push({ src: src, ctx: v2.ctx || null, list: v2.list, close: '{/' + v2.list + '}', open: t });
+      t.rep = '{' + (pre || (inv ? '^' : '#')) + v2.list + '}';
+      if (v2.list === _FT_NONE) _ftGone(st, t.raw, d && d.none);
+      else _ftDone(st, t.raw, t.rep);
+      return;
+    }
+    var c = _ftCondTo(st, ex2, resolve);
+    var fr = { src: src, open: t };
+    if (c && c.key && !(dash && c.neg)) {
+      t.rep = '{' + (pre || ((!!c.neg !== inv) ? '^' : '#')) + c.key + '}';
+      fr.close = '{/' + c.key + '}';
+      _ftDone(st, t.raw, t.rep);
+    } else if (c && c.konst !== undefined && c.konst !== inv) {
+      t.rep = ''; fr.close = '';
+      if (c.why) _ftGone(st, t.raw, c.why); else _ftDone(st, t.raw, 'always shown');
+    } else {
+      t.rep = '{' + (pre || '#') + _FT_NONE + '}'; fr.close = '{/' + _FT_NONE + '}';
+      if (c && c.konst !== undefined && !c.why) _ftDone(st, t.raw, 'never shown');
+      else _ftGone(st, t.raw, c && c.why ? c.why : 'a condition Pental cannot answer, so what it holds is left out');
+    }
+    st.stack.push(fr);
+    return;
+  }
+  if (c0 === '/') {
+    var f2 = st.stack.length > 1 ? st.stack.pop() : null;
+    if (!f2) { t.rep = ''; return; }
+    if (f2.rich) { t.rep = ''; st.ops.dropIfEmpty.push(t.P); return; }
+    t.rep = f2.close || '';
+    if (!f2.close && _ftAlone(f2.open) && _ftAlone(t)) { st.ops.dropIfEmpty.push(f2.open.P); st.ops.dropIfEmpty.push(t.P); }
+    return;
+  }
+
+  var ex3 = _ftExpr(body, false);
+  if (top.rich && ex3 && !ex3.op && ex3.left.path === 'text') { t.rep = '{' + top.richKey + '}'; t.only = true; return; }
+  if (ex3 && !ex3.op && !ex3.bad && ex3.left.lit != null) { t.rep = /[{}]/.test(ex3.left.lit) ? '' : ex3.left.lit; return; }
+  var v3 = ex3 && !ex3.op && !ex3.bad && ex3.left.path ? _ftApplyFilters(st, resolve(ex3.left.path), ex3.left.filters) : null;
+  if (v3 && v3.key) {
+    t.rep = '{' + v3.key + '}';
+    if (v3.caps) t.caps = true;
+    _ftDone(st, t.raw, t.rep + (v3.notes && v3.notes.length ? ', ' + v3.notes.join(', ') : ''));
+    return;
+  }
+  t.rep = '';
+  _ftGone(st, t.raw, v3 && v3.none);
+}
+function _ftDropRange(st, a, b) {
+  if (a.P === b.P) { st.ops.cuts.push({ P: a.P, s: a.s, e: b.e }); st.ops.dropIfEmpty.push(a.P); return; }
+  st.ops.cuts.push({ P: a.P, s: a.s, e: a.P.orig.length });
+  st.ops.cuts.push({ P: b.P, s: 0, e: b.e });
+  for (var i = a.pi + 1; i < b.pi; i++) st.ops.dropAlways.push(st.paras[i]);
+  st.ops.dropIfEmpty.push(a.P);
+  st.ops.dropIfEmpty.push(b.P);
+}
+var _FT_GW = {
+  root: {
+    title: 'assessment_name', report_date: 'report_date',
+    'project.name': 'assessment_name', 'project.type': 'assessment_type',
+    'project.start_date': 'start_date', 'project.end_date': 'end_date',
+    'project.start_day': 'start_day', 'project.start_month': 'start_month', 'project.start_year': 'start_year',
+    'project.end_day': 'end_day', 'project.end_month': 'end_month', 'project.end_year': 'end_year',
+    'client.name': 'client_name', 'client.short_name': 'client_name', 'client.address': 'client_address',
+    'client.contacts': { list: 'client_contacts', ctx: 'contact' }, contacts: { list: 'client_contacts', ctx: 'contact' },
+    'recipient.name': 'client_contact_name', 'recipient.email': 'client_contact_email', 'recipient.phone': 'client_contact_phone',
+    'company.name': 'company_name', 'company.short_name': 'company_name', 'company.email': 'company_email', 'company.address': 'company_address',
+    team: { list: 'team', ctx: 'member' }, findings: { list: 'findings', ctx: 'finding' },
+    'totals.findings': 'total_findings', 'totals.findings_critical': 'critical_count', 'totals.findings_high': 'high_count',
+    'totals.findings_medium': 'medium_count', 'totals.findings_low': 'low_count', 'totals.findings_info': 'info_count',
+    'totals.team': 'team_count', 'totals.scope': 'scope_count'
+  },
+  contact: { name: 'name', job_title: 'title', email: 'email', phone: 'phone' },
+  member: { name: 'name', role: 'role', email: 'email', phone: 'phone' },
+  finding: {
+
+    title: 'title', severity: 'severity_plain', severity_rt: 'severity', severity_color: 'severity_color',
+    cvss_score: 'cvss_score', cvss_vector: 'cvss_vector', finding_type: 'category', position: 'finding_index',
+    affected_entities: 'affected_hosts', description: { rich: 'description' }, impact: { rich: { field: 'Impact' } },
+    mitigation: { rich: 'remediation' }, recommendation: { rich: 'remediation' }, replication_steps: { rich: 'evidence_content' },
+    host_detection_techniques: { rich: { field: 'Host detection techniques' } },
+    network_detection_techniques: { rich: { field: 'Network detection techniques' } },
+    references: 'references', tags: { field: 'Tags' }
+  }
+};
+var _FT_GW_ABSENT = [
+  [/^(objectives|totals\.objectives(_completed)?)\b/, 'Ghostwriter’s objectives'],
+  [/^(targets|totals\.targets)\b/, 'Ghostwriter’s targets'],
+  [/^infrastructure\b/, 'a red team’s infrastructure'],
+  [/^(deconflictions|whitecards)\b/, 'deconfliction and white card records'],
+  [/^(logs|tools)\b/, 'operation logs'],
+  [/^bloodhound\b/, 'BloodHound results'],
+  [/^observations\b/, 'Ghostwriter’s observations'],
+  [/^evidence\b/, 'the list of every evidence file'],
+  [/^severities\b/, 'Ghostwriter’s list of severities'],
+  [/^scope\b/, 'Ghostwriter’s scope lists'],
+  [/^(extra_fields|project\.extra_fields|client\.extra_fields)\b/, 'a report, project or client extra field'],
+  [/^(docx_template|pptx_template)\b/, 'the template’s own settings'],
+  [/^project\./, 'that project detail'],
+  [/^client\./, 'that client detail'],
+  [/^(recipient|company)\./, 'that contact detail']
+];
+function _ftGwIn(st, ctx, path) {
+  var T = _FT_GW[ctx] || {}, p2 = String(path).replace(/_rt$/, '');
+  if (Object.prototype.hasOwnProperty.call(T, path)) return T[path];
+  if (Object.prototype.hasOwnProperty.call(T, p2)) return T[p2];
+  if (ctx === 'finding') {
+    var m = /^extra_fields\.(\w+)$/.exec(p2);
+    if (m) return /cwe/i.test(m[1]) ? 'cwe' : { field: m[1].replace(/_/g, ' ').replace(/^\w/, function (c) { return c.toUpperCase(); }) };
+    return { none: 'that finding detail: Pental has nothing that means the same' };
+  }
+  if (ctx === 'contact' || ctx === 'member') return { none: 'that detail of a person: Pental does not keep it' };
+  if (ctx === 'root') {
+    for (var i = 0; i < _FT_GW_ABSENT.length; i++) {
+      if (_FT_GW_ABSENT[i][0].test(path)) return { none: _FT_GW_ABSENT[i][1] + ': Pental has nothing that means the same', list: true };
+    }
+  }
+  return null;
+}
+function _ftGwResolve(st, path) {
+  var parts = String(path).split('.'), head = parts[0], rest = parts.slice(1).join('.');
+  for (var i = st.stack.length - 1; i >= 0; i--) {
+    var fr = st.stack[i];
+    if (fr.alias && Object.prototype.hasOwnProperty.call(fr.alias, head)) {
+      var a = fr.alias[head];
+      if (!rest) return a;
+      return a && a.ctx ? _ftGwIn(st, a.ctx, rest) : { none: 'part of a value this could not read' };
+    }
+    if (fr.vars && fr.vars.indexOf(head) >= 0) {
+      if (fr.vars.length > 1 || !fr.ctx) return { none: 'an item of a list Pental has nothing for' };
+      if (!rest) return { none: 'a whole item rather than one of its values' };
+      return _ftGwIn(st, fr.ctx, rest);
+    }
+  }
+  if (head === 'loop') {
+    var lf = null;
+    for (var j = st.stack.length - 1; j >= 0 && !lf; j--) if (st.stack[j].vars) lf = st.stack[j];
+    if (lf && lf.list === 'findings') {
+      if (rest === 'index') return 'finding_index';
+      if (rest === 'first') return 'is_first';
+      if (rest === 'last') return 'is_last';
+    }
+    return { none: 'a loop counter Pental does not keep for this list', unknown: true };
+  }
+  return _ftGwIn(st, 'root', path);
+}
+function _ftGwPut(st, t, fr, close, open) {
+  if (t.prefix === 'tr' && _ftUp(t.P.p, 'tr')) {
+    var row = _ftUp(t.P.p, 'tr');
+    if (st.ops.rows.indexOf(row) < 0) st.ops.rows.push(row);
+    if (fr.rowBranch) { fr.rowBranch.endRow = row; fr.rowBranch.close = close; st.ops.rowBlocks.push(fr.rowBranch); fr.rowBranch = null; }
+    if (open) fr.rowBranch = { startRow: row, open: open };
+    t.rep = '';
+    return;
+  }
+  t.rep = (close || '') + (open || '');
+  if (t.prefix === 'p') t.only = true;
+  if (!t.prefix && !t.dashed && close && fr.inlineOpen && /^\{\/[\w]+\}$/.test(close)) st.ops.pairs.push({ a: fr.inlineOpen, b: t });
+  fr.inlineOpen = (!t.prefix && !t.dashed && open && /^\{[#^][\w]+\}$/.test(open) && !close) ? t : null;
+}
+function _ftGwBranchOpen(c) {
+
+  if (c && c.key) return { open: '{' + (c.neg ? '^' : '#') + c.key + '}', key: c.key, neg: !!c.neg };
+  if (c && c.konst === true) return { open: '', key: '', show: true };
+  return { open: '{#' + _FT_NONE + '}', key: _FT_NONE, neg: false };
+}
+function _ftGwTag(st, t) {
+  var raw = t.body;
+  var pm = /^(tr|tc|p|r) /.exec(raw);
+  t.prefix = pm ? pm[1] : '';
+  var inner = raw.slice(pm ? pm[0].length : 0);
+  t.dashed = /^-/.test(inner) || /-$/.test(inner);
+  var body = _ftQuotes(inner).replace(/^-/, '').replace(/-$/, '').trim();
+  var resolve = function (p) { return _ftGwResolve(st, p); };
+  var top = st.stack[st.stack.length - 1];
+  if (t.type === 'comment') {
+    t.rep = '';
+    if (t.prefix === 'tr' && _ftUp(t.P.p, 'tr')) st.ops.rows.push(_ftUp(t.P.p, 'tr'));
+    else if (t.prefix === 'p' || t.dashed) { t.only = true; st.ops.dropIfEmpty.push(t.P); }
+    return;
+  }
+  if (t.type === 'expr') {
+    var pc = /^totals\.findings_(critical|high|medium|low|info)\s*\/\s*totals\.findings\s*\*\s*100(\s*\|\s*(round|int)(\([^)]*\))?)?$/.exec(body);
+    if (pc && t.prefix !== 'tr' && t.prefix !== 'tc') {
+      t.rep = '{' + pc[1] + '_percent}';
+      if (t.prefix === 'p') t.only = true;
+      _ftDone(st, t.raw, t.rep + ', to the nearest whole number');
+      return;
+    }
+    var ex = _ftExpr(body, true);
+    if (t.prefix === 'tr' || t.prefix === 'tc') { t.rep = ''; _ftGone(st, t.raw, 'a value standing for a whole row or cell'); return; }
+    if (ex && !ex.op && !ex.bad && ex.left.lit != null && !ex.left.filters.length) {
+      if (/[{}]/.test(ex.left.lit)) { t.rep = ''; _ftGone(st, t.raw, 'literal braces, which Pental would read as a placeholder'); }
+      else t.rep = ex.left.lit;
+      if (t.prefix === 'p') t.only = true;
+      return;
+    }
+    var v = ex && !ex.op && !ex.bad && ex.left.path ? _ftApplyFilters(st, resolve(ex.left.path), ex.left.filters) : null;
+    if (t.prefix === 'p') t.only = true;
+    if (!v || !v.key) { t.rep = ''; _ftGone(st, t.raw, v && v.none ? v.none : (v && v.list ? 'a whole list printed as text' : 'an expression this could not read')); return; }
+    t.rep = '{' + v.key + '}';
+    if (v.caps) t.caps = true;
+    _ftDone(st, t.raw, t.rep + (v.notes && v.notes.length ? ', ' + v.notes.join(', ') : ''));
+    return;
+  }
+
+  var kw = (/^(\w+)/.exec(body) || ['', ''])[1], rest = body.slice(kw.length).trim();
+  var fr, c, b;
+  if (kw === 'for') {
+    var m = /^([\w\s,]+?)\s+in\s+([\s\S]+?)(\s+if\s+[\s\S]+?)?(\s+recursive)?$/.exec(rest);
+    var vars = m ? m[1].split(',').map(function (x) { return x.trim(); }).filter(Boolean) : [];
+    var ex2 = m ? _ftExpr(m[2], true) : null;
+    var v2 = ex2 && !ex2.op && !ex2.bad && ex2.left.path ? _ftApplyFilters(st, resolve(ex2.left.path), ex2.left.filters) : null;
+    var list = v2 && v2.list && !(m && m[3]) && vars.length === 1 ? v2.list : _FT_NONE;
+    fr = { kind: 'for', vars: vars, ctx: v2 && v2.ctx, list: list, open: t };
+    st.stack.push(fr);
+    _ftGwPut(st, t, fr, '', '{#' + list + '}');
+    if (list === _FT_NONE) _ftGone(st, t.raw, v2 && v2.none ? v2.none : 'a loop over something Pental has nothing for');
+    else _ftDone(st, t.raw, '{#' + list + '}' + (v2.notes && v2.notes.length ? ', ' + v2.notes.join(', ') : ''));
+    return;
+  }
+  if (kw === 'if') {
+    c = _ftCondTo(st, _ftExpr(rest, true), resolve);
+    b = _ftGwBranchOpen(c);
+    fr = { kind: 'if', cur: b, closes: [], open: t };
+    st.stack.push(fr);
+    _ftGwPut(st, t, fr, '', b.open);
+    if (!c || c.why) _ftGone(st, t.raw, c && c.why ? c.why : 'a condition Pental cannot answer, so what it holds is left out');
+    else _ftDone(st, t.raw, b.open || 'always shown');
+    return;
+  }
+  if (kw === 'elif' || kw === 'else') {
+    fr = top && top.kind === 'if' ? top : null;
+    if (!fr) { t.rep = ''; return; }
+    var prev = fr.cur, close = prev.key ? '{/' + prev.key + '}' : '';
+
+    var rest1 = prev.show ? { open: '{#' + _FT_NONE + '}', key: _FT_NONE } : (prev.key === _FT_NONE ? { open: '', key: '', show: true } : { open: '{' + (prev.neg ? '#' : '^') + prev.key + '}', key: prev.key, neg: !prev.neg });
+    if (kw === 'else') { fr.cur = rest1; _ftGwPut(st, t, fr, close, rest1.open); return; }
+    c = _ftCondTo(st, _ftExpr(rest, true), resolve);
+    b = _ftGwBranchOpen(c);
+    if (!c || c.why) _ftGone(st, t.raw, c && c.why ? c.why : 'a condition Pental cannot answer, so what it holds is left out');
+    if (rest1.key) fr.closes.push('{/' + rest1.key + '}');
+    fr.cur = b;
+    _ftGwPut(st, t, fr, close, (rest1.open || '') + b.open);
+    return;
+  }
+  if (kw === 'endif' || kw === 'endfor') {
+    var want = kw === 'endif' ? 'if' : 'for';
+    while (st.stack.length > 1 && st.stack[st.stack.length - 1].kind !== want) st.stack.pop();
+    fr = st.stack.length > 1 ? st.stack.pop() : null;
+    if (!fr) { t.rep = ''; return; }
+    var cl = fr.kind === 'for' ? '{/' + fr.list + '}' : (fr.cur.key ? '{/' + fr.cur.key + '}' : '');
+    _ftGwPut(st, t, fr, cl + (fr.closes || []).slice().reverse().join(''), '');
+    return;
+  }
+  if (kw === 'set' || kw === 'with') {
+
+    var sm = /^(\w+)\s*=\s*([\s\S]+)$/.exec(rest);
+    var al = {};
+    if (sm) {
+      var ex3 = _ftExpr(sm[2], true);
+      var v3 = ex3 && !ex3.op && !ex3.bad && ex3.left.path ? _ftApplyFilters(st, resolve(ex3.left.path), ex3.left.filters) : null;
+      al[sm[1]] = !v3 || v3.none ? { none: 'something worked out in the template that Pental cannot repeat' } : (v3.list ? { list: v3.list, ctx: v3.ctx } : v3.key);
+    }
+    if (kw === 'with') st.stack.push({ kind: 'with', alias: al, open: t });
+    else { top.alias = top.alias || {}; Object.keys(al).forEach(function (k) { top.alias[k] = al[k]; }); }
+    t.rep = '';
+    if (t.prefix === 'p' || t.dashed) { t.only = true; st.ops.dropIfEmpty.push(t.P); }
+    if (t.prefix === 'tr' && _ftUp(t.P.p, 'tr')) st.ops.rows.push(_ftUp(t.P.p, 'tr'));
+    return;
+  }
+  if (kw === 'endwith') {
+    if (top.kind === 'with') st.stack.pop();
+    t.rep = '';
+    if (t.prefix === 'p' || t.dashed) { t.only = true; st.ops.dropIfEmpty.push(t.P); }
+    if (t.prefix === 'tr' && _ftUp(t.P.p, 'tr')) st.ops.rows.push(_ftUp(t.P.p, 'tr'));
+    return;
+  }
+  if (kw === 'cellbg') {
+    var ex4 = _ftExpr(rest, true);
+    var v4 = ex4 && !ex4.op && !ex4.bad && ex4.left.path ? _ftApplyFilters(st, resolve(ex4.left.path), ex4.left.filters) : null;
+    if (v4 && v4.key === 'severity_color') { t.rep = '{severity_shade}'; _ftDone(st, t.raw, 'the cell shaded in the finding’s severity colour'); return; }
+    var hex = ex4 && ex4.left && ex4.left.lit != null ? String(ex4.left.lit).replace(/^#/, '') : '';
+    if (/^[0-9a-fA-F]{6}$/.test(hex)) { t.rep = ''; st.ops.fills.push({ P: t.P, hex: hex.toUpperCase() }); _ftDone(st, t.raw, 'the cell shaded #' + hex.toUpperCase()); return; }
+    t.rep = ''; _ftGone(st, t.raw, 'a cell colour Pental has no value for');
+    return;
+  }
+
+  t.rep = '';
+  _ftGone(st, t.raw, /^(colspan|vm|hm)$/.test(kw) ? 'a merged cell, which stays as the template has it' : 'a statement Pental cannot repeat');
+  if (t.prefix === 'p' || t.dashed) { t.only = true; st.ops.dropIfEmpty.push(t.P); }
+}
+function _ftCellsOf(tr) {
+  var all = tr.getElementsByTagNameNS(_FT_W, 'tc'), out = [];
+  for (var i = 0; i < all.length; i++) if (_ftUp(all[i], 'tr') === tr) out.push(all[i]);
+  return out;
+}
+function _ftParaWith(like, text) {
+  var q = _ftEmptyLike(like), doc = like.ownerDocument;
+  var r = doc.createElementNS(_FT_W, 'w:r'), tn = doc.createElementNS(_FT_W, 'w:t');
+  _ftSetText(tn, text);
+  r.appendChild(tn);
+  q.appendChild(r);
+  return q;
+}
+function _ftRowBlock(st, b, add) {
+  if (!b.startRow || !b.endRow) return;
+  var rows = [];
+  for (var r = b.startRow.nextSibling; r && r !== b.endRow; r = r.nextSibling) if (_ftIs(r, 'tr')) rows.push(r);
+  if (!rows.length) return;
+  var open = b.open || '', close = b.close || '';
+  var m1 = /^\{#(\w+)\}$/.exec(open), m2 = /^\{\/(\w+)\}$/.exec(close);
+  if (rows.length === 1 && _ftCellsOf(rows[0]).length === 1 && m1 && m2 && m1[1] === m2[1]) open = '{-w:tr ' + m1[1] + '}';
+  var c1 = _ftCellsOf(rows[0])[0], cN = _ftCellsOf(rows[rows.length - 1]).slice(-1)[0];
+  var p1 = c1 && c1.getElementsByTagNameNS(_FT_W, 'p')[0];
+  var pNs = cN && cN.getElementsByTagNameNS(_FT_W, 'p'), pN = pNs && pNs[pNs.length - 1];
+  var P1 = p1 && st.byEl.get(p1), PN = pN && st.byEl.get(pN);
+  if (open && P1) add(P1, { s: 0, e: 0, rep: open });
+  if (close && PN) add(PN, { s: PN.orig.length, e: PN.orig.length, rep: close });
+}
+function _ftIsolate(node, at, len) {
+  var t = node.textContent, run = _ftUp(node, 'r');
+  if (!run || (at === 0 && len === t.length)) return node;
+  var mk = function (txt) {
+    var r2 = run.cloneNode(true);
+    var ts = r2.getElementsByTagNameNS(_FT_W, 't');
+    for (var i = ts.length - 1; i >= 1; i--) ts[i].parentNode.removeChild(ts[i]);
+    _ftSetText(ts[0], txt);
+    return r2;
+  };
+  if (run.getElementsByTagNameNS(_FT_W, 't').length !== 1) return node;
+  var before = t.slice(0, at), mid = t.slice(at, at + len), after = t.slice(at + len);
+  var par = run.parentNode;
+  if (before) par.insertBefore(mk(before), run);
+  if (after) par.insertBefore(mk(after), run.nextSibling);
+  _ftSetText(node, mid);
+  return node;
+}
+function _ftCaps(node) {
+  var run = _ftUp(node, 'r');
+  if (!run) return;
+  var doc = run.ownerDocument, rPr = _ftKids(run, 'rPr')[0];
+  if (!rPr) { rPr = doc.createElementNS(_FT_W, 'w:rPr'); run.insertBefore(rPr, run.firstChild); }
+  if (_ftKids(rPr, 'caps').length) return;
+  var caps = doc.createElementNS(_FT_W, 'w:caps');
+
+  var after = ['rStyle', 'rFonts', 'b', 'bCs', 'i', 'iCs'], ref = null;
+  for (var c = rPr.firstChild; c; c = c.nextSibling) { if (c.nodeType === 1 && after.indexOf(c.localName) < 0) { ref = c; break; } }
+  rPr.insertBefore(caps, ref);
+}
+function _ftFill(p, hex) {
+  var tc = _ftUp(p, 'tc');
+  if (!tc) return;
+  var doc = tc.ownerDocument, tcPr = _ftKids(tc, 'tcPr')[0];
+  if (!tcPr) { tcPr = doc.createElementNS(_FT_W, 'w:tcPr'); tc.insertBefore(tcPr, tc.firstChild); }
+  _ftKids(tcPr, 'shd').forEach(function (x) { tcPr.removeChild(x); });
+  var shd = doc.createElementNS(_FT_W, 'w:shd');
+  shd.setAttributeNS(_FT_W, 'w:val', 'clear');
+  shd.setAttributeNS(_FT_W, 'w:color', 'auto');
+  shd.setAttributeNS(_FT_W, 'w:fill', hex);
+  var later = ['noWrap', 'tcMar', 'textDirection', 'tcFitText', 'vAlign', 'hideMark', 'headers', 'cellIns', 'cellDel', 'cellMerge', 'tcPrChange'], ref = null;
+  for (var c = tcPr.firstChild; c; c = c.nextSibling) { if (c.nodeType === 1 && later.indexOf(c.localName) >= 0) { ref = c; break; } }
+  tcPr.insertBefore(shd, ref);
+}
+function _ftApply(st) {
+  var byPara = new Map(), seq = 0;
+  var D = st.alt ? function (x) { return String(x).replace(/\{/g, '\u27E6').replace(/\}/g, '\u27E7'); } : function (x) { return x; };
+  var add = function (P, ed) { ed.seq = seq++; ed.rep = D(ed.rep); var a = byPara.get(P); if (!a) { a = []; byPara.set(P, a); } a.push(ed); };
+  st.ops.cuts.forEach(function (c) {
+    st.tags.forEach(function (t) { if (t.P === c.P && t.s >= c.s && t.e <= c.e) t.skip = true; });
+    add(c.P, { s: c.s, e: c.e, rep: '' });
+  });
+  st.ops.rowBlocks.forEach(function (b) { _ftRowBlock(st, b, add); });
+  st.tags.forEach(function (t) {
+    if (t.skip || t.rep == null) return;
+    add(t.P, t.only ? { only: true, rep: t.rep, t: t } : { s: t.s, e: t.e, rep: t.rep, t: t });
+    if (t.only && !t.rep && !t.pageBreakUnlessLast) st.ops.dropIfEmpty.push(t.P);
+  });
+  byPara.forEach(function (eds, P) {
+    var only = eds.filter(function (x) { return x.only; })[0];
+    if (only) {
+
+      var ins = eds.filter(function (x) { return !x.only && !x.t; });
+      var txt = ins.filter(function (x) { return x.s === 0; }).map(function (x) { return x.rep; }).join('') + only.rep
+        + ins.filter(function (x) { return x.s !== 0; }).map(function (x) { return x.rep; }).join('');
+      var o = _ftSplice(P, 0, P.text.length, txt);
+      if (only.t && only.t.caps && o) _ftCaps(o);
+
+      var wm = only.t && !ins.length && /^\{(\w+)\}$/.exec(only.t.rep || '');
+      if (wm && wm[1] !== 'severity_shade' && P.p.parentNode) {
+        var H = _ftHasKey(wm[1]);
+        P.p.parentNode.insertBefore(_ftParaWith(P.p, D('{#' + H + '}')), P.p);
+        P.p.parentNode.insertBefore(_ftParaWith(P.p, D('{/' + H + '}')), P.p.nextSibling);
+      }
+      return;
+    }
+    eds.sort(function (x, y) { return (y.s - x.s) || (y.e - x.e) || (y.seq - x.seq); });
+    eds.forEach(function (x) {
+      var node = _ftSplice(P, x.s, x.e, x.rep);
+      if (x.t && x.t.caps && node && x.rep) {
+        var at = node.textContent.indexOf(x.rep);
+        if (at >= 0) _ftCaps(_ftIsolate(node, at, x.rep.length));
+      }
+    });
+  });
+
+  st.ops.pairs.forEach(function (pr) {
+    var A = pr.a.P, B = pr.b.P;
+    if (A === B || _ftUp(A.p, 'tc') !== _ftUp(B.p, 'tc')) return;
+    var ra = D(pr.a.rep), rb = D(pr.b.rep);
+    if (A.text.trim() !== ra || B.text.trim() !== rb) return;
+    if (A.text !== ra) _ftSplice(A, 0, A.text.length, ra);
+    if (B.text !== rb) _ftSplice(B, 0, B.text.length, rb);
+    A.p.parentNode.insertBefore(_ftEmptyLike(A.p), A.p);
+    B.p.parentNode.insertBefore(_ftEmptyLike(B.p), B.p);
+  });
+  st.tags.forEach(function (t) {
+    if (!t.pageBreakUnlessLast) return;
+    var p = t.P.p, doc = p.ownerDocument;
+    var r = doc.createElementNS(_FT_W, 'w:r'), br = doc.createElementNS(_FT_W, 'w:br');
+    br.setAttributeNS(_FT_W, 'w:type', 'page');
+    r.appendChild(br);
+    for (var c = p.firstChild; c;) { var nx = c.nextSibling; if (!_ftIs(c, 'pPr')) p.removeChild(c); c = nx; }
+    p.appendChild(r);
+    p.parentNode.insertBefore(_ftParaWith(p, D('{^is_last}')), p);
+    p.parentNode.insertBefore(_ftParaWith(p, D('{/is_last}')), p.nextSibling);
+  });
+  st.ops.fills.forEach(function (f) { _ftFill(f.P.p, f.hex); });
+  st.ops.dropAlways.forEach(function (P) { _ftDropPara(P.p); });
+  st.ops.dropIfEmpty.forEach(function (P) { if (!P.text.trim() && !_ftHasMore(P.p)) _ftDropPara(P.p); });
+  st.ops.rows.forEach(function (tr) { if (tr.parentNode) tr.parentNode.removeChild(tr); });
+}
+function _ftConvert(zip, kind) {
+  var R = { kind: kind, done: {}, gone: {}, fields: {}, parts: 0, open: 0, alt: false };
+
+  if (kind === 'ghostwriter') {
+    R.alt = _ftParts(zip).some(function (n) {
+      var f0 = zip.file(n);
+      return f0 && _ftParaTexts(f0.asText()).some(function (t) {
+        return /[{}]/.test(t.replace(/\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}|\{#[\s\S]*?#\}/g, ''));
+      });
+    });
+  }
+  _ftParts(zip).forEach(function (name) {
+    var f = zip.file(name);
+    if (!f) return;
+    var xml = f.asText();
+    if (xml.indexOf('{') < 0) return;
+    if (/<!DOCTYPE|<!ENTITY/i.test(xml)) throw new Error('Part of this file (' + name + ') is written in a way Pental will not read.');
+    var decl = (/^\s*<\?xml[^>]*\?>/.exec(xml) || [''])[0];
+    var doc = new DOMParser().parseFromString(xml, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('Part of this file (' + name + ') is not one Word could open.');
+    var paras = _ftParas(doc), tags = [];
+    var re = kind === 'pwndoc' ? /\{([^{}]*)\}/g : /\{\{([\s\S]*?)\}\}|\{%([\s\S]*?)%\}|\{#([\s\S]*?)#\}/g;
+    paras.forEach(function (P, pi) {
+      P.orig = P.text; P.pi = pi; P.tagCount = 0;
+      var m;
+      re.lastIndex = 0;
+      while ((m = re.exec(P.text))) {
+        var t = { P: P, pi: pi, s: m.index, e: m.index + m[0].length, raw: m[0], rep: null };
+        if (kind === 'pwndoc') t.body = m[1];
+        else if (m[1] != null) { t.type = 'expr'; t.body = m[1]; }
+        else if (m[2] != null) { t.type = 'stmt'; t.body = m[2]; }
+        else { t.type = 'comment'; t.body = m[3]; }
+        tags.push(t);
+        P.tagCount++;
+      }
+    });
+    if (!tags.length) return;
+    var st = { R: R, kind: kind, alt: R.alt, stack: [{ ctx: 'root', alias: {} }], paras: paras, tags: tags, byEl: new Map(),
+      ops: { cuts: [], dropIfEmpty: [], dropAlways: [], rows: [], rowBlocks: [], pairs: [], fills: [] } };
+    paras.forEach(function (P) { st.byEl.set(P.p, P); });
+    tags.forEach(function (t) { (kind === 'pwndoc' ? _ftPdTag : _ftGwTag)(st, t); });
+    R.open += st.stack.length - 1;
+    _ftApply(st);
+    var out = new XMLSerializer().serializeToString(doc);
+    if (decl && out.indexOf('<?xml') !== 0) out = decl + (/^\s*<\?xml[^>]*\?>\r?\n/.test(xml) ? '\n' : '') + out;
+    zip.file(name, out);
+    R.parts++;
+  });
+
+  var dx = zip.file('word/document.xml');
+  if (dx) {
+    var dxml = dx.asText();
+    if (dxml.indexOf('w:name="_PntlFrom_') < 0) {
+      dxml = dxml.replace(/(<w:body\b[^>]*>)/, '$1<w:bookmarkStart w:id="7999990" w:name="_PntlFrom_' + kind + '"/><w:bookmarkEnd w:id="7999990"/>');
+      zip.file('word/document.xml', dxml);
+    }
+  }
+  return R;
+}
+function _ftFrom(xml) { var m = /w:name="_PntlFrom_(\w+)"/.exec(String(xml || '')); return m ? m[1] : ''; }
+var _FT_W3 = {
+  AV: { N: 'Network', A: 'Adjacent Network', L: 'Local', P: 'Physical' }, AC: { L: 'Low', H: 'High' },
+  PR: { N: 'None', L: 'Low', H: 'High' }, UI: { N: 'None', R: 'Required' }, S: { U: 'Unchanged', C: 'Changed' },
+  C: { N: 'None', L: 'Low', H: 'High' }, E: { U: 'Unproven', P: 'Proof-of-Concept', F: 'Functional', H: 'High' },
+  RL: { O: 'Official Fix', T: 'Temporary Fix', W: 'Workaround', U: 'Unavailable' }, RC: { U: 'Unknown', R: 'Reasonable', C: 'Confirmed' },
+  CR: { L: 'Low', M: 'Medium', H: 'High' }
+};
+var _FT_K3 = { AV: 'AV', MAV: 'AV', AC: 'AC', MAC: 'AC', PR: 'PR', MPR: 'PR', UI: 'UI', MUI: 'UI', S: 'S', MS: 'S',
+  C: 'C', I: 'C', A: 'C', MC: 'C', MI: 'C', MA: 'C', E: 'E', RL: 'RL', RC: 'RC', CR: 'CR', IR: 'CR', AR: 'CR' };
+var _FT_W4 = {
+  AV: { N: 'Network', A: 'Adjacent', L: 'Local', P: 'Physical' }, AC: { L: 'Low', H: 'High' }, AT: { N: 'None', P: 'Present' },
+  PR: { N: 'None', L: 'Low', H: 'High' }, UI: { N: 'None', P: 'Passive', A: 'Active' }, VC: { N: 'None', L: 'Low', H: 'High' },
+  MS: { N: 'None', L: 'Low', H: 'High', S: 'Safety' }, S: { N: 'Negligible', P: 'Present' }, AU: { N: 'No', Y: 'Yes' },
+  R: { A: 'Automatic', U: 'User', I: 'Irrecoverable' }, V: { D: 'Diffuse', C: 'Concentrated' }, RE: { L: 'Low', M: 'Moderate', H: 'High' },
+  U: { CLEAR: 'Clear', GREEN: 'Green', AMBER: 'Amber', RED: 'Red' }, CR: { H: 'High', M: 'Medium', L: 'Low' }, E: { A: 'Attacked', P: 'POC', U: 'Unreported' }
+};
+var _FT_K4 = { AV: 'AV', MAV: 'AV', AC: 'AC', MAC: 'AC', AT: 'AT', MAT: 'AT', PR: 'PR', MPR: 'PR', UI: 'UI', MUI: 'UI',
+  VC: 'VC', VI: 'VC', VA: 'VC', SC: 'VC', SI: 'VC', SA: 'VC', MVC: 'VC', MVI: 'VC', MVA: 'VC', MSC: 'VC', MSI: 'MS', MSA: 'MS',
+  S: 'S', AU: 'AU', R: 'R', V: 'V', RE: 'RE', U: 'U', CR: 'CR', IR: 'CR', AR: 'CR', E: 'E' };
+function _ftCvssWords(vector) {
+  var out = {}, v = String(vector || '').trim();
+  _FT_CVSS3.forEach(function (k) { out['cvss_' + k.toLowerCase()] = ''; });
+  _FT_CVSS4.forEach(function (k) { out['cvss4_' + k.toLowerCase()] = ''; });
+  if (!/(^|\/)AV:[NALP]/i.test(v)) return out;
+  var four = /CVSS:4\.0/i.test(v), got = {};
+  v.split('/').forEach(function (part) { var kv = part.split(':'); if (kv.length === 2) got[kv[0].trim().toUpperCase()] = kv[1].trim().toUpperCase(); });
+  var words = four ? _FT_W4 : _FT_W3, kind = four ? _FT_K4 : _FT_K3, keys = four ? _FT_CVSS4 : _FT_CVSS3, pre = four ? 'cvss4_' : 'cvss_';
+  keys.forEach(function (k) {
+    var code = got[k], w = words[kind[k]] || {};
+
+    out[pre + k.toLowerCase()] = _FT_PLAIN + (code && code !== 'X' ? (w[code] || code) : 'Not Defined');
+  });
+  return out;
+}
+var _FT_PLAIN = '\uE003';
+function _ftShadeMark(sev, tpl) {
+  var sk = String(sev || '').toLowerCase();
+  if (sk === 'informational') sk = 'info';
+  var hex = String(((tpl && tpl.severity_colors) || {})[sk] || (typeof _sevColors === 'function' ? _sevColors()[sk] : '') || '').replace(/^#/, '');
+  return /^[0-9a-fA-F]{6}$/.test(hex) ? '__PNTLSHADE_' + hex.toUpperCase() + '__' : '';
+}
+var _FT_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function _ftDateParts(d) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || ''));
+  if (!m) return { day: '', month: '', year: '', n: 0 };
+  return { day: String(+m[3]), month: _FT_MONTHS[+m[2] - 1] || '', year: m[1], n: +m[2] };
+}
+function _ftReportExtras(data, a, client, findings, fd, o) {
+  var users = (S.data && S.data.users) || [];
+  var userOf = function (id) { return users.filter(function (u) { return u && u.id === id; })[0] || null; };
+  var split = function (name) { var n = String(name || '').trim(), i = n.indexOf(' '); return i < 0 ? [n, ''] : [n.slice(0, i), n.slice(i + 1).trim()]; };
+  var person = function (u, name, role) {
+    var nm = String(name || (u && u.name) || '').trim(), sp = split(nm);
+    return { name: nm, first_name: sp[0], last_name: sp[1], role: role, title: (typeof _docPersonTitle === 'function' ? _docPersonTitle(u) : '') || '',
+      email: (u && u.email) || '', phone: (u && u.phone) || '' };
+  };
+  var lead = a.lead_id ? person(userOf(a.lead_id), data.lead_tester_name, 'Lead tester') : null;
+  var testers = (o.authors || []).filter(function (id) { return id && id !== a.lead_id; })
+    .map(function (id) { return person(userOf(id), typeof getTesterName === 'function' ? getTesterName(id) : '', 'Tester'); })
+    .filter(function (p) { return p.name; });
+  var qa = a.qa_assignee ? person(userOf(a.qa_assignee), data.qa_reviewer_name, 'QA reviewer') : null;
+  if (qa && !qa.name) qa = null;
+  var team = [lead].concat(testers).concat(qa && !(lead && qa.name === lead.name) ? [qa] : []).filter(function (p) { return p && p.name; });
+  var c = client || {}, cs = split(c.contact_name);
+  var contacts = (c.contact_name || c.contact_email) ? [{ name: c.contact_name || '', first_name: cs[0], last_name: cs[1], title: '', email: c.contact_email || '', phone: c.contact_phone || '' }] : [];
+  var s = _ftDateParts(a.start_date), e = _ftDateParts(a.end_date), ls = split(data.lead_tester_name);
+  var total = findings.length, cnt = o.counts || {};
+  var pct = function (n) { return total ? String(Math.round((n || 0) / total * 100)) : '0'; };
+  var cats = [], byCat = {};
+  (fd || []).forEach(function (f) {
+    var k = String(f._category_raw || '').trim();
+    if (!byCat[k]) { byCat[k] = { category_name: k || 'No Category', category_findings: [] }; cats.push(byCat[k]); }
+    byCat[k].category_findings.push(f);
+  });
+  var scopeN = (o.scope || []).length;
+  return {
+    lead_tester_first_name: lead ? ls[0] : '', lead_tester_last_name: lead ? ls[1] : '',
+    client_contact_first_name: cs[0], client_contact_last_name: cs[1],
+    start_day: s.day, start_month: s.month, start_year: s.year, end_day: e.day, end_month: e.month, end_year: e.year,
+    same_year: !!(s.year && s.year === e.year), same_month: !!(s.n && s.n === e.n),
+    team: team, team_count: String(team.length), has_team: team.length > 0,
+    testers: testers, testers_count: String(testers.length), has_testers: testers.length > 0,
+    qa_reviewers: qa ? [qa] : [], has_qa_reviewer: !!qa,
+    client_contacts: contacts, client_contacts_count: String(contacts.length), has_client_contacts: contacts.length > 0,
+    scope_count: String(scopeN), has_scope: scopeN > 0,
+    has_findings: total > 0, has_critical: cnt.critical > 0, has_high: cnt.high > 0, has_medium: cnt.medium > 0, has_low: cnt.low > 0, has_info: cnt.info > 0,
+    critical_percent: pct(cnt.critical), high_percent: pct(cnt.high), medium_percent: pct(cnt.medium), low_percent: pct(cnt.low), info_percent: pct(cnt.info),
+    finding_categories: cats
+  };
+}
+function _ftDeriveLists(zip, data) {
+  if (!data || !Array.isArray(data.findings)) return;
+  var names = {};
+  var re = /(?:has_|count_)?(findings_(?:cat__[a-z0-9_]+|(?:critical|high|medium|low|info)(?:_(?:critical|high|medium|low|info))+))(?=[}⟧])/g;
+  _ftParts(zip).forEach(function (n) {
+    var f = zip.file(n);
+    if (!f) return;
+    var x = f.asText();
+    if (x.indexOf('findings_') < 0) return;
+    _ftParaTexts(x).forEach(function (t) { var m; re.lastIndex = 0; while ((m = re.exec(t))) names[m[1]] = true; });
+  });
+  Object.keys(names).forEach(function (name) {
+    var list;
+    if (/^findings_cat__/.test(name)) {
+      var want = name.slice('findings_cat__'.length).split('__');
+      list = data.findings.filter(function (f) { return want.indexOf(_ftSlug(f._category_raw)) >= 0; });
+    } else {
+      var sevs = name.slice('findings_'.length).split('_');
+      list = data.findings.filter(function (f) { return sevs.some(function (s) { return f['is_' + s]; }); });
+    }
+    data[name] = list;
+    data['has_' + name] = list.length > 0;
+    data['count_' + name] = String(list.length);
+  });
+}
+function _ftTagAt(xml, tag, pos) {
+  var p = pos;
+  while (p >= 0) {
+    var ix = xml.lastIndexOf(tag, p);
+    if (ix < 0) return -1;
+    var ch = xml.charAt(ix + tag.length);
+    if (ch === ' ' || ch === '>' || ch === '/') return ix;
+    p = ix - 1;
+  }
+  return -1;
+}
+function _ftOnColour(hex) {
+  var h = String(hex || '').toLowerCase();
+  if (!/^[0-9a-f]{6}$/.test(h)) return '000000';
+  var rgb = [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  if (typeof _sevOnFillRgb === 'function') {
+    return _sevOnFillRgb(rgb).map(function (n) { return Math.max(0, Math.min(255, n | 0)).toString(16).padStart(2, '0'); }).join('').toUpperCase();
+  }
+  return (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) > 150 ? '000000' : 'FFFFFF';
+}
+function _ftCellFill(cell, hex) {
+  var open = /^<w:tc\b[^>]*>/.exec(cell);
+  if (!open) return cell;
+  var head = open[0], rest = cell.slice(head.length);
+  var shd = '<w:shd w:val="clear" w:color="auto" w:fill="' + hex + '"/>';
+  var pr = /^\s*<w:tcPr>([\s\S]*?)<\/w:tcPr>/.exec(rest);
+  if (pr) {
+    var inner = pr[1].replace(/<w:shd\b[^>]*\/>/g, '');
+    var at = inner.search(/<w:(noWrap|tcMar|textDirection|tcFitText|vAlign|hideMark|headers|cellIns|cellDel|cellMerge|tcPrChange)\b/);
+    inner = at < 0 ? inner + shd : inner.slice(0, at) + shd + inner.slice(at);
+    rest = '<w:tcPr>' + inner + '</w:tcPr>' + rest.slice(pr[0].length);
+  } else rest = '<w:tcPr>' + shd + '</w:tcPr>' + rest;
+  var col = '<w:color w:val="' + _ftOnColour(hex) + '"/>';
+
+  rest = rest.replace(/<w:r(\s[^>]*)?>(\s*<w:rPr>([\s\S]*?)<\/w:rPr>)?/g, function (m, attrs, whole, rpr) {
+    var body = (rpr || '').replace(/<w:color\b[^>]*\/>/g, '');
+    var at2 = body.search(/<w:(spacing|w|kern|position|sz|szCs|highlight|u|effect|bdr|shd|fitText|vertAlign|rtl|cs|em|lang|eastAsianLayout|specVanish|oMath)\b/);
+    body = at2 < 0 ? body + col : body.slice(0, at2) + col + body.slice(at2);
+    return '<w:r' + (attrs || '') + '><w:rPr>' + body + '</w:rPr>';
+  });
+  return head + rest;
+}
+function _ftShades(zip) {
+  _ftParts(zip).forEach(function (n) {
+    var f = zip.file(n);
+    if (!f) return;
+    var xml = f.asText();
+    if (xml.indexOf(_FT_PLAIN) >= 0) { xml = xml.split(_FT_PLAIN).join(''); zip.file(n, xml); }
+    if (xml.indexOf('__PNTLSHADE_') < 0) return;
+    var hits = [], m, re = /__PNTLSHADE_([0-9A-F]{6})__/g;
+    while ((m = re.exec(xml))) hits.push({ at: m.index, len: m[0].length, hex: m[1] });
+    for (var i = hits.length - 1; i >= 0; i--) {
+      var h = hits[i];
+      xml = xml.slice(0, h.at) + xml.slice(h.at + h.len);
+      var tcS = _ftTagAt(xml, '<w:tc', h.at), tcE = xml.indexOf('</w:tc>', h.at);
+      if (tcS < 0 || tcE < 0 || xml.lastIndexOf('</w:tc>', h.at) > tcS) continue;
+      var pS = _ftTagAt(xml, '<w:p', h.at), pE = xml.indexOf('</w:p>', h.at);
+      if (pS > tcS && pE > 0 && pE < tcE) {
+        var para = xml.slice(pS, pE + 6);
+        var txt = (para.match(/<w:t(?:\s[^>]*[^\/>])?>[^<]*<\/w:t>/g) || []).map(function (w) { return w.replace(/<[^>]+>/g, ''); }).join('');
+        var paras = (xml.slice(tcS, tcE).match(/<w:p[\s>]/g) || []).length;
+        if (!txt.trim() && paras > 1 && !/<w:(drawing|pict|object|fldChar|fldSimple)\b|w:type="page"/.test(para)) {
+          xml = xml.slice(0, pS) + xml.slice(pE + 6);
+          tcE -= pE + 6 - pS;
+        }
+      }
+      xml = xml.slice(0, tcS) + _ftCellFill(xml.slice(tcS, tcE), h.hex) + xml.slice(tcE);
+    }
+    zip.file(n, xml);
+  });
+}
+var _FTV_NAME = { pwndoc: 'PwnDoc', ghostwriter: 'Ghostwriter' };
+async function _ftOffer(buf, fileName, type) {
+  if (typeof _loadDocxLibs === 'function') await _loadDocxLibs();
+  var zip;
+  try { zip = new PizZip(buf); } catch (e) { return false; }
+  var kind = _ftDetect(zip);
+  if (!kind) return false;
+  var R = _ftConvert(zip, kind);
+  var bytes = zip.generate({ type: 'uint8array', compression: 'DEFLATE' });
+
+  var errs = null;
+  try { errs = typeof _validateDocxTemplate === 'function' ? await _validateDocxTemplate(new PizZip(bytes)) : null; } catch (e) {}
+  S._ftv = { R: R, kind: kind, fileName: String(fileName || 'template.docx'), type: type || 'report', bytes: bytes, errs: errs && errs.length ? errs : null };
+  _ftvShow();
+  return true;
+}
+window._ftOffer = _ftOffer;
+function _ftvShow() {
+  S.modal = { type: '_custom', html: _ftvHtml(), cls: 'irv-modal' };
+  render(true);
+}
+function _ftvClose() {
+  if (S._ftv && S._ftv.saving) return;
+  S._ftv = null;
+  closeM();
+}
+window._ftvClose = _ftvClose;
+function _ftvTo(to) {
+  return String(to).replace(/\{custom_(\w+)\}/g, function (m, id) {
+    var f = (S._ftv && S._ftv.R.fields[id]) || _ftCustoms().filter(function (x) { return x && x.id === id; })[0];
+    return f ? f.label + ' (finding field)' : m;
+  });
+}
+function _ftvMake(R) {
+  return Object.keys(R.fields).map(function (k) { return R.fields[k]; }).filter(function (f) { return !f.exists || f.enable; });
+}
+function _ftvHtml() {
+  var X = S._ftv;
+  if (!X) return '';
+  var R = X.R, src = _FTV_NAME[X.kind] || 'other';
+  var done = Object.keys(R.done), gone = Object.keys(R.gone), make = _ftvMake(R);
+  var h = '<div class="irv ftv">';
+  h += '<div class="irv-head"><div class="irv-head-ic" aria-hidden="true">' + IC.doc + '</div><div>'
+    + '<h2 class="irv-title">Bring your ' + esc(src) + ' template across</h2>'
+    + '<p class="irv-sub">' + esc(X.fileName) + '. Its placeholders become Pental’s, and everything else stays as you made it: styles, tables, headers, pictures and wording. Nothing is saved until you press Save.</p></div>'
+    + '<button class="btn-close" onclick="_ftvClose()" title="Close">&times;</button></div>';
+  h += '<div class="irv-body">';
+
+  var shown = function (v, why) {
+    var t = _ftvTo(v);
+    if (why) { t = t.replace(/:\s*Pental has nothing that means the same$/, ''); t = t.charAt(0).toUpperCase() + t.slice(1); }
+    return /^\{[^{}]+\}(,|$)/.test(t) && !why ? '<div class="ftv-to"><code class="ftv-code">' + esc(t.split(', ')[0]) + '</code>' + (t.indexOf(', ') > 0 ? ' ' + esc(t.slice(t.indexOf(', ') + 2)) : '') + '</div>'
+      : '<div class="ftv-to">' + esc(t) + '</div>';
+  };
+  var pairs = function (keys, map, right, why) {
+    return '<div class="ftv-map"><div class="ftv-mh">In your template</div><div class="ftv-mh">' + right + '</div>'
+      + keys.map(function (k) { return '<code class="ftv-from">' + esc(k) + '</code>' + shown(map[k], why); }).join('') + '</div>';
+  };
+  if (done.length) {
+    h += _irvRow(IC.check, 'Brought across', done.length + ' placeholder' + (done.length === 1 ? '' : 's') + ', each now printing the Pental value that means the same.',
+      '', pairs(done, R.done, 'In Pental'), false);
+  }
+  if (gone.length) {
+    h += _irvRow(IC.warn, 'Left out', gone.length + ' with nothing in Pental that means the same. Each prints nothing, as an empty value did in ' + esc(src) + '.',
+      '', pairs(gone, R.gone, 'What it was', true), false);
+  }
+  if (make.length) {
+    h += _irvRow(IC.list, 'Finding fields it prints', 'Saving adds ' + (make.length === 1 ? 'this field' : 'these ' + make.length + ' fields') + ' to every finding, so the template has ' + (make.length === 1 ? 'it' : 'them') + ' to print.',
+      '', '<ul class="ftv-fields">' + make.map(function (f) { return '<li>' + esc(f.label) + (f.enable ? ' <span class="irv-tag">Turned back on</span>' : '') + '</li>'; }).join('') + '</ul>'
+        + '<p class="irv-note">Findings brought across from ' + esc(src) + ' under Coming from another platform fill them.</p>', false);
+  }
+  if (X.errs) {
+    h += '<p class="irv-warn">Word would open it, but Pental cannot fill it yet: ' + esc(X.errs.slice(0, 3).map(function (e) { return (e.explanation || e.message) + (e.xtag ? ' (' + e.xtag + ')' : ''); }).join('; '))
+      + '. Download it to correct those in Word, then upload it here.</p>';
+  }
+  h += '<p class="irv-note">Severity colours, the date format and how findings are numbered follow your settings in Pental.'
+    + (R.alt ? ' The template has braces in its own words, so its placeholders are written ⟦like this⟧ instead.' : '') + '</p>';
+  h += '</div>';
+  var sum = done.length + ' brought across' + (gone.length ? ', ' + gone.length + ' left out' : '') + (make.length ? ', ' + make.length + ' finding field' + (make.length === 1 ? '' : 's') + ' to add' : '') + '.';
+  h += '<div class="irv-foot"><p class="irv-sum">' + esc(sum) + '</p><div class="irv-acts">'
+    + '<button type="button" class="btn btn-ghost" onclick="_ftvClose()">Cancel</button>'
+    + '<button type="button" class="btn btn-secondary" onclick="_ftvDownload()">' + IC.dl + ' Download it</button>'
+    + '<button type="button" class="btn btn-primary" onclick="_ftvSave()"' + (X.errs ? ' disabled' : '') + '>Save as a report template</button></div></div>';
+  return h + '</div>';
+}
+function _ftvDownload() {
+  var X = S._ftv;
+  if (!X) return;
+  var blob = new Blob([X.bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  var url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href = url;
+  a.download = X.fileName.replace(/\.docx$/i, '') + ' (Pental).docx';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+window._ftvDownload = _ftvDownload;
+async function _ftvSave() {
+  var X = S._ftv;
+  if (!X || X.saving || X.errs) return;
+  X.saving = true;
+  _showLoading();
+  try {
+
+    var make = _ftvMake(X.R);
+    if (make.length && typeof _setSavedCopy === 'function' && typeof _settingsWriteBlob === 'function') {
+      var put = function (list) {
+        make.forEach(function (f) {
+          var have = list.filter(function (x) { return x && x.id === f.id; })[0];
+          if (have) have.enabled = true;
+          else list.push({ id: f.id, label: f.label, type: 'html', enabled: true, required: false });
+        });
+      };
+      var w = _setSavedCopy('finding_fields');
+      put(w.custom);
+      await _settingsWriteBlob({ finding_fields: w });
+      try {
+        if (typeof _ffMutCfg === 'function') put(_ffMutCfg().custom);
+        if (typeof _setBase !== 'undefined' && _setBase) _setBase.finding_fields = JSON.parse(JSON.stringify(w));
+      } catch (e) {}
+    }
+    var bin = '', b = X.bytes;
+    for (var i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
+    var name = X.fileName.replace(/\.docx$/i, '');
+    var ok = await _saveDocxTemplateData(X.type, { name: name, data: btoa(bin), filename: X.fileName, uploaded_at: new Date().toISOString(), size: b.length });
+    if (ok === false) return;
+    S._ftv = null;
+    closeM();
+    toast('Saved as a report template' + (make.length ? ', and ' + make.length + ' finding field' + (make.length === 1 ? '' : 's') + ' added' : ''), 'success');
+    if (S.page === 'settings' && typeof renderSettings === 'function') renderSettings(); else render();
+  } catch (e) {
+    toast('It could not be saved: ' + (e && e.message ? e.message : 'the settings could not be written'), 'error');
+  } finally {
+    if (S._ftv) S._ftv.saving = false;
+    _hideLoading();
+  }
+}
+window._ftvSave = _ftvSave;
 async function uploadDocxTemplate(type, templateName) {
   var input = document.createElement('input');
   input.type = 'file';
@@ -77101,6 +78491,8 @@ async function uploadDocxTemplate(type, templateName) {
     _showLoading();
     try {
       var buf = await file.arrayBuffer();
+
+      if (type === 'report' && typeof _ftOffer === 'function' && await _ftOffer(buf, file.name, type)) return;
       var bytes = new Uint8Array(buf);
       var binary = '';
       for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
@@ -79676,6 +81068,56 @@ function _stripBrokenHeadingNumbering(xmlStr, zip) {
 
   return modified;
 }
+async function _validateDocxTemplate(zip) {
+  try {
+    if (typeof window.docxtemplater === 'undefined') return null;
+    var uint8 = zip.generate({ type: 'uint8array' });
+    var testZip = new PizZip(uint8);
+
+    var thrown = null;
+    try {
+      var doc = new window.docxtemplater(testZip, _dtplOpts(testZip, {
+        paragraphLoop: JSON.parse('true'),
+        linebreaks: JSON.parse('true')
+      }));
+      try { doc.compile(); } catch(ce) { thrown = ce; }
+    } catch(cse) {
+      thrown = cse;
+    }
+    if (!thrown) return null;
+    var errs = [];
+    var errsArr = (thrown.properties && thrown.properties.errors) || null;
+    if (errsArr && errsArr.length) {
+      errsArr.forEach(function(e) {
+        var p = e.properties || {};
+        errs.push({
+          message: e.message,
+          id: p.id || '',
+          xtag: p.xtag || p.openingtag || p.closingtag || '',
+          openingtag: p.openingtag || '',
+          closingtag: p.closingtag || '',
+          offset: typeof p.offset === 'number' ? p.offset : (Array.isArray(p.offset) ? p.offset[0] : -1),
+          file: p.file || 'word/document.xml',
+          explanation: p.explanation || ''
+        });
+      });
+    } else {
+      errs.push({
+        message: thrown.message || String(thrown),
+        id: (thrown.properties && thrown.properties.id) || '',
+        xtag: '',
+        offset: -1,
+        file: '',
+        explanation: ''
+      });
+    }
+    console.warn('[AI Setup v3] Template validation errors:', errs);
+    return errs;
+  } catch (e) {
+    console.warn('[AI Setup v3] Validation helper threw outer:', e);
+    return null;
+  }
+}
 function _cleanupForeignTokensInXml(xmlStr, docType) {
   var textInfo = _extractDocxTextMap(xmlStr);
   if (!textInfo.text) return xmlStr;
@@ -82223,6 +83665,8 @@ async function buildReportData(assessmentId, docType, _opts) {
       _fdata['custom_' + cf.id] = (typeof _fsText === 'function' && _cffType(cf) !== 'html')
         ? _pntlPlainMarker(cf, _cfHasContent(_cv) ? _cv : '', _imgCache, _cbm)
         : _richMarker(_cfHasContent(_cv) ? String(_cv) : '', _imgCache, _cbm);
+
+      _fdata['has_custom_' + cf.id] = _cfHasContent(_cv);
     });
 
     Object.keys(_CF_ALIAS).forEach(function (invented) {
@@ -82232,6 +83676,27 @@ async function buildReportData(assessmentId, docType, _opts) {
     });
 
     _fdata._pb = idx > 0;
+
+    if (typeof _ftCvssWords === 'function') {
+      Object.assign(_fdata, _ftCvssWords(f.cvss_vector));
+      _fdata.severity_shade = _ftShadeMark(f.severity, tpl);
+    }
+    _fdata.severity_plain = (typeof _FT_PLAIN === 'string' ? _FT_PLAIN : '') + _sevCased(f.severity);
+    _fdata.references_list = (_fdata.refs_list || []).map(function (x) { return { reference: String(x.ref || '').replace(/^\n/, '') }; });
+    _fdata._category_raw = f.category || '';
+    _fdata.is_first = idx === 0;
+    _fdata.is_last = idx === findings.length - 1;
+    _fdata.has_cvss = f.cvss != null && String(f.cvss).trim() !== '' && !isNaN(parseFloat(f.cvss));
+    _fdata.has_cwe = !!String(f.cwe || '').trim();
+    _fdata.has_category = !!String(f.category || '').trim();
+    _fdata.has_description = _cfHasContent(f.description);
+    _fdata.has_remediation = _cfHasContent(f.remediation);
+    _fdata.has_impact = _cfHasContent(f.impact);
+    _fdata.has_evidence = evRaw.length > 0;
+    _fdata.retest_fixed = f.retest_status === 'fixed';
+    _fdata.retest_part_fixed = f.retest_status === 'part_fixed';
+    _fdata.retest_not_fixed = f.retest_status === 'not_fixed';
+    _fdata.retest_accepted = f.retest_status === 'accepted';
     return _fdata;
   });
 
@@ -82615,6 +84080,13 @@ async function buildReportData(assessmentId, docType, _opts) {
       if (_plain) _injList.push({ key: key, label: cs.label, token: '{custom_summary_' + key + '}' });
     });
     data._summaryInjectList = _injList;
+  }
+
+  if (data && typeof data === 'object' && typeof _ftReportExtras === 'function') {
+    try {
+      var _ftx = _ftReportExtras(data, a, client, findings, findingsData, { authors: Object.keys(_authorIds), scope: scopeItems, counts: sevCounts });
+      Object.keys(_ftx).forEach(function (k) { if (!(k in data)) data[k] = _ftx[k]; });
+    } catch (e) { console.warn('[DOCX] what a converted template asks for was not added:', e && e.message); }
   }
 
   return data;
