@@ -274,6 +274,8 @@ Every engagement becomes a report two ways, both in your own brand.
 
 **Your own Word template.** Upload a `.docx` under Settings, PDF & DOCX, and every report is your template filled in, as a Word document, with the PDF made from it in your browser if you like. Start from the **Draft**, a ready-made template in your colours with every placeholder in it, including your own fields, or let the **Document Builder** turn a report you already send into one. The **Placeholder Key** lists everything you can place.
 
+**A template from another reporting tool, brought across.** Upload the Word template you used elsewhere on the same Report row: Pental Report recognises it from its placeholders and turns each into its own, with the loops, conditions and table rows around them kept and everything else in the file as you made it. Before it is saved you see what each placeholder became, what has nothing here that means the same, and the finding fields it prints, which saving adds.
+
 **Edited in Word, brought back.** Download the report as your Word file, edit it in Word or send it round for review, and upload it back beside the report's button. Pental Report shows what changed before anything is written: plain edits and tracked changes (each one yours to accept), and Word comments, which join the engagement's Comments saying who wrote them and where. The file you upload can then be the report your team downloads, kept up to date with anything changed since.
 
 <p align="center">
@@ -290,6 +292,14 @@ Every engagement becomes a report two ways, both in your own brand.
     <img alt="Settings, PDF and DOCX: the firm's Word template, the Document Builder, the Draft and the Placeholder Key" src=".github/assets/screens/templates-light.png" width="100%">
   </picture>
   <br><sub>Where the template is kept</sub>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/screens/convert-dark.png">
+    <img alt="A Word template from another reporting tool, uploaded: each placeholder beside what it became, and what was left out, before it is saved" src=".github/assets/screens/convert-light.png" width="100%">
+  </picture>
+  <br><sub>A template from another tool, before it is saved</sub>
 </p>
 
 ## The API

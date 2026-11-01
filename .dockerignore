@@ -8,3 +8,5 @@ backups
 test
 *.log
 .update.lock
+.DS_Store
+Thumbs.db

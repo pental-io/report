@@ -17,7 +17,8 @@
 #
 # What it did is written to update.log beside it, and told to Pental Report,
 # which shows it in Settings, Updates. To stop it, set UPDATER=0 in .env, or
-# run the installer with --no-auto-update.
+# run the installer with --no-auto-update. On Windows there is no updater:
+# the install command, run again, is how it is updated there.
 #
 #   sh update.sh            what the timer runs
 #

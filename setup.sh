@@ -8,6 +8,7 @@
 #   DOMAIN= ./setup.sh                    this machine only, http://localhost:8080
 #   DOMAIN= PORT=8090 ./setup.sh          the same, on another port
 #
+# Copyright (c) Pental Limited.
 # SPDX-License-Identifier: AGPL-3.0-only
 set -eu
 cd "$(dirname "$0")"

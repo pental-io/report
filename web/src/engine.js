@@ -78405,7 +78405,8 @@ function _ftvHtml() {
   if (make.length) {
     h += _irvRow(IC.list, 'Finding fields it prints', 'Saving adds ' + (make.length === 1 ? 'this field' : 'these ' + make.length + ' fields') + ' to every finding, so the template has ' + (make.length === 1 ? 'it' : 'them') + ' to print.',
       '', '<ul class="ftv-fields">' + make.map(function (f) { return '<li>' + esc(f.label) + (f.enable ? ' <span class="irv-tag">Turned back on</span>' : '') + '</li>'; }).join('') + '</ul>'
-        + '<p class="irv-note">Findings brought across from ' + esc(src) + ' under Coming from another platform fill them.</p>', false);
+
+        + ((typeof REPORTER !== 'undefined' && REPORTER) ? '' : '<p class="irv-note">Findings brought across from ' + esc(src) + ' under Coming from another platform fill them.</p>'), false);
   }
   if (X.errs) {
     h += '<p class="irv-warn">Word would open it, but Pental cannot fill it yet: ' + esc(X.errs.slice(0, 3).map(function (e) { return (e.explanation || e.message) + (e.xtag ? ' (' + e.xtag + ')' : ''); }).join('; '))
