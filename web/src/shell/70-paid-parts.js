@@ -78,7 +78,8 @@ function _assAutomationNote() { return null; }
 
 // ── Settings ─────────────────────────────────────────────────────────────
 var _REPORTER_SETTINGS_TABS = {
-  login: 1, branding: 1, pdf_templates: 1, filenames: 1, company: 1, testing_ip: 1,
+  // 1977: no testing_ip: Testing IPs is a card on Assessments, as in the portal.
+  login: 1, branding: 1, pdf_templates: 1, filenames: 1, company: 1,
   assessments: 1, findings: 1, checklists: 1, ai: 1, security: 1, data: 1,
   // 1976: its own, for a newer release (shell/85-updates.js).
   updates: 1,
@@ -90,6 +91,8 @@ function _setTabOn(id) {
   return !!_REPORTER_SETTINGS_TABS[id];
 }
 function renderSettings() {
+  // 1977: a Testing IPs tab remembered from before opens Assessments, where the card is.
+  if (S.settingsTab === 'testing_ip') S.settingsTab = 'assessments';
   if (!S._embedSettings && !_REPORTER_SETTINGS_TABS[S.settingsTab]) S.settingsTab = 'branding';
   return renderSettings__portal();
 }

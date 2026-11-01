@@ -1084,12 +1084,8 @@ async function _smResetDefaults() {
 }
 window._smResetDefaults = _smResetDefaults;
 function _smDocMove(btn, dir) {
-  var card = btn.closest('[data-sm-key]');
-  if (!card) return;
-  var grid = card.parentNode;
-  if (!grid) return;
-  if (dir < 0 && card.previousElementSibling) grid.insertBefore(card, card.previousElementSibling);
-  else if (dir > 0 && card.nextElementSibling) grid.insertBefore(card.nextElementSibling, card);
+  var row = btn.closest('[data-sm-key]');
+  if (row && row.parentNode && row.parentNode.id === 'smDocGrid' && _sgShift(row, dir)) _sgMoved(row, btn);
 }
 window._smDocMove = _smDocMove;
 function _clientSelectHtml(selId, selectedId, only) {
@@ -20283,7 +20279,7 @@ async function _loadAllDataInner() {
 
   var _settingsCols_staff = _settingsCols_base + ',notes_prompt,caveats_prompt,contractor_rate,public_ip,exec_summary_prompt,finding_desc_prompt,finding_rem_prompt,retest_summary_prompt,email_templates,meeting_auto_invite,contact_integration,meeting_integration,ai_provider,ai_custom_model,ai_custom_url,ai_custom_format,ai_custom_max_tokens,ai_ollama_num_ctx,ai_requests_per_minute,ai_parallel_requests,smtp_host,smtp_port,smtp_user,smtp_oauth_provider,smtp_oauth_user,smtp_from_name,smtp_from_email,auto_start_enabled,auto_start_time,auto_complete_enabled,auto_complete_time,automation_timezone,automation_workdays_only,auto_credentials_enabled,auto_credentials_time,auto_credentials_days,mail_outbox_enabled,mail_outbox_started_at,invoice_automation,invoice_auto_send_days,standard_field_prompts,teams_tenant_id,teams_client_id,teams_user_email,zoom_account_id,zoom_client_id,slack_channel_id,proposal_multi_year_enabled,proposal_subscription_enabled,proposal_custom_titles,plan_max_users,plan_max_clients,scanning_enabled,scan_min_severity,scan_ai_write,scan_client_visible_default,scan_exec_summary_prompt,scan_finding_prompt,scan_default_provider,scan_billing_mode,scan_billing_amount,scan_phase_default,scan_import_maps,cvss_version,date_format,self_scan_enabled,self_scan_default_provider_id,self_scan_type_providers,self_scan_lands,self_scan_billing,self_scan_price_pence,self_scan_stripe_price_id,self_scan_active_providers,self_scan_who,self_scan_target_policy,self_scan_require_auth,self_scan_auth_when,self_scan_auth_text,self_scan_frequencies,self_scan_price_daily_pence,self_scan_price_weekly_pence,self_scan_price_monthly_pence,self_scan_price_annual_pence,self_scan_stripe_sub_price_daily,self_scan_stripe_sub_price_weekly,self_scan_stripe_sub_price_monthly,self_scan_stripe_sub_price_annual,self_scan_self_hosted_only,self_scan_internal_enabled,self_scan_appliances,self_scan_max_targets,self_scan_default_cap,self_scan_default_cooldown_hours,self_scan_default_hour,self_scan_window_start,self_scan_window_end,self_scan_notify,self_scan_report,account_owner_id,scan_fields,vuln_report_fields,final_pdf_names,scan_summary_auto,finding_default_draft,google_place_id,qa_checklist,qa_checklist_on,qa_ai_enabled,qa_ai_prompt';
 
-  var _settingsCols = isClient ? _settingsCols_base : (isCon ? _settingsCols_base + ',ai_parallel_requests,qa_checklist,qa_checklist_on' : _settingsCols_staff);
+  var _settingsCols = isClient ? _settingsCols_base + ',public_ip' : (isCon ? _settingsCols_base + ',ai_parallel_requests,qa_checklist,qa_checklist_on' : _settingsCols_staff);
 
   p1.settings = _syncApi('1:settings', 'settings', _settingsCols);
 
@@ -30355,6 +30351,9 @@ function renderAssessmentDetail() {
   }
 
   var _detailIP = (S.data.settings || {}).public_ip;
+
+  var _detailIPLead = 'All testing ' + ((a.status === 'draft' || a.status === 'active') ? 'is' : 'was')
+    + ' conducted from the following source IP ' + (String(_detailIP || '').indexOf(',') >= 0 ? 'addresses' : 'address') + ': ';
   var _rptTpl = getTemplate('report');
 
   var _anyPhaseScope = (_detPhasesInfo || []).some(function (ph) { return String((ph && ph.scope) || '').trim(); });
@@ -30422,7 +30421,7 @@ function renderAssessmentDetail() {
     });
     h += '</tbody></table>';
 
-    if (_detailIP) h += '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.6rem 0.75rem;font-size:0.8rem;color:var(--gray);border-top:1px solid var(--border);background:var(--surface)"><span style="flex-shrink:0;opacity:0.6">' + IC.globe + '</span><span>All testing was conducted from the following source IP address: <span class="mono" style="font-weight:600;color:var(--text)">' + esc(_detailIP) + '</span></span></div>';
+    if (_detailIP) h += '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.6rem 0.75rem;font-size:0.8rem;color:var(--gray);border-top:1px solid var(--border);background:var(--surface)"><span style="flex-shrink:0;opacity:0.6">' + IC.globe + '</span><span>' + esc(_detailIPLead) + '<span class="mono" style="font-weight:600;color:var(--text)">' + esc(_detailIP) + '</span></span></div>';
     h += '</div>';
   } else {
 
@@ -30453,7 +30452,7 @@ function renderAssessmentDetail() {
       } else {
         h += '<p class="text-muted">No scope defined.' + (canEdit() ? ' Click Edit to add scope items.' : '') + '</p>';
       }
-      if (_detailIP) h += '<div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border);font-size:0.8rem;color:var(--gray)"><span style="flex-shrink:0;opacity:0.6">' + IC.globe + '</span><span>All testing was conducted from the following source IP address: <span class="mono" style="font-weight:600;color:var(--text)">' + esc(_detailIP) + '</span></span></div>';
+      if (_detailIP) h += '<div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border);font-size:0.8rem;color:var(--gray)"><span style="flex-shrink:0;opacity:0.6">' + IC.globe + '</span><span>' + esc(_detailIPLead) + '<span class="mono" style="font-weight:600;color:var(--text)">' + esc(_detailIP) + '</span></span></div>';
       h += '</div></div>';
     }
   }
@@ -39826,6 +39825,8 @@ function renderSettings__portal() {
     try { S.settingsTab = localStorage.getItem('pental_settings_tab') || 'login'; } catch(e) { S.settingsTab = 'login'; }
   }
 
+  if (S.settingsTab === 'testing_ip') S.settingsTab = (assessmentsEnabled() || !proposalsEnabled()) ? 'assessments' : 'proposals';
+
   try { localStorage.setItem('pental_settings_tab', S.settingsTab); } catch(e) {}
   var _st = S.settingsTab;
   var _stOriginal = _st;
@@ -39834,7 +39835,6 @@ function renderSettings__portal() {
     'login':         { tab: 'branding', brandingSection: 'login' },
     'pdf_templates': { tab: 'branding', brandingSection: 'pdf_templates' },
     'filenames':     { tab: 'branding', brandingSection: 'filenames' },
-    'testing_ip':    { tab: 'company',  companySection:  'testing_ip' },
     'finance':       { tab: 'company',  companySection:  'finance' },
     'bank':          { tab: 'company',  companySection:  'bank' },
     'sig_box':       { tab: 'signature', signatureSection: 'sig_box' }
@@ -39861,7 +39861,6 @@ function renderSettings__portal() {
     {id:'filenames',label:'File Naming',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'},
 
     {id:'company',label:'Company',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg>'},
-    {id:'testing_ip',label:'Testing IPs',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>'},
     {id:'finance',label:'Finance',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>'},
     {id:'bank',label:'Bank',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>'},
     {id:'dashboard',label:'Dashboard',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>'},
@@ -40456,6 +40455,7 @@ function renderSettings__portal() {
     'Applies to reports, proposals and invoices. Documents are on a white page, so the light-mode logo is usually the right one if your main logo is white.');
 
   h += '</div></div>';
+  h += _datesCardHtml();
   }
 
   if (!S._wizBrandingSection || S._wizBrandingSection === 'filenames' || S._wizBrandingSection === 'full') {
@@ -40644,6 +40644,8 @@ function renderSettings__portal() {
 
   if (assessmentsEnabled()) {
 
+  h += _testingIpsCardHtml();
+
   h += '<div class="card mb-4"><div class="card-header"><span class="card-title">Lead Tester Card</span></div><div class="card-body">';
   h += '<p class="sub-text" style="margin-bottom:0.5rem">Choose which contact buttons appear on the lead tester card that shows on every assessment page. Useful when working with team members who don\'t share a Microsoft 365 or Slack workspace.</p>';
   h += '<div class="checkbox-row" style="margin-bottom:0.2rem"><input type="checkbox" id="set_show_tester_teams"' + (s.show_tester_teams ? ' checked' : '') + '><label for="set_show_tester_teams">Show Teams button on lead tester card</label></div>';
@@ -40658,6 +40660,7 @@ function renderSettings__portal() {
   h += '<div class="sg-wrap sg-wrap-sm">';
   h += '<div class="sg-row sg-sm sg-head"><span>Order</span><span style="text-align:center">Icon</span><span>Section heading</span><span style="text-align:center">Show</span><span style="text-align:center">Report</span><span style="text-align:center">Client</span><span style="text-align:center">On new</span><span style="text-align:right">Token</span><span></span></div>';
   h += '<div id="smList">';
+  h += _smTitleRowHtml();
   _smOrder().forEach(function(key) {
     var d = _smDefs().find(function(x) { return x.key === key; });
 
@@ -40684,15 +40687,6 @@ function renderSettings__portal() {
   h += '</select>';
   h += '</div>';
 
-  h += '<div class="form-group" id="smTitlePrompt" style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">';
-  h += '<label class="form-label">Assessment Title</label>';
-  h += '<p style="font-size:0.8rem;color:var(--gray);margin-bottom:0.5rem">Generate beside an assessment\'s title writes it with AI, to this prompt, from the client and the phases. Without AI it is made from the phases.</p>';
-  h += '<details><summary style="cursor:pointer;font-size:0.78rem;color:var(--gray)">AI prompt</summary>';
-  h += '<textarea class="form-textarea" id="sm_prompt_assessment_title" rows="5" style="font-size:0.82rem;margin-top:0.4rem">' + esc(_smPromptShown('assessment_title')) + '</textarea>';
-  h += '<button class="btn btn-ghost btn-sm" style="margin-top:0.3rem" onclick="_resetPromptField(\'sm_prompt_assessment_title\',\'assessment_title\')" title="Restore the built-in prompt">Reset to default</button>';
-  h += _aiContractNote(_AI_REPLY_CONTRACTS.title);
-  h += '</details>';
-  h += '</div>';
   h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the summary section settings above.</div>';
   h += '<div style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center"><button class="btn btn-primary" onclick="saveSummaryFieldsConfig()">Save Assessment Sections</button>';
   h += '<button class="btn btn-ghost btn-sm" onclick="_smResetDefaults()" title="Restore the built-in names, icons, order and toggles">Reset to defaults</button></div>';
@@ -40887,32 +40881,9 @@ function renderSettings__portal() {
 
   if (_st === 'company') {
 
-  h += '<div class="card mb-4"><div class="card-header"><span class="card-title">Dates</span></div><div class="card-body">';
-  h += '<div class="form-group" style="margin-bottom:0"><label>How dates are written in documents</label>';
-  h += '<select class="form-input" id="set_date_format">';
-  var _dfNow = new Date();
-
-  var _dfEg = new Date(2026, 7, 3);
-  [['short', fmtDate(_dfEg, 'short') + ' (default)'], ['dmy', fmtDate(_dfEg, 'dmy')],
-   ['iso', '2026-08-03 (the same everywhere)'],
-   ['long', fmtDate(_dfEg, 'long')]].forEach(function (o) {
-    h += '<option value="' + o[0] + '"' + (((s.date_format || 'short') === o[0]) ? ' selected' : '') + '>'
-      + esc(o[1]) + '</option>';
-  });
-  h += '</select>';
-
-  h += '<p class="sub-text">The country these follow comes from your <strong>currency</strong> under '
-    + 'Finance \u2014 one answer, not two to keep in step. '
-    + esc(_curLocaleNote()) + '</p>';
-  h += '<p class="sub-text" style="margin-bottom:0">Today would read <strong>'
-    + esc(fmtDate(_dfNow, s.date_format || 'short')) + '</strong>. This changes new documents only; '
-    + 'one already produced keeps the dates it was written with.</p>';
-  h += '</div></div></div>';
-
   h += '<div id="set_company_section">';
 
   var _showCompanyDetails = !S._wizCompanySection || S._wizCompanySection === 'company'   || S._wizCompanySection === 'full';
-  var _showTestingIp      = !S._wizCompanySection || S._wizCompanySection === 'testing_ip'|| S._wizCompanySection === 'full';
   var _showFinance        = !S._wizCompanySection || S._wizCompanySection === 'finance'   || S._wizCompanySection === 'full';
   var _showBankDetails    = !S._wizCompanySection || S._wizCompanySection === 'bank'      || S._wizCompanySection === 'full';
   var _showCompanyExtras  = !S._wizCompanySection || S._wizCompanySection === 'full';
@@ -40928,27 +40899,6 @@ function renderSettings__portal() {
   h += '<div class="form-group"><label>Company Address</label><textarea class="form-input" id="set_company_address" rows="3" placeholder="123 Business Street&#10;London&#10;EC1A 1BB">' + esc(s.company_address || '') + '</textarea></div>';
   h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the fields above.</div>';
   h += '<button class="btn btn-primary mt-2" onclick="saveSettings()">Save Company Details</button>';
-  h += '</div></div>';
-  }
-
-  if (_showTestingIp) {
-  var _existingIPs = (s.public_ip || '').split(',').map(function(x){return x.trim()}).filter(Boolean);
-  h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> Public Testing IP Addresses</span></div><div class="card-body">';
-
-  var _ipWhere = [proposalsEnabled() ? 'proposals' : '', assessmentsEnabled() ? 'assessment credentials pages' : '', assessmentsEnabled() ? 'reports' : ''].filter(Boolean);
-  h += '<p style="color:var(--gray);margin-bottom:0.75rem;font-size:0.82rem">Source IPs your team tests from. These appear in reports, so clients can allow them before testing begins.</p>';
-  h += '<div class="form-group"><div id="ip_list">';
-  _existingIPs.forEach(function(ip, i) {
-    h += '<div class="ip-row" style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.4rem"><input type="text" class="form-input ip-entry" value="' + esc(ip) + '" style="flex:1" placeholder="e.g. 203.0.113.50"><button class="btn btn-ghost btn-sm" onclick="this.parentElement.remove()" title="Remove" style="color:var(--red-text);padding:0.25rem 0.5rem">&times;</button></div>';
-  });
-  if (_existingIPs.length === 0) {
-    h += '<div class="ip-row" style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.4rem"><input type="text" class="form-input ip-entry" value="" style="flex:1" placeholder="e.g. 203.0.113.50"><button class="btn btn-ghost btn-sm" onclick="this.parentElement.remove()" title="Remove" style="color:var(--red-text);padding:0.25rem 0.5rem">&times;</button></div>';
-  }
-  h += '</div>';
-  h += '<button class="btn btn-ghost btn-sm mt-2" onclick="var d=document.createElement(\'div\');d.className=\'ip-row\';d.style=\'display:flex;gap:0.5rem;align-items:center;margin-bottom:0.4rem\';d.innerHTML=\'<input type=&quot;text&quot; class=&quot;form-input ip-entry&quot; value=&quot;&quot; style=&quot;flex:1&quot; placeholder=&quot;e.g. 203.0.113.50&quot;><button class=&quot;btn btn-ghost btn-sm&quot; onclick=&quot;this.parentElement.remove()&quot; title=&quot;Remove&quot; style=&quot;color:var(--red-text);padding:0.25rem 0.5rem&quot;>&times;</button>\';document.getElementById(\'ip_list\').appendChild(d)">+ Add IP</button>';
-  h += '</div>';
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the fields above.</div>';
-  h += '<button class="btn btn-primary mt-2" onclick="saveSettings()">Save Testing IPs</button>';
   h += '</div></div>';
   }
 
@@ -41086,6 +41036,7 @@ function renderSettings__portal() {
   h += '</div></div>';
 
   if (!assessmentsEnabled()) h += _assTypesCardHtml();
+  if (!assessmentsEnabled()) h += _testingIpsCardHtml();
   }
 
   if (_st === 'contractors') {
@@ -51569,6 +51520,62 @@ function _assTypesCardHtml() {
   return h;
 }
 window._assTypesCardHtml = _assTypesCardHtml;
+function _testingIpsCardHtml() {
+  var s = (S.data && S.data.settings) || {};
+  var h = '';
+  var _existingIPs = (s.public_ip || '').split(',').map(function(x){return x.trim()}).filter(Boolean);
+  h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> Public Testing IP Addresses</span></div><div class="card-body">';
+
+  var _ipBefore = [];
+  var _ipSay = 'Source IPs your team tests from.'
+    + (_ipBefore.length ? ' Clients see them on ' + _andList(_ipBefore) + ', so they can allow them before testing starts.' : '')
+    + (assessmentsEnabled() ? ' The report states them as where the testing came from.' : '');
+  h += '<p style="color:var(--gray);margin-bottom:0.75rem;font-size:0.82rem">' + _ipSay + '</p>';
+  h += '<div class="form-group"><div id="ip_list">';
+  _existingIPs.forEach(function(ip, i) {
+    h += '<div class="ip-row" style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.4rem"><input type="text" class="form-input ip-entry" value="' + esc(ip) + '" style="flex:1" placeholder="e.g. 203.0.113.50"><button class="btn btn-ghost btn-sm" onclick="this.parentElement.remove()" title="Remove" style="color:var(--red-text);padding:0.25rem 0.5rem">&times;</button></div>';
+  });
+  if (_existingIPs.length === 0) {
+    h += '<div class="ip-row" style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.4rem"><input type="text" class="form-input ip-entry" value="" style="flex:1" placeholder="e.g. 203.0.113.50"><button class="btn btn-ghost btn-sm" onclick="this.parentElement.remove()" title="Remove" style="color:var(--red-text);padding:0.25rem 0.5rem">&times;</button></div>';
+  }
+  h += '</div>';
+  h += '<button class="btn btn-ghost btn-sm mt-2" onclick="var d=document.createElement(\'div\');d.className=\'ip-row\';d.style=\'display:flex;gap:0.5rem;align-items:center;margin-bottom:0.4rem\';d.innerHTML=\'<input type=&quot;text&quot; class=&quot;form-input ip-entry&quot; value=&quot;&quot; style=&quot;flex:1&quot; placeholder=&quot;e.g. 203.0.113.50&quot;><button class=&quot;btn btn-ghost btn-sm&quot; onclick=&quot;this.parentElement.remove()&quot; title=&quot;Remove&quot; style=&quot;color:var(--red-text);padding:0.25rem 0.5rem&quot;>&times;</button>\';document.getElementById(\'ip_list\').appendChild(d)">+ Add IP</button>';
+  h += '</div>';
+  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the fields above.</div>';
+  h += '<button class="btn btn-primary mt-2" onclick="saveSettings()">Save Testing IPs</button>';
+  h += '</div></div>';
+  return h;
+}
+window._testingIpsCardHtml = _testingIpsCardHtml;
+function _datesCardHtml() {
+  var s = (S.data && S.data.settings) || {};
+  var h = '';
+
+  h += '<div class="card mt-4" id="set_dates_card"><div class="card-header"><span class="card-title">Dates</span></div><div class="card-body">';
+
+  h += '<div class="form-group" style="margin-bottom:0"><label class="form-label" for="set_date_format">How dates are written in documents</label>';
+  h += '<select class="form-select" id="set_date_format" style="max-width:340px">';
+  var _dfNow = new Date();
+
+  var _dfEg = new Date(2026, 7, 3);
+  [['short', fmtDate(_dfEg, 'short') + ' (default)'], ['dmy', fmtDate(_dfEg, 'dmy')],
+   ['iso', '2026-08-03 (the same everywhere)'],
+   ['long', fmtDate(_dfEg, 'long')]].forEach(function (o) {
+    h += '<option value="' + o[0] + '"' + (((s.date_format || 'short') === o[0]) ? ' selected' : '') + '>'
+      + esc(o[1]) + '</option>';
+  });
+  h += '</select>';
+
+  h += '<p class="set-p" style="margin:0.4rem 0 0">Today would read <strong>'
+    + esc(fmtDate(_dfNow, s.date_format || 'short')) + '</strong>. This changes new documents only; '
+    + 'one already produced keeps the dates it was written with.</p>';
+  h += '</div>';
+  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the date style above.</div>';
+  h += '<button class="btn btn-primary" onclick="saveSettings()">Save Dates</button>';
+  h += '</div></div>';
+  return h;
+}
+window._datesCardHtml = _datesCardHtml;
 function _smKeyOn(key) {
   switch (key) {
     case 'doc_proposal': return proposalsEnabled();
@@ -51582,29 +51589,52 @@ window._smKeyOn = _smKeyOn;
 function _smDocChildrenHtml() {
   var docs = _smDefs().filter(function(d) { return d.doc && _smKeyOn(d.key); });
   if (!docs.length) return '';
-  var h = '<div style="margin:0 0 0.5rem 46px;padding:0.5rem;border:1px dashed var(--border);border-radius:8px">';
-  h += '<div style="font-size:0.68rem;color:var(--gray);font-weight:700;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:0.4rem">Documents in this row</div>';
-
-  h += '<div id="smDocGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,9rem),1fr));gap:0.5rem">';
+  var _ord = _smOrder();
+  docs.sort(function (x, y) { return _ord.indexOf(x.key) - _ord.indexOf(y.key); });
+  var many = docs.length > 1;
+  var h = '<div class="sm-docs">';
+  if (many) h += '<div class="sm-docs-note">Side by side on the assessment, the first on the left.</div>';
+  h += '<div id="smDocGrid">';
   docs.forEach(function(d) {
     var en = _smEnabled(d.key);
-    h += '<div data-sm-key="' + esc(d.key) + '" style="border:1px solid var(--border);border-radius:6px;padding:0.5rem;display:flex;flex-direction:column;gap:0.4rem">';
-
-    h += '<div style="display:flex;justify-content:space-between;align-items:center">';
-    h += '<button type="button" class="btn btn-ghost btn-sm" onclick="_smDocMove(this,-1)" title="Move left" style="padding:0 0.25rem;font-size:0.75rem;line-height:1">&#9664;</button>';
-    h += '<button type="button" class="btn btn-ghost btn-sm" onclick="_smDocMove(this,1)" title="Move right" style="padding:0 0.25rem;font-size:0.75rem;line-height:1">&#9654;</button>';
-    h += '</div>';
-    h += '<div style="display:flex;align-items:center;gap:0.35rem">';
+    h += '<div data-sm-key="' + esc(d.key) + '" data-sm-kind="doc" class="sg-row sg-sm sg-box">';
+    h += many ? _sgOrderCell(_smLabel(d.key), '_smDocMove') : '<span class="g-ord"></span>';
     h += '<input type="hidden" id="sm_icon_' + d.key + '" value="' + esc(_smIcon(d.key)) + '">';
-    h += '<button type="button" id="sm_iconbtn_' + d.key + '" onclick="_smOpenIconPicker(\'' + d.key + '\')" title="Choose an icon" style="width:30px;height:26px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:5px;background:transparent;cursor:pointer;color:var(--accent)">' + _smIconHtml(d.key) + '</button>';
-    h += '<label style="display:flex;align-items:center;gap:0.3rem;font-size:0.72rem;color:var(--gray);cursor:pointer" title="Show this document"><input type="checkbox" id="sm_en_' + d.key + '"' + (en ? ' checked' : '') + '> Show</label>';
-    h += '</div>';
-    h += '<input type="text" class="form-input" id="sm_label_' + d.key + '" value="' + esc(_smLabel(d.key)) + '" placeholder="' + esc(d.label) + '" style="height:28px;font-size:0.78rem;padding:0.2rem 0.4rem">';
+    h += '<button type="button" class="g-ico" id="sm_iconbtn_' + d.key + '" onclick="_smOpenIconPicker(\'' + d.key + '\')" title="Choose an icon" style="width:44px;height:30px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:6px;background:transparent;cursor:pointer;color:var(--accent)">' + _smIconHtml(d.key) + '</button>';
+    h += '<span class="g-lab"><input type="text" class="form-input" id="sm_label_' + d.key + '" value="' + esc(_smLabel(d.key)) + '" placeholder="' + esc(d.label) + '" title="Default: ' + esc(d.label) + '" aria-label="The document’s name" oninput="_smBuiltinEdit(\'' + d.key + '\',\'label\',this.value)" style="height:30px;font-size:0.85rem;font-weight:600;padding:0.25rem 0.5rem"></span>';
+    h += '<span class="sg-ctl">';
+    h += '<label class="g-c g-mid" data-la="Show" title="Show this document on the assessment"><input type="checkbox" id="sm_en_' + d.key + '"' + (en ? ' checked' : '') + ' onchange="_smBuiltinEdit(\'' + d.key + '\',\'enabled\',this.checked)"></label>';
+    h += '<span></span><span></span><span></span>' + _tokSlot('');
+    h += '</span><span class="g-x"></span>';
     h += '</div>';
   });
   h += '</div></div>';
   return h;
 }
+function _smTitleRowHtml() {
+  var fixed = function (la, title) {
+    return '<label class="g-c g-mid" data-la="' + la + '" title="' + esc(title) + '"><input type="checkbox" checked disabled aria-label="' + esc(la + ', always') + '"></label>';
+  };
+  var h = '<div id="smTitlePrompt" class="sm-fixed">';
+  h += '<div class="sg-row sg-sm sg-box" data-sm-fixed="assessment_title">';
+  h += '<span class="g-ord sm-fixed-ord" title="Always first" aria-label="Always first">' + IC.lock + '</span>';
+  h += '<span class="g-ico"></span>';
+  h += '<span class="g-lab"><span class="sm-fixed-name">Assessment Title</span>'
+    + '<span class="sm-fixed-note">Always first. Generate writes it with AI to the prompt below, from the client and the phases; without AI, from the phases.</span></span>';
+  h += '<span class="sg-ctl">' + fixed('Show', 'Every assessment has its title') + fixed('Report', 'In every report')
+    + fixed('Client', 'Seen by the client') + fixed('On new', 'Asked for on the new assessment form')
+    + _tokSlot(_docxTokenHtml('{assessment_name}', 'DOCX placeholder for the title')) + '</span>';
+  h += '<span class="g-x"></span>';
+  h += '</div>';
+  h += '<details style="margin:0 0 0.5rem 46px"><summary style="cursor:pointer;font-size:0.78rem;color:var(--gray)">AI prompt</summary>';
+  h += '<textarea class="form-textarea" id="sm_prompt_assessment_title" rows="5" style="font-size:0.82rem;margin-top:0.4rem">' + esc(_smPromptShown('assessment_title')) + '</textarea>';
+  h += '<button class="btn btn-ghost btn-sm" style="margin-top:0.3rem" onclick="_resetPromptField(\'sm_prompt_assessment_title\',\'assessment_title\')" title="Restore the built-in prompt">Reset to default</button>';
+  h += _aiContractNote(_AI_REPLY_CONTRACTS.title);
+  h += '</details>';
+  h += '</div>';
+  return h;
+}
+window._smTitleRowHtml = _smTitleRowHtml;
 var SM_CREATE_BUILTINS = { notes: 1, caveats: 1, files: 1, comments: 1 };
 function _smCanCreate(key) {
   if (SM_CREATE_BUILTINS[key]) return true;
@@ -63423,9 +63453,9 @@ function _smBuiltinRowHtml(d) {
   var h = '<div data-sm-key="' + esc(d.key) + '" data-sm-kind="builtin" class="sg-row sg-sm sg-box">';
   h += _smArrows(_smLabel(d.key));
 
-  if (d.structural) {
+  if (d.structural || d.key === 'documents') {
     h += '<span class="g-ico"></span>';
-    h += '<span class="g-lab" style="font-size:0.85rem;font-weight:600;color:var(--gray)">' + esc(d.label) + '</span>';
+    h += '<span class="g-lab" style="font-size:0.85rem;font-weight:600;color:var(--' + (d.structural ? 'gray' : 'text') + ')">' + esc(d.label) + '</span>';
     h += '<span class="sg-ctl">';
     h += '<label class="g-c g-mid" data-la="Show" title="Show this area"><input type="checkbox" id="sm_en_' + d.key + '"' + (en ? ' checked' : '') + ' onchange="_smBuiltinEdit(\'' + d.key + '\',\'enabled\',this.checked)"></label>';
     h += '<span></span><span></span><span></span>' + _tokSlot('');

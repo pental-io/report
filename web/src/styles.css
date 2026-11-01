@@ -4068,6 +4068,19 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
 .sg-moved{animation:sgMoved 0.9s ease-out}
 @keyframes sgMoved{0%{box-shadow:0 0 0 2px rgba(var(--accent-rgb),0.55)}100%{box-shadow:0 0 0 2px rgba(var(--accent-rgb),0)}}
 @media (prefers-reduced-motion:reduce){.sg-moved{animation:none}}
+/* 1977: ASSESSMENT SECTIONS' TITLE AND DOCUMENTS. [stated] Arian: "it is also
+   an assessment section on top, not movable" and, of the documents' box, "it
+   can make a bit more sense". The title is the list's first row, fixed: a lock
+   where the arrows are and its switches ticked and fixed. The documents are
+   rows a step in under Documents, on its columns, with a rule that ties them
+   to it. */
+.sm-fixed-ord{display:flex;align-items:center;justify-content:center;color:var(--gray)}
+.sm-fixed-ord svg{width:14px;height:14px}
+.sm-fixed-name{font-size:0.85rem;font-weight:600;color:var(--text)}
+.sm-fixed-note{flex:1 1 100%;font-size:0.72rem;line-height:1.4;color:var(--gray)}
+.sm-fixed .g-c input:disabled{opacity:0.6;cursor:default}
+.sm-docs{margin:-1px 0 6px 22px;padding:6px 0 0 12px;border-left:2px solid var(--border)}
+.sm-docs-note{font-size:0.72rem;color:var(--gray);margin:0 0 5px 2px}
 /* 1819: one bar, at the foot of a Settings page, while a change waits. */
 .set-dirty-bar{position:fixed;left:50%;bottom:22px;z-index:900;display:flex;align-items:center;gap:0.6rem;
   padding:0.55rem 0.6rem 0.55rem 1rem;border-radius:12px;border:1px solid var(--border);background:var(--card);
