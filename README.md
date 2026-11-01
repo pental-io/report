@@ -34,7 +34,7 @@
 
 ## Install
 
-You need Docker: [Docker Desktop](https://www.docker.com/products/docker-desktop/) on a Mac or a Windows PC, or Docker Engine on Linux, which the installer offers to set up for you. Then run one command.
+You need Docker: [Docker Desktop](https://www.docker.com/products/docker-desktop/) on a Mac or a Windows PC, or Docker Engine on Linux, which the installer offers to set up for you. The first time Docker Desktop opens, accept its terms, then skip signing in or create an account: it starts only once its main screen shows. Then run one command.
 
 **macOS and Linux**
 

@@ -164,9 +164,10 @@ Write-Host ''
 
 # -- Docker -------------------------------------------------------------------
 # Installed here, Docker Desktop is opened and the install carries on once it
-# is running: no closing this window and running the command again. Docker
-# Desktop asks for its terms to be accepted the first time it opens, and
-# Windows may need to restart before it can run.
+# is running: no closing this window and running the command again. The first
+# time it opens, Docker Desktop does not start until its terms are accepted and
+# its sign-in is skipped (or an account made) on to its main screen, which is
+# said before the wait; and Windows may need to restart before it can run.
 Refresh-Path
 $fresh = $false
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -185,19 +186,18 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
       $fresh = $true
     }
   }
-  if (-not $fresh) { Fail 'Pental Report runs in Docker.' @('Install Docker Desktop from https://www.docker.com/products/docker-desktop/,', 'open it once, then run this installer again.') }
+  if (-not $fresh) { Fail 'Pental Report runs in Docker.' @('Install Docker Desktop from https://www.docker.com/products/docker-desktop/,', 'open it and go on to its main screen (skip signing in, or create an account),', 'then run this installer again.') }
 }
 if (-not (Docker-Ok)) {
   if (Test-Path $DockerApp) { Start-Process -FilePath $DockerApp | Out-Null }
-  if ($fresh) {
-    Note 'Docker Desktop is opening for the first time. Accept its terms in its window,'
-    Note 'and this carries on by itself once it is running.'
-  }
-  if (-not (Wait-Until 'Waiting for Docker Desktop to start' { Docker-Ok } $(if ($fresh) { 900 } else { 180 }))) {
+  if ($fresh) { Note 'Docker Desktop is opening for the first time.' }
+  Note 'If it asks, accept its terms, then skip signing in or create an account,'
+  Note 'on to its main screen: it starts only then, and this carries on by itself.'
+  if (-not (Wait-Until 'Waiting for Docker Desktop to start' { Docker-Ok } $(if ($fresh) { 900 } else { 600 }))) {
     if ($fresh) {
-      Fail 'Docker Desktop has not started yet.' @('If it asks you to restart Windows or to sign out, do that, then open Docker Desktop.', 'Once it says it is running, run the same command again, in this window or a new one.')
+      Fail 'Docker Desktop has not started yet.' @('If it is still on its terms or its sign-in, accept them, then skip signing in or create an account.', 'If it asks you to restart Windows or to sign out, do that, then open Docker Desktop.', 'Once it says it is running, run the same command again, in this window or a new one.')
     }
-    Fail 'Docker Desktop is not running.' @('Open Docker Desktop, wait until it says it is running, then run this again.')
+    Fail 'Docker Desktop is not running.' @('Open Docker Desktop and go on to its main screen (if it asks, accept its terms,', 'then skip signing in or create an account). Once it says it is running, run this again.')
   }
 }
 # Windows PowerShell turns a program's error output into an error of its own

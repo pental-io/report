@@ -149,7 +149,7 @@ SUDO=""
 [ "$(id -u)" = 0 ] || { command -v sudo >/dev/null 2>&1 && SUDO="sudo"; }
 
 if ! command -v docker >/dev/null 2>&1; then
-  [ "$OS" = Darwin ] && fail "Docker is not installed." "Install Docker Desktop from https://www.docker.com/products/docker-desktop/," "open it once, then run this installer again."
+  [ "$OS" = Darwin ] && fail "Docker is not installed." "Install Docker Desktop from https://www.docker.com/products/docker-desktop/," "open it and go on to its main screen (skip signing in, or create an account)," "then run this installer again."
   warn "Docker is not installed."
   # Installing it is asked, or given with --yes: never taken for granted.
   if [ $YES = 1 ]; then WANT=y
@@ -167,8 +167,12 @@ DOCKER="docker"
 if ! docker info >/dev/null 2>&1; then
   if [ "$OS" = Darwin ]; then
     open -ga Docker >/dev/null 2>&1 || true
-    _wait_docker() { _i=0; while [ $_i -lt 90 ]; do docker info >/dev/null 2>&1 && return 0; sleep 2; _i=$((_i + 1)); done; return 1; }
-    run "Starting Docker Desktop" _wait_docker || fail "Docker Desktop is not running." "Open Docker Desktop, wait until it says it is running, then run this again."
+    # Opened for the first time, it does not start until its terms are accepted
+    # and its sign-in skipped (or an account made), on to its main screen.
+    note "If Docker Desktop asks, accept its terms, then skip signing in or create an account,"
+    note "on to its main screen: it starts only then, and this carries on by itself."
+    _wait_docker() { _i=0; while [ $_i -lt 300 ]; do docker info >/dev/null 2>&1 && return 0; sleep 2; _i=$((_i + 1)); done; return 1; }
+    run "Starting Docker Desktop" _wait_docker || fail "Docker Desktop is not running." "Open Docker Desktop and go on to its main screen (if it asks, accept its terms," "then skip signing in or create an account). Once it says it is running, run this again."
   elif [ -n "$SUDO" ]; then
     # Not in the docker group: Docker is asked through sudo, once for the password.
     $SUDO -v || fail "Docker needs sudo here, and sudo was not given."
