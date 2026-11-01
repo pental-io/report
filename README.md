@@ -12,6 +12,7 @@
   <a href="LICENSE"><img alt="Licence: AGPL-3.0" src="https://img.shields.io/badge/licence-AGPL--3.0-b71c1c?style=flat-square"></a>
   <a href="https://github.com/pental-io/report/pkgs/container/report"><img alt="Docker image" src="https://img.shields.io/badge/image-ghcr.io%2Fpental--io%2Freport-1f2433?style=flat-square&logo=docker&logoColor=white"></a>
   <img alt="Runs on macOS, Linux and Windows" src="https://img.shields.io/badge/runs%20on-macOS%20%7C%20Linux%20%7C%20Windows-1f2433?style=flat-square">
+  <a href="https://www.linkedin.com/company/pental"><img alt="Follow Pental on LinkedIn" src="https://img.shields.io/badge/follow-Pental%20on%20LinkedIn-0a66c2?style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -27,7 +28,8 @@
   <a href="#ai-on-your-own-key">AI</a>&nbsp;&nbsp;&nbsp;&nbsp;
   <a href="#your-reports">Your reports</a>&nbsp;&nbsp;&nbsp;&nbsp;
   <a href="#updating">Updating</a>&nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://pental.io/report">pental.io/report</a>
+  <a href="https://pental.io/report">pental.io/report</a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.linkedin.com/company/pental">LinkedIn</a>
 </p>
 
 <br>
@@ -391,3 +393,5 @@ Or without Docker, with Node.js 22 and PostgreSQL 16 or later: `node web/build.m
 ## Licence
 
 Pental Report is free software under the [GNU Affero General Public License v3.0](LICENSE). If you run a modified version for others to use over a network, you must offer them its source. Copyright Pental Limited.
+
+Releases and news from Pental are on [LinkedIn](https://www.linkedin.com/company/pental) and at [pental.io](https://pental.io).
