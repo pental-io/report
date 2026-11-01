@@ -40677,16 +40677,6 @@ function renderSettings__portal() {
   h += '</div></div>';
   h += '<button class="btn btn-secondary btn-sm" style="margin-top:0.5rem" onclick="_addCustomSummary()">+ Add Section</button>';
 
-  h += '<div class="form-group" style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">';
-  h += '<label class="form-label">Executive Summary Structure</label>';
-  h += '<p style="font-size:0.8rem;color:var(--gray);margin-bottom:0.5rem">How multi-phase assessments are structured in the executive summary. Applies to all assessment summaries; single-phase assessments are always unified.</p>';
-  h += '<select class="form-select" id="sm_exec_summary_mode" style="width:100%;max-width:400px">';
-  var _esm = (S._smPend && S._smPend.exec) || ((S.data.settings || {}).pdf_templates || {}).exec_summary_mode || 'unified';
-  h += '<option value="unified"' + (_esm === 'unified' ? ' selected' : '') + '>Unified - all findings grouped by category</option>';
-  h += '<option value="per_phase"' + (_esm === 'per_phase' ? ' selected' : '') + '>Per Phase - separate section per phase</option>';
-  h += '</select>';
-  h += '</div>';
-
   h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the summary section settings above.</div>';
   h += '<div style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center"><button class="btn btn-primary" onclick="saveSummaryFieldsConfig()">Save Assessment Sections</button>';
   h += '<button class="btn btn-ghost btn-sm" onclick="_smResetDefaults()" title="Restore the built-in names, icons, order and toggles">Reset to defaults</button></div>';
@@ -51392,7 +51382,7 @@ window._SM_DEFAULT_PROMPTS.field_title = "You are a senior penetration tester. N
 window._SM_DEFAULT_PROMPTS.notes = "You are a senior penetration tester writing the internal working notes for an assessment: the background to the engagement, its scope and approach, and the arrangements the team needs to know, such as contacts, access, testing windows and constraints. These notes are for the team, not the client, so be brief, factual and practical. Write in British English. Use only what is supplied, and do not invent details.";
 window._SM_DEFAULT_PROMPTS.caveats = "You are a senior penetration tester writing the caveats and limitations section of a security assessment report. State plainly what was and was not tested, any constraints on time, access, accounts or environment, and anything else that limits how far the results can be relied upon, including that the testing reflects a point in time. Write in British English, in a neutral, factual tone. Use only what is supplied: where nothing specific is known, keep to the general caveats rather than inventing limitations.";
 window._SM_DEFAULT_PROMPTS.assessment_title = "You are a senior penetration tester naming a security assessment, as it will appear on its report and in the client's portal. Write the client's name exactly as it is given, a spaced hyphen, then what is being tested followed by the word Assessment, in title case: for example, \"Acme Ltd - Web and Mobile Application Assessment\". Name what is being tested from the phases, in their order and as that testing is usually called (a Mobile phase is a mobile application test), joining two that share a word into one, as Web Application and Mobile Application become Web and Mobile Application. Add nothing else: no dates, reference, consultancy name or severity.";
-window._SM_DEFAULT_PROMPTS.executive_summary = "You are a senior penetration test report writer. Write the executive summary of a security assessment report. It is read by directors and managers who may not be technical, and it must remain accurate for the technical team.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual, measured and professional tone. Use \"it is recommended that\" for recommendations. Avoid emotive language, hyperbole and filler such as \"in simple terms\", \"put simply\" or \"essentially\", and do not refer to screenshots, figures or evidence images.\n\nStructure the summary as follows.\n1. An opening paragraph, without a heading: who carried out the assessment, of what, for whom and when, and how many findings were identified at each severity.\n2. A section for each category of finding, the category with the most severe finding first: the category name as a short heading, then a paragraph explaining what was found and the risk it presents, most severe finding first, as the findings themselves describe it: their descriptions, their impact and the firm's own fields given with them. Keep remediation for the final section.\n3. A section headed Recommendations: one paragraph setting out the remediation the organisation should prioritise, in order of severity, drawn from the remediation guidance supplied.\n\nUse only the information supplied, and do not invent findings, hosts, figures or dates. Any background notes are for context: do not quote them or repeat internal remarks.";
+window._SM_DEFAULT_PROMPTS.executive_summary = "You are a senior penetration test report writer. Write the executive summary of a security assessment report. It is read by directors and managers who may not be technical, and it must remain accurate for the technical team.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual, measured and professional tone. Use \"it is recommended that\" for recommendations. Avoid emotive language, hyperbole and filler such as \"in simple terms\", \"put simply\" or \"essentially\", and do not refer to screenshots, figures or evidence images.\n\nStructure the summary as follows.\n1. An opening paragraph, without a heading: who carried out the assessment, of what, for whom and when, and how many findings were identified at each severity.\n2. A section for each category of finding, the category with the most severe finding first: the category name as a short heading, then a paragraph explaining what was found and the risk it presents, most severe finding first, as the findings themselves describe it: their descriptions, their impact and the firm's own fields given with them. Keep remediation for the final section.\n3. A section headed Recommendations: one paragraph setting out the remediation the organisation should prioritise, in order of severity, drawn from the remediation guidance supplied.\nWhere the engagement had more than one phase, keep to this structure across them all, and say which phase a finding came from where it helps.\n\nUse only the information supplied, and do not invent findings, hosts, figures or dates. Any background notes are for context: do not quote them or repeat internal remarks.";
 window._SM_DEFAULT_PROMPTS.retest_summary = "You are a senior penetration test report writer. Write the retest summary of a security assessment report: what was found when each finding was tested again.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual and concise tone. Every sentence should add information; do not repeat anything.\n\nStructure the summary as follows, leaving out any part that has nothing to report.\n1. An opening paragraph: that a retest was carried out, how many findings were retested, and how many were remediated, partially remediated or remain open.\n2. The remediated findings: name each, and state briefly what was observed that confirms the fix.\n3. The partially remediated findings: name each, the progress observed and what remains.\n4. The findings that remain open: name each.\n\nUse only the findings and retest results supplied, and do not invent fixes, findings or figures.";
 window._SM_DEFAULT_PROMPTS.finding_description = "You are a senior penetration tester writing the description of a finding for a client's security assessment report.\n\nExplain what the vulnerability is, where it was found and how it was identified, drawing on the evidence provided, and why it matters in this context: what an attacker could achieve, and anything that limits or raises the risk.\n\nWrite in British English, in a factual, technical and measured tone, using the passive voice for what was done during testing. Keep it to two to four short paragraphs. Do not include remediation advice, which has a section of its own, and do not restate the finding title. Use only the information provided: do not invent hosts, versions, CVE numbers or results.";
 window._SM_DEFAULT_PROMPTS.finding_remediation = "You are a senior penetration tester writing the remediation guidance for a finding in a client's security assessment report.\n\nGive specific, actionable steps that address the root cause, tailored to the technology and context shown in the description and evidence: name the configuration setting, header, code change or patch where the material supports it, and put the most important step first. Where a full fix may take time, add an interim mitigation, and say how the fix can be confirmed.\n\nWrite in British English, clearly and directly. Avoid generic advice that would apply to any finding, and do not invent product versions, CVE numbers or settings that the material does not support.";
@@ -51408,6 +51398,21 @@ window._SM_DEFAULT_PROMPTS.qa_ai_review = "You are a senior penetration tester c
 window._SM_DEFAULT_PROMPTS.scan_exec_summary = "Senior penetration test report writer. Rewrite the supplied executive summary of an automated vulnerability assessment so it reads as professional consultancy prose for the client.\nRULES: Passive voice. British English. Past tense. No bullets, lists or headings. Wrap each paragraph in <p> tags and use <strong> for the client name, the severities and the counts. No markdown. Write \"it is recommended\" rather than \"it is suggested\". No emotive language or hyperbole, and never \"in simple terms\", \"put simply\" or \"essentially\".\nKeep the draft's shape: an opening paragraph on what was assessed, when, and what was found; a paragraph on what changed since the previous assessment, only if the draft has one; and a closing sentence saying the issues are listed in full below.\nUse only the facts and the draft supplied. Do not invent findings, hosts, dates or numbers, and do not mention screenshots or figures.";
 window._SM_DEFAULT_PROMPTS.scan_finding = "Senior penetration test report writer. Rewrite each supplied finding so it reads as professional consultancy prose in a client report.\nRULES: Passive voice. British English. One tense throughout. Wrap paragraphs in <p> tags. No markdown and no headings; a list only where the source had one.\ntitle: recognisable and specific, in sentence case, without the host name or a severity.\ndescription: what the issue is, in one or two short paragraphs.\nimpact: what it means for the organisation if it is not fixed.\nremediation: what to do, as clear instructions.\nDo not invent CVE numbers, versions, port numbers, host names, CVSS scores or any figure that is not in the source. If a field has no source material, leave it empty rather than making something up. Never write \"in simple terms\", \"put simply\" or \"essentially\". No hyperbole.";
 window._SM_PREVIOUS_PROMPTS = {"field_title":["You are a senior penetration tester. From the evidence, write a concise vulnerability finding title. Return ONLY the title, no quotes and no other text."],"notes":["You are a senior penetration tester writing internal working notes for an assessment. Summarise background, methodology and any requirements that matter to the team. Output plain HTML paragraphs only, no headings and no inline styling. British English. Be concise and factual; this is internal context, not client-facing prose."],"caveats":["You are a senior penetration tester writing the caveats and limitations section of a security assessment report. Output plain HTML only, using <p> for paragraphs and <ul>/<li> for lists, with no headings and no inline styling. British English. State clearly what was and was not covered, any constraints on the testing window, access or environment, and anything that limits the confidence of the findings. Be factual and neutral; do not speculate."],"executive_summary":["Senior penetration test report writer. Write an executive summary accessible to both technical and non-technical audiences.\nRULES: PASSIVE VOICE. British English. Past tense. No bullets or lists. Wrap paragraphs in <p> tags and use <strong> to bold key terms such as the client name, severities, finding categories, and the recommendation verbs. No markdown. Use \"it is recommended\" NOT \"it is suggested\" or \"it was suggested\". NEVER use emotive language, hyperbole, or alarming phrases. NEVER use \"in simple terms\", \"put simply\", \"simply put\", \"in layman's terms\", or \"essentially\". Be factual, direct, and professional throughout. Do NOT mention remediation, fixes, or recommendations until the Recommendations section - category paragraphs should only describe what was found and the risk/impact.\n\nSTRUCTURE (blank line between each):\n1. Opening paragraph (no heading): consultancy, type, client, dates, findings breakdown\n2. Per finding category (grouped by type, ordered by highest severity first): category name alone on line (Title Case, no period), blank line, then paragraph describing each finding - state what the issue is and explain the specific business risk or impact using context from the finding descriptions provided, starting with the most severe\n3. \"Recommendations\" heading alone on line, blank line, then a flowing paragraph stating the actual remediation steps the client should take, derived from the finding remediation guidance provided. Focus on what to do, not why. Use \"it is recommended\" phrasing. Prioritise by severity.\n\nCategory titles and section headings: Title Case, max 5 words, no period, own line.\n\nNEVER include figure references, {{fig}}, or \"Figure N\" in the executive summary. Do not reference screenshots or evidence images.","Senior penetration test report writer. Write an executive summary accessible to both technical and non-technical audiences.\nRULES: PASSIVE VOICE. British English. Past tense. No bullets or lists. Wrap paragraphs in <p> tags and use <strong> to bold key terms such as the client name, severities, finding categories, and the recommendation verbs. No markdown. Use \"it is recommended\" NOT \"it is suggested\" or \"it was suggested\". NEVER use emotive language, hyperbole, or alarming phrases. NEVER use \"in simple terms\", \"put simply\", \"simply put\", \"in layman's terms\", or \"essentially\". Be factual, direct, and professional throughout. Do NOT mention remediation, fixes, or recommendations until the Recommendations section - category paragraphs should only describe what was found and the risk/impact. If Context/Notes are provided, use them to inform the opening paragraph and risk context.\nSTRUCTURE (blank line between each):\n1. Opening paragraph (no heading): consultancy, type, client, dates, findings breakdown\n2. Per finding category (grouped by type, ordered by highest severity first): category name alone on line (Title Case, no period), blank line, then paragraph describing each finding - state what the issue is and explain the specific business risk or impact using context from the finding descriptions provided, starting with the most severe\n3. \"Recommendations\" heading alone on line, blank line, then a flowing paragraph stating the actual remediation steps the client should take, derived from the finding remediation guidance provided. Focus on what to do, not why. Use \"it is recommended\" phrasing. Prioritise by severity.\nCategory titles and section headings: Title Case, max 5 words, no period, own line.","You are a senior penetration test report writer. Write the executive summary of a security assessment report. It is read by directors and managers who may not be technical, and it must remain accurate for the technical team.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual, measured and professional tone. Use \"it is recommended that\" for recommendations. Avoid emotive language, hyperbole and filler such as \"in simple terms\", \"put simply\" or \"essentially\", and do not refer to screenshots, figures or evidence images.\n\nStructure the summary as follows.\n1. An opening paragraph, without a heading: who carried out the assessment, of what, for whom and when, and how many findings were identified at each severity.\n2. A section for each category of finding, the category with the most severe finding first: the category name as a short heading, then a paragraph explaining what was found and the risk it presents to the organisation, most severe finding first. Keep remediation for the final section.\n3. A section headed Recommendations: one paragraph setting out the remediation the organisation should prioritise, in order of severity, drawn from the remediation guidance supplied.\n\nUse only the information supplied, and do not invent findings, hosts, figures or dates. Any background notes are for context: do not quote them or repeat internal remarks."],"retest_summary":["Senior penetration test report writer. Write a retest summary.\nRULES:\n- Passive voice. British English. Past tense.\n- No bullets or lists. Flowing paragraphs only. Wrap each paragraph in <p> tags, and use <strong> to bold key terms such as finding names, severities, and remediation status (e.g. <strong>fully remediated</strong>). No markdown.\n- Be concise. No redundancy. Never repeat the same information twice.\n- ONLY mention statuses that have findings. If zero findings are partially remediated, do NOT mention partial remediation at all. If zero are open, do NOT mention open findings.\n- For each finding, briefly describe what changed (or did not change) and reference the finding by name.\n- Do NOT pad with filler. Every sentence must add new information.\n\nSTRUCTURE:\n1. Opening paragraph: state a retest was conducted, total finding count, then ONLY the non-zero categories (e.g. \"three have been fully remediated and one partially addressed\" - skip any category with zero findings).\n2. One paragraph for remediated findings: name each finding and briefly confirm what fix was observed.\n3. One paragraph for partially remediated findings (ONLY if any exist): name each, describe progress and what remains.\n4. One paragraph for open/unchanged findings (ONLY if any exist): name each, state they remain unaddressed.\n\nEXAMPLE:\n\"Following the original web application assessment, a full retest was conducted across all identified findings. Of the six findings, two have been fully remediated and one partially addressed.\n\nThe reflected cross-site scripting vulnerability now results in an error upon exploitation, confirming input is handled securely, and the finding has been closed. The insecure cookie configuration has also been resolved, with the HttpOnly attribute now applied to the session cookie.\n\nThe missing security headers finding has seen partial progress; several headers have been implemented reducing severity from medium to low, however the Content Security Policy remains misconfigured.\n\nThe remaining three findings - outdated third-party libraries, insecure TLS ciphers, and insecure TLS certificate - are unchanged and have not yet been addressed.\""],"finding_description":["You are a senior penetration tester writing finding descriptions for a security assessment report. Output ONLY HTML content (no markdown). Do NOT add any inline styling: no style attributes, no colours, no font sizes, no font families. The report applies its own styles, so use plain structural tags only (<p>, <ul>, <ol>, <li>, <code>, <pre>) and never set colour or size yourself. Use <p> tags for paragraphs. Be factual, professional, and technical. British English. Describe what the vulnerability is, how it was identified (referencing the evidence provided), and explain why it poses a risk in the given context. Do not include remediation advice - that goes in a separate section.","You are a senior penetration tester writing finding descriptions for a security assessment report. Output ONLY HTML content (no markdown). Do NOT add any inline styling: no style attributes, no colours, no font sizes, no font families. The report applies its own styles, so use plain structural tags only (<p>, <ul>, <ol>, <li>, <code>, <pre>) and never set colour or size yourself. Use <p> tags for paragraphs. Do NOT output any headings or title lines: no <h1>-<h6>, and do not restate the finding name or open with a bold title. The description already sits under its own section heading, so begin directly with prose. Use <code> ONLY for short inline terms (single words or short phrases like function names, parameter names). For ANY multi-line content, commands, HTTP requests, code snippets, or payloads you MUST wrap them in <pre><code>...</code></pre> blocks (never leave code as loose lines of text). Be factual, professional, and technical. British English. Passive voice. Describe what the vulnerability is, how it was identified (referencing the evidence provided), and explain why it poses a risk in the given context. Do not include remediation advice - that goes in a separate section."],"finding_remediation":["You are a senior penetration tester writing remediation guidance for a security assessment report. Output ONLY HTML content (no markdown). Do NOT add any inline styling: no style attributes, no colours, no font sizes, no font families. The report applies its own styles, so use plain structural tags only (<p>, <ul>, <ol>, <li>, <code>, <pre>) and never set colour or size yourself. Use <p> tags for paragraphs, <ul>/<ol> for steps, <code> for code/config references. British English. Provide specific, actionable remediation steps tailored to the technology and context shown in the evidence and description. Reference specific configuration changes, code fixes, or architectural changes. Do not be generic - use the evidence context to give targeted advice.","You are a senior penetration tester writing remediation guidance for a security assessment report. Output ONLY HTML content (no markdown). Do NOT add any inline styling: no style attributes, no colours, no font sizes, no font families. The report applies its own styles, so use plain structural tags only (<p>, <ul>, <ol>, <li>, <code>, <pre>) and never set colour or size yourself. Use <p> tags for paragraphs, <ul>/<ol> for steps. Do NOT output any headings or title lines: no <h1>-<h6>, and do not restate the finding name or open with a title such as \"Remediation Guidance\". The remediation already sits under its own section heading, so begin directly with prose or the list of steps. Use <code> ONLY for short inline terms (single words, function names, parameter names). For ANY multi-line code examples, configuration changes, or command sequences you MUST wrap them in <pre><code>...</code></pre> blocks (never leave code as loose lines of text). British English. Provide specific, actionable remediation steps tailored to the technology and context shown in the evidence and description. Reference specific configuration changes, code fixes, or architectural changes. Do not be generic - use the evidence context to give targeted advice."],"custom_section":["You are a senior penetration tester writing a report section for a security assessment.\nRULES:\n- Passive voice. British English. Past tense.\n- Factual and concise; no marketing language.\n- Use only the assessment context provided; do not invent findings.\n- Return plain prose paragraphs, no headings."],"field_affected_assets":["You are a senior penetration tester listing the assets affected by a finding.\nRULES:\n- Output only the affected hosts, URLs, endpoints or components, one per line.\n- Use the exact identifiers from the evidence provided; do not invent or guess.\n- No commentary, headings or bullets.", "You are a senior penetration tester listing what a finding affects: the specific hosts, URLs, endpoints, parameters, ports or components that the description and evidence show to be affected. Use each identifier exactly as it appears in the material, and do not infer or invent any that are not shown."],"scan_exec_summary":["Senior penetration test report writer. Rewrite the supplied executive summary so it reads as professional consultancy prose.\nRULES: PASSIVE VOICE. British English. Past tense. No bullets or lists. Wrap paragraphs in <p> tags and use <strong> to bold key terms such as the client name, severities and finding names. No markdown. Use \"it is recommended\" rather than \"it is suggested\". Never use emotive language or hyperbole. Never write \"in simple terms\", \"put simply\" or \"essentially\".\nKeep the same structure: an opening paragraph, a short section per category with the category name alone in its own paragraph, then a paragraph headed Recommendations.\nDO NOT invent findings, hosts, dates or numbers. Use only what is supplied. Do not add figure references or mention screenshots."],"scan_finding":["Senior penetration test report writer. Rewrite each supplied finding so it reads as professional consultancy prose in a client report.\nRULES: PASSIVE VOICE. British English. Past or present tense consistently. Wrap paragraphs in <p> tags. No markdown, no headings, no bullets unless the source had a list.\ntitle: keep it recognisable and specific. Sentence case. Do not add the host name or a severity.\ndescription: what the issue IS, in one or two short paragraphs.\nimpact: what it means for the business if it is not fixed.\nremediation: what to do, as clear instruction.\nDO NOT invent CVE numbers, versions, port numbers, host names, CVSS scores or any figure that is not in the source. If a field has no source material, return an empty string for it rather than making something up. Never write \"in simple terms\", \"put simply\" or \"essentially\". Never use hyperbole.\nReturn ONLY a JSON array, one object per input, in the same order, each with keys: title, description, impact, remediation. No preamble, no code fences."],"field_cwe":["You are a CWE classification expert. Analyse the vulnerability and return the single most relevant CWE identifier."],"field_cvss":["You are a CVSS v3.1 scoring expert. Analyse the provided vulnerability details and calculate an accurate CVSS v3.1 Base Score, considering Attack Vector, Attack Complexity, Privileges Required, User Interaction, Scope, and the Confidentiality, Integrity and Availability impacts."],"field_category":["You are a vulnerability classification expert. Select the single best matching category for the finding from the list provided."],"field_references":["You are a cybersecurity researcher. Produce relevant reference URLs for the vulnerability. Only include URLs you are highly confident exist, preferring stable well-known sources such as CWE entries, OWASP pages and vendor advisories."],"field_evidence":["You are a senior penetration tester laying out the evidence for a finding in a client's security assessment report. For each screenshot, write the sentence that goes above it: what the screenshot shows and what it demonstrates, read in the light of the whole finding and of the screenshots before and after it, so that the evidence reads as one account of how the issue was identified and confirmed. Then write the caption that goes beneath it, naming in a few words what it shows. Refer to what can be seen, such as the request, the response, the parameter, the page or the tool, and draw only on what the screenshots and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone.","You are a senior penetration tester laying out the evidence for a finding in a client's security assessment report. For each screenshot, write the sentence that goes above it: what the screenshot shows and what it demonstrates, read in the light of the whole finding and of the evidence before and after it, so that the evidence reads as one account of how the issue was identified and confirmed. Then write the caption that goes beneath it, naming in a few words what it shows. For each request and response, block of code, command output or table, write the sentence that goes above it in the same way: what it is and what it shows. Refer to what can be seen, such as the request, the response, the parameter, the page or the tool, and draw only on what the evidence and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone.","You are a senior penetration tester laying out the evidence for a finding in a client's security assessment report. For each screenshot, write the sentence that goes above it: what the screenshot shows and what it demonstrates, read in the light of the whole finding and of the evidence before and after it, so that the evidence reads as one account of how the issue was identified and confirmed. Then write the caption that goes beneath it, naming in a few words what it shows. For each request and response, block of code, command output or table, write the sentence that goes above it in the same way: what it is and what it shows. Rewrite each of the tester's own notes as clean report prose: mend the spelling, grammar, punctuation and broken or unfinished sentences, keep every fact, name, value, host, path, parameter and piece of code exactly as written, and add nothing; leave out a note that already reads cleanly. Refer to what can be seen, such as the request, the response, the parameter, the page or the tool, and draw only on what the evidence and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone.","You are a senior penetration tester laying out the evidence for a finding in a client's security assessment report, so that it reads as the evidence section of a professional report: one account of how the issue was identified and confirmed. For each screenshot, write the sentence that goes above it: what the screenshot shows and what it demonstrates, read in the light of the whole finding and of the evidence before and after it, without repeating what the words just before it already say. Then write the caption that goes beneath it, naming in a few words what it shows. For each request and response, block of code, command output or table, write the sentence that goes above it in the same way: what it is and what it shows. Rewrite each of the tester's own notes as the report would put it: complete, formal sentences saying what was done, how, and what it showed, with the spelling, grammar and punctuation mended and shorthand written out. Keep every fact that bears on this finding, with each name, value, host, path, parameter and piece of code exactly as written, and add nothing the notes do not say. Where a note introduces the evidence that follows it, the rewrite still introduces it. Leave out of the notes anything that is not evidence for this finding: an issue that belongs in another finding, a to-do or reminder, a question or guess still to be settled, and asides; and give back no rewrite for a note that already reads as report prose. Refer to what can be seen, such as the request, the response, the parameter, the page or the tool, and draw only on what the evidence and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone."]};
+window._ES_TOGETHER = "Where the engagement had more than one phase, keep to this structure across them all, and say which phase a finding came from where it helps.";
+window._ES_BY_PHASE = "Where the engagement had more than one phase, structure the summary by phase instead: a heading \"Introduction\", then the opening paragraph, which also describes the phases and the scope of each; a heading for each phase, named as it is and in the order given, with that phase's findings grouped by category, most severe first; and a heading \"Conclusion and Recommendations\", with the overall position across all phases and the remediation to prioritise, in order of severity.";
+(window._SM_PREVIOUS_PROMPTS.executive_summary = window._SM_PREVIOUS_PROMPTS.executive_summary || []).push("You are a senior penetration test report writer. Write the executive summary of a security assessment report. It is read by directors and managers who may not be technical, and it must remain accurate for the technical team.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual, measured and professional tone. Use \"it is recommended that\" for recommendations. Avoid emotive language, hyperbole and filler such as \"in simple terms\", \"put simply\" or \"essentially\", and do not refer to screenshots, figures or evidence images.\n\nStructure the summary as follows.\n1. An opening paragraph, without a heading: who carried out the assessment, of what, for whom and when, and how many findings were identified at each severity.\n2. A section for each category of finding, the category with the most severe finding first: the category name as a short heading, then a paragraph explaining what was found and the risk it presents, most severe finding first, as the findings themselves describe it: their descriptions, their impact and the firm's own fields given with them. Keep remediation for the final section.\n3. A section headed Recommendations: one paragraph setting out the remediation the organisation should prioritise, in order of severity, drawn from the remediation guidance supplied.\n\nUse only the information supplied, and do not invent findings, hosts, figures or dates. Any background notes are for context: do not quote them or repeat internal remarks.");
+function _esLegacyByPhase() {
+  var t = (S.data && S.data.settings && S.data.settings.pdf_templates) || {};
+  return !!t && t.exec_summary_mode === 'per_phase';
+}
+function _esWithByPhase(text) {
+  var t = String(text || '');
+  if (t.indexOf(window._ES_BY_PHASE) >= 0) return t;
+  if (t.indexOf(window._ES_TOGETHER) >= 0) return t.replace(window._ES_TOGETHER, function () { return window._ES_BY_PHASE; });
+  return t.replace(/\s+$/, '') + '\n\n' + window._ES_BY_PHASE;
+}
+window._esLegacyByPhase = _esLegacyByPhase;
+window._esWithByPhase = _esWithByPhase;
 window._AI_SUMMARY_GROUNDING = "WHAT THE SUMMARY RESTS ON. Each finding is given with its description, its impact where it has one, and the firm's own fields under the firm's own names, such as a business risk, a likelihood or an affected service. Those fields are the tester's own account of the finding and its context: take the risk and the context of each finding from them and from its description, and where they say something, say it as they do rather than in general terms. Do not assume anything that the findings, their fields and the engagement details do not state: not what the organisation does, holds or is obliged to do, not who its users are or what other systems it has, not that an issue was exploited, and no consequence such as financial loss, reputational damage, a data breach or a regulatory penalty that no finding gives. Where nothing supplied says what an issue would mean for the organisation, say what it allows, in the terms the finding uses. Where your other instructions ask for something that nothing supplied supports, leave it out rather than supplying it.";
 window._AI_REPLY_CONTRACTS = {
   "html": "Reply with the content only, as HTML: <p> for paragraphs, <ul> or <ol> with <li> for lists, <strong> for emphasis, <code> for short inline terms and <pre><code> for requests, responses, commands, code or any other multi-line text. No headings, no markdown, no inline styles or colours, and no preamble. Never name a screenshot or figure by a number, since the report numbers them in its own order: say the screenshot in the evidence, or what it shows.",
@@ -51491,7 +51496,10 @@ function _smPromptFor(key) {
   if (!col) return '';
   var s = S.data.settings || {};
 
-  return _smEffectivePrompt(key, s[col]);
+  var eff = _smEffectivePrompt(key, s[col]);
+
+  if (key === 'executive_summary' && _esLegacyByPhase()) eff = _esWithByPhase(eff);
+  return eff;
 }
 function _smDocOrder(key) {
   var idx = (typeof _smOrder === 'function') ? _smOrder().indexOf(key) : -1;
@@ -51626,11 +51634,12 @@ function _smTitleRowHtml() {
     + _tokSlot(_docxTokenHtml('{assessment_name}', 'DOCX placeholder for the title')) + '</span>';
   h += '<span class="g-x"></span>';
   h += '</div>';
-  h += '<details style="margin:0 0 0.5rem 46px"><summary style="cursor:pointer;font-size:0.78rem;color:var(--gray)">AI prompt</summary>';
-  h += '<textarea class="form-textarea" id="sm_prompt_assessment_title" rows="5" style="font-size:0.82rem;margin-top:0.4rem">' + esc(_smPromptShown('assessment_title')) + '</textarea>';
-  h += '<button class="btn btn-ghost btn-sm" style="margin-top:0.3rem" onclick="_resetPromptField(\'sm_prompt_assessment_title\',\'assessment_title\')" title="Restore the built-in prompt">Reset to default</button>';
-  h += _aiContractNote(_AI_REPLY_CONTRACTS.title);
-  h += '</details>';
+
+  var _tpShown = _smPromptShown('assessment_title');
+  h += _ffPromptDisclosure(!_smIsShippedPrompt('assessment_title', _tpShown),
+    '<textarea class="form-textarea" id="sm_prompt_assessment_title" rows="5" style="width:100%;font-size:0.82rem">' + esc(_tpShown) + '</textarea>'
+    + '<button class="btn btn-ghost btn-sm" style="margin-top:0.3rem" onclick="_resetPromptField(\'sm_prompt_assessment_title\',\'assessment_title\')" title="Restore the built-in prompt">Reset to default</button>'
+    + _aiContractNote(_AI_REPLY_CONTRACTS.title));
   h += '</div>';
   return h;
 }
@@ -63440,8 +63449,6 @@ function _smCaptureEdits() {
     if (co) { try { _smCustomEdit(id, 'colors', JSON.parse(co.value || '{}')); } catch (e) {} }
   });
   if (Object.keys(pd).length) S._smPromptDraft = pd;
-  var ex = document.getElementById('sm_exec_summary_mode');
-  if (ex) { S._smPend = S._smPend || {}; S._smPend.exec = ex.value; }
 }
 function _smPromptShown(key) {
   return (S._smPromptDraft && Object.prototype.hasOwnProperty.call(S._smPromptDraft, key))
@@ -63487,14 +63494,14 @@ function _smBuiltinRowHtml(d) {
   h += '</div>';
 
   if (d.ai && SM_PROMPT_COLS[d.key]) {
-    h += '<details style="margin:0 0 0.5rem 46px"><summary style="cursor:pointer;font-size:0.78rem;color:var(--gray)">AI prompt</summary>';
-    h += '<textarea class="form-textarea" id="sm_prompt_' + d.key + '" rows="5" style="font-size:0.82rem;margin-top:0.4rem">' + esc(_smPromptShown(d.key)) + '</textarea>';
-    h += '<button class="btn btn-ghost btn-sm" style="margin-top:0.3rem" onclick="_resetPromptField(\'sm_prompt_' + d.key + '\',\'' + d.key + '\')" title="Restore the built-in prompt">Reset to default</button>';
+    var _pShown = _smPromptShown(d.key);
+    var _pIn = '<textarea class="form-textarea" id="sm_prompt_' + d.key + '" rows="5" style="width:100%;font-size:0.82rem">' + esc(_pShown) + '</textarea>';
+    _pIn += '<button class="btn btn-ghost btn-sm" style="margin-top:0.3rem" onclick="_resetPromptField(\'sm_prompt_' + d.key + '\',\'' + d.key + '\')" title="Restore the built-in prompt">Reset to default</button>';
 
-    h += _aiContractNote((d.key === 'executive_summary' || d.key === 'retest_summary')
-      ? (d.key === 'executive_summary' ? _AI_SUMMARY_GROUNDING + '\n\n' : '') + _AI_REPLY_CONTRACTS.summary + (d.key === 'executive_summary' ? '\n\nFor an engagement with phases, Pental also sets out the structure by phase: an introduction, a section for each phase and a conclusion with the recommendations.' : '')
+    _pIn += _aiContractNote((d.key === 'executive_summary' || d.key === 'retest_summary')
+      ? (d.key === 'executive_summary' ? _AI_SUMMARY_GROUNDING + '\n\n' : '') + _AI_REPLY_CONTRACTS.summary
       : _AI_REPLY_CONTRACTS.html);
-    h += '</details>';
+    h += _ffPromptDisclosure(!_smIsShippedPrompt(d.key, _pShown), _pIn);
   }
   return h;
 }
@@ -63527,11 +63534,11 @@ function _smRowHtml(f) {
   h += '<div class="sm-optwrap"' + (_cffHasOptions(f) ? '' : ' style="display:none"') + '>' + _fsOptEditorHtml(f, 'sm') + '</div>';
   h += '</div>';
 
-  h += '<details style="margin:0 0 0.5rem 46px"><summary style="cursor:pointer;font-size:0.78rem;color:var(--gray)">AI prompt</summary>';
-  h += '<textarea class="form-textarea sm-cs-prompt" data-csid="' + id + '" id="sm_prompt_' + id + '" rows="5" style="font-size:0.82rem;margin-top:0.4rem">' + esc(_smPromptShown(id)) + '</textarea>';
-  h += '<button class="btn btn-ghost btn-sm" style="margin-top:0.3rem" onclick="_resetPromptField(\'sm_prompt_' + id + '\',\'cs:' + id + '\')" title="Restore the built-in prompt for this section\'s name">Reset to default</button>';
-  h += '<span class="sm-contract">' + _aiContractNote(_fsAiFormat(f)) + '</span>';
-  h += '</details>';
+  var _cShown = _smPromptShown(id);
+  h += _ffPromptDisclosure(!_afSectionPromptIsShipped(Object.assign({}, f, { label: label }), _cShown),
+    '<textarea class="form-textarea sm-cs-prompt" data-csid="' + id + '" id="sm_prompt_' + id + '" rows="5" style="width:100%;font-size:0.82rem">' + esc(_cShown) + '</textarea>'
+    + '<button class="btn btn-ghost btn-sm" style="margin-top:0.3rem" onclick="_resetPromptField(\'sm_prompt_' + id + '\',\'cs:' + id + '\')" title="Restore the built-in prompt for this section\'s name">Reset to default</button>'
+    + '<span class="sm-contract">' + _aiContractNote(_fsAiFormat(f)) + '</span>');
   return h;
 }
 function _smTypeChanged(sel, id) {
@@ -63767,10 +63774,11 @@ async function saveSummaryFieldsConfig() {
         if (el) _upd[SM_PROMPT_COLS[k]] = _smIsShippedPrompt(k, el.value) ? '' : String(el.value).trim();
       });
 
-      var _esmEl = document.getElementById('sm_exec_summary_mode');
-      if (_esmEl) {
-        var _esmTpl = Object.assign({}, (S.data.settings.pdf_templates || {}));
-        _esmTpl.exec_summary_mode = _esmEl.value || 'unified';
+      var _ptNow = S.data.settings.pdf_templates;
+      if (document.getElementById('sm_prompt_executive_summary') && _ptNow && typeof _ptNow === 'object'
+        && Object.prototype.hasOwnProperty.call(_ptNow, 'exec_summary_mode')) {
+        var _esmTpl = Object.assign({}, _ptNow);
+        delete _esmTpl.exec_summary_mode;
         _upd.pdf_templates = _esmTpl;
         _setPdfTemplates(_esmTpl);
       }
@@ -66895,26 +66903,13 @@ async function generateExecSummary(assessmentId) {
   });
 
   var _esPhases = _getPhases(a);
-  var _esMode = (settings && settings.pdf_templates && settings.pdf_templates.exec_summary_mode) || 'unified';
-  var _isPerPhase = _esMode === 'per_phase' && _esPhases && _esPhases.length > 1;
+
+  var _esMulti = !!(_esPhases && _esPhases.length > 1);
 
   if (_aiEnabled()) {
     var genBtn = document.getElementById('genBtn');
 
-    var fd = '';
-    if (_isPerPhase) {
-      _esPhases.forEach(function(ph, idx) {
-        var phFindings = findings.filter(function(f) { return f.phase === ph.type; });
-        var unphased = (idx === 0) ? findings.filter(function(f) { return !f.phase; }) : [];
-        var allPh = phFindings.concat(unphased);
-        fd += '\n=== PHASE ' + (idx + 1) + ': ' + (ph.type || 'Assessment').toUpperCase() + ' ===\n';
-        if (ph.scope) fd += 'Scope: ' + String(ph.scope).slice(0, 600) + '\n';
-        fd += 'Findings: ' + allPh.length + '\n';
-        fd += _aiFindingLines(allPh, Math.floor(48000 / _esPhases.length), { cap: 3000 });
-      });
-    } else {
-      fd = _aiFindingLines(findings, 48000, { cap: 3000, phase: _esPhases && _esPhases.length > 1 });
-    }
+    var fd = _aiFindingLines(findings, 48000, { cap: 3000, phase: _esMulti });
     var _all = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, _fixed = 0;
     findings.forEach(function (f) {
       var sv = String(f.severity || 'info').toLowerCase();
@@ -66925,25 +66920,22 @@ async function generateExecSummary(assessmentId) {
       .map(function (k) { return _all[k] + ' ' + (k === 'info' ? 'informational' : k); }).join(', ') || 'none';
 
     var sp = _smPromptFor('executive_summary');
-    if (_isPerPhase) {
-      sp += '\n\nTHIS ENGAGEMENT HAD ' + _esPhases.length + ' PHASES. Keep the instructions above, and structure the summary as follows.\n'
-        + '1. A heading "Introduction", then the opening paragraph, which also describes the phases and the scope of each.\n'
-        + _esPhases.map(function(ph, idx) {
-            return (idx + 2) + '. A heading "' + (ph.type || 'Assessment') + '", then the findings from that phase grouped by category, most severe first.';
-          }).join('\n')
-        + '\n' + (_esPhases.length + 2) + '. A heading "Conclusion and Recommendations", then the overall position across all phases and the remediation to prioritise, in order of severity.';
-    }
 
     sp += '\n\n' + _AI_SUMMARY_GROUNDING + '\n\n' + _AI_REPLY_CONTRACTS.summary;
 
     var um = 'Consultancy: ' + companyName + '\nClient: ' + clientName + '\nAssessment: ' + (a.name || 'Security Assessment')
       + '\nType: ' + (_displayType(a) || 'Penetration Test') + '\nPeriod: ' + fmtDate(a.start_date) + ' to ' + fmtDate(a.end_date)
       + '\nFindings: ' + total + ' (' + sevStr + ')' + (_fixed ? ', of which ' + _fixed + ' already remediated' : '');
-    if (_isPerPhase) {
+    if (_esMulti) {
       um += '\nPhases: ' + _esPhases.map(function(ph, i) { return 'Phase ' + (i+1) + ': ' + (ph.type || 'Assessment') + ' (' + (ph.test_days || 0) + ' days)'; }).join('; ');
     }
 
-    um += _aiEngagementLines(a, client, { noScope: _isPerPhase && _esPhases.some(function (ph) { return ph.scope; }) });
+    var _esPhScoped = _esMulti && _esPhases.some(function (ph) { return ph.scope; });
+    um += _aiEngagementLines(a, client, { noScope: _esPhScoped });
+    if (_esPhScoped) _esPhases.forEach(function (ph, i) {
+      var psc = ph.scope ? _aiEditorText(String(ph.scope), '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim() : '';
+      if (psc) um += '\n\nScope of phase ' + (i + 1) + ', ' + (ph.type || 'Assessment') + ':\n' + _aiCut(psc, 600);
+    });
     var _esNotes = a.notes || '';
     if (!_esNotes) { var _esProp = (S.data.proposals || []).find(function(p) { return p.id === a.proposal_id || p.assessment_id === a.id; }); if (_esProp) _esNotes = _esProp.notes || ''; }
 
@@ -66992,64 +66984,7 @@ async function generateExecSummary(assessmentId) {
   if (cnt.low > 0) sevList.push(cnt.low + ' low');
   if (cnt.info > 0) sevList.push(cnt.info + ' informational');
 
-  if (_isPerPhase) {
-
-    summary += 'Introduction\n\n';
-    summary += companyName + ' was engaged to conduct a multi-phase security assessment of ' + clientName;
-    if (a.name) summary += ' (' + a.name + ')';
-    summary += '. The assessment was conducted between ' + fmtDate(a.start_date) + ' and ' + fmtDate(a.end_date);
-    summary += ' and comprised ' + _esPhases.length + ' phases: ';
-    summary += _esPhases.map(function(ph) { return ph.type || 'Assessment'; }).join(', ');
-    summary += '. A total of ' + total + ' finding' + (total !== 1 ? 's were' : ' was') + ' identified';
-    if (sevList.length > 0) summary += ', comprising ' + sevList.join(', ') + ' severity';
-    summary += '.\n\n';
-
-    _esPhases.forEach(function(ph, idx) {
-      var phType = ph.type || 'Assessment';
-      var phFindings = findings.filter(function(f) { return f.phase === phType; });
-      var unphased = (idx === 0) ? findings.filter(function(f) { return !f.phase; }) : [];
-      var allPh = phFindings.concat(unphased);
-
-      summary += phType + '\n\n';
-
-      if (allPh.length === 0) {
-        summary += 'No findings were identified during this phase of testing.\n\n';
-        return;
-      }
-
-      var phByCat = {};
-      var phCatMax = {};
-      allPh.forEach(function(f) {
-        var cat = f.category || 'General';
-        if (!phByCat[cat]) { phByCat[cat] = []; phCatMax[cat] = 4; }
-        phByCat[cat].push(f);
-        var s = sevRank(f.severity);
-        if (s < phCatMax[cat]) phCatMax[cat] = s;
-      });
-      var phSortedCats = Object.keys(phByCat).sort(function(a, b) { return (phCatMax[a]||4) - (phCatMax[b]||4); });
-
-      phSortedCats.forEach(function(cat) {
-        summary += cat + '\n\n';
-        phByCat[cat].forEach(function(f) {
-          var desc = '';
-          if (f.description) {
-            var raw = f.description.replace(/<[^>]*>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&nbsp;/g,' ').trim();
-            var sents = raw.split(/\.\s+/);
-            desc = sents.slice(0,2).join('. ');
-            if (desc && !desc.endsWith('.')) desc += '.';
-          }
-          summary += f.title + ' (' + f.severity + ') was identified';
-          if (f.affected_hosts) summary += ' affecting ' + f.affected_hosts;
-          summary += '. ';
-          if (desc) summary += desc + ' ';
-        });
-        summary += '\n\n';
-      });
-    });
-
-    summary += 'Conclusion and Recommendations\n\n';
-  } else {
-
+  {
     summary += companyName + ' was engaged to conduct a ' + (_displayType(a) || 'security').toLowerCase() + ' assessment of ' + clientName;
     if (a.name) summary += ' (' + a.name + ')';
     summary += '. The assessment was conducted between ' + fmtDate(a.start_date) + ' and ' + fmtDate(a.end_date) + '. ';
@@ -84009,7 +83944,7 @@ async function _irvRead(file, source) {
   var C = {
     team: people.length > 0, people: {},
     work: true, library: true, checklists: true,
-    branding: 'replace', fields: 'replace', report: fromReport ? 'add' : 'replace',
+    branding: fromReport ? 'keep' : 'replace', fields: 'replace', report: fromReport ? 'add' : 'replace',
     company: fromReport && mineS.company_name && plan.company && mineS.company_name !== plan.company ? 'keep' : 'replace',
     ai: fromReport && mineS.ai_provider && mineS.ai_provider !== st.ai_provider ? 'keep' : 'replace',
     other: 'replace'

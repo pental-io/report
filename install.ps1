@@ -29,7 +29,7 @@ param(
   [switch]$Local,
   [switch]$Tailscale,
   [string]$Dir = '',
-  [string]$Version = '0.1.12',
+  [string]$Version = '0.1.13',
   [switch]$Yes,
   [switch]$NoOpen
 )
@@ -117,6 +117,25 @@ function Wait-Until([string]$label, [scriptblock]$ok, [int]$seconds) {
   return $false
 }
 function Docker-Ok { try { & docker info *> $null; return ($LASTEXITCODE -eq 0) } catch { return $false } }
+# Docker Desktop's installer puts docker on the PATH of windows opened after it,
+# not this one: the PATH is read again from Windows (and Docker's own folder
+# added where it is not there yet), so nothing needs closing and opening.
+$DockerDir = Join-Path $(if ($Env:ProgramW6432) { $Env:ProgramW6432 } else { $Env:ProgramFiles }) 'Docker\Docker'
+$DockerApp = Join-Path $DockerDir 'Docker Desktop.exe'
+function Refresh-Path {
+  $seen = @{}; $parts = @()
+  $bin = Join-Path $DockerDir 'resources\bin'
+  $all = @($Env:Path, [Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User'))
+  if (Test-Path (Join-Path $bin 'docker.exe')) { $all += $bin }
+  foreach ($p in $all) {
+    if (-not $p) { continue }
+    foreach ($d in $p.Split(';')) {
+      $k = $d.Trim().TrimEnd('\').ToLowerInvariant()
+      if ($k -and -not $seen.ContainsKey($k)) { $seen[$k] = $true; $parts += $d.Trim() }
+    }
+  }
+  $Env:Path = $parts -join ';'
+}
 function Port-Busy([int]$port) {
   try { return [bool](Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) } catch { return $false }
 }
@@ -144,24 +163,40 @@ Write-Host '  Free, open-source penetration test reporting, on your own server.'
 Write-Host ''
 
 # -- Docker -------------------------------------------------------------------
+# Installed here, Docker Desktop is opened and the install carries on once it
+# is running: no closing this window and running the command again. Docker
+# Desktop asks for its terms to be accepted the first time it opens, and
+# Windows may need to restart before it can run.
+Refresh-Path
+$fresh = $false
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
   Warn 'Docker Desktop is not installed.'
   if (Get-Command winget -ErrorAction SilentlyContinue) {
     $want = Ask 'Install it now with winget? [Y/n]' 'y'
     if ($want -notmatch '^[nN]') {
-      if (-not (Run 'Installing Docker Desktop' 'winget' @('install', '-e', '--id', 'Docker.DockerDesktop', '--accept-package-agreements', '--accept-source-agreements'))) {
-        Fail 'Docker Desktop could not be installed.' @('Install it from https://www.docker.com/products/docker-desktop/, then run this again.')
+      Note 'If Windows asks whether it may make changes to this computer, choose Yes.'
+      $null = Run 'Installing Docker Desktop, which takes a few minutes' 'winget' @('install', '-e', '--id', 'Docker.DockerDesktop', '--accept-package-agreements', '--accept-source-agreements')
+      Refresh-Path
+      # Judged by what is on disk, whatever winget answered.
+      if (-not (Test-Path $DockerApp) -or -not (Get-Command docker -ErrorAction SilentlyContinue)) {
+        Fail 'Docker Desktop could not be installed.' @('Install it from https://www.docker.com/products/docker-desktop/, then run the same command again.')
       }
       Step 'Docker Desktop installed'
-      Fail 'Open Docker Desktop once to finish setting it up, then run this installer again.' @('(Windows may ask you to restart first.)')
+      $fresh = $true
     }
   }
-  Fail 'Pental Report runs in Docker.' @('Install Docker Desktop from https://www.docker.com/products/docker-desktop/,', 'open it once, then run this installer again.')
+  if (-not $fresh) { Fail 'Pental Report runs in Docker.' @('Install Docker Desktop from https://www.docker.com/products/docker-desktop/,', 'open it once, then run this installer again.') }
 }
 if (-not (Docker-Ok)) {
-  $dd = Join-Path $Env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
-  if (Test-Path $dd) { Start-Process -FilePath $dd | Out-Null }
-  if (-not (Wait-Until 'Starting Docker Desktop' { Docker-Ok } 180)) {
+  if (Test-Path $DockerApp) { Start-Process -FilePath $DockerApp | Out-Null }
+  if ($fresh) {
+    Note 'Docker Desktop is opening for the first time. Accept its terms in its window,'
+    Note 'and this carries on by itself once it is running.'
+  }
+  if (-not (Wait-Until 'Waiting for Docker Desktop to start' { Docker-Ok } $(if ($fresh) { 900 } else { 180 }))) {
+    if ($fresh) {
+      Fail 'Docker Desktop has not started yet.' @('If it asks you to restart Windows or to sign out, do that, then open Docker Desktop.', 'Once it says it is running, run the same command again, in this window or a new one.')
+    }
     Fail 'Docker Desktop is not running.' @('Open Docker Desktop, wait until it says it is running, then run this again.')
   }
 }
