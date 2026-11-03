@@ -3532,10 +3532,56 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp;
 
+-- 1982: A REVOKED SESSION IS SIGNED OUT, NOT ONLY LISTED AS SIGNED OUT.
+-- [stated] Arian: "check security page actually works for reporting tool".
+-- Revoke and Sign out other devices marked rows in user_sessions and nothing
+-- else, so the devices they named went on working. These end the sign-in
+-- session itself: its row in auth.sessions goes, its refresh tokens with it
+-- (ON DELETE CASCADE), and the device cannot renew its token. On Pental
+-- Report and a Pental gateway it is refused at once (pental_session_end); on
+-- Supabase when its token next needs renewing. Where the database refuses
+-- the delete, the rows are still marked, as before.
+--
+-- Only a session of the person the row belongs to: a row names its session
+-- by an id its browser gave, so the delete is held to that person's own.
+CREATE OR REPLACE FUNCTION public._session_end_auth(p_auth_session_id text, p_user uuid) RETURNS boolean AS $$
+DECLARE v_n integer := 0;
+BEGIN
+  IF p_user IS NULL OR p_auth_session_id IS NULL OR p_auth_session_id !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN RETURN false; END IF;
+  IF to_regclass('auth.sessions') IS NULL THEN RETURN false; END IF;
+  BEGIN
+    DELETE FROM auth.sessions WHERE id = p_auth_session_id::uuid AND user_id = p_user;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+  EXCEPTION WHEN OTHERS THEN v_n := 0;
+  END;
+  RETURN v_n > 0;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp;
+
+-- Every sign-in session of one person but the one kept: Sign out other
+-- devices, including sessions whose rows were marked before 1982 and still
+-- work, and sessions that never registered a row.
+CREATE OR REPLACE FUNCTION public._session_end_auth_others(p_user uuid, p_keep text) RETURNS integer AS $$
+DECLARE v_n integer := 0;
+BEGIN
+  IF p_user IS NULL OR p_keep IS NULL OR p_keep !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN RETURN 0; END IF;
+  IF to_regclass('auth.sessions') IS NULL THEN RETURN 0; END IF;
+  BEGIN
+    DELETE FROM auth.sessions WHERE user_id = p_user AND id <> p_keep::uuid;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+  EXCEPTION WHEN OTHERS THEN v_n := 0;
+  END;
+  RETURN v_n;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp;
+REVOKE ALL ON FUNCTION public._session_end_auth(text, uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public._session_end_auth_others(uuid, text) FROM PUBLIC, anon, authenticated;
+
 CREATE OR REPLACE FUNCTION public.rpc_session_revoke(p_session_id uuid, p_reason text DEFAULT 'user') RETURNS boolean AS $$
 DECLARE v_profile_id uuid; v_caller_role text;
         v_target_profile_id uuid;
         v_target_email text; v_device text; v_ip text;
+        v_auth_session text; v_target_auth uuid; v_marked boolean; v_ended boolean;
 BEGIN
   -- BYO is single-tenant; every profile is in the same tenant by definition,
   -- so no tenant comparison is needed. Caller must own the session, or be
@@ -3544,8 +3590,8 @@ BEGIN
     WHERE auth_user_id = auth.uid() AND active = true LIMIT 1;
   IF v_profile_id IS NULL THEN RETURN false; END IF;
 
-  SELECT us.profile_id, p.email, us.device_label, us.ip
-    INTO v_target_profile_id, v_target_email, v_device, v_ip
+  SELECT us.profile_id, p.email, us.device_label, us.ip, us.auth_session_id, p.auth_user_id
+    INTO v_target_profile_id, v_target_email, v_device, v_ip, v_auth_session, v_target_auth
     FROM public.user_sessions us
     LEFT JOIN public.profiles p ON p.id = us.profile_id
     WHERE us.id = p_session_id;
@@ -3558,8 +3604,11 @@ BEGIN
   UPDATE public.user_sessions
     SET revoked_at = now(), revoked_reason = COALESCE(p_reason, 'user')
     WHERE id = p_session_id AND revoked_at IS NULL;
+  v_marked := FOUND;
+  -- 1982: and the session itself ends, even where the row was marked before.
+  v_ended := public._session_end_auth(v_auth_session, v_target_auth);
 
-  IF FOUND THEN
+  IF v_marked OR v_ended THEN
     PERFORM public._queue_security_notif(
       'notify_session_revoked',
       'A portal session was revoked',
@@ -3584,7 +3633,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp;
 
 CREATE OR REPLACE FUNCTION public.rpc_session_revoke_others(p_current_auth_session_id text) RETURNS integer AS $$
-DECLARE v_profile_id uuid; v_count integer;
+DECLARE v_profile_id uuid; v_count integer; v_ended integer;
 BEGIN
   SELECT id INTO v_profile_id FROM public.profiles
     WHERE auth_user_id = auth.uid() AND active = true LIMIT 1;
@@ -3598,7 +3647,9 @@ BEGIN
       RETURNING 1
   )
   SELECT count(*) INTO v_count FROM updated;
-  RETURN v_count;
+  -- 1982: and every other sign-in session of this person ends.
+  v_ended := public._session_end_auth_others(auth.uid(), p_current_auth_session_id);
+  RETURN GREATEST(v_count, v_ended);
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp;
 
@@ -45953,9 +46004,9 @@ END $assets_rt$;
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: e12f16c8f61356db @ 2025110301
+-- schema-fingerprint: 3c23303ba20a06a6 @ 2025110302
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025110301, now())
+VALUES (1, 2025110302, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 

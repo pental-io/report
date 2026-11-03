@@ -8734,6 +8734,9 @@ async function _mfaFreshnessGuard(reason) {
       }
     }
 
+    var _guardSess = null;
+    try { _guardSess = (await supabaseClient.auth.getSession()).data.session; } catch (e) { _guardSess = null; }
+    if (!_guardSess) return true;
     console.warn('[mfa] server confirms mfa_is_fresh=false (' + reason + '), routing to re-verify');
 
     if (_sessionIdleExpired()) { await _endIdleSession(); return true; }
@@ -10217,6 +10220,8 @@ var _rtTableMap = {
   assessment_files: 'files', contractor_payments: 'contractor_payments',
   meetings: 'meetings', meeting_attendees: 'meeting_attendees',
   profiles: 'users', timeline_events: '_timeline',
+
+  assets: 'assets',
 
   scan_runs: 'scan_runs'
 };
@@ -19700,7 +19705,7 @@ document.addEventListener('visibilitychange', function() {
           _authTrace('tab-return: confirmed genuine database change, signing out');
           console.log('[TAB-RETURN] Confirmed plan change to', _changedTo, '- signing out and reloading.');
           toast('Portal settings updated. Reconnecting...', 'info');
-          try { supabaseClient.auth.signOut(); } catch(e) {}
+          try { supabaseClient.auth.signOut({ scope: 'local' }); } catch(e) {}
           _authTrace('RELOADING PAGE (tenant change)');
           setTimeout(function() { window.location.reload(); }, 1500);
         } else {
@@ -22324,6 +22329,8 @@ async function verifyLoginCode() {
 }
 async function logout() {
 
+  window._signingOutHere = true;
+
   try { _lfAllGone(false); } catch (e) {}
 
   try { _ffForget(); } catch (e) {}
@@ -22381,7 +22388,8 @@ async function logout() {
     window._verifyingCode = false;
     window._mfaAccessToken = null;
   } catch(e) {}
-  try { await supabaseClient.auth.signOut(); } catch(e) {}
+
+  try { await supabaseClient.auth.signOut({ scope: 'local' }); } catch(e) {}
 
   try {
     Object.keys(localStorage).forEach(function(k) {
@@ -22691,7 +22699,7 @@ async function init() {
         var _oldClient = window.supabase.createClient(_prevDbUrl, _prevDbKey, {
           auth: { persistSession: false, autoRefreshToken: false, storageKey: 'pental-portal-cleanup-' + Date.now() },
         });
-        _oldClient.auth.signOut().catch(function() {});
+        _oldClient.auth.signOut({ scope: 'local' }).catch(function() {});
       }
     } catch(e) {}
     try {
@@ -22919,7 +22927,7 @@ async function init() {
           try { _expectHost = new URL(EFFECTIVE_SUPABASE_URL).hostname; } catch (e) {}
           if (_issHost && _expectHost && _issHost !== _expectHost) {
             console.warn('[BOOT] JWT iss mismatch, token issued by', _issHost, 'but routing target is', _expectHost, '. Signing out and clearing stale session.');
-            try { await supabaseClient.auth.signOut(); } catch (e) {}
+            try { await supabaseClient.auth.signOut({ scope: 'local' }); } catch (e) {}
             try {
               Object.keys(localStorage).forEach(function(k) {
                 if ((k.indexOf('sb-') === 0 && k.indexOf('-auth-token') !== -1) || k.indexOf('pental-portal-') === 0) {
@@ -22954,7 +22962,7 @@ async function init() {
         } else {
 
           console.warn('[BOOT] refreshSession returned hard error (status=' + _status + ', msg=' + _err.message + '), signing out.');
-          try { await supabaseClient.auth.signOut(); } catch(e) {}
+          try { await supabaseClient.auth.signOut({ scope: 'local' }); } catch(e) {}
           try {
             Object.keys(localStorage).forEach(function(k) {
               if ((k.indexOf('sb-') === 0 && k.indexOf('-auth-token') !== -1) || k.indexOf('pental-portal-') === 0) {
@@ -23083,6 +23091,7 @@ function _setupAuthListener() {
     if (window._codeLoginInProgress) { console.debug('Skipping auth event - code login in progress'); return; }
 
     if (event === 'SIGNED_IN' && session) {
+      window._signingOutHere = false;
 
       if (S.user && S.profile && S._bootReady && session.user && S.user.id === session.user.id
           && _isMfaValid()) {
@@ -23151,6 +23160,8 @@ function _setupAuthListener() {
 
       try { supabaseClient.realtime.setAuth(session.access_token); } catch(e) {}
     } else if (event === 'SIGNED_OUT') {
+
+      var _endedElsewhere = !!(S.user && S.profile) && !window._signingOutHere;
       try { _mkForget(true); _mkStash = null; } catch (e) {}
 
       S._mfaProfile = null;
@@ -23164,6 +23175,14 @@ function _setupAuthListener() {
       S.profile = null;
       S.data = { clients: [], assessments: [], findings: [], proposals: [], invoices: [], kb: [], users: [], clientUsers: [], feedback: [], files: [], assessment_comments: [], qa_comments: [], contractor_payments: [], meetings: [], meeting_attendees: [], contact_requests: [], settings: {} };
       _syncReset();
+
+      _suppressRender = false;
+      S._mfaScreenShown = false;
+      try { _stopMfaScreenWatch(); } catch (e) {}
+      if (_endedElsewhere) {
+        if (!window._ssoError) window._ssoError = 'You were signed out. Please sign in again.';
+        try { toast('You were signed out. Please sign in again.', 'warning'); } catch (e) {}
+      }
       render();
     }
   });
@@ -23269,7 +23288,7 @@ async function loadProfile__portal() {
   if (!profile) {
     console.error('Profile not found for:', _mfaEmail());
     toast('No account found. Please contact your administrator.', 'error');
-    await supabaseClient.auth.signOut();
+    await supabaseClient.auth.signOut({ scope: 'local' });
     S.user = null;
     S.profile = null;
     return;
