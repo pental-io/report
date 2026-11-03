@@ -45830,6 +45830,12 @@ END $api_grants$;
 ALTER TABLE public.kb_entries ADD COLUMN IF NOT EXISTS library_key text;
 CREATE INDEX IF NOT EXISTS kb_entries_library_key_idx ON public.kb_entries (library_key) WHERE library_key IS NOT NULL;
 
+-- 1981: MITRE ATT&CK, a finding field a firm turns on in Settings, Findings
+-- (off by default): the techniques as IDs ("T1557.001, T1187"), on a finding
+-- and on a library entry that keeps them for reuse.
+ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS attack text;
+ALTER TABLE public.kb_entries ADD COLUMN IF NOT EXISTS attack text;
+
 -- WHEN A FINDING STOPPED BEING OPEN. The risk register's time to remediate is
 -- the time from a finding being reported to this. Set by the database when the
 -- status becomes Remediated or Risk Accepted (unless the same write gives a
@@ -45859,8 +45865,9 @@ DROP TRIGGER IF EXISTS tr_finding_resolved_at ON public.findings;
 CREATE TRIGGER tr_finding_resolved_at BEFORE INSERT OR UPDATE OF status, resolved_at ON public.findings
   FOR EACH ROW EXECUTE FUNCTION public._tg_finding_resolved_at();
 
--- THE MODULES AND THE REGISTER'S SETTINGS. NULL is the default (on), as for
--- every module added after the tenants that predate it. posture_config holds
+-- THE MODULES AND THE REGISTER'S SETTINGS. NULL is the default, which for
+-- these two is off (1980) until an administrator switches them on under
+-- Settings, Feature Modules. posture_config holds
 -- the days a firm gives each severity to be fixed in and whether clients see
 -- their register: {"targets": {"critical": 14, "high": 30, ...}, "clients": true}.
 ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS assets_enabled boolean;
@@ -45946,9 +45953,9 @@ END $assets_rt$;
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: be462ec934d2d2bc @ 2025110101
+-- schema-fingerprint: e12f16c8f61356db @ 2025110301
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025110101, now())
+VALUES (1, 2025110301, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 

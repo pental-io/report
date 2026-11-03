@@ -5331,6 +5331,8 @@ var _findingExportColumns = [
     get: function(f) { return f.status || ''; } },
   { key: 'cwe',            label: 'CWE',             def: true,
     get: function(f) { return f.cwe || ''; } },
+  { key: 'attack',         label: 'MITRE ATT&CK',    def: true,
+    get: function(f) { return _attackTidy(f.attack); } },
   { key: 'affected_hosts', label: 'Affected Assets', def: true,
     get: function(f) { return f.affected_hosts || ''; } },
   { key: 'description',    label: 'Description',     def: true,  rich: true,
@@ -5370,7 +5372,7 @@ function _customFindingExportColumns() {
   });
 }
 var _EXPORT_COL_FIELD = {
-  category: 'category', cvss: 'cvss', status: 'status', cwe: 'cwe',
+  category: 'category', cvss: 'cvss', status: 'status', cwe: 'cwe', attack: 'attack',
   affected_hosts: 'affected_assets', description: 'description',
   evidence: 'evidence', remediation: 'remediation', refs: 'references'
 };
@@ -6073,7 +6075,7 @@ function _ffImportPlan(rows, findings, opts) {
   }
   return { create: create, update: update, remove: remove, skipped: skipped, kept: kept, scope: scope };
 }
-var _FF_IMPORT_FIELDS = ['title', 'category', 'severity', 'cvss', 'status', 'cwe',
+var _FF_IMPORT_FIELDS = ['title', 'category', 'severity', 'cvss', 'status', 'cwe', 'attack',
   'affected_hosts', 'description', 'remediation', 'evidence', 'refs'];
 function _ffImportChanges(f, row, a, kept, info) {
   var out = {}, fields = [];
@@ -6851,6 +6853,7 @@ async function _buildFindingsSheet(workbook, sheetName, findings, assessment, ac
       case 'cvss':           width = 8;  break;
       case 'status':         width = 12; break;
       case 'cwe':            width = 14; break;
+      case 'attack':         width = 22; break;
       case 'affected_hosts': width = 26; break;
       case 'description':    width = 60; break;
       case 'evidence':       width = 75; break;
@@ -12255,7 +12258,7 @@ function _rbCatalogueGroups(docType) {
 }
 var _RB_FIELD_TOKEN = {
 
-  title: 'title', severity: 'severity', cvss: 'cvss', cwe: 'cwe',
+  title: 'title', severity: 'severity', cvss: 'cvss', cwe: 'cwe', attack: 'attack',
   category: 'category', description: 'description', impact: 'impact',
   remediation: 'remediation', affected_assets: 'affected_hosts',
   references: 'references', evidence: 'evidence_content', phase: 'phase',
@@ -31515,6 +31518,7 @@ function renderFindingDetail() {
     _facts.push({ label: label, value: value, html: html || '' });
   };
   if (_ffEnabled('cwe')) _pushFact(_ffLabel('cwe'), f.cwe || '');
+  if (_ffEnabled('attack')) _pushFact(_ffLabel('attack'), _attackTidy(f.attack), _attackHtml(f.attack));
   if (_ffEnabled('category')) _pushFact(_ffLabel('category'), f.category || '');
   (function () {
     var cfs = (typeof _ffCustomEnabled === 'function') ? _ffCustomEnabled() : [];
@@ -33692,7 +33696,7 @@ function _flibKbPayload(e) {
   if (cw) refs.push(cw);
   (e.references || []).forEach(function (u) { if (u && refs.indexOf(u) < 0) refs.push(u); });
   var titles = ((e.match && e.match.titles) || []).filter(function (t) { return _scanTitleKey(t) !== _scanTitleKey(e.title); }).slice(0, 60);
-  return {
+  var out = {
     title: String(e.title || '').slice(0, 300),
     severity: r.severity,
     cvss: r.score,
@@ -33706,6 +33710,9 @@ function _flibKbPayload(e) {
     library_key: e.key,
     custom_fields: {},
   };
+
+  if (_attackReuse() && Array.isArray(e.attack) && e.attack.length) out.attack = e.attack.join(', ');
+  return out;
 }
 async function _flibInsertKb(rows, dropped) {
   for (var attempt = 0; attempt < 6; attempt++) {
@@ -39882,7 +39889,7 @@ function _ffMatches(f, a, scope) {
   if (st.sev.length && st.sev.indexOf(String(f.severity || '').toLowerCase()) < 0) return false;
   if (st.status.length && st.status.indexOf(String(f.status || '').toLowerCase()) < 0) return false;
   if (!q) return true;
-  var hay = [f.title, f.category, f.cwe, f.finding_code, f.status, f.severity];
+  var hay = [f.title, f.category, f.cwe, f.attack, f.finding_code, f.status, f.severity];
   if (Array.isArray(f.affected_hosts)) hay.push(f.affected_hosts.join(' '));
   else if (f.affected_hosts) hay.push(String(f.affected_hosts));
   if (a) { hay.push(a.name); hay.push(getClientName(a.client_id) || ''); }
@@ -47795,7 +47802,7 @@ function _coLiveDismiss() {
   var line = document.querySelector('.modal-content .co-live');
   if (line) line.remove();
 }
-var _CO_FINDING_INPUTS = { mTi: 'title', mSv: 'severity', mCv: 'cvss', mCvVec: 'cvss_vector', mCw: 'cwe',
+var _CO_FINDING_INPUTS = { mTi: 'title', mSv: 'severity', mCv: 'cvss', mCvVec: 'cvss_vector', mCw: 'cwe', mAtt: 'attack',
   mCat: 'category', mDe: 'description', mRe: 'remediation', mAs: 'affected_hosts', mRf: 'refs',
   mPhase: 'phase', evidenceEditor: 'evidence', mSta: 'status' };
 function _coFieldOfEl(el, r) {
@@ -48029,6 +48036,11 @@ function renderKBModal() {
     _libCv += '<input type="hidden" id="kb_cvss_vector" value="' + esc((k && k.cvss_vector) || '') + '">';
     _libCv += '</span></div><input type="number" step="0.1" min="0" max="10" class="form-input" id="kb_cvss" value="' + (k && typeof k.cvss === 'number' ? k.cvss : 0) + '" oninput="_cvssTyped(this.value, \'kb_cvss\', \'kb_cvss_vector\', \'kbCvssPickBtn\')" onchange="updateSeverityFromCVSS(this.value)"' + dis + '></div>';
     _libcw.push(_libCv);
+  }
+
+  if (_attackReuse()) {
+    _libcw.push('<div class="form-group"><div class="fld-head"><label class="fld-label" for="kb_attack" style="margin:0">' + esc(_ffLabel('attack')) + '</label></div>'
+      + '<input type="text" class="form-input" id="kb_attack" placeholder="e.g. T1190, T1059" value="' + esc(k ? _attackTidy(k.attack) : '') + '"' + dis + '></div>');
   }
   if (_ffReusable('cwe')) {
     var _libCw = '<div class="form-group"><div class="fld-head"><label class="fld-label" for="kb_cwe" style="margin:0">' + esc(_ffLabel('cwe')) + '</label>';
@@ -51216,6 +51228,8 @@ function _ffDefs() {
     { key:'category',        label:'Category',        col:'category',       def:true, reuse:true, ai:true, req:true },
     { key:'cvss',            label:'CVSS',            col:'cvss',           def:true, reuse:true, ai:true, req:true },
     { key:'cwe',             label:'CWE',             col:'cwe',            def:true, reuse:true, ai:true, req:true },
+
+    { key:'attack',          label:'MITRE ATT&CK',    col:'attack',         def:false, reuse:true },
     { key:'description',     label:'Description',     col:'description',    def:true, reuse:true, ai:true, req:true },
     { key:'remediation',     label:'Remediation',     col:'remediation',    def:true, reuse:true, ai:true, req:true },
 
@@ -51224,6 +51238,21 @@ function _ffDefs() {
     { key:'references',      label:'References',      col:'refs',           def:true, reuse:true, ai:true  }
   ];
 }
+function _attackTidy(v) {
+  return String(v == null ? '' : v).split(/[,;\n]+/).map(function (t) {
+    t = t.trim();
+    return /^t\d{4}(\.\d{3})?$/i.test(t) ? t.toUpperCase() : t;
+  }).filter(Boolean).join(', ');
+}
+function _attackHtml(v) {
+  var names = (typeof _flibWhole !== 'undefined' && _flibWhole && _flibWhole.attack) || {};
+  return _attackTidy(v).split(', ').filter(Boolean).map(function (t) {
+    if (!/^T\d{4}(\.\d{3})?$/.test(t)) return esc(t);
+    var n = names[t] && names[t].name;
+    return '<a href="https://attack.mitre.org/techniques/' + t.replace('.', '/') + '/" target="_blank" rel="noopener noreferrer">' + t + '</a>' + (n ? ' ' + esc(n) : '');
+  }).join(', ');
+}
+function _attackReuse() { return _ffEnabled('attack') && _ffReusable('attack'); }
 function _atMove(btn, dir) {
   var row = btn.closest('[data-ati]');
   if (!row || !row.parentNode) return;
@@ -51377,7 +51406,7 @@ function _ffCustomReqMark(f) {
 var _FF_FORM_IDS = {
   title: 'mTi', severity: 'mSv', status: 'mSta', category: 'mCat', cvss: 'mCv',
   cwe: 'mCw', description: 'mDe', remediation: 'mRe', evidence: 'evidenceEditor',
-  affected_assets: 'mAs', references: 'mRf'
+  affected_assets: 'mAs', references: 'mRf', attack: 'mAtt'
 };
 function _ffValueEmpty(el) {
   if (!el) return true;
@@ -51685,7 +51714,7 @@ function _docxTokenForSection(key) {
 function _docxTokenForField(key) {
   var map = {
     title: 'title', severity: 'severity', status: 'status',
-    category: 'category', cvss: 'cvss', cwe: 'cwe',
+    category: 'category', cvss: 'cvss', cwe: 'cwe', attack: 'attack',
     description: 'description', remediation: 'remediation',
     evidence: 'evidence_content', affected_assets: 'affected_hosts',
     references: 'references'
@@ -51708,7 +51737,7 @@ function _ffReportLabel(tpl, rptKey, ffKey) {
 function _ffColLabel(key, fallback) {
   var map = { affected_hosts: 'affected_assets', refs: 'references', references: 'references' };
   var fk = map[key] || key;
-  var known = { title: 1, severity: 1, status: 1, category: 1, cvss: 1, cwe: 1, description: 1, remediation: 1, evidence: 1, affected_assets: 1, references: 1 };
+  var known = { title: 1, severity: 1, status: 1, category: 1, cvss: 1, cwe: 1, attack: 1, description: 1, remediation: 1, evidence: 1, affected_assets: 1, references: 1 };
   if (known[fk]) return _ffLabel(fk);
   return fallback != null ? fallback : key;
 }
@@ -52246,7 +52275,7 @@ function _coMarkStale(fields, who) {
   } catch (e) {}
 }
 function _coFindingFields() {
-  var base = ['title', 'severity', 'cvss', 'cwe', 'category', 'description', 'impact',
+  var base = ['title', 'severity', 'cvss', 'cwe', 'attack', 'category', 'description', 'impact',
     'remediation', 'affected_hosts', 'references', 'status', 'phase', 'evidence',
     'custom_fields', 'retest_status', 'retest_notes'];
   try {
@@ -52444,6 +52473,11 @@ h += '</div></div>';
     if (_hasAI) _cwCell += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="genCweBtn" onmousedown="event.preventDefault();generateCWE()" onclick="if(event.detail===0)generateCWE()" style="color:var(--accent);font-size:0.7rem;padding:0.15rem 0.4rem" title="Auto-classify CWE using AI">' + IC.ai + ' Classify</button>', 'cwe', 'genCweBtn', _ffLabel('cwe'), { verb: 'Classify' });
     _cwCell += '</span></div><input class="form-input" id="mCw" value="' + esc(fi ? fi.cwe || '' : 'CWE-') + '"></div>';
     _cwCells.push(_cwCell);
+  }
+
+  if (_ffEnabled('attack')) {
+    _cwCells.push('<div class="form-group"><div class="fld-head"><label class="fld-label" for="mAtt">' + esc(_ffLabel('attack')) + _ffReqMark('attack') + '</label></div>'
+      + '<input class="form-input" id="mAtt" placeholder="e.g. T1190, T1059" value="' + esc(fi ? _attackTidy(fi.attack) : '') + '"></div>');
   }
 
   if (_cwCells.length) h += '<div class="fm-cls-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.75rem;margin-top:0.5rem">' + _cwCells.join('') + '</div>';
@@ -52776,6 +52810,7 @@ function selectKB(id, o) {
     if (_cvGot) got.push('cvss');
   }
   if (_ffReusable('cwe')) { el = document.getElementById('mCw'); if (takes(el, ['CWE-', 'CWE-0', 'cwe-']) && (!only || k.cwe)) { el.value = k.cwe || ''; got.push('cwe'); } }
+  if (_attackReuse()) { el = document.getElementById('mAtt'); if (takes(el) && (!only || k.attack)) { el.value = _attackTidy(k.attack); got.push('attack'); } }
   if (_ffReusable('category')) { el = document.getElementById('mCat'); if (takes(el) && (!only || k.category)) { el.value = k.category || ''; got.push('category'); } }
 
   if (_ffReusable('description')) { el = document.getElementById('mDe'); if (takes(el) && (!only || _cfHasContent(k.description || ''))) { el.innerHTML = sanitizeHtml(_rewriteStorageSrc(k.description || '')); resolveStorageImages(el); got.push('description'); } }
@@ -52918,6 +52953,7 @@ async function saveFinding(id, aid, _opts) {
     } catch (e) { return null; }
   })();
   var _fCw = _readFld('mCw'), _fCat = _readFld('mCat'), _fAs = _readFld('mAs');
+  var _fAtt = _readFld('mAtt');
   var _fRf = _readFld('mRf');
 
   var _fPhase = _readFld('mPhase');
@@ -52979,6 +53015,7 @@ async function saveFinding(id, aid, _opts) {
 
   if (_fCvVec && _fCvVec.had) data.cvss_vector = _fCvVec.value || null;
   if (_fCw.had) data.cwe = (_fCw.value || '').trim();
+  if (_fAtt.had) data.attack = _attackTidy(_fAtt.value);
   if (_fCat.had) data.category = (_fCat.value || '').trim();
   if (descEl) data.description = descHtml;
 
@@ -55948,7 +55985,7 @@ function _pntlKey(id) {
   return (('0000000' + h1.toString(16)).slice(-8) + ('000' + (h2 & 0xffff).toString(16)).slice(-4));
 }
 var _PNTL_FIELD = {
-  title: 'title', severity: 'sev', cvss: 'cvss', cwe: 'cwe', category: 'cat',
+  title: 'title', severity: 'sev', cvss: 'cvss', cwe: 'cwe', attack: 'att', category: 'cat',
   description: 'desc', impact: 'imp', remediation: 'rem',
   affected_assets: 'hosts', references: 'refs', evidence: 'ev',
 
@@ -55959,7 +55996,7 @@ var _PNTL_SECTION = {
   notes: 'notes', retest_summary: 'retest'
 };
 var _PNTL_FIELD_COL = {
-  title: 'title', severity: 'severity', cvss: 'cvss', cwe: 'cwe', category: 'category',
+  title: 'title', severity: 'severity', cvss: 'cvss', cwe: 'cwe', attack: 'attack', category: 'category',
   description: 'description', impact: 'impact', remediation: 'remediation',
   affected_assets: 'affected_hosts', references: 'refs', evidence: 'evidence',
   phase: 'phase'
@@ -60302,6 +60339,7 @@ async function saveKB() {
   var _kCvV = document.getElementById('kb_cvss_vector');
   if (_kCvV) data.cvss_vector = String(_kCvV.value || '');
   var _kCw = document.getElementById('kb_cwe'); if (_kCw) data.cwe = (_kCw.value || '').trim();
+  var _kAt = document.getElementById('kb_attack'); if (_kAt) data.attack = _attackTidy(_kAt.value);
   var _kCat = document.getElementById('kb_category'); if (_kCat) data.category = _kCat.value || '';
   if (document.getElementById('kb_refs')) data.refs = refs;
 
@@ -60459,6 +60497,7 @@ async function importKBEntry(id) {
   if (_ffReusable('status') && k.status) data.status = k.status;
   if (_ffReusable('affected_assets') && k.affected_hosts) data.affected_hosts = k.affected_hosts;
   if (_ffReusable('evidence') && k.evidence) data.evidence = k.evidence;
+  if (_attackReuse() && k.attack) data.attack = _attackTidy(k.attack);
 
   if (S._newFindingPhase) {
     data.phase = S._newFindingPhase;
@@ -60501,6 +60540,7 @@ function _libEntryFromFinding(f) {
 
   if (_ffReusable('cvss')) { data.cvss = (typeof f.cvss === 'number' ? f.cvss : 0); data.cvss_vector = f.cvss_vector || ''; }
   if (_ffReusable('cwe')) data.cwe = f.cwe;
+  if (_attackReuse() && f.attack) data.attack = _attackTidy(f.attack);
   if (_ffReusable('category')) data.category = f.category;
   if (_ffReusable('description')) data.description = f.description;
   if (_ffReusable('remediation')) data.remediation = f.remediation;
@@ -71102,6 +71142,9 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
     }
     if (_metaOn('cwe')) {
       _metaCells.push({ label: _ffReportLabel(tpl, 'cwe', 'cwe'), value: f.cwe || 'N/A' });
+    }
+    if (_metaOn('attack')) {
+      _metaCells.push({ label: _ffReportLabel(tpl, 'attack', 'attack'), value: _attackTidy(f.attack) || 'N/A' });
     }
     if (_metaOn('category')) {
       _metaCells.push({ label: _ffReportLabel(tpl, 'category', 'category'), value: f.category || 'N/A' });
@@ -83984,6 +84027,7 @@ async function buildReportData(assessmentId, docType, _opts) {
 
       cvss_vector: _cvssVectorTidy(f.cvss_vector),
       cwe: _pntlScalar('f_' + _fk + '_cwe', f.cwe || ''),
+      attack: _pntlScalar('f_' + _fk + '_att', _attackTidy(f.attack)),
       category: _pntlScalar('f_' + _fk + '_cat', f.category || ''),
       phase: _pntlScalar('f_' + _fk + '_phase', f.phase || ''),
 
@@ -84099,6 +84143,7 @@ async function buildReportData(assessmentId, docType, _opts) {
     _fdata.is_last = idx === findings.length - 1;
     _fdata.has_cvss = f.cvss != null && String(f.cvss).trim() !== '' && !isNaN(parseFloat(f.cvss));
     _fdata.has_cwe = !!String(f.cwe || '').trim();
+    _fdata.has_attack = !!_attackTidy(f.attack);
     _fdata.has_category = !!String(f.category || '').trim();
     _fdata.has_description = _cfHasContent(f.description);
     _fdata.has_remediation = _cfHasContent(f.remediation);

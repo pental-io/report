@@ -29,7 +29,7 @@ param(
   [switch]$Local,
   [switch]$Tailscale,
   [string]$Dir = '',
-  [string]$Version = '0.1.18',
+  [string]$Version = '0.1.19',
   [switch]$Yes,
   [switch]$NoOpen
 )
