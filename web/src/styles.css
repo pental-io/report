@@ -4072,15 +4072,22 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
    an assessment section on top, not movable" and, of the documents' box, "it
    can make a bit more sense". The title is the list's first row, fixed: a lock
    where the arrows are and its switches ticked and fixed. The documents are
-   rows a step in under Documents, on its columns, with a rule that ties them
-   to it. */
+   rows under Documents, on its columns, with a rule that ties them to it.
+   1979: every cell on the list's columns. The step in was the whole row, so
+   a document's grip, icon and name stood 36px right of every other row's, and
+   on a phone its switches wrapped a column apart (check_views). The step is
+   now inside the name cell, a corner drawn from above to the name. */
 .sm-fixed-ord{display:flex;align-items:center;justify-content:center;color:var(--gray)}
 .sm-fixed-ord svg{width:14px;height:14px}
 .sm-fixed-name{font-size:0.85rem;font-weight:600;color:var(--text)}
 .sm-fixed-note{flex:1 1 100%;font-size:0.72rem;line-height:1.4;color:var(--gray)}
 .sm-fixed .g-c input:disabled{opacity:0.6;cursor:default}
-.sm-docs{margin:-1px 0 6px 22px;padding:6px 0 0 12px;border-left:2px solid var(--border)}
-.sm-docs-note{font-size:0.72rem;color:var(--gray);margin:0 0 5px 2px}
+.sm-docs{margin:-1px 0 6px;padding:6px 0 0}
+.sm-docs .sg-row > .g-lab{position:relative;padding-left:1.35rem}
+.sm-docs .sg-row > .g-lab::before{content:"";position:absolute;left:0.3rem;top:-0.45rem;height:calc(50% + 0.45rem);width:0.7rem;border-left:2px solid var(--border);border-bottom:2px solid var(--border);border-bottom-left-radius:5px;pointer-events:none}
+/* The note stands where the documents' names start: the grip and icon
+   columns, their gaps, the row's padding and border, and the step. */
+.sm-docs-note{font-size:0.72rem;color:var(--gray);margin:0 0 5px calc(46px + 44px + 1rem + 0.5rem + 1px + 1.35rem)}
 /* 1819: one bar, at the foot of a Settings page, while a change waits. */
 .set-dirty-bar{position:fixed;left:50%;bottom:22px;z-index:900;display:flex;align-items:center;gap:0.6rem;
   padding:0.55rem 0.6rem 0.55rem 1rem;border-radius:12px;border:1px solid var(--border);background:var(--card);
@@ -4307,7 +4314,10 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
 .crbl-cat{font-size:0.68rem;font-weight:700;padding:0.12rem 0.55rem;border-radius:999px;background:rgba(var(--accent-rgb),0.12);color:var(--accent);white-space:nowrap}
 .crbl-kind{font-size:0.72rem;color:var(--gray);white-space:nowrap}
 .crbl-name{font-size:0.93rem;font-weight:700;line-height:1.35;color:var(--text)}
-.crbl-desc{flex:1;font-size:0.8rem;line-height:1.5;color:var(--gray);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+/* 1979: whole, not clamped at three lines. A library card's description is
+   what the template or finding is for, and four of them lost their ends
+   (check_views: nothing is cut). */
+.crbl-desc{flex:1;font-size:0.8rem;line-height:1.5;color:var(--gray)}
 .crbl-meta{display:flex;flex-wrap:wrap;align-items:center;gap:0.2rem 0.5rem;font-size:0.72rem;color:var(--gray)}
 .crbl-meta i{display:inline-block;width:3px;height:3px;border-radius:50%;background:currentColor;opacity:0.6}
 .crbl-meta .is-other{opacity:0.75}
