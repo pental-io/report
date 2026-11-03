@@ -4288,7 +4288,8 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
    with every item a press away before it is added. */
 .crbl-shelf{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.6rem 1rem;margin:0 0 1rem}
 .crbl-shelf .irv-seg-b span{margin-left:0.35rem;font-size:0.7rem;opacity:0.75}
-.crbl-sub{margin:0 0 0.9rem;font-size:0.82rem;line-height:1.6;color:var(--gray);max-width:78ch}
+/* 1980: the width of what it sits over, the search and the cards, not 78ch. */
+.crbl-sub{margin:0 0 0.9rem;font-size:0.82rem;line-height:1.6;color:var(--gray)}
 .crbl-tools{display:flex;flex-wrap:wrap;align-items:center;gap:0.6rem;margin:0 0 0.7rem}
 .crbl-search{position:relative;flex:1 1 260px;min-width:0}
 .crbl-search svg{position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);width:15px;height:15px;color:var(--gray);pointer-events:none}

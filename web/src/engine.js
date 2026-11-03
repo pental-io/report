@@ -20053,6 +20053,8 @@ async function loadAllData() {
   _loadAllDataPromise = _loadAllDataInner().finally(function() {
     _loadAllDataPromise = null;
 
+    try { _flibMoveImpactSoon(); } catch (e) {}
+
     if (S._bootReady) return;
 
     var _logoSrc = null;
@@ -26659,8 +26661,8 @@ var _FEATURE_MODULES = [
     { key: 'assessments_enabled',  label: 'Assessments', desc: 'Engagements, phases, findings and the reports that come out of them. Off hides the area and its navigation; nothing is deleted and existing documents stay downloadable. Only turn this off if you sell scanning alone.', def: true },
     { key: 'library_enabled',      label: 'Library', desc: 'Your own library of reusable findings, with descriptions and remediation your team has already agreed. Off hides the area; the entries are kept.', def: true },
 
-    { key: 'posture_enabled',      label: 'Risk Register', desc: 'Each client\u2019s issues across every engagement, one row per issue: open and overdue against your remediation targets, time to remediate, the trend by quarter, and MITRE ATT&CK and OWASP Top 10 mapping. Clients see their own unless you turn that off.', def: true },
-    { key: 'assets_enabled',       label: 'Assets', desc: 'Each client\u2019s hosts, ranges, domains and cloud resources with their owners, imported from Nmap, masscan, subfinder, amass, httpx and the cloud inventories. Every finding is paired with its asset and owner.', def: true },
+    { key: 'posture_enabled',      label: 'Risk Register', desc: 'Each client\u2019s issues across every engagement, one row per issue: open and overdue against your remediation targets, time to remediate, the trend by quarter, and MITRE ATT&CK and OWASP Top 10 mapping. Clients see their own unless you turn that off.', def: false },
+    { key: 'assets_enabled',       label: 'Assets', desc: 'Each client\u2019s hosts, ranges, domains and cloud resources with their owners, imported from Nmap, masscan, subfinder, amass, httpx and the cloud inventories. Every finding is paired with its asset and owner.', def: false },
     { key: 'scanning_enabled',     label: 'Scans', desc: 'Connect your own scanner (Burp, Nessus, Tenable and others), import results, and let clients run scans against assets you approve. Off hides the area and its navigation for everyone.', def: false, beta: true }
   ];
 function wizStep_features() {
@@ -33558,6 +33560,7 @@ function _flibLoad() {
       _flibIndex(j);
       _flibWhole = j;
       _flibErr = '';
+      try { _flibMoveImpact(j); } catch (e) {  }
       return j;
     }).catch(function (e) {
       _flibAsk = null;
@@ -33566,6 +33569,51 @@ function _flibLoad() {
     });
   }
   return _flibAsk;
+}
+var _flibImpactMoved = false;
+function _flibPrint(html) {
+  var s = String(html || '').replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/[^A-Za-z0-9]+/g, ' ').trim().toLowerCase();
+  var h = 0x811c9dc5;
+  for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return ('0000000' + h.toString(16)).slice(-8);
+}
+function _flibMoveImpact(j) {
+  if (_flibImpactMoved || !j || !j._ix || !S.data || !S.profile || !Array.isArray(S.data.findings)) return;
+  if (typeof canEdit !== 'function' || !canEdit()) return;
+  _flibImpactMoved = true;
+  var has = function (x) { return !!String(x || '').replace(/<[^>]*>/g, '').trim(); };
+  var jobs = [];
+  var asWritten = function (e, row) { return !!(e && e.was && _flibPrint(row.description) + _flibPrint(row.impact) === e.was); };
+  (S.data.library || []).forEach(function (k) {
+    if (!k || !k.id || !k.library_key || !has(k.impact)) return;
+    var e = j._ix.byKey[k.library_key];
+    jobs.push({ table: 'kb_entries', row: k, patch: { description: asWritten(e, k) ? sanitizeHtml(e.description || '') : (k.description || '') + k.impact, impact: null } });
+  });
+  (S.data.findings || []).forEach(function (f) {
+    if (!f || !f.id || !has(f.impact)) return;
+    var key = j._ix.byTitle[_scanTitleKey(f.title)];
+    var e = key && j._ix.byKey[key];
+    if (e && e.title === f.title && asWritten(e, f)) jobs.push({ table: 'findings', row: f, patch: { description: sanitizeHtml(e.description || ''), impact: null } });
+  });
+  if (!jobs.length) return;
+  (async function () {
+    for (var i = 0; i < jobs.length; i++) {
+      var jb = jobs[i];
+      try {
+        var r = await supabaseClient.from(jb.table).update(jb.patch).eq('id', jb.row.id).not('impact', 'is', null).select('id');
+        if (r && !r.error && r.data && r.data.length) { jb.row.description = jb.patch.description; jb.row.impact = null; }
+      } catch (e) {  }
+    }
+  })();
+}
+function _flibMoveImpactSoon() {
+  if (_flibImpactMoved || !S.data || !S.profile || !Array.isArray(S.data.findings)) return;
+  if (typeof canEdit !== 'function' || !canEdit()) return;
+  if (_flibWhole) { _flibMoveImpact(_flibWhole); return; }
+  var has = function (x) { return !!String(x || '').replace(/<[^>]*>/g, '').trim(); };
+  var want = (S.data.library || []).some(function (k) { return k && k.library_key && has(k.impact); })
+    || S.data.findings.some(function (f) { return f && has(f.impact) && String(f.created_at || '') >= '2026-11-03T16:30'; });
+  if (want) _flibLoad().catch(function () {});
 }
 function _flibWant(then) {
   if (_flibWhole || _flibAsk || _flibErr) return;
@@ -33652,7 +33700,6 @@ function _flibKbPayload(e) {
     category: _findingCategoryOf(e.category) || null,
     cwe: e.cwe || null,
     description: sanitizeHtml(e.description || ''),
-    impact: sanitizeHtml(e.impact || ''),
     remediation: sanitizeHtml(e.remediation || ''),
     refs: refs,
     scan_titles: titles,
@@ -33797,7 +33844,7 @@ function _flibBrowserHtml() {
   var st = _flibState();
   var all = _flibWhole.entries;
   var h = '<div class="crbl flib">';
-  h += '<p class="crbl-sub">' + all.length + ' findings written up as a report would have them, across web applications, APIs, infrastructure, Active Directory, cloud, mobile, wireless and more: each with a description, its impact, remediation, a CVSS 3.1 and 4.0 rating, its CWE, the MITRE ATT&amp;CK techniques it gives an attacker and references. '
+  h += '<p class="crbl-sub">' + all.length + ' findings written up as a report would have them, across web applications, APIs, infrastructure, Active Directory, cloud, mobile, wireless and more: each with a description of the issue and its impact, the remediation, a CVSS 3.1 and 4.0 rating, its CWE, the MITRE ATT&amp;CK techniques it gives an attacker and references. '
     + 'Adding one copies it into your library, to change as you like and use from any finding. Import from scanner uses them too, to bring every scanner’s name for an issue together as one finding.</p>';
   h += '<div class="crbl-tools"><div class="crbl-search">' + IC.search + '<input type="search" id="flibQ" placeholder="Search the finding library, e.g. Kerberoasting, CWE-79, HSTS, S3" value="' + esc(st.q || '') + '" oninput="_flibFilter(\'q\', this.value)" aria-label="Search the finding library"></div>';
   h += '<div class="irv-seg" role="radiogroup" aria-label="Severity">' + [['', 'All']].concat(_FLIB_SEVS.map(function (s) { return [s, s === 'info' ? 'Info' : s.charAt(0).toUpperCase() + s.slice(1)]; })).map(function (o) {
@@ -33848,7 +33895,6 @@ async function openFlibPreview(key) {
   if (e.cves && e.cves.length) h += '<div><dt>CVE</dt><dd>' + e.cves.map(esc).join(', ') + '</dd></div>';
   h += '</dl>';
   h += '<h3 class="flib-h">Description</h3><div class="crb-rich">' + sanitizeHtml(e.description || '') + '</div>';
-  h += '<h3 class="flib-h">Impact</h3><div class="crb-rich">' + sanitizeHtml(e.impact || '') + '</div>';
   h += '<h3 class="flib-h">Remediation</h3><div class="crb-rich">' + sanitizeHtml(e.remediation || '') + '</div>';
   var refs = [_flibCweUrl(e.cwe)].concat(e.references || []).filter(Boolean);
   h += '<h3 class="flib-h">References</h3><ul class="flib-refs">' + refs.map(function (u) {
