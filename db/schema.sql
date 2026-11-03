@@ -45812,14 +45812,143 @@ BEGIN
   END LOOP;
 END $api_grants$;
 
+-- ============================================================================
+-- 1979: THE FINDING LIBRARY, THE ASSET INVENTORY AND THE RISK REGISTER.
+--
+-- [stated] Arian: "i want pental to be able to do this and have a knowledge
+-- base library of all the possible findings written up properly that are
+-- importable", with scanner results from several tools brought together into
+-- the issues they are; and "a solution for this as well": a living risk
+-- register with posture trends across quarters and years (MTTR, MITRE ATT&CK
+-- and compliance frameworks), and an asset inventory that pairs every finding
+-- with the asset and the owner it belongs to.
+-- ============================================================================
+
+-- A library entry taken from Pental's finding library keeps the key of the
+-- entry it came from, so the library can say it is already in the firm's own,
+-- and a scanner's result that the entry recognises finds the firm's wording.
+ALTER TABLE public.kb_entries ADD COLUMN IF NOT EXISTS library_key text;
+CREATE INDEX IF NOT EXISTS kb_entries_library_key_idx ON public.kb_entries (library_key) WHERE library_key IS NOT NULL;
+
+-- WHEN A FINDING STOPPED BEING OPEN. The risk register's time to remediate is
+-- the time from a finding being reported to this. Set by the database when the
+-- status becomes Remediated or Risk Accepted (unless the same write gives a
+-- date of its own, as an import of history does), kept through a move between
+-- the two, and cleared when a finding is opened again. Part Remediated is still
+-- open. Findings resolved before this column existed have no date here; the
+-- portal takes their retest's completion, or their last change, instead.
+ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
+CREATE OR REPLACE FUNCTION public._tg_finding_resolved_at()
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = public, pg_catalog, pg_temp AS $fra$
+BEGIN
+  IF NEW.status IN ('remediated', 'accepted') THEN
+    IF TG_OP = 'INSERT' THEN
+      NEW.resolved_at := COALESCE(NEW.resolved_at, now());
+    ELSIF OLD.status IS NULL OR OLD.status NOT IN ('remediated', 'accepted') THEN
+      IF NEW.resolved_at IS NOT DISTINCT FROM OLD.resolved_at THEN NEW.resolved_at := now(); END IF;
+    ELSIF NEW.resolved_at IS NULL THEN
+      NEW.resolved_at := OLD.resolved_at;
+    END IF;
+  ELSE
+    NEW.resolved_at := NULL;
+  END IF;
+  RETURN NEW;
+END $fra$;
+DROP TRIGGER IF EXISTS tr_finding_resolved_at ON public.findings;
+CREATE TRIGGER tr_finding_resolved_at BEFORE INSERT OR UPDATE OF status, resolved_at ON public.findings
+  FOR EACH ROW EXECUTE FUNCTION public._tg_finding_resolved_at();
+
+-- THE MODULES AND THE REGISTER'S SETTINGS. NULL is the default (on), as for
+-- every module added after the tenants that predate it. posture_config holds
+-- the days a firm gives each severity to be fixed in and whether clients see
+-- their register: {"targets": {"critical": 14, "high": 30, ...}, "clients": true}.
+ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS assets_enabled boolean;
+ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS posture_enabled boolean;
+ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS posture_config jsonb;
+
+-- THE ASSET INVENTORY. One row per thing a client owns that can be tested or
+-- found to be at fault: a host, an address, a range, a domain (a wildcard such
+-- as *.dev.example.com covers what is under it), a URL, a cloud resource or an
+-- application, with who owns it. A range or a wildcard with an owner is how a
+-- firm says "everything in here is the network team's" without listing it.
+CREATE TABLE IF NOT EXISTS public.assets (
+  id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  client_id uuid NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+  name text NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 500),
+  kind text NOT NULL DEFAULT 'host'
+    CHECK (kind IN ('host', 'ip', 'range', 'domain', 'url', 'cloud', 'application', 'other')),
+  label text,
+  environment text,
+  criticality text CHECK (criticality IS NULL OR criticality IN ('critical', 'high', 'medium', 'low')),
+  owner_name text,
+  owner_email text,
+  owner_team text,
+  tags jsonb NOT NULL DEFAULT '[]'::jsonb,
+  details jsonb NOT NULL DEFAULT '{}'::jsonb,
+  source text,
+  notes text,
+  first_seen timestamptz DEFAULT now(),
+  last_seen timestamptz DEFAULT now(),
+  archived_at timestamptz,
+  created_by uuid REFERENCES public.profiles(id),
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS assets_client_name_uq ON public.assets (client_id, lower(btrim(name)));
+CREATE INDEX IF NOT EXISTS assets_client_idx ON public.assets (client_id);
+
+DROP TRIGGER IF EXISTS tr_assets_author ON public.assets;
+CREATE TRIGGER tr_assets_author BEFORE INSERT OR UPDATE ON public.assets
+  FOR EACH ROW EXECUTE FUNCTION public._force_row_author('created_by');
+DROP TRIGGER IF EXISTS tg_assets_touch ON public.assets;
+CREATE TRIGGER tg_assets_touch BEFORE UPDATE ON public.assets
+  FOR EACH ROW EXECUTE FUNCTION public._tg_touch_updated_at_crb();
+
+-- Who sees and keeps a client's inventory: the firm's people who do the work,
+-- a contractor for a client of an engagement that is theirs (can_see_client),
+-- and the client's own people, who read it. Sales and Marketing do not: an
+-- inventory with its owners and findings is the work (1970).
+ALTER TABLE public.assets ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS assets_read ON public.assets;
+CREATE POLICY assets_read ON public.assets FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND (public.is_delivery_staff()
+    OR (public.current_user_role() = 'contractor' AND public.can_see_client(client_id))
+    OR (public.current_user_role() = 'client' AND client_id = public.current_user_client_id())));
+DROP POLICY IF EXISTS assets_insert ON public.assets;
+CREATE POLICY assets_insert ON public.assets FOR INSERT TO authenticated
+  WITH CHECK (public.mfa_is_fresh() AND (public.is_delivery_staff()
+    OR (public.current_user_role() = 'contractor' AND public.can_see_client(client_id))));
+DROP POLICY IF EXISTS assets_update ON public.assets;
+CREATE POLICY assets_update ON public.assets FOR UPDATE TO authenticated
+  USING (public.mfa_is_fresh() AND (public.is_delivery_staff()
+    OR (public.current_user_role() = 'contractor' AND public.can_see_client(client_id))))
+  WITH CHECK (public.is_delivery_staff()
+    OR (public.current_user_role() = 'contractor' AND public.can_see_client(client_id)));
+DROP POLICY IF EXISTS assets_delete ON public.assets;
+CREATE POLICY assets_delete ON public.assets FOR DELETE TO authenticated
+  USING (public.mfa_is_fresh() AND (public.is_delivery_staff()
+    OR (public.current_user_role() = 'contractor' AND public.can_see_client(client_id))));
+REVOKE ALL ON public.assets FROM anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.assets TO authenticated;
+GRANT ALL ON public.assets TO service_role;
+
+DO $assets_rt$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.assets;
+    EXCEPTION WHEN duplicate_object THEN NULL; END;
+  END IF;
+END $assets_rt$;
+
 -- 1806: the version stamp below is written by this file and read by anyone,
 -- never written by a session (a signed-in user could otherwise set it, and a
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: 449fca3a1bf45179 @ 2025103101
+-- schema-fingerprint: be462ec934d2d2bc @ 2025110101
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025103101, now())
+VALUES (1, 2025110101, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 

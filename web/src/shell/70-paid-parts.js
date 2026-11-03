@@ -85,6 +85,8 @@ var _REPORTER_SETTINGS_TABS = {
   updates: 1,
   // 1977: the API, as in the portal (an administrator's: _setTabOn).
   api: 1,
+  // 1979: Pental's finding library, to add to the team's own.
+  library: 1,
 };
 function _setTabOn(id) {
   if (id === 'api' && !(S.profile && S.profile.role === 'admin')) return false;

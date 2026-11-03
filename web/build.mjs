@@ -39,7 +39,12 @@ const libText = JSON.stringify(JSON.parse(read('methodology-library.json')));
 const libFile = `methodology-library.${hash(libText)}.json`;
 if (app.split('%%CRB_LIBRARY_FILE%%').length !== 2) throw new Error('the app names the methodology library other than once');
 app = app.split('%%CRB_LIBRARY_FILE%%').join(libFile);
-const leftover = app.match(/%%(SUPABASE_URL|SUPABASE_PUBLISHABLE_KEY|MASTER_SUPABASE_URL|MASTER_SUPABASE_PUBLISHABLE_KEY|REPORTER_VERSION|CRB_LIBRARY_FILE)%%/g);
+// 1979: Pental's finding library, the same way.
+const fLibText = JSON.stringify(JSON.parse(read('finding-library.json')));
+const fLibFile = `finding-library.${hash(fLibText)}.json`;
+if (app.split('%%FINDING_LIBRARY_FILE%%').length !== 2) throw new Error('the app names the finding library other than once');
+app = app.split('%%FINDING_LIBRARY_FILE%%').join(fLibFile);
+const leftover = app.match(/%%(SUPABASE_URL|SUPABASE_PUBLISHABLE_KEY|MASTER_SUPABASE_URL|MASTER_SUPABASE_PUBLISHABLE_KEY|REPORTER_VERSION|CRB_LIBRARY_FILE|FINDING_LIBRARY_FILE)%%/g);
 if (leftover) throw new Error('placeholders left in the app: ' + [...new Set(leftover)].join(', '));
 // It must parse: a broken script shows a blank page with no other clue.
 {
@@ -70,6 +75,7 @@ fs.writeFileSync(path.join(DIST, 'assets', cssFile), css);
 fs.cpSync(path.join(SRC, 'vendor'), path.join(DIST, 'assets', 'vendor'), { recursive: true });
 fs.cpSync(path.join(SRC, 'public'), path.join(DIST, 'assets'), { recursive: true });
 fs.writeFileSync(path.join(DIST, 'assets', libFile), libText);
+fs.writeFileSync(path.join(DIST, 'assets', fLibFile), fLibText);   // 1979
 const sb = fs.readFileSync(path.join(SRC, 'vendor', 'supabase-js-2.39.3', 'supabase.js'), 'utf8');
 const sbFile = `supabase-js-2.39.3.${hash(sb)}.js`;
 fs.writeFileSync(path.join(DIST, 'assets', sbFile), sb);

@@ -4616,7 +4616,7 @@ window._conOnWork = _conOnWork;
 window._conTeamName = _conTeamName;
 var _ASSESS_PAGES = ['assessments', 'assessment-detail', 'finding-detail', 'retests'];
 var _CLIENT_PAGES = ['dashboard', 'scans', 'scan-detail', 'proposals', 'signatures', 'assessments', 'assessment-detail',
-  'finding-detail', 'findings', 'invoices', 'my-profile'];
+  'finding-detail', 'findings', 'invoices', 'my-profile', 'posture', 'assets'];
 function canAccessPage(page) {
   if (!S.profile) return page === 'dashboard';
 
@@ -4637,6 +4637,9 @@ function canAccessPage(page) {
 
   if (_ASSESS_PAGES.indexOf(page) > -1 && !assessmentsEnabled()) return false;
   if (page === 'library' && !libraryEnabled()) return false;
+
+  if (page === 'posture' && !_pstMay()) return false;
+  if (page === 'assets' && !(assetsEnabled() && (!isClient() || _pstCfg().clients))) return false;
   if (page === 'invoices' && !invoicesEnabled()) return false;
   if (page === 'feedback' && !feedbackEnabled()) return false;
   if (page === 'meet-calendar' && !meetCalendarEnabled()) return false;
@@ -4680,7 +4683,7 @@ function canAccessPage(page) {
 
   if (isSales() || isMarketing()) {
     var _techPages = ['calendar', 'assign', 'qa', 'qa-review', 'library', 'retests', 'scans', 'scan-detail', 'all-findings',
-      'assessments', 'assessment-detail', 'finding-detail', 'findings', 'report-builder'];
+      'assessments', 'assessment-detail', 'finding-detail', 'findings', 'report-builder', 'posture', 'assets'];
     if (_techPages.indexOf(page) >= 0) return false;
   }
   return true;
@@ -19977,7 +19980,9 @@ var _SHELL_KEYS = [
   'feedback_enabled', 'meetings_enabled', 'meet_calendar_enabled',
   'contacts_enabled', 'contractors_enabled', 'qa_enabled',
 
-  'testing_calendar_enabled', 'scanning_enabled', 'enable_checklists_runbooks'
+  'testing_calendar_enabled', 'scanning_enabled', 'enable_checklists_runbooks',
+
+  'posture_enabled', 'assets_enabled'
 ];
 function _shellCacheKey() {
   var uid = (S.profile && (S.profile.id || S.profile.auth_user_id)) || (S.user && S.user.id) || '';
@@ -20264,7 +20269,7 @@ async function _loadAllDataInner() {
 
   var p1 = {};
 
-  var _settingsCols_base = 'id,company_name,company_email,company_phone,company_address,company_number,company_ending,company_website,accent_color,theme_mode,refcode_bold,severity_colors,severity_style,notification_color,toast_success_color,logo_url,logo_url_light,pdf_logo_variant,email_logo_variant,password_login_enabled,font_display,font_body,font_mono,pdf_font_body,pdf_font_heading,email_font,portal_title,login_title,login_subtitle,login_support_email,login_button_text,login_custom_text,login_show_logo,login_show_company_name,login_show_title,sso_google_enabled,sso_google_client_id,sso_ms_client_id,sso_ms_tenant,sso_microsoft_enabled,proposals_enabled,invoices_enabled,feedback_enabled,meet_calendar_enabled,testing_calendar_enabled,meetings_enabled,contacts_enabled,contractors_enabled,contractors_library,dashboard_enabled,qa_enabled,assessments_enabled,library_enabled,dashboard_layouts,theme_dark,theme_light,currency_code,currency_symbol,day_rate,vat_rate,vat_number,sig_name,sig_title,sig_email,sig_phone,sig_teams,sig_slack,sig_html,assessment_types,session_timeout_minutes,session_timeout_action,session_signout_minutes,session_refresh_buffer_minutes,show_tester_teams,show_tester_slack,feedback_mode,google_review_url,loa_visibility,email_enabled,email_signature_enabled,notify_test_started,notify_test_ended,notify_critical_finding,notify_proposal_sent,notify_invoice_sent,notify_invoice_paid,notify_tester_assigned,notify_credentials_submitted,notify_comment_reply,notify_report_delivered,notify_new_sign_in,notify_new_device_sign_in,notify_mfa_changed,notify_role_changed,notify_user_created,notify_session_revoked,bank_account_name,bank_name,bank_sort_code,bank_account_number,bank_iban,bank_bic,stripe_enabled,stripe_publishable_key,stripe_success_url,favicon_url,created_at,updated_at,pdf_templates,loa_signatory_name,loa_signatory_title,loa_signature_data,filename_templates,mfa_methods_allowed,mfa_methods_required,notify_reply_to_email'
+  var _settingsCols_base = 'id,company_name,company_email,company_phone,company_address,company_number,company_ending,company_website,accent_color,theme_mode,refcode_bold,severity_colors,severity_style,notification_color,toast_success_color,logo_url,logo_url_light,pdf_logo_variant,email_logo_variant,password_login_enabled,font_display,font_body,font_mono,pdf_font_body,pdf_font_heading,email_font,portal_title,login_title,login_subtitle,login_support_email,login_button_text,login_custom_text,login_show_logo,login_show_company_name,login_show_title,sso_google_enabled,sso_google_client_id,sso_ms_client_id,sso_ms_tenant,sso_microsoft_enabled,proposals_enabled,invoices_enabled,feedback_enabled,meet_calendar_enabled,testing_calendar_enabled,meetings_enabled,contacts_enabled,contractors_enabled,contractors_library,dashboard_enabled,qa_enabled,assessments_enabled,library_enabled,dashboard_layouts,posture_enabled,assets_enabled,posture_config,theme_dark,theme_light,currency_code,currency_symbol,day_rate,vat_rate,vat_number,sig_name,sig_title,sig_email,sig_phone,sig_teams,sig_slack,sig_html,assessment_types,session_timeout_minutes,session_timeout_action,session_signout_minutes,session_refresh_buffer_minutes,show_tester_teams,show_tester_slack,feedback_mode,google_review_url,loa_visibility,email_enabled,email_signature_enabled,notify_test_started,notify_test_ended,notify_critical_finding,notify_proposal_sent,notify_invoice_sent,notify_invoice_paid,notify_tester_assigned,notify_credentials_submitted,notify_comment_reply,notify_report_delivered,notify_new_sign_in,notify_new_device_sign_in,notify_mfa_changed,notify_role_changed,notify_user_created,notify_session_revoked,bank_account_name,bank_name,bank_sort_code,bank_account_number,bank_iban,bank_bic,stripe_enabled,stripe_publishable_key,stripe_success_url,favicon_url,created_at,updated_at,pdf_templates,loa_signatory_name,loa_signatory_title,loa_signature_data,filename_templates,mfa_methods_allowed,mfa_methods_required,notify_reply_to_email'
 
     + ',final_pdf_names'
 
@@ -20393,6 +20398,8 @@ async function _loadAllDataInner() {
     p1.issue_trackers = _readPaged(db.from('issue_trackers').select(_TRACKER_COLS).eq('client_id', cid), Infinity);
     p1.finding_tickets = _readPaged(db.from('finding_tickets').select('*'), Infinity);
   }
+
+  if (!_commercialOnly && (isStaff || isCon || isClient)) p1.assets = _readPaged(db.from('assets').select('*'), Infinity);
 
   var keys1 = Object.keys(p1);
   var vals1 = await Promise.all(keys1.map(function(k) {
@@ -20671,6 +20678,9 @@ async function _loadAllDataInner() {
     S.data.contact_requests = []; S.data.feedback = []; S.data.users = [];
     S.data.clientUsers = [];
   }
+
+  S.data.assets = _d(r1.assets);
+  if (r1.assets && !r1.assets.error) _rtTableMap.assets = 'assets'; else delete _rtTableMap.assets;
 
   var assessmentIds = S.data.assessments.map(function(a) { return a.id; });
 
@@ -26480,7 +26490,7 @@ function renderApp() {
 function getTitle() {
 
   if (S.page === 'scan-detail') return _ssRunName(S.currentScanRun).toUpperCase();
-  return { dashboard: 'DASHBOARD', assessments: 'ASSESSMENTS', 'assessment-detail': 'ASSESSMENT', 'finding-detail': 'FINDING', clients: 'CLIENTS', 'client-detail': 'CLIENT', users: 'USERS', library: 'LIBRARY', settings: 'SETTINGS', qa: 'QA QUEUE', signatures: 'SIGN PROPOSALS', assign: 'ASSIGN TESTERS', findings: 'FINDINGS', retests: 'RETESTS', invoices: 'INVOICES', feedback: 'FEEDBACK', proposals: 'PROPOSALS', calendar: 'CALENDAR', 'meet-calendar': 'SALES CALENDAR', meetings: 'MEETINGS', contacts: 'CONTACTS', 'my-profile': 'PROFILE', subscription: 'SUBSCRIPTION', contractors: 'EXTERNAL', scans: 'SCANS', 'scan-detail': 'SCAN', 'qa-review': 'QA REVIEW', 'report-builder': 'DOCUMENT BUILDER', 'all-findings': 'FINDINGS' }[S.page] || 'DASHBOARD';
+  return { dashboard: 'DASHBOARD', assessments: 'ASSESSMENTS', 'assessment-detail': 'ASSESSMENT', 'finding-detail': 'FINDING', clients: 'CLIENTS', 'client-detail': 'CLIENT', users: 'USERS', library: 'LIBRARY', settings: 'SETTINGS', qa: 'QA QUEUE', signatures: 'SIGN PROPOSALS', assign: 'ASSIGN TESTERS', findings: 'FINDINGS', retests: 'RETESTS', invoices: 'INVOICES', feedback: 'FEEDBACK', proposals: 'PROPOSALS', calendar: 'CALENDAR', 'meet-calendar': 'SALES CALENDAR', meetings: 'MEETINGS', contacts: 'CONTACTS', 'my-profile': 'PROFILE', subscription: 'SUBSCRIPTION', contractors: 'EXTERNAL', scans: 'SCANS', 'scan-detail': 'SCAN', 'qa-review': 'QA REVIEW', 'report-builder': 'DOCUMENT BUILDER', 'all-findings': 'FINDINGS', posture: 'RISK REGISTER', assets: 'ASSETS' }[S.page] || 'DASHBOARD';
 }
 function renderHeaderSearch() {
 
@@ -26648,6 +26658,9 @@ var _FEATURE_MODULES = [
 
     { key: 'assessments_enabled',  label: 'Assessments', desc: 'Engagements, phases, findings and the reports that come out of them. Off hides the area and its navigation; nothing is deleted and existing documents stay downloadable. Only turn this off if you sell scanning alone.', def: true },
     { key: 'library_enabled',      label: 'Library', desc: 'Your own library of reusable findings, with descriptions and remediation your team has already agreed. Off hides the area; the entries are kept.', def: true },
+
+    { key: 'posture_enabled',      label: 'Risk Register', desc: 'Each client\u2019s issues across every engagement, one row per issue: open and overdue against your remediation targets, time to remediate, the trend by quarter, and MITRE ATT&CK and OWASP Top 10 mapping. Clients see their own unless you turn that off.', def: true },
+    { key: 'assets_enabled',       label: 'Assets', desc: 'Each client\u2019s hosts, ranges, domains and cloud resources with their owners, imported from Nmap, masscan, subfinder, amass, httpx and the cloud inventories. Every finding is paired with its asset and owner.', def: true },
     { key: 'scanning_enabled',     label: 'Scans', desc: 'Connect your own scanner (Burp, Nessus, Tenable and others), import results, and let clients run scans against assets you approve. Off hides the area and its navigation for everyone.', def: false, beta: true }
   ];
 function wizStep_features() {
@@ -26779,6 +26792,8 @@ function renderBreadcrumbs() {
     crumbs = [{ label: 'QA Queue', onclick: "nav('qa')" }, { label: _qaA ? _qaA.name : 'Review', active: true }];
   }
   if (S.page === 'library') crumbs = [{ label: 'Library', active: true }];
+  if (S.page === 'posture') crumbs = [{ label: 'Risk Register', active: true }];
+  if (S.page === 'assets') crumbs = [{ label: 'Assets', active: true }];
   if (S.page === 'users') crumbs = [{ label: 'Users', active: true }];
   if (S.page === 'contractors') crumbs = [{ label: 'External', active: true }];
   if (S.page === 'settings') crumbs = [{ label: 'Settings', active: true }];
@@ -26851,6 +26866,8 @@ function renderPage() {
     case 'client-detail': return renderClientDetail();
     case 'users': return renderUsers();
     case 'library': return renderLibrary();
+    case 'posture': return renderPosture();
+    case 'assets': return renderAssets();
     case 'report-builder': return renderReportBuilder();
     case 'scans': return renderScans();
     case 'scan-detail': return renderScanDetail();
@@ -31651,7 +31668,7 @@ function renderFindingDetail() {
       if (!hostsList.length) return;
       var _hb = '<ul style="margin:0;padding-left:1.5rem">';
       hostsList.forEach(function(host) { _hb += '<li style="margin-bottom:0.25rem">' + esc(host) + '</li>'; });
-      _dCard(_ffLabel('affected_assets'), _hb + '</ul>');
+      _dCard(_ffLabel('affected_assets'), _hb + '</ul>' + _astFindingOwnersHtml(f));
       return;
     }
 
@@ -32990,6 +33007,7 @@ function renderClientDetail() {
   }
   if (invoicesEnabled()) _cdStats += '<div class="stat"><div class="stat-label">Outstanding</div><div class="stat-value' + (outstandingTotal > 0 ? ' medium' : '') + '">' + outstandingTotal_txt + '</div></div>';
   if (_cdStats) h += '<div class="stats">' + _cdStats + '</div>';
+  h += _pstClientCardHtml(c);
 
   if (c.contact_name || c.contact_email) {
     h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.mail + ' Contact</span></div><div class="card-body pl-contact">';
@@ -33455,6 +33473,13 @@ function renderUsers() {
 
 }
 function renderLibrary() {
+
+  var _sh = _flibShelfHtml();
+  if (_sh.tab === 'pental') {
+    var _ph = '<div class="page-header">';
+    if (canEdit()) _ph += '<button class="btn btn-primary" onclick="openM(\'kb\')">' + IC.plus + ' New Template</button>';
+    return _ph + '</div>' + _sh.html + _flibBrowserHtml();
+  }
   var list = S.data.library;
   var q = S.searchQuery.toLowerCase();
   if (q) list = list.filter(function(k) { return k.title.toLowerCase().indexOf(q) >= 0 || (k.cwe || '').toLowerCase().indexOf(q) >= 0 || (k.category || '').toLowerCase().indexOf(q) >= 0; });
@@ -33465,6 +33490,7 @@ function renderLibrary() {
   var h = '<div class="page-header">';
   if (canEdit()) h += '<button class="btn btn-primary" onclick="openM(\'kb\')">' + IC.plus + ' New Template</button>';
   h += '</div>';
+  h += _sh.html;
 
   h += '<div class="card"><div class="card-header"><span class="card-title">' + IC.library + ' Library</span><span class="badge">' + list.length + '</span></div><div class="mob-table"><table class="dt"><thead><tr>';
 
@@ -33499,7 +33525,7 @@ function renderLibrary() {
     }
     h += '</div></td></tr>';
   });
-  if (!list.length) h += '<tr><td colspan="5" class="empty">No templates yet</td></tr>';
+  if (!list.length) h += '<tr><td colspan="5" class="empty">No templates yet' + (canEdit() ? '. <a href="#" onclick="event.preventDefault();_flibFilter(\'tab\', \'pental\')">Add some from the finding library</a>' : '') + '</td></tr>';
   h += '</tbody></table></div>';
 
   h += '<div class="mob-cards" style="display:none">';
@@ -33515,6 +33541,336 @@ function renderLibrary() {
   h += '</div></div>';
 
   return h;
+}
+var _FLIB_FILE = '%%FINDING_LIBRARY_FILE%%';
+var _flibWhole = null, _flibAsk = null, _flibErr = '';
+function _flibUrl() {
+  return '/assets/' + (/^%%/.test(_FLIB_FILE) ? 'finding-library.json' : _FLIB_FILE);
+}
+function _flibLoad() {
+  if (_flibWhole) return Promise.resolve(_flibWhole);
+  if (!_flibAsk) {
+    _flibAsk = fetch(_flibUrl(), { credentials: 'same-origin' }).then(function (r) {
+      if (!r.ok) throw new Error('The finding library could not be loaded (' + r.status + '). Try again.');
+      return r.json();
+    }).then(function (j) {
+      if (!j || !Array.isArray(j.entries)) throw new Error('The finding library could not be read. Try again.');
+      _flibIndex(j);
+      _flibWhole = j;
+      _flibErr = '';
+      return j;
+    }).catch(function (e) {
+      _flibAsk = null;
+      _flibErr = (e && e.message) || 'The finding library could not be loaded. Try again.';
+      throw e;
+    });
+  }
+  return _flibAsk;
+}
+function _flibWant(then) {
+  if (_flibWhole || _flibAsk || _flibErr) return;
+  _flibLoad().then(then, then);
+}
+function _flibRetry() { _flibErr = ''; render(true); }
+window._flibRetry = _flibRetry;
+window._flibLoad = _flibLoad;
+function _flibFmt(format, tool) {
+  var f = String(format || '').toLowerCase() + ' ' + String(tool || '').toLowerCase();
+  if (/nessus|tenable/.test(f)) return 'nessus';
+  if (/burp/.test(f)) return 'burp';
+  if (/zap/.test(f)) return 'zap';
+  if (/nuclei/.test(f)) return 'nuclei';
+  if (/openvas|greenbone/.test(f)) return 'openvas';
+  if (/qualys/.test(f)) return 'qualys';
+  if (/testssl/.test(f)) return 'testssl';
+  if (/nmap/.test(f)) return 'nmap';
+  if (/nikto/.test(f)) return 'nikto';
+  if (/acunetix|invicti/.test(f)) return 'acunetix';
+  if (/semgrep/.test(f)) return 'semgrep';
+  if (/trivy/.test(f)) return 'trivy';
+  if (/wapiti/.test(f)) return 'wapiti';
+  return '';
+}
+function _flibIndex(j) {
+  var ix = { byKey: {}, byTitle: {}, ids: {}, patterns: [], families: [] };
+  var re = function (s) { try { return new RegExp(s, 'i'); } catch (e) { return null; } };
+  (j.entries || []).forEach(function (e) {
+    ix.byKey[e.key] = e;
+    var tk = _scanTitleKey(e.title);
+    if (tk && !ix.byTitle[tk]) ix.byTitle[tk] = e.key;
+    var m = e.match || {};
+    (m.titles || []).forEach(function (t) { var k = _scanTitleKey(t); if (k && !ix.byTitle[k]) ix.byTitle[k] = e.key; });
+    Object.keys(m.ids || {}).forEach(function (fmt) {
+      (m.ids[fmt] || []).forEach(function (id) { var k = fmt + '|' + String(id).toLowerCase(); if (!ix.ids[k]) ix.ids[k] = e.key; });
+    });
+    (m.patterns || []).forEach(function (p) {
+      var src = typeof p === 'string' ? p : p && p.re;
+      var r = re(src);
+      if (r) ix.patterns.push({ re: r, fmt: (p && p.fmt) || '', key: e.key, prio: (p && +p.prio) || 0, n: ix.patterns.length });
+    });
+    (m.families || []).forEach(function (f) {
+      var c = re(f.family), t = f.title ? re(f.title) : null, x = f.not ? re(f.not) : null;
+      if (c) ix.families.push({ fmt: f.fmt || '', cat: c, title: t, not: x, key: e.key });
+    });
+  });
+
+  ix.patterns.sort(function (a, b) { return (b.prio - a.prio) || (a.n - b.n); });
+  j._ix = ix;
+}
+function _flibAdded(e) {
+  if (!e) return null;
+  var lib = S.data.library || [];
+  var hit = lib.find(function (k) { return k && k.library_key === e.key; });
+  if (hit) return hit;
+  var tk = _scanTitleKey(e.title);
+  return lib.find(function (k) { return k && _scanTitleKey(k.title) === tk; }) || null;
+}
+function _flibRating(e) {
+  var four = _cvssVersion() === '4.0';
+  var score = four ? e.score40 : e.score31;
+  var vec = four ? e.cvss40 : e.cvss31;
+  if (!(score >= 0) || !vec) { score = e.score31; vec = e.cvss31; }
+  var n = parseFloat(score) || 0;
+  return { score: n, vector: vec || '', severity: n > 0 ? _fsiRating(n) : 'info' };
+}
+function _flibCweUrl(cwe) {
+  var m = /^CWE-(\d+)$/i.exec(String(cwe || '').trim());
+  return m ? 'https://cwe.mitre.org/data/definitions/' + m[1] + '.html' : '';
+}
+function _flibKbPayload(e) {
+  var r = _flibRating(e);
+  var refs = [];
+  var cw = _flibCweUrl(e.cwe);
+  if (cw) refs.push(cw);
+  (e.references || []).forEach(function (u) { if (u && refs.indexOf(u) < 0) refs.push(u); });
+  var titles = ((e.match && e.match.titles) || []).filter(function (t) { return _scanTitleKey(t) !== _scanTitleKey(e.title); }).slice(0, 60);
+  return {
+    title: String(e.title || '').slice(0, 300),
+    severity: r.severity,
+    cvss: r.score,
+    cvss_vector: r.vector || null,
+    category: _findingCategoryOf(e.category) || null,
+    cwe: e.cwe || null,
+    description: sanitizeHtml(e.description || ''),
+    impact: sanitizeHtml(e.impact || ''),
+    remediation: sanitizeHtml(e.remediation || ''),
+    refs: refs,
+    scan_titles: titles,
+    library_key: e.key,
+    custom_fields: {},
+  };
+}
+async function _flibInsertKb(rows, dropped) {
+  for (var attempt = 0; attempt < 6; attempt++) {
+    var res = await supabaseClient.from('kb_entries').insert(rows).select('*');
+    if (!res || !res.error) return res;
+    var col = _missingColumnFrom(_errMsg(res.error));
+    if (!col || !rows.some(function (r) { return col in r; })) return res;
+    rows.forEach(function (r) { delete r[col]; });
+    if (dropped.indexOf(col) < 0) dropped.push(col);
+  }
+  return { error: { message: 'Too many missing columns' } };
+}
+function _flibKeepRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  var ids = {};
+  rows.forEach(function (r) { if (r && r.id) ids[r.id] = 1; });
+  S.data.library = (S.data.library || []).filter(function (k) { return !ids[k.id]; }).concat(rows);
+}
+async function flibAdd(keys) {
+  if (!canEdit()) { toast('You cannot add to the library', 'error'); return; }
+  keys = (Array.isArray(keys) ? keys : [keys]).filter(Boolean);
+  _showLoading();
+  try {
+    var j = await _flibLoad();
+    var todo = keys.map(function (k) { return j._ix.byKey[k]; }).filter(function (e) { return e && !_flibAdded(e); });
+    if (!todo.length) { toast(keys.length === 1 ? 'Already in your library' : 'Those are all in your library already', 'info'); return; }
+    var added = 0, dropped = [], failed = 0;
+    for (var i = 0; i < todo.length; i += 25) {
+      var part = todo.slice(i, i + 25).map(_flibKbPayload);
+      var res = await _flibInsertKb(part, dropped);
+      if (res && !res.error) { added += part.length; _flibKeepRows(res.data || []); }
+      else { failed += part.length; console.warn('[finding library] could not add:', res && res.error && _errMsg(res.error)); }
+    }
+    var msg = added === 1 ? 'Added "' + todo[0].title + '" to your library' : 'Added ' + added + ' findings to your library';
+    if (dropped.length) msg += '. Your database could not store ' + _andList(dropped) + ' yet; re-run byo-setup.sql to bring it up to date';
+    if (failed) toast((added ? msg + '. ' : '') + failed + ' could not be added.', 'error', 12000);
+    else toast(msg, 'success', dropped.length ? 12000 : undefined);
+    render(true);
+  } catch (e) {
+    toast(e.message || 'The finding library could not be loaded.', 'error');
+  } finally { _hideLoading(); }
+}
+window.flibAdd = flibAdd;
+function flibAddShown() { flibAdd(_flibKeys().filter(function (k) { return !_flibAdded(_flibWhole._ix.byKey[k]); })); }
+window.flibAddShown = flibAddShown;
+var _FLIB_SEVS = ['critical', 'high', 'medium', 'low', 'info'];
+var _FLIB_SHOW = 60;
+function _flibState() { if (!S._flib) S._flib = { q: '', area: '', sev: '', shown: _FLIB_SHOW }; return S._flib; }
+function _flibAreaName(id) {
+  var a = ((_flibWhole && _flibWhole.areas) || []).find(function (x) { return x.id === id; });
+  return a ? a.name : id;
+}
+function _flibKeys() {
+  if (!_flibWhole) return [];
+  var st = _flibState();
+  var words = String(st.q || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return _flibWhole.entries.filter(function (e) {
+    if (st.area && e.area !== st.area) return false;
+    if (st.sev && _flibRating(e).severity !== st.sev) return false;
+    if (!words.length) return true;
+    if (!e._hay) e._hay = [e.title, e.summary, e.cwe, e.category, _flibAreaName(e.area)].concat(e.keywords || [], e.attack || [], e.cves || []).join(' ').toLowerCase();
+    return words.every(function (w) { return e._hay.indexOf(w) >= 0; });
+  }).map(function (e) { return e.key; });
+}
+function _flibTechName(id) {
+  var t = _flibWhole && _flibWhole.attack && _flibWhole.attack[id];
+  return t ? t.name : '';
+}
+function _flibOwaspOf(cwe, edition) {
+  var m = /^CWE-(\d+)$/i.exec(String(cwe || '').trim());
+  var o = _flibWhole && _flibWhole.owasp && _flibWhole.owasp[edition || '2025'];
+  if (!m || !o) return null;
+  var n = parseInt(m[1], 10);
+  var code = Object.keys(o).find(function (c) { return (o[c].cwes || []).indexOf(n) >= 0; });
+  return code ? { code: code, title: o[code].title, url: o[code].url } : null;
+}
+function _flibCardHtml(k) {
+  var e = _flibWhole._ix.byKey[k];
+  var got = _flibAdded(e);
+  var r = _flibRating(e);
+  var h = '<div class="crbl-card flib-card' + (got ? ' is-added' : '') + '" data-flib="' + esc(k) + '">';
+  h += '<div class="crbl-top"><span class="crbl-cat">' + esc(_flibAreaName(e.area)) + '</span>' + badge(r.severity, r.severity) + '</div>';
+  h += '<div class="crbl-name">' + esc(e.title) + '</div>';
+  h += '<div class="crbl-desc">' + esc(e.summary || '') + '</div>';
+  var meta = [];
+  if (e.cwe) meta.push(esc(e.cwe));
+  if (e.attack && e.attack.length) meta.push('ATT&amp;CK ' + esc(e.attack.slice(0, 2).join(', ')) + (e.attack.length > 2 ? ' +' + (e.attack.length - 2) : ''));
+  var ow = _flibOwaspOf(e.cwe);
+  if (ow) meta.push('OWASP ' + esc(ow.code));
+  if (r.score > 0) meta.push('CVSS ' + r.score.toFixed(1));
+  if (meta.length) h += '<div class="crbl-meta">' + meta.join('<i aria-hidden="true"></i>') + '</div>';
+  h += '<div class="crbl-acts"><button type="button" class="btn btn-sm btn-ghost" onclick="openFlibPreview(\'' + esc(k) + '\')">Preview</button>';
+  if (got) h += '<span class="crbl-added">' + IC.check + ' In your library</span><button type="button" class="btn btn-sm" onclick="openM(\'kb\',\'' + esc(got.id) + '\')">Open</button>';
+  else if (canEdit()) h += '<button type="button" class="btn btn-sm btn-primary" onclick="flibAdd(\'' + esc(k) + '\')">Add to my library</button>';
+  return h + '</div></div>';
+}
+function _flibGridHtml() {
+  var keys = _flibKeys();
+  if (!keys.length) return '<div class="crbl-empty">Nothing in the finding library matches that. Try another word, area or severity.</div>';
+  var st = _flibState();
+  var h = keys.slice(0, st.shown).map(_flibCardHtml).join('');
+  if (keys.length > st.shown) h += '<div class="crbl-empty flib-more"><button type="button" class="btn btn-secondary btn-sm" onclick="_flibMore()">Show ' + Math.min(_FLIB_SHOW, keys.length - st.shown) + ' more of ' + (keys.length - st.shown) + '</button></div>';
+  return h;
+}
+function _flibCountHtml() {
+  var keys = _flibKeys();
+  var total = _flibWhole.entries.length;
+  var todo = keys.filter(function (k) { return !_flibAdded(_flibWhole._ix.byKey[k]); }).length;
+  return '<span>' + (keys.length === total ? 'All ' + total + ' findings' : keys.length + ' of ' + total + ' findings') + (todo < keys.length ? ', ' + (keys.length - todo) + ' in your library' : '') + '</span>'
+    + (todo > 1 && canEdit() ? '<button type="button" class="btn btn-sm btn-ghost" onclick="flibAddShown()">Add these ' + todo + ' to my library</button>' : '');
+}
+function _flibMore() {
+  var st = _flibState();
+  st.shown += _FLIB_SHOW;
+  var g = document.getElementById('flibGrid'); if (g) g.innerHTML = _flibGridHtml();
+}
+window._flibMore = _flibMore;
+function _flibFilter(k, v) {
+  var st = _flibState();
+  st[k] = v;
+  st.shown = _FLIB_SHOW;
+  if (k === 'q') {
+    var g = document.getElementById('flibGrid'); if (g) g.innerHTML = _flibGridHtml();
+    var c = document.getElementById('flibCount'); if (c) c.innerHTML = _flibCountHtml();
+    return;
+  }
+  render(true);
+}
+window._flibFilter = _flibFilter;
+function _flibBrowserHtml() {
+  if (!_flibWhole) {
+    _flibWant(function () { render(true); });
+    if (_flibErr) return '<div class="crbl-none">' + esc(_flibErr) + ' <a href="#" onclick="event.preventDefault();_flibRetry()">Try again</a></div>';
+    return '<div class="crbl-none flib-loading">Loading the finding library…</div>';
+  }
+  var st = _flibState();
+  var all = _flibWhole.entries;
+  var h = '<div class="crbl flib">';
+  h += '<p class="crbl-sub">' + all.length + ' findings written up as a report would have them, across web applications, APIs, infrastructure, Active Directory, cloud, mobile, wireless and more: each with a description, its impact, remediation, a CVSS 3.1 and 4.0 rating, its CWE, the MITRE ATT&amp;CK techniques it gives an attacker and references. '
+    + 'Adding one copies it into your library, to change as you like and use from any finding. Import from scanner uses them too, to bring every scanner’s name for an issue together as one finding.</p>';
+  h += '<div class="crbl-tools"><div class="crbl-search">' + IC.search + '<input type="search" id="flibQ" placeholder="Search the finding library, e.g. Kerberoasting, CWE-79, HSTS, S3" value="' + esc(st.q || '') + '" oninput="_flibFilter(\'q\', this.value)" aria-label="Search the finding library"></div>';
+  h += '<div class="irv-seg" role="radiogroup" aria-label="Severity">' + [['', 'All']].concat(_FLIB_SEVS.map(function (s) { return [s, s === 'info' ? 'Info' : s.charAt(0).toUpperCase() + s.slice(1)]; })).map(function (o) {
+    var on = (st.sev || '') === o[0];
+    return '<button type="button" role="radio" aria-checked="' + on + '" class="irv-seg-b' + (on ? ' is-on' : '') + '" onclick="_flibFilter(\'sev\', \'' + o[0] + '\')">' + o[1] + '</button>';
+  }).join('') + '</div></div>';
+  h += '<div class="crbl-cats" role="radiogroup" aria-label="Area">';
+  h += '<button type="button" role="radio" aria-checked="' + !st.area + '" class="crbl-chip' + (!st.area ? ' is-on' : '') + '" onclick="_flibFilter(\'area\', \'\')">All <span>' + all.length + '</span></button>';
+  (_flibWhole.areas || []).forEach(function (a) {
+    var n = all.filter(function (e) { return e.area === a.id; }).length;
+    if (!n) return;
+    var on = st.area === a.id;
+    h += '<button type="button" role="radio" aria-checked="' + on + '" class="crbl-chip' + (on ? ' is-on' : '') + '" onclick="_flibFilter(\'area\', \'' + esc(a.id) + '\')">' + esc(a.name) + ' <span>' + n + '</span></button>';
+  });
+  h += '</div>';
+  h += '<div class="crbl-count" id="flibCount">' + _flibCountHtml() + '</div>';
+  h += '<div class="crbl-grid" id="flibGrid">' + _flibGridHtml() + '</div>';
+  return h + '</div>';
+}
+window._flibBrowserHtml = _flibBrowserHtml;
+async function openFlibPreview(key) {
+  var j;
+  if (!_flibWhole) {
+    _showLoading();
+    try { j = await _flibLoad(); } catch (e) { toast(e.message || 'The finding library could not be loaded.', 'error'); return; }
+    finally { _hideLoading(); }
+  } else j = _flibWhole;
+  var e = j._ix.byKey[key];
+  if (!e) return;
+  var got = _flibAdded(e);
+  var r = _flibRating(e);
+  var other = _cvssVersion() === '4.0' ? { v: '3.1', s: e.score31, vec: e.cvss31 } : { v: '4.0', s: e.score40, vec: e.cvss40 };
+  var h = '<div class="modal-header"><div><div class="crbl-top" style="justify-content:flex-start;margin-bottom:0.35rem"><span class="crbl-cat">' + esc(_flibAreaName(e.area)) + '</span>' + badge(r.severity, r.severity) + '</div>'
+    + '<h2 class="modal-title">' + esc(e.title) + '</h2></div><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
+  h += '<div class="modal-body flib-prev">';
+  h += '<dl class="flib-facts">';
+  h += '<div><dt>CVSS ' + esc(_cvssVersion()) + '</dt><dd>' + (r.score > 0 ? r.score.toFixed(1) : '0.0') + ' <code>' + esc(r.vector) + '</code></dd></div>';
+  if (other.vec) h += '<div><dt>CVSS ' + other.v + '</dt><dd>' + (parseFloat(other.s) || 0).toFixed(1) + ' <code>' + esc(other.vec) + '</code></dd></div>';
+  if (e.cwe) h += '<div><dt>CWE</dt><dd><a href="' + esc(_flibCweUrl(e.cwe)) + '" target="_blank" rel="noopener noreferrer">' + esc(e.cwe) + '</a></dd></div>';
+  if (e.category) h += '<div><dt>Category</dt><dd>' + esc(e.category) + '</dd></div>';
+  var ow = _flibOwaspOf(e.cwe);
+  if (ow) h += '<div><dt>OWASP Top 10:2025</dt><dd><a href="' + esc(ow.url) + '" target="_blank" rel="noopener noreferrer">' + esc(ow.code + ' ' + ow.title) + '</a></dd></div>';
+  if (e.attack && e.attack.length) {
+    h += '<div><dt>MITRE ATT&amp;CK</dt><dd>' + e.attack.map(function (t) {
+      return '<a href="https://attack.mitre.org/techniques/' + esc(t.replace('.', '/')) + '/" target="_blank" rel="noopener noreferrer">' + esc(t) + '</a> ' + esc(_flibTechName(t));
+    }).join('<br>') + '</dd></div>';
+  }
+  if (e.cves && e.cves.length) h += '<div><dt>CVE</dt><dd>' + e.cves.map(esc).join(', ') + '</dd></div>';
+  h += '</dl>';
+  h += '<h3 class="flib-h">Description</h3><div class="crb-rich">' + sanitizeHtml(e.description || '') + '</div>';
+  h += '<h3 class="flib-h">Impact</h3><div class="crb-rich">' + sanitizeHtml(e.impact || '') + '</div>';
+  h += '<h3 class="flib-h">Remediation</h3><div class="crb-rich">' + sanitizeHtml(e.remediation || '') + '</div>';
+  var refs = [_flibCweUrl(e.cwe)].concat(e.references || []).filter(Boolean);
+  h += '<h3 class="flib-h">References</h3><ul class="flib-refs">' + refs.map(function (u) {
+    return '<li><a href="' + esc(_crbSafeUrl(u) || '#') + '" target="_blank" rel="noopener noreferrer">' + esc(u) + '</a></li>';
+  }).join('') + '</ul>';
+  h += '</div>';
+  h += '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:0.5rem"><button class="btn btn-ghost" onclick="closeM()">Close</button>'
+    + (got ? '<button class="btn btn-secondary" onclick="closeM();openM(\'kb\',\'' + esc(got.id) + '\')">Open your copy</button>'
+      : (canEdit() ? '<button class="btn btn-primary" onclick="closeM();flibAdd(\'' + esc(key) + '\')">Add to my library</button>' : '')) + '</div>';
+  S.modal = { type: '_custom', html: h, cls: 'crbl-prev-modal flib-prev-modal' };
+  render(true);
+}
+window.openFlibPreview = openFlibPreview;
+function _flibShelfHtml() {
+  var st = _flibState();
+  var mine = (S.data.library || []).length;
+  var tab = st.tab || (st.tab = mine ? 'mine' : 'pental');
+  var h = '<div class="crbl-shelf"><div class="irv-seg" role="tablist" aria-label="Library">';
+  h += '<button type="button" role="tab" aria-selected="' + (tab === 'mine') + '" class="irv-seg-b' + (tab === 'mine' ? ' is-on' : '') + '" data-flib-shelf="mine" onclick="_flibFilter(\'tab\', \'mine\')">Your library<span>' + mine + '</span></button>';
+  h += '<button type="button" role="tab" aria-selected="' + (tab === 'pental') + '" class="irv-seg-b' + (tab === 'pental' ? ' is-on' : '') + '" data-flib-shelf="pental" onclick="_flibFilter(\'tab\', \'pental\')">Finding library<span>' + (_flibWhole ? _flibWhole.entries.length : '') + '</span></button>';
+  h += '</div></div>';
+  return { html: h, tab: tab };
 }
 var _API_GUIDE = 'https://pental.io/guides/pental-api';
 function _apiRoles() {
@@ -39868,6 +40224,8 @@ function renderSettings__portal() {
     {id:'sig_box',label:'Signature Box',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>'},
 
     {id:'assessments',label:'Assessments',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>'},
+
+    {id:'library',label:'Library',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>'},
     {id:'findings',label:'Findings',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'},
     {id:'proposals',label:'Proposals',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>'},
     {id:'invoices',label:'Invoices',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="7" y1="15" x2="10" y2="15"/></svg>'},
@@ -40684,6 +41042,12 @@ function renderSettings__portal() {
   }
   }
 
+  if (_st === 'library') {
+    h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.library + ' Finding Library</span></div><div class="card-body">';
+    h += _flibBrowserHtml();
+    h += '<p class="hint" style="margin-top:1rem">Your own library is on the <a href="#" onclick="event.preventDefault();_flibState().tab=\'mine\';nav(\'library\')">Library page</a>, where the finding library is too. Whether every finding you write is added to your library, and whether a rewritten finding replaces its wording, are under <a href="#" onclick="event.preventDefault();_setGoTab(\'findings\')">Findings</a>.</p>';
+    h += '</div></div>';
+  }
   if (_st === 'findings') {
 
   if (!canManage()) {
@@ -40824,7 +41188,7 @@ function renderSettings__portal() {
   if (libraryEnabled()) {
   h += '<div style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--border)">';
   h += '<div style="font-size:0.8rem;font-weight:700;margin-bottom:0.3rem">The library</div>';
-  h += '<p class="hint" style="margin-bottom:0.6rem">You add findings to the library yourself, with the Library button on a finding or the bulk action. Turn on the first option and every finding you write is added once it is final: when you save it, or, for a draft, when it is saved or marked as final.</p>';
+  h += '<p class="hint" style="margin-bottom:0.6rem">You add findings to the library yourself, with the Library button on a finding or the bulk action, or from the finding library under <a href="#" onclick="event.preventDefault();_setGoTab(\'library\')">Library</a>. Turn on the first option and every finding you write is added once it is final: when you save it, or, for a draft, when it is saved or marked as final.</p>';
   h += '<label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer">';
   h += '<input type="checkbox" id="ff_auto_library"' + (_ffAutoLibrary() ? ' checked' : '') + '>';
   h += '<span>Add every new finding to the library automatically</span>';
@@ -85200,6 +85564,10 @@ async function _copyText(text, btn) {
   }
 }
 window._copyText = _copyText;
+function _scanTitleKey(t) {
+  return String(t == null ? '' : t).toLowerCase().replace(/\s*\([^()]*\)\s*$/, '')
+    .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
 async function forgetImportMap(format) {
   if (!format) return;
   if (!(await confirmAsync('The next ' + esc(format) + ' import will use the built-in field mapping again. '
@@ -85253,36 +85621,64 @@ function _fsiStart(aid, phase) {
   var el = document.createElement('input');
   el.type = 'file';
   el.accept = '.nessus,.xml,.csv,.json,.jsonl,.sarif';
+  el.multiple = true;
   el.onchange = function () { _fsiRead(aid, phase || '', el); };
   el.click();
 }
 window._fsiStart = _fsiStart;
 async function _fsiRead(aid, phase, inputEl) {
-  var file = inputEl && inputEl.files && inputEl.files[0];
+  var files = inputEl && inputEl.files ? Array.prototype.slice.call(inputEl.files) : [];
   if (inputEl) inputEl.value = '';
-  if (!file) return;
-  if (file.size > 200 * 1024 * 1024) { toast('That file is very large. Export a narrower range from the scanner.', 'error'); return; }
+  if (!files.length) return;
+  if (files.some(function (f) { return f.size > 200 * 1024 * 1024; })) { toast('That file is very large. Export a narrower range from the scanner.', 'error'); return; }
   var a = (S.data.assessments || []).find(function (x) { return x.id === aid; });
   if (!a) { toast('That engagement is no longer here', 'error'); return; }
   _showLoading();
-  var read;
-  try { read = _scanImportParse(await file.text(), file.name); }
-  catch (e) { _hideLoading(); toast('That file could not be read', 'error'); return; }
+
+  var reads = [], warnings = [];
+  for (var i = 0; i < files.length; i++) {
+    var read;
+    try { read = _scanImportParse(await files[i].text(), files[i].name); }
+    catch (e) { read = { rows: [], format: '', warnings: ['That file could not be read.'] }; }
+    if (!read.rows.length) { warnings.push(files[i].name + ': ' + ((read.warnings || [])[0] || 'no findings were found in it.')); continue; }
+    reads.push({ file: files[i], read: read });
+  }
+
+  try { await _flibLoad(); } catch (e) { console.warn('[import] the finding library could not be loaded:', e && e.message); }
   _hideLoading();
-  if (!read.rows.length) { toast(read.warnings[0] || 'No findings were found in that file', 'error'); return; }
+  if (!reads.length) { toast(warnings[0] || 'No findings were found in that file', 'error'); return; }
 
   var cl = (S.data.clients || []).find(function (x) { return x.id === a.client_id; }) || {};
   var keep = _SCAN_SEV_ORDER[cl.scan_import_min_severity] != null ? cl.scan_import_min_severity : 'info';
+  var multi = reads.length > 1;
+  var rows = [];
+  reads.forEach(function (x) {
+    var r = x.read;
+    var fmt = _flibFmt(r.format, r.tool);
+    var label = r.format === 'SARIF' ? (r.tool || 'SARIF') : (r.format || 'CSV');
+
+    var rs = multi ? _scanApplyFieldMap(r.rows, _scanStoredMap(r.format)) : r.rows;
+    rs.forEach(function (row) { row._fmt = fmt; row._tool = label; row._file = x.file.name; rows.push(row); });
+    (r.warnings || []).forEach(function (w) { warnings.push(multi ? x.file.name + ': ' + w : w); });
+  });
+  var one = reads[0].read;
   S._scanImport = {
     dest: 'findings', assessmentId: aid, phase: phase || '', clientId: a.client_id,
-    fileName: file.name, format: read.format, tool: read.tool || '', warnings: read.warnings || [], rows: read.rows,
+    fileName: multi ? reads.length + ' files' : reads[0].file.name,
+    format: multi ? '' : one.format, tool: multi ? '' : (one.tool || ''), warnings: warnings, rows: rows,
+    files: reads.map(function (x) { return { name: x.file.name, format: x.read.format, label: x.read.format === 'SARIF' ? (x.read.tool || 'SARIF') : (x.read.format || 'CSV'), n: x.read.rows.length }; }),
     keep: keep, keepWas: keep,
-    map: _scanStoredMap(read.format), mapWas: JSON.stringify(_scanStoredMap(read.format) || {}),
-    clientName: getClientName(a.client_id), closeGone: false,
+    map: multi ? {} : _scanStoredMap(one.format), mapWas: JSON.stringify((multi ? {} : _scanStoredMap(one.format)) || {}),
+    clientName: getClientName(a.client_id), closeGone: false, libWording: true,
   };
   openM('scanimport');
 }
 window._fsiRead = _fsiRead;
+function _fsiRating(cvss) {
+  var n = parseFloat(cvss);
+  if (!(n > 0)) return null;
+  return n >= 9 ? 'critical' : n >= 7 ? 'high' : n >= 4 ? 'medium' : 'low';
+}
 var _MVZ_ZIP_IC = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M10 6h1M10 9h1M10 12h1"/><rect x="9" y="14" width="3" height="4" rx="1"/></svg>';
 var _IRV_GROUPS = {
   branding: ['accent_color', 'color_bg', 'color_border', 'color_card', 'color_hover', 'color_muted', 'color_primary', 'color_secondary', 'color_text',

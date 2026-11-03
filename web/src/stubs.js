@@ -13,6 +13,7 @@ var _SCAN_NOT_UPDATED = '';
 var _SCAN_PROVIDER_COLS = null;
 var _SCAN_SEV_ORDER = {};
 var _TRACKER_COLS = '';
+function _astFindingOwnersHtml() { return ''; }
 function _attestationOn() { return false; }
 async function _bulkRaiseFindingTickets() { return Promise.resolve(null); }
 function _canDeliverNow() { return false; }
@@ -63,6 +64,9 @@ function _pmSettingsCardHtml() { return ''; }
 async function _pmStatusLoad() { return Promise.resolve(null); }
 async function _pmailCheck() { return; }
 function _proposalFilename() { return; }
+function _pstCfg() { return {}; }
+function _pstClientCardHtml() { return ''; }
+function _pstMay() { return false; }
 function _qaCanReview() { return false; }
 function _qaChangeReads() { return; }
 var _qaChangesCache = {};
@@ -90,6 +94,7 @@ function _qaWriteMarkup() { return; }
 function _renderAttestationTemplateFields() { return; }
 function _renderInvoiceTemplateFields() { return; }
 function _renderProposalTemplateFields() { return; }
+function _scanApplyFieldMap() { return; }
 async function _scanCap() { return Promise.resolve(null); }
 function _scanCapNow() { return; }
 function _scanFindingContext() { return {}; }
@@ -139,6 +144,7 @@ function _xeroNote() { return ''; }
 function _xeroWhyWords() { return ''; }
 function archiveInvoice() { return; }
 function archiveProposal() { return; }
+function assetsEnabled() { return; }
 function canSeeProposals() { return; }
 function clearLoaSignature() { return; }
 async function confirmBankPayment() { return; }
@@ -185,6 +191,7 @@ async function pushInvoiceToXeroNow() { return Promise.resolve(null); }
 async function pushMissingToXero() { return Promise.resolve(null); }
 async function removeLoASignature() { return Promise.resolve(null); }
 async function renderApplyConfirmation() { return ''; }
+function renderAssets() { return ''; }
 function renderClientFindings() { return ''; }
 function renderClientUserModal() { return ''; }
 function renderCollectorTokenModal() { return; }
@@ -205,6 +212,7 @@ function renderMeetingsPage() { return ''; }
 function renderMigrateModal() { return ''; }
 function renderPaymentAllModal() { return ''; }
 function renderPaymentModal() { return ''; }
+function renderPosture() { return ''; }
 function renderProposalColumn() { return ''; }
 function renderProposalModal() { return; }
 function renderProposalsPage() { return ''; }
