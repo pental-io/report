@@ -365,6 +365,11 @@ function _rpUpdatesSettingsHtml() {
       : 'This server has no updater, so it is updated with the install command. ' + (st.host === 'windows' ? 'Run it when a release comes out:' : 'Run it once and it offers to set one up, so updates install by themselves from then on:'))
       + '</p>' + _rpUpdCommandHtml(st);
   }
-  h += '<p class="set-p rp-hint">To know of a new release, this server asks GitHub for the latest one twice a day. Nothing else is sent. UPDATE_CHECK=off in .env turns it off.</p>';
+  // 1985: and, once a day, that it is running (server/lib/usage.js).
+  h += '<p class="set-p rp-hint">To know of a new release, this server asks GitHub for the latest one twice a day. '
+    + (st.telemetry
+      ? 'Once a day it also tells pental.io that it is running, with a random ID made when it was installed, its version and its system, so Pental knows how many use it. Nothing else is sent. TELEMETRY=off in .env stops that, and UPDATE_CHECK=off stops both.'
+      : 'Nothing else is sent. UPDATE_CHECK=off in .env turns it off.')
+    + '</p>';
   return h + '</div></div>';
 }

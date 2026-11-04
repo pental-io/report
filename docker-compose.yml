@@ -33,7 +33,7 @@ services:
       retries: 30
 
   report:
-    image: ghcr.io/pental-io/report:${REPORT_VERSION:-0.1.20}
+    image: ghcr.io/pental-io/report:${REPORT_VERSION:-0.1.21}
     build: .
     restart: unless-stopped
     depends_on:
@@ -63,6 +63,10 @@ services:
       REPORT_HOST: ${REPORT_HOST:-}
       REPORT_DIR: ${REPORT_DIR:-}
       REPORT_ROOT: ${REPORT_ROOT:-0}
+      # That this copy is running, to pental.io once a day, by the random ID
+      # the installer made (server/lib/usage.js). off stops it.
+      TELEMETRY: ${TELEMETRY:-on}
+      INSTALL_ID: ${INSTALL_ID:-}
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
 

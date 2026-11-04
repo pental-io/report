@@ -34,6 +34,7 @@ import { AiWorker } from './lib/ai.js';
 import { ensureSchema, ensureInstance } from './lib/setup.js';
 import { Api } from './lib/api.js';
 import { Updates } from './lib/updates.js';
+import { Usage } from './lib/usage.js';
 import { Web } from './lib/web.js';
 import { Router, applyCors, sendJson, handleError, HttpError } from './lib/http.js';
 
@@ -77,6 +78,9 @@ export async function createServer(env = process.env, { listen = true } = {}) {
   // Whether there is a newer release, and the updater on this computer.
   const updates = new Updates({ cfg, db, api, version: REPORTER_VERSION });
   await updates.start();
+  // That a copy is running, to pental.io once a day (TELEMETRY=off stops it).
+  const usage = new Usage({ cfg, db, version: REPORTER_VERSION });
+  usage.start();
   const web = new Web({ cfg });
   if (!web.ready()) log.warn('the app is not built yet', { webDir: cfg.webDir });
 
@@ -136,13 +140,14 @@ export async function createServer(env = process.env, { listen = true } = {}) {
   server.on('upgrade', (req, socket, head) => realtime.upgrade(req, socket, head));
   server.keepAliveTimeout = 65000;
 
-  const out = { cfg, db, schema, authz, rest, auth, storage, realtime, ai, api, updates, web, server, instance };
+  const out = { cfg, db, schema, authz, rest, auth, storage, realtime, ai, api, updates, usage, web, server, instance };
   if (listen) {
     await new Promise((resolve) => server.listen(cfg.port, cfg.host, resolve));
     log.info('listening', { port: cfg.port, host: cfg.host, publicUrl: cfg.publicUrl || '(the address each request arrives at)' });
   }
   out.close = async () => {
     updates.stop();
+    usage.stop();
     await Promise.allSettled([ai.stop()]);
     await realtime.stop();
     storage.stop();

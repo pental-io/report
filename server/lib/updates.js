@@ -169,6 +169,8 @@ export class Updates {
     return {
       current: this.version,
       checks: !!this.cfg.updateCheck,
+      // The daily check-in with pental.io (lib/usage.js), for Settings to say.
+      telemetry: !!(this.cfg.updateCheck && this.cfg.telemetry),
       latest,
       newer: !!(latest && newer(latest.version, this.version)),
       auto: this.state.auto,

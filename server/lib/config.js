@@ -100,6 +100,12 @@ export function loadConfig(env = process.env) {
     reportHost: /^(linux|macos|windows)$/i.test(String(env.REPORT_HOST || '').trim()) ? String(env.REPORT_HOST).trim().toLowerCase() : '',
     reportDir: String(env.REPORT_DIR || '').trim().slice(0, 300),
     reportRoot: bool(env.REPORT_ROOT, false),
+    // The daily check-in with pental.io (lib/usage.js): on unless TELEMETRY
+    // is off (or UPDATE_CHECK, which stops it too), this copy's random ID as
+    // the installer made it, and where it goes (only ever changed to test it).
+    telemetry: bool(env.TELEMETRY, true),
+    installId: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(env.INSTALL_ID || '').trim()) ? String(env.INSTALL_ID).trim().toLowerCase() : '',
+    telemetryUrl: String(env.TELEMETRY_URL || '').trim(),
   };
   if (cfg.publicUrl && !/^https?:\/\/[^/]+$/.test(cfg.publicUrl)) problems.push('PUBLIC_URL must be an origin such as https://reports.yourfirm.com (no path)');
   if (cfg.storage.backend === 's3') {

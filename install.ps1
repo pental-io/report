@@ -19,6 +19,13 @@
 #   -Version X.Y.Z  a release other than this installer's
 #   -Yes            ask nothing, take the defaults
 #   -NoOpen         leave the browser closed at the end
+#   -NoTelemetry    tell pental.io nothing: not that it was installed, and not,
+#                   from the app, that it is running
+#
+# It tells pental.io when it has installed or updated Pental Report, or at
+# which step it stopped, and the app says once a day that it is running: a
+# random ID made here, the version, the system and the processor, and nothing
+# else. -NoTelemetry, or TELEMETRY=off in .env, turns all of it off.
 #
 # Copyright (c) Pental Limited.
 # SPDX-License-Identifier: AGPL-3.0-only
@@ -29,9 +36,10 @@ param(
   [switch]$Local,
   [switch]$Tailscale,
   [string]$Dir = '',
-  [string]$Version = '0.1.20',
+  [string]$Version = '0.1.21',
   [switch]$Yes,
-  [switch]$NoOpen
+  [switch]$NoOpen,
+  [switch]$NoTelemetry
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is many times faster without its bar
@@ -45,6 +53,49 @@ $Version = $Version.TrimStart('v')
 if (-not $Dir) { $Dir = Join-Path $HOME 'pental-report' }
 $Log = Join-Path ([System.IO.Path]::GetTempPath()) 'pental-report-install.log'
 Set-Content -Path $Log -Value '' -Encoding UTF8
+
+# -- Counting installs ----------------------------------------------------------
+# So Pental knows how many use Pental Report, the installer tells pental.io
+# when it has finished (installed, or updated) or stopped, and at which step,
+# with this install's random ID (INSTALL_ID in .env, made here), the version,
+# the system and the processor. Nothing else, and pental.io keeps no address.
+# -NoTelemetry, PENTAL_REPORT_TELEMETRY=off or DO_NOT_TRACK=1 sends nothing and
+# writes TELEMETRY=off to .env, which keeps it so, here and in the app (it says
+# once a day that it is running otherwise: server/lib/usage.js).
+$CountUrl = $(if ($Env:PENTAL_REPORT_TELEMETRY_URL) { $Env:PENTAL_REPORT_TELEMETRY_URL } else { 'https://pental.io/api/report/ping' })
+$Counting = $true; $OffNow = $false
+if ($NoTelemetry -or ("$Env:PENTAL_REPORT_TELEMETRY" -match '^(off|0|false|no)$') -or ("$Env:DO_NOT_TRACK" -match '^(1|true|yes)$')) { $Counting = $false; $OffNow = $true }
+$Stage = 'system'
+$InstallId = ''
+$envFile = Join-Path $Dir '.env'
+if (Test-Path $envFile) {
+  try {
+    $envNow = @(Get-Content $envFile)
+    # On as the app reads it: empty, on, 1, true or yes; anything else is off.
+    $t = $envNow | Where-Object { $_ -match '^TELEMETRY=' } | Select-Object -Last 1
+    if ($t) { $tv = $t.Substring(10).Trim().Trim('"', "'").ToLowerInvariant(); if ($tv -and $tv -notmatch '^(on|1|true|yes)$') { $Counting = $false } }
+    $i = $envNow | Where-Object { $_ -match '^INSTALL_ID=' } | Select-Object -Last 1
+    if ($i) { $InstallId = $i.Substring(11).Trim().Trim('"', "'").ToLowerInvariant() }
+  } catch {}
+}
+if ($InstallId -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') { $InstallId = [guid]::NewGuid().ToString() }
+function Send-Count([string]$what) {
+  # One request, five seconds at most; whatever happens to it, the installer
+  # carries on as it was.
+  if (-not $Counting) { return }
+  try {
+    $cpu = "$Env:PROCESSOR_ARCHITEW6432 $Env:PROCESSOR_ARCHITECTURE"
+    $body = [ordered]@{
+      event = $what
+      id = $InstallId
+      version = $(if ($Version -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$') { $Version } else { $null })
+      os = 'windows'
+      arch = $(if ($cpu -match 'ARM64') { 'arm64' } elseif ($cpu -match 'AMD64') { 'x64' } else { 'other' })
+      stage = $(if ($what -eq 'failed') { $Stage } else { $null })
+    } | ConvertTo-Json -Compress
+    $null = Invoke-WebRequest -UseBasicParsing -Method Post -Uri $CountUrl -ContentType 'application/json' -Body $body -TimeoutSec 5
+  } catch {}
+}
 
 # -- How it looks -------------------------------------------------------------
 $prevEnc = [Console]::OutputEncoding
@@ -75,6 +126,7 @@ function Fail([string]$t, [string[]]$more = @()) {
     Write-Host "    All of it: $Log" -ForegroundColor DarkGray
   }
   Write-Host ''
+  Send-Count 'failed'
   throw $Stop
 }
 function Ask([string]$q, [string]$default) {
@@ -168,6 +220,7 @@ Write-Host ''
 # time it opens, Docker Desktop does not start until its terms are accepted and
 # its sign-in is skipped (or an account made) on to its main screen, which is
 # said before the wait; and Windows may need to restart before it can run.
+$Stage = 'docker'
 Refresh-Path
 $fresh = $false
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -210,6 +263,7 @@ try { $dv = (& docker version --format '{{.Server.Version}}' 2>$null) } catch {}
 Step ("Docker " + $(if ($dv) { "$dv " } else { '' }) + 'is ready')
 
 # -- Download -----------------------------------------------------------------
+$Stage = 'download'
 $update = Test-Path (Join-Path $Dir '.env')
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('pental-report-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -235,6 +289,7 @@ Step "Pental Report $Version is in $Dir"
 Set-Location $Dir
 
 # -- Settings -----------------------------------------------------------------
+$Stage = 'settings'
 if (-not $update) {
   $mode = ''
   if ($Domain) { $mode = 'domain' } elseif ($Tailscale) { $mode = 'tailscale' } elseif ($Local) { $mode = 'local' }
@@ -292,6 +347,9 @@ Env-Set 'REPORT_VERSION' $Version
 # PowerShell takes in a path, so .env reads it as written.
 Env-Set 'REPORT_HOST' 'windows'
 Env-Set 'REPORT_DIR' ($Dir -replace '\\', '/')
+# This install's random ID, kept; and not counted, kept so for the app too.
+if ((Env-Get 'INSTALL_ID') -ne $InstallId) { Env-Set 'INSTALL_ID' $InstallId }
+if ($OffNow) { Env-Set 'TELEMETRY' 'off' }
 $port = Env-Get 'PORT'; if (-not $port) { $port = '8080' }
 $Domain = Env-Get 'DOMAIN'
 $addr = Env-Get 'PUBLIC_URL'; if (-not $addr) { $addr = "http://localhost:$port" }
@@ -301,6 +359,7 @@ $share = [bool]$Tailscale -or ((Env-Get 'TAILSCALE') -eq '1')
 if ($share -and $Domain) { Fail "This Pental Report is served at https://$Domain already." @('Tailscale is for one without a domain of its own.') }
 
 # -- Start --------------------------------------------------------------------
+$Stage = 'start'
 if ($Domain) {
   if (-not (Run 'Fetching PostgreSQL and Caddy' 'docker' @('compose', 'pull', '--quiet', 'db', 'caddy'))) { Fail 'PostgreSQL and Caddy could not be fetched.' @('Check this computer can reach Docker Hub, then try again.') }
 } else {
@@ -328,6 +387,7 @@ Step 'Pental Report is running'
 # PUBLIC_URL (the links Pental Report hands out, and security keys, are made
 # for it), and Tailscale's proxy is the one in front (TRUST_PROXY=1).
 if ($share) {
+  $Stage = 'tailscale'
   $ts = $null
   $cmd = Get-Command tailscale -ErrorAction SilentlyContinue
   if ($cmd) { $ts = $cmd.Source } else {
@@ -386,6 +446,7 @@ try { $first = ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Uri "http://1
 $token = Env-Get 'SETUP_TOKEN'
 
 # -- Done ---------------------------------------------------------------------
+$Stage = 'done'
 $rule = $H * 60
 function BarLine([string]$label, [string]$value) {
   Write-Host "  $Bar  " -ForegroundColor DarkGray -NoNewline
@@ -421,6 +482,12 @@ Write-Host '  Lives in  ' -ForegroundColor DarkGray -NoNewline; Write-Host $Dir
 Write-Host '  Logs      ' -ForegroundColor DarkGray -NoNewline; Write-Host "cd `"$Dir`"; docker compose logs -f report"
 Write-Host '  Stop      ' -ForegroundColor DarkGray -NoNewline; Write-Host "cd `"$Dir`"; docker compose stop"
 Write-Host '  Update    ' -ForegroundColor DarkGray -NoNewline; Write-Host 'run this installer again'
+if ($Counting) {
+  Write-Host '  Counting  ' -ForegroundColor DarkGray -NoNewline; Write-Host 'pental.io counts installs and running copies by a random ID, with'
+  Write-Host '            the version and system only. TELEMETRY=off in .env turns it off.'
+} else {
+  Write-Host '  Counting  ' -ForegroundColor DarkGray -NoNewline; Write-Host 'off (TELEMETRY=off in .env)'
+}
 Write-Host ''
 Remove-Item $Log -ErrorAction SilentlyContinue
 
@@ -429,6 +496,8 @@ if (-not $NoOpen -and $first -and -not $Domain) {
   # never sent to the server, and the page takes it off the address at once.
   Start-Process "$addr/#setup=$token"
 }
+# Last, so nothing above waits on it.
+Send-Count $(if ($update) { 'updated' } else { 'installed' })
 } catch {
   # Fail has said what went wrong; anything else is said here, plainly,
   # rather than as PowerShell's own error block.
@@ -438,6 +507,7 @@ if (-not $NoOpen -and $first -and -not $Domain) {
     Write-Host ('    ' + $_.Exception.Message)
     Write-Host "    Its log: $Log" -ForegroundColor DarkGray
     Write-Host ''
+    Send-Count 'failed'
   }
 } finally {
   try { [Console]::OutputEncoding = $prevEnc } catch {}

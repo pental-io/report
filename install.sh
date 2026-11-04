@@ -9,11 +9,16 @@
 #   curl -fsSL https://pental.io/report/install.sh | sh -s -- --tailscale
 #   curl -fsSL https://pental.io/report/install.sh | sh -s -- --domain reports.yourfirm.com
 #
+# It tells pental.io when it has installed or updated Pental Report, or at
+# which step it stopped, and the app says once a day that it is running: a
+# random ID made here, the version, the system and the processor, and nothing
+# else. --no-telemetry, or TELEMETRY=off in .env, turns all of it off.
+#
 # Copyright (c) Pental Limited.
 # SPDX-License-Identifier: AGPL-3.0-only
 set -eu
 
-VERSION="0.1.20"
+VERSION="0.1.21"
 REPO="pental-io/report"
 IMAGE="ghcr.io/pental-io/report"
 
@@ -34,11 +39,13 @@ Pental Report installer
   --no-open        leave the browser closed at the end
   --no-auto-update leave updating to you: Pental Report says when a release
                    is out, with this command to run
+  --no-telemetry   tell pental.io nothing: not that it was installed, and not,
+                   from the app, that it is running
 USAGE
 }
 
 # ── Options ────────────────────────────────────────────────────────────────
-DOMAIN_ARG=""; MODE=""; DIR="${PENTAL_REPORT_DIR:-}"; YES=0; OPEN=1; AUTO_ARG=""
+DOMAIN_ARG=""; MODE=""; DIR="${PENTAL_REPORT_DIR:-}"; YES=0; OPEN=1; AUTO_ARG=""; COUNT=1; OFF_NOW=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --domain) DOMAIN_ARG="${2:-}"; MODE=domain; shift; [ $# -gt 0 ] && shift ;;
@@ -53,6 +60,7 @@ while [ $# -gt 0 ]; do
     --no-open) OPEN=0; shift ;;
     --no-auto-update) AUTO_ARG=0; shift ;;
     --auto-update) AUTO_ARG=1; shift ;;
+    --no-telemetry) COUNT=0; OFF_NOW=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -63,6 +71,54 @@ if [ -z "$DIR" ]; then
 fi
 LOG="${TMPDIR:-/tmp}/pental-report-install.log"
 : > "$LOG"
+
+# ── Counting installs ──────────────────────────────────────────────────────
+# So Pental knows how many use Pental Report, the installer tells pental.io
+# when it has finished (installed, or updated) or stopped, and at which step,
+# with this install's random ID (INSTALL_ID in .env, made here), the version,
+# the system and the processor. Nothing else, and pental.io keeps no address.
+# --no-telemetry, PENTAL_REPORT_TELEMETRY=off or DO_NOT_TRACK=1 sends nothing
+# and writes TELEMETRY=off to .env, which keeps it so, here and in the app
+# (it says once a day that it is running otherwise: server/lib/usage.js).
+COUNT_URL="${PENTAL_REPORT_TELEMETRY_URL:-https://pental.io/api/report/ping}"
+case "$(printf '%s' "${PENTAL_REPORT_TELEMETRY:-}" | tr 'A-Z' 'a-z')" in off|0|false|no) COUNT=0; OFF_NOW=1 ;; esac
+case "$(printf '%s' "${DO_NOT_TRACK:-}" | tr 'A-Z' 'a-z')" in 1|true|yes) COUNT=0; OFF_NOW=1 ;; esac
+STAGE=system
+INSTALL_ID=""
+if [ -r "$DIR/.env" ]; then
+  # On as the app reads it: empty, on, 1, true or yes; anything else is off.
+  case "$(sed -n 's/^TELEMETRY=//p' "$DIR/.env" 2>/dev/null | tail -n 1 | tr -d "\"' \r" | tr 'A-Z' 'a-z')" in ''|on|1|true|yes) ;; *) COUNT=0 ;; esac
+  INSTALL_ID=$(sed -n 's/^INSTALL_ID=//p' "$DIR/.env" 2>/dev/null | tail -n 1 | tr -d "\"' \r" | tr 'A-F' 'a-f')
+fi
+uuid_ok() { case "$1" in *[!0-9a-f-]*|'') return 1 ;; ????????-????-????-????-????????????) return 0 ;; *) return 1 ;; esac; }
+new_id() {
+  _u=""
+  if [ -r /proc/sys/kernel/random/uuid ]; then _u=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true); fi
+  if [ -z "$_u" ] && command -v uuidgen >/dev/null 2>&1; then _u=$(uuidgen 2>/dev/null || true); fi
+  if [ -z "$_u" ]; then
+    _u=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' | sed 's/^\(.\{8\}\)\(.\{4\}\)\(.\{4\}\)\(.\{4\}\)\(.\{12\}\)$/\1-\2-\3-\4-\5/' || true)
+  fi
+  printf '%s' "$_u" | tr 'A-F' 'a-f'
+}
+uuid_ok "$INSTALL_ID" || INSTALL_ID=$(new_id)
+uuid_ok "$INSTALL_ID" || INSTALL_ID=""
+_jstr() { if [ -n "$1" ]; then printf '"%s"' "$1"; else printf 'null'; fi; }
+send_count() {
+  # send_count installed|updated|failed: one request, five seconds at most,
+  # and whatever happens to it the installer carries on as it was.
+  [ "$COUNT" = 1 ] && [ -n "$INSTALL_ID" ] || return 0
+  _v=""; case "$VERSION" in *[!0-9.]*|'') ;; *.*.*) _v="$VERSION" ;; esac
+  _o=""; case "$(uname -s 2>/dev/null)" in Linux) _o=linux ;; Darwin) _o=macos ;; esac
+  _a=""; case "$(uname -m 2>/dev/null)" in x86_64|amd64) _a=x64 ;; aarch64|arm64) _a=arm64 ;; '') ;; *) _a=other ;; esac
+  _s=""; [ "$1" = failed ] && _s="$STAGE"
+  _b=$(printf '{"event":"%s","id":"%s","version":%s,"os":%s,"arch":%s,"stage":%s}' "$1" "$INSTALL_ID" "$(_jstr "$_v")" "$(_jstr "$_o")" "$(_jstr "$_a")" "$(_jstr "$_s")")
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS -m 5 -o /dev/null -X POST -H 'Content-Type: application/json' --data "$_b" "$COUNT_URL" >/dev/null 2>&1 || true
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -T 5 --tries=1 -O /dev/null --header='Content-Type: application/json' --post-data="$_b" "$COUNT_URL" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
 
 # ── How it looks ───────────────────────────────────────────────────────────
 UTF=0
@@ -90,6 +146,7 @@ fail() {
     printf '    %sAll of it: %s%s\n' "$D" "$LOG" "$R" >&2
   fi
   printf '\n' >&2
+  send_count failed
   exit 1
 }
 
@@ -148,6 +205,7 @@ command -v tar >/dev/null 2>&1 || fail "tar is needed to unpack Pental Report."
 SUDO=""
 [ "$(id -u)" = 0 ] || { command -v sudo >/dev/null 2>&1 && SUDO="sudo"; }
 
+STAGE=docker
 if ! command -v docker >/dev/null 2>&1; then
   [ "$OS" = Darwin ] && fail "Docker is not installed." "Install Docker Desktop from https://www.docker.com/products/docker-desktop/," "open it and go on to its main screen (skip signing in, or create an account)," "then run this installer again."
   warn "Docker is not installed."
@@ -189,6 +247,7 @@ DV=$($DOCKER version --format '{{.Server.Version}}' 2>/dev/null || true)
 step "Docker${DV:+ $DV} is ready"
 
 # ── Download ───────────────────────────────────────────────────────────────
+STAGE=download
 UPDATE=0
 [ -f "$DIR/.env" ] && UPDATE=1
 TMP=$(mktemp -d)
@@ -206,6 +265,7 @@ step "Pental Report $VERSION is in $DIR"
 cd "$DIR"
 
 # ── Settings ───────────────────────────────────────────────────────────────
+STAGE=settings
 port_busy() {
   if command -v ss >/dev/null 2>&1; then ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$1\$"
   elif command -v lsof >/dev/null 2>&1; then lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
@@ -262,6 +322,9 @@ case "$OS" in Darwin) envset REPORT_HOST macos ;; *) envset REPORT_HOST linux ;;
 envset REPORT_DIR "$DIR"
 if [ "$(id -u)" = 0 ]; then envset REPORT_ROOT 1; else envset REPORT_ROOT 0; fi
 [ -n "$(envget UPDATE_TOKEN)" ] || envset UPDATE_TOKEN "$(secret 32)"
+# This install's random ID, kept; and not counted, kept so for the app too.
+[ -z "$INSTALL_ID" ] || [ "$(envget INSTALL_ID)" = "$INSTALL_ID" ] || envset INSTALL_ID "$INSTALL_ID"
+[ $OFF_NOW = 0 ] || envset TELEMETRY off
 PORT=$(envget PORT); PORT=${PORT:-8080}
 DOMAIN=$(envget DOMAIN)
 ADDR=$(envget PUBLIC_URL); ADDR=${ADDR:-http://localhost:$PORT}
@@ -274,6 +337,7 @@ if [ "$MODE" = tailscale ] || [ "$(envget TAILSCALE)" = 1 ]; then
 fi
 
 # ── Start ──────────────────────────────────────────────────────────────────
+STAGE=start
 if [ -n "$DOMAIN" ]; then
   run "Fetching PostgreSQL and Caddy" $DOCKER compose pull --quiet db caddy || fail "PostgreSQL and Caddy could not be fetched." "Check this computer can reach Docker Hub, then try again."
 else
@@ -302,6 +366,7 @@ step "Pental Report is running"
 # PUBLIC_URL (the links Pental Report hands out, and security keys, are made
 # for it), and Tailscale's proxy is the one in front (TRUST_PROXY=1).
 if [ $SHARE = 1 ]; then
+  STAGE=tailscale
   TS=""; TS_SUDO=""
   if command -v tailscale >/dev/null 2>&1; then TS=tailscale
   elif [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]; then TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale
@@ -356,6 +421,7 @@ fi
 # timer runs it (cron where there is no systemd), as root because it runs
 # Docker; on macOS a launchd agent, as you. Without it, Pental Report still
 # says when a release is out, with the command that installs it.
+STAGE=updates
 UNIT=pental-report-update
 AGENT=io.pental.report.update
 PLIST="$HOME/Library/LaunchAgents/$AGENT.plist"
@@ -454,6 +520,7 @@ case "$($GET "http://127.0.0.1:$PORT/reporter/v1/config" 2>/dev/null || true)" i
 TOKEN=$(envget SETUP_TOKEN)
 
 # ── Done ───────────────────────────────────────────────────────────────────
+STAGE=done
 rule() { _n=60; _s=""; while [ $_n -gt 0 ]; do _s="$_s$H"; _n=$((_n - 1)); done; printf '  %s%s%s%s\n' "$D" "$1" "$_s" "$R"; }
 bar()  { printf '  %s%s%s  %s\n' "$D" "$BAR" "$R" "$*"; }
 say ""
@@ -485,6 +552,12 @@ printf '  %sLogs%s      cd %s && %s compose logs -f report\n' "$D" "$R" "$DIR" "
 printf '  %sStop%s      cd %s && %s compose stop\n' "$D" "$R" "$DIR" "$DOCKER"
 if [ "$UPD" = on ]; then printf '  %sUpdates%s   install by themselves overnight (Settings, Updates)\n' "$D" "$R"
 else printf '  %sUpdate%s    run this installer again\n' "$D" "$R"; fi
+if [ "$COUNT" = 1 ]; then
+  printf '  %sCounting%s  pental.io counts installs and running copies by a random ID, with\n' "$D" "$R"
+  printf '            the version and system only. TELEMETRY=off in .env turns it off.\n'
+else
+  printf '  %sCounting%s  off (TELEMETRY=off in .env)\n' "$D" "$R"
+fi
 say ""
 rm -f "$LOG"
 
@@ -496,3 +569,6 @@ if [ $OPEN = 1 ] && [ $FIRST = 1 ] && [ -z "$DOMAIN" ]; then
   elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null 2>&1; then xdg-open "$GO" >/dev/null 2>&1 || true
   fi
 fi
+
+# Last, so nothing above waits on it.
+if [ $UPDATE = 1 ]; then send_count updated; else send_count installed; fi

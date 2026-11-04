@@ -100,6 +100,7 @@ Either way, the address your team types is `PUBLIC_URL` in `.env`, and the insta
 | `--yes` | `-Yes` | Ask nothing and take the defaults |
 | `--no-open` | `-NoOpen` | Leave the browser closed at the end |
 | `--no-auto-update` | | No updater: you run the install command when a release is out (see [Updating](#updating)) |
+| `--no-telemetry` | `-NoTelemetry` | Tell pental.io nothing: not that it was installed, and not, from the app, that it is running (see [Your Data](#your-data)) |
 
 On Windows, give it options like this:
 
@@ -348,7 +349,7 @@ docker compose start report
 
 ## Settings
 
-Everything you can set is in [`.env.example`](.env.example): the address, where it listens, file storage in an S3-compatible bucket (AWS S3, MinIO, Cloudflare R2, Backblaze B2), the largest upload, and logging. Change `.env`, then run `docker compose up -d`.
+Everything you can set is in [`.env.example`](.env.example): the address, where it listens, file storage in an S3-compatible bucket (AWS S3, MinIO, Cloudflare R2, Backblaze B2), the largest upload, logging, and whether it is counted (`TELEMETRY`). Change `.env`, then run `docker compose up -d`.
 
 ## Locked Out
 
@@ -365,11 +366,13 @@ docker compose exec report node server/bin/reset-mfa.js you@yourfirm.com
 
 ## Your Data
 
-Everything lives in the PostgreSQL that runs beside Pental Report: assessments, findings, your library, settings, templates and uploaded files (or your own S3-compatible bucket). Nothing is sent to Pental.
+Everything lives in the PostgreSQL that runs beside Pental Report: assessments, findings, your library, settings, templates and uploaded files (or your own S3-compatible bucket). None of it is sent to Pental.
 
 Two things are fetched from outside when you use them: the AI provider you choose, and the Word-to-PDF engine (from `cdn.zetaoffice.net`) when you make a PDF from a Word template. The conversion runs in your browser, and your document is not uploaded anywhere.
 
 To know of a new release, the server asks GitHub for Pental Report's latest one twice a day. The request carries nothing but the version it runs, and `UPDATE_CHECK=off` in `.env` stops it. An update is downloaded from GitHub too.
+
+Pental counts installs and running copies of Pental Report, to know how many use it. The installer tells pental.io when an install finishes, is updated or stops, and at which step it stopped; and the server tells pental.io once a day that it is running. Each says this copy's random ID (made when it was installed, `INSTALL_ID` in `.env`), the version, the system (Linux, macOS or Windows) and the processor, and nothing else: nothing about your firm, your team, your clients or your reports. pental.io keeps no address, only the country an install ran in. `TELEMETRY=off` in `.env` stops all of it, as does installing with `--no-telemetry` (`-NoTelemetry` on Windows) or with `DO_NOT_TRACK=1` set, which writes it there for you; `UPDATE_CHECK=off` stops the daily one too. The install command itself, fetched from pental.io, is counted the way a visit to the site is. Pental's [privacy policy](https://pental.io/privacy#report-tool) says how long the counts are kept.
 
 ## Moving to Pental
 
