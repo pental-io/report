@@ -1809,9 +1809,11 @@ BEGIN
   IF p_client IS NULL OR COALESCE(p_path, '') = '' THEN RETURN false; END IF;
   BEGIN v_home := split_part(p_path, '/', 1)::uuid; EXCEPTION WHEN OTHERS THEN v_home := NULL; END;
   IF v_home IS NOT NULL AND EXISTS (SELECT 1 FROM public.assessments WHERE id = v_home AND client_id = p_client) THEN
+    -- 1989: a finding's retest results count only while its client is shown
+    -- them (`retest_client_visible`); hidden, the rest of the finding still does.
     IF EXISTS (SELECT 1 FROM public.findings f
                 WHERE f.assessment_id = v_home AND f.client_visible = true
-                  AND strpos(f::text, p_path) > 0)
+                  AND strpos(CASE WHEN f.retest_client_visible IS FALSE THEN (to_jsonb(f) - 'retest_results')::text ELSE f::text END, p_path) > 0)
        OR public._client_section_refers(v_home, p_path) THEN
       RETURN true;
     END IF;
@@ -1823,7 +1825,7 @@ BEGIN
                 AND f.assessment_id IS DISTINCT FROM v_home
                 AND (f.assessment_id IN (SELECT a.id FROM public.assessments a WHERE a.client_id = p_client)
                      OR (f.assessment_id IS NULL AND f.client_id = p_client))
-                AND strpos(f::text, p_path) > 0) THEN
+                AND strpos(CASE WHEN f.retest_client_visible IS FALSE THEN (to_jsonb(f) - 'retest_results')::text ELSE f::text END, p_path) > 0) THEN
     RETURN true;
   END IF;
   RETURN EXISTS (SELECT 1 FROM public.assessments a
@@ -1990,7 +1992,8 @@ BEGIN
                   WHERE fd.id = v_third_seg::uuid AND fd.client_visible = true
                     AND (fd.assessment_id IN (SELECT a.id FROM public.assessments a WHERE a.client_id = v_client_id)
                          OR (fd.assessment_id IS NULL AND fd.client_id = v_client_id))
-                    AND strpos(fd::text, file_path) > 0) THEN
+                    -- 1989: its retest results only while they are shown to the client.
+                    AND strpos(CASE WHEN fd.retest_client_visible IS FALSE THEN (to_jsonb(fd) - 'retest_results')::text ELSE fd::text END, file_path) > 0) THEN
         RETURN true;
       END IF;
     END IF;
@@ -45887,6 +45890,13 @@ CREATE INDEX IF NOT EXISTS kb_entries_library_key_idx ON public.kb_entries (libr
 ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS attack text;
 ALTER TABLE public.kb_entries ADD COLUMN IF NOT EXISTS attack text;
 
+-- 1989: whether a finding's client is shown its retest results ("Client
+-- Visible" on the finding's retest, as the engagement's sections have). True
+-- by default: every retest written before this was shown. While it is false
+-- the portal shows the client nothing of the results, and a picture in them is
+-- not theirs to fetch (`can_access_assessment_file`, `_client_sees_reference`).
+ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS retest_client_visible boolean DEFAULT true;
+
 -- WHEN A FINDING STOPPED BEING OPEN. The risk register's time to remediate is
 -- the time from a finding being reported to this. Set by the database when the
 -- status becomes Remediated or Risk Accepted (unless the same write gives a
@@ -46004,9 +46014,9 @@ END $assets_rt$;
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: 3c23303ba20a06a6 @ 2025110302
+-- schema-fingerprint: 47c9e45ee34d2a63 @ 2025110501
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025110302, now())
+VALUES (1, 2025110501, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 

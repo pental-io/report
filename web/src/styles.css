@@ -731,6 +731,11 @@ input[type="date"]{font-family:var(--font-mono);font-size:0.85rem}
    their padding, so theirs (a small button's 0.4rem) is let into the
    header's own: the header is no taller for them than the cards' below. */
 .rt-ai-hd{display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end;margin:-0.4rem 0 -0.4rem auto}
+/* 1988: the finding dialog's retest, drawn as the page's. A result (or Not for
+   retest) marked there to apply on save is ringed, and the others set back. */
+.btn.rt-out-on{outline:2px solid var(--text);outline-offset:2px}
+.btn.rt-out-off{opacity:.55}
+.btn.rt-out-off:hover,.btn.rt-out-off:focus-visible{opacity:1}
 .qa-finding-review{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:1rem;margin-bottom:0.75rem}
 /* Comments drawn where they were written (419). The field and its comments are
    one object on screen: the quoted words are marked in place, the cards sit in

@@ -10843,6 +10843,7 @@ async function _coSave(table, id, payload, opts) {
 }
 function _lfAfterSave(table, id, payload, res) {
   if (res && res.ok) { try { if (typeof _lfSaved === 'function') _lfSaved(table, id, payload); } catch (e) {} }
+  if (res && res.ok) { try { if (typeof _carriedSaved === 'function') _carriedSaved(table, id); } catch (e) {} }
   try { if (typeof _lfSnapDone === 'function') _lfSnapDone(table, id); } catch (e) {}
   return res;
 }
@@ -23227,7 +23228,7 @@ function restoreNavState() {
 function applyPendingRestore() {
   var state = S._pendingRestore;
 
-  if (!state) { try { _mkResume(); } catch (e) {} return; }
+  if (!state) { try { _rtKeepResume(); } catch (e) {} try { _mkResume(); } catch (e) {} return; }
   delete S._pendingRestore;
 
   enforcePageAccess();
@@ -23259,6 +23260,7 @@ function applyPendingRestore() {
   }
 
   try { _coSayWhere(); } catch (e) {}
+  try { _rtKeepResume(); } catch (e) {}
   try { _mkResume(); } catch (e) {}
 }
 function _coSayWhere() {
@@ -24047,6 +24049,8 @@ function _doRender() {
     window.__qaPendingEditor = null;
     if (_snapBack) _qaEditorRestore(_snapBack);
   } catch (e) {}
+
+  try { if (typeof _carryIntoDialog === 'function') _carryIntoDialog(); } catch (e) {}
 }
 var _commentReadObserver = null;
 var _commentDwellTimers = {};
@@ -26953,7 +26957,7 @@ async function conTeamSetMember(profileId, teamId) {
 }
 window.conTeamSetMember = conTeamSetMember;
 var _navSuppressHistory = false;
-async function nav(p) { try { if (typeof _dashEdUndoPreview === 'function') _dashEdUndoPreview(); } catch (e) {}  if (S.page === 'settings' && p !== 'settings' && !S.wizard && typeof _setIsDirty === 'function' && _setIsDirty()) { _setLeaveAsk(function () { nav(p); }); return; } if (!canAccessPage(p)) { toast('You do not have access to that area', 'error'); return; } try { if (p !== 'qa-review') _coLeave(); } catch (e) {} try { _lfLeftPage(p); } catch (e) {} S.page = p; try { _coWhere({ page: p, aid: p === 'qa-review' ? (S.qa_review_id || '') : '' }); } catch (e) {} S.currentAssessment = null; S.currentFinding = null; S.currentClient = null; S.currentScanRun = null; S.searchQuery = '';
+async function nav(p) { try { if (typeof _dashEdUndoPreview === 'function') _dashEdUndoPreview(); } catch (e) {}  if (p !== S.page && typeof _pageLeaving === 'function' && _pageLeaving(function () { nav(p); })) return;  if (S.page === 'settings' && p !== 'settings' && !S.wizard && typeof _setIsDirty === 'function' && _setIsDirty()) { _setLeaveAsk(function () { nav(p); }); return; } if (!canAccessPage(p)) { toast('You do not have access to that area', 'error'); return; } try { if (p !== 'qa-review') _coLeave(); } catch (e) {} try { _lfLeftPage(p); } catch (e) {} S.page = p; try { _coWhere({ page: p, aid: p === 'qa-review' ? (S.qa_review_id || '') : '' }); } catch (e) {} S.currentAssessment = null; S.currentFinding = null; S.currentClient = null; S.currentScanRun = null; S.searchQuery = '';
 
   S._ffOpen = null; if (!_navSuppressHistory) pushNavHistory(); saveNavState(); closeMobileMenu(); render(); }
 function toggleMobileMenu() { var sb = document.querySelector('.sidebar'); var ov = document.getElementById('mobOverlay'); if (sb) sb.classList.toggle('open'); if (ov) ov.classList.toggle('open'); }
@@ -27493,6 +27497,8 @@ function closeM() {
 
   S._mRetestPending = null;
   S._mRetestOutcome = null;
+  S._mRetestWithdraw = null;
+  S._mRtPrev = null;
 
   try { _mkForget(); _mkStash = null; } catch (e) {}
 
@@ -27778,7 +27784,8 @@ document.addEventListener('keydown', function(e) {
   }
 
   if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && String(e.key || '').toLowerCase() === 's') {
-    if (!S.modal) return;
+
+    if (!S.modal) { if (!document.getElementById('confirmOverlay') && typeof _pageSaveKey === 'function' && _pageSaveKey(e.repeat)) e.preventDefault(); return; }
     e.preventDefault();
     if (e.repeat) return;
 
@@ -28290,6 +28297,10 @@ function _mkStateOf(m) {
   if (m.phase) st.phase = m.phase;
   if (m.id && S._mRetestPending && S._mRetestPending.id === m.id) st.retestPending = true;
   if (m.id && S._mRetestOutcome && S._mRetestOutcome.id === m.id) st.retestOutcome = S._mRetestOutcome.outcome;
+  if (m.id && S._mRetestWithdraw && S._mRetestWithdraw.id === m.id) st.retestWithdraw = true;
+
+  if (m.id && typeof m.__rtRound === 'boolean') st.rtRound = m.__rtRound;
+  if (m.id && S._mRtPrev && S._mRtPrev.id === m.id && S._mRtPrev.changed && String(S._mRtPrev.html).indexOf('data:image/') < 0) st.rtPrev = S._mRtPrev.html;
   return st;
 }
 var _MK_DB = 'pental-dialog-keep';
@@ -28752,12 +28763,16 @@ function _mkResumeFrom(rec) {
     var maxAge = (typeof _sessionIdleWindowMs === 'function') ? _sessionIdleWindowMs() : 16 * 3600000;
     if (!rec.at || Date.now() - rec.at > maxAge) { drop(); return false; }
     var m = { type: rec.type, id: rec.id || null, extra: rec.extra == null ? null : rec.extra };
+    m.__carried = true;
     if (rec.state && rec.state.phase) m.phase = rec.state.phase;
     if (!_mkCanReopen(m)) { drop(); return false; }
     if (m.type === 'finding' && m.id && rec.state) {
       if (rec.state.retestPending) S._mRetestPending = { id: m.id };
 
       if (_retestOutcomeKey(rec.state.retestOutcome)) S._mRetestOutcome = { id: m.id, outcome: _retestOutcomeKey(rec.state.retestOutcome) };
+      if (rec.state.retestWithdraw) S._mRetestWithdraw = { id: m.id };
+      if (typeof rec.state.rtRound === 'boolean') m.__rtRound = rec.state.rtRound;
+      if (typeof rec.state.rtPrev === 'string') S._mRtPrev = { id: m.id, html: rec.state.rtPrev, changed: true };
     }
 
     try {
@@ -28792,6 +28807,8 @@ function _mkCameBack() {
 async function viewAssessment(id) {
 
   if (!_mayOpenWork()) { toast('Engagement details are for the testing team', 'info'); return; }
+
+  if (typeof _pageLeaving === 'function' && _pageLeaving(function () { viewAssessment(id); })) return;
   _showLoading();
   try {
     var a = (S.data.assessments || []).find(function(x) { return x.id === id; });
@@ -28817,6 +28834,9 @@ async function viewAssessment(id) {
 var _viewFindingTok = 0;
 function viewFinding(fid, aid, _waited) {
   if (!_mayOpenWork()) { toast('Findings are for the testing team', 'info'); return; }
+
+  if (!_waited && !(S.page === 'finding-detail' && S.currentFinding && S.currentFinding.id === fid)
+    && typeof _pageLeaving === 'function' && _pageLeaving(function () { viewFinding(fid, aid); })) return;
   var f = (S.data.findings || []).find(function(x) { return x.id === fid; });
 
   var a = (S.data.assessments || []).find(function(x) {
@@ -28863,6 +28883,7 @@ function viewFinding(fid, aid, _waited) {
   window.scrollTo(0, 0);
 }
 async function viewClient(id) {
+  if (typeof _pageLeaving === 'function' && _pageLeaving(function () { viewClient(id); })) return;
   _showLoading();
   try {
     var c = (S.data.clients || []).find(function(x) { return x.id === id; });
@@ -29631,6 +29652,29 @@ function _qaTextOf(v) {
   }
   if (typeof v === 'object') return _qaTextOf([v]);
   return String(v);
+}
+function cancelQAInlineEdit(fieldId) {
+
+  try { _lfLetGoWhere(function (m) { return m.surface === 'qa' && m.qa === fieldId; }); } catch (e) {}
+
+  try {
+    var _ed = S._qaEditing && S._qaEditing[fieldId];
+    if (_ed) { delete S._qaEditing[fieldId]; _coEnterField('assessments', _ed.aid, ''); }
+  } catch (e) {}
+  var editEl = document.getElementById(fieldId + '_edit');
+
+  var _place = null;
+  try { if (editEl && editEl.style.display !== 'none') _place = _qaPlaceOf(editEl, _qaEditBody(fieldId), true); } catch (e) {}
+  if (editEl) editEl.style.display = 'none';
+  try { var _cell = editEl && editEl.closest('.qa-cell'); if (_cell) _cell.classList.remove('editing'); } catch (e) {}
+  try {
+    var slot = document.getElementById(fieldId + '_slot');
+    if (editEl && slot && editEl.__qaHome && editEl.parentNode === slot) editEl.__qaHome.appendChild(editEl);
+  } catch (e) {}
+
+  var showEl = _qaDisplayEl(fieldId, 'exec', 'exec_summary');
+  if (showEl) showEl.style.display = '';
+  try { if (_place) _qaPutPlace(_place, showEl, false); } catch (e) {}
 }
 function _isPendingDetailRestore(targetPage) {
   if (!S._pendingRestore) return false;
@@ -31597,29 +31641,8 @@ function renderFindingDetail() {
 
     var _rtD = _retestDraftOf(f);
 
-    var _rtAiHd = !!((S.data.settings || {}).ai_provider || S._hasAiKey) ? _rtAiButtonsHtml('retestResultsEditor') : '';
-    h += '<div class="card mb-4" style="border-color:var(--notification-color)"><div class="card-header"><span class="card-title">' + IC.refresh + ' Retest In Progress</span>'
-      + (_rtAiHd ? '<div class="rt-ai-hd">' + _rtAiHd + badge('open', 'Awaiting Results') + '</div>' : badge('open', 'Awaiting Results')) + '</div>';
-    h += '<div class="card-body">';
-    h += '<p class="sub-text" style="margin-bottom:0.75rem">Document your retest findings below. These results will be included in the report.'
-      + (_rtD.draft ? ' Your draft' + (_rtD.saved ? ' from ' + esc(fmtDateTime(_rtD.saved)) : '') + ' is open here, so finish it and mark the result.' : '') + '</p>';
-    h += buildEditorToolbar('retestResultsEditor', false);
-
-    h += '<div class="rich-editor" id="retestResultsEditor" contenteditable="true" style="min-height:150px" oninput="_evAiTouched(this)" data-rt-keep="' + esc(_rtKeepKeyOf(f, 'draft')) + '" data-placeholder="Document retest methodology, observations, and conclusions...">' + (_rtD.draft ? _rewriteStorageSrc(_rtD.draft) : '') + '</div>';
-    h += '<div style="display:flex;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap">';
-    h += '<button class="btn btn-primary btn-sm" onclick="saveRetestResults(\'' + f.id + '\')">Save Draft</button>';
-
-    _RETEST_OUTCOME_ORDER.forEach(function (k) { h += _retestOutcomeBtnHtml(k, 'completeRetestWithResults(\'' + f.id + '\',\'' + k + '\')'); });
-
-    h += '<button class="btn btn-ghost btn-sm" data-not-for-retest onclick="notForRetest(\'' + f.id + '\')" style="margin-left:auto" title="Withdraw this retest request">Not for retest</button>';
-    h += '</div></div>';
-    if (_retestHas(_rtD.rest)) {
-
-      var _rtSeq = _portalFigForField('retest_results');
-      h += '<div style="border-top:1px solid var(--border);padding:1rem"><p style="font-size:0.8rem;font-weight:600;color:var(--gray);margin-bottom:0.5rem">Previous Results</p>';
-      h += '<div style="font-size:0.9rem;color:var(--text);opacity:0.85" class="rich-content">' + _rtSeq(renderHtmlContent(_rtD.rest)) + '</div></div>';
-    }
-    h += '</div>';
+    h += _retestCardHtml(f, { where: 'page', draft: _rtD.draft || '', saved: _rtD.saved, rest: _rtD.rest,
+      ai: !!((S.data.settings || {}).ai_provider || S._hasAiKey), fig: _portalFigForField('retest_results'), vis: true });
     if (S._pendingRetestAction && S._pendingRetestAction.id === f.id) {
       delete S._pendingRetestAction;
       setTimeout(function() { var el = document.getElementById('retestResultsEditor'); if (el) { el.scrollIntoView({ behavior:'smooth', block:'center' }); el.focus(); } }, 200);
@@ -31628,12 +31651,13 @@ function renderFindingDetail() {
 
   function _portalFigForField(fieldName) { return _figSeq(_figFrom(_figP, f.id, fieldName)); }
 
-  if (f.retest_results && f.retest_status !== 'requested') {
+  if (f.retest_results && f.retest_status !== 'requested' && (!isClient || _retestClientVisible(f))) {
 
     var _rtEdOpen = !!(canEdit() && S._rtEditOpen && S._rtEditOpen.id === f.id && S._rtEditOpen.status === f.retest_status);
     h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + esc(_ffLabel('retest_results')) + '</span>';
     if (canEdit()) {
-      h += '<button class="btn btn-ghost btn-sm" onclick="toggleRetestEdit(\'' + f.id + '\')" id="retestEditBtn">' + (_rtEdOpen ? IC.x + ' Cancel' : IC.edit + ' Edit') + '</button>';
+      h += '<div class="flex gap-2" style="align-items:center">' + _retestVisSwitchHtml(f, false);
+      h += '<button class="btn btn-ghost btn-sm" onclick="toggleRetestEdit(\'' + f.id + '\')" id="retestEditBtn">' + (_rtEdOpen ? IC.x + ' Cancel' : IC.edit + ' Edit') + '</button></div>';
     }
     h += '</div>';
     h += '<div class="card-body rich-content" id="retestResultsDisplay"' + (_rtEdOpen ? ' style="display:none"' : '') + '>' + _portalFigForField('retest_results')(renderHtmlContent(f.retest_results)) + '</div>';
@@ -47858,7 +47882,7 @@ function _coLiveDismiss() {
 }
 var _CO_FINDING_INPUTS = { mTi: 'title', mSv: 'severity', mCv: 'cvss', mCvVec: 'cvss_vector', mCw: 'cwe', mAtt: 'attack',
   mCat: 'category', mDe: 'description', mRe: 'remediation', mAs: 'affected_hosts', mRf: 'refs',
-  mPhase: 'phase', evidenceEditor: 'evidence', mSta: 'status' };
+  mPhase: 'phase', evidenceEditor: 'evidence', mSta: 'status', mRtVis: 'retest_client_visible' };
 function _coFieldOfEl(el, r) {
   if (!el) return '';
   if (r && r.field) return _coModalField(r);
@@ -52375,52 +52399,8 @@ function renderFindingModal() {
   h += '<div id="kbSuggestions" class="kb-suggestions"></div></div>';
 
   if (fi && fi.id && canEdit() && typeof _canRetestFinding === 'function' && _canRetestFinding(fi)) {
-    var _rtStatus = fi.retest_status || '';
-    var _rtBadge = (S._mRetestPending && S._mRetestPending.id === fi.id) ? badge('medium', 'Retest Requested')
-      : _rtStatus === 'requested' ? badge('medium', 'Retest Requested')
-      : _rtStatus === 'fixed' ? badge('success', 'Remediated')
 
-      : _rtStatus === 'not_fixed' ? badge('high', 'Not Remediated')
-
-      : _RETEST_OUTCOMES[_rtStatus] ? badge(_RETEST_OUTCOMES[_rtStatus].badge, _RETEST_OUTCOMES[_rtStatus].label)
-      : '';
-    h += '<div class="form-group" id="mRetestBlock">';
-    h += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.35rem;flex-wrap:wrap">';
-    h += '<label style="margin:0">' + esc(_ffLabel('retest_results')) + '</label>';
-    h += _rtBadge;
-
-    var _rtPending = !!(S._mRetestPending && S._mRetestPending.id === fi.id);
-    if (!_rtStatus || _rtStatus === 'not_fixed' || _rtStatus === 'part_fixed') {
-      h += '<button type="button" class="btn btn-ghost btn-sm" style="font-size:0.72rem;margin-left:auto"'
-        + ' onclick="_mRetestMark(\'' + fi.id + '\')" id="mRetestBtn">' + IC.refresh + ' '
-        + (_rtPending ? 'Retest will be requested on save' : 'Mark for retest') + '</button>';
-    }
-    h += '</div>';
-
-    var _rtOpen = _rtPending || _rtStatus === 'requested' || !!(fi.retest_results || '').trim();
-    h += '<div id="mRetestBody"' + (_rtOpen ? '' : ' style="display:none"') + '>';
-    var _rtSay = '<p class="hint" id="mRetestSay" style="margin:0 0 0.4rem"' + (_rtStatus === 'requested' || _rtPending ? '' : ' hidden') + '>'
-      + 'What you write here is the retest result, and it goes in the report.</p>';
-
-    if (_hasAI) h += _rtAiActsHtml('mRt', _rtSay.replace('margin:0 0 0.4rem', 'margin:0'));
-    else h += _rtSay;
-    h += buildEditorToolbar('mRt', false);
-    h += '<div class="rich-editor" id="mRt" contenteditable="true" style="min-height:110px" oninput="_evAiTouched(this)"'
-      + ' data-placeholder="What was re-tested, and what the result was">'
-      + _rewriteStorageSrc(fi.retest_results || '') + '</div>';
-
-    var _rtOut = (S._mRetestOutcome && S._mRetestOutcome.id === fi.id) ? S._mRetestOutcome.outcome : null;
-    h += '<div style="display:flex;gap:0.5rem;margin-top:0.6rem;flex-wrap:wrap" id="mRetestOutcome">';
-    _RETEST_OUTCOME_ORDER.forEach(function (k) {
-      h += '<button type="button" class="btn btn-sm ' + _mRtOutCls(k, _rtOut === k) + '" data-retest-outcome="' + k + '"'
-        + ' style="font-size:0.72rem' + (k === 'not_fixed' ? ';color:var(--red-text)' : '') + '"'
-        + ' onclick="_mRetestOutcomeSet(\'' + fi.id + '\',\'' + k + '\')" id="' + _mRtOutId(k) + '">'
-        + _retestOutcomeIcon(k) + ' ' + _RETEST_OUTCOMES[k].label + '</button>';
-    });
-    h += '<span class="hint" id="mRtOutSay" style="align-self:center"' + (_rtOut === null ? ' hidden' : '')
-      + '>Applied when you save</span>';
-    h += '</div>';
-h += '</div></div>';
+    h += '<div class="form-group" id="mRetestBlock">' + _mRetestBlockInner(fi) + '</div>';
   }
 
   if (_ffEnabled('evidence')) {
@@ -52960,6 +52940,19 @@ async function saveFinding(id, aid, _opts) {
     }
   }
 
+  var _rtNeedWords = false;
+  try {
+    var _rtNe = document.getElementById('mRt');
+    _rtNeedWords = !!(id && _rtNe && _rtNe.getAttribute('data-rt-round') === '1'
+      && S._mRetestOutcome && S._mRetestOutcome.id === id && _retestOutcomeKey(S._mRetestOutcome.outcome)
+      && !_retestHas(_rtNe.innerHTML));
+  } catch (e) { _rtNeedWords = false; }
+  if (_rtNeedWords && !_stay) {
+    toast('Please document your retest results before marking the finding', 'error');
+    try { var _rtNe2 = document.getElementById('mRt'); _rtNe2.scrollIntoView({ block: 'center' }); _rtNe2.focus(); } catch (e) {}
+    return;
+  }
+
   var _stayReq = null;
   if (_stay) _stayReq = (_mStayReq && S.modal && _mStayReq.ref === S.modal) ? _mStayReq : _mStayOpen();
 
@@ -52982,6 +52975,20 @@ async function saveFinding(id, aid, _opts) {
 
   var _rtEl = _hadRetestEditor ? document.getElementById('mRt') : null;
   var _rtHtml = _rtEl ? _rtEl.innerHTML : '';
+
+  var _rtRound = !!(_rtEl && _rtEl.getAttribute('data-rt-round') === '1');
+  var _rtFi0 = (id && _rtRound) ? (S.data.findings || []).find(function (x) { return x.id === id; }) : null;
+  var _rtPrev = _rtRound ? ((S._mRtPrev && S._mRtPrev.id === id) ? S._mRtPrev.html
+    : (_rtFi0 && _rtFi0.retest_status === 'requested' ? _retestDraftOf(_rtFi0).rest : _retestUnmark((_rtFi0 && _rtFi0.retest_results) || ''))) : null;
+  var _rtWas = (_rtRound && _rtFi0 && _rtFi0.retest_status === 'requested') ? (_retestDraftOf(_rtFi0).draft || '') : '';
+  var _rtWithdraw = !!(_rtRound && id && S._mRetestWithdraw && S._mRetestWithdraw.id === id && _rtFi0 && _rtFi0.retest_status === 'requested');
+
+  var _rtTouched = _rtRound && !_rtSameAsDrawn(_rtHtml, _rtWas);
+  var _rtPrevUp = !!(_rtRound && S._mRtPrev && S._mRtPrev.id === id && S._mRtPrev.changed);
+  var _rtRead = _rtHtml;
+
+  var _rtVisEl = document.getElementById('mRtVis');
+  var _rtVisOn = _rtVisEl ? !!_rtVisEl.checked : null;
 
   var evidence = _hadEvidenceEditor
     ? ((_ffStripToText(_evHtml) || /<img|<table|<hr/i.test(_evHtml)) ? _evHtml : '')
@@ -53053,6 +53060,10 @@ async function saveFinding(id, aid, _opts) {
   descHtml = await uploadHtmlImages(descHtml, aid, _fid, 'description');
   remHtml = await uploadHtmlImages(remHtml, aid, _fid, 'remediation');
 
+  if (_hadRetestEditor && _rtHtml && /<img\b/i.test(_rtHtml)) _rtHtml = await uploadHtmlImages(_rtHtml, aid, _fid, 'retest');
+
+  if (_rtPrevUp && _rtPrev && /<img\b/i.test(_rtPrev)) _rtPrev = await uploadHtmlImages(_rtPrev, aid, _fid, 'retest');
+
   var data = { title: title };
 
   var _newDraftDefault = !id && !(_opts && _opts.draft) && !_final && _newFindingDraft();
@@ -53077,17 +53088,36 @@ async function saveFinding(id, aid, _opts) {
   if (descEl && _fImpactMerged) data.impact = '';
   if (remEl) data.remediation = remHtml;
 
-  if (_hadRetestEditor) {
+  if (_hadRetestEditor && !_rtRound) {
     data.retest_results = (_ffStripToText(_rtHtml) || /<img|<table|<hr/i.test(_rtHtml)) ? _rtHtml : '';
+  }
+
+  var _rtOutK = (!_rtNeedWords && id && S._mRetestOutcome && S._mRetestOutcome.id === id) ? _retestOutcomeKey(S._mRetestOutcome.outcome) : null;
+  var _rtSaid = [];
+  if (_rtRound && id) {
+    var _rtWords = _retestHas(_rtHtml) ? _retestUnmark(_rtHtml) : '';
+    if (_rtWithdraw) {
+      Object.assign(data, _retestWithdrawn(_rtFi0));
+      _rtSaid.push('Marked not for retest: ');
+    } else if (_rtOutK) {
+      data.retest_results = _rtWords ? _buildRetestResultsHtml(_rtWords, _rtPrev) : _rtPrev;
+    } else if (_rtTouched || _rtPrevUp) {
+      data.retest_results = _rtWords ? _retestDraftOver(_rtPrev, _rtWords, new Date().toISOString()) : (_retestHas(_rtPrev) ? _rtPrev : '');
+    }
+  }
+
+  if (id && _rtVisOn !== null && _rtVisOn !== _retestClientVisible((S.data.findings || []).find(function (x) { return x.id === id; }))) {
+    data.retest_client_visible = _rtVisOn;
   }
 
   if (id && S._mRetestPending && S._mRetestPending.id === id) {
     data.retest_requested = true;
     data.retest_status = 'requested';
     data.retest_requested_at = new Date().toISOString();
+    _rtSaid.push('Retest requested for: ');
   }
 
-  if (id && S._mRetestOutcome && S._mRetestOutcome.id === id && _retestOutcomeKey(S._mRetestOutcome.outcome)) {
+  if (id && !_rtNeedWords && S._mRetestOutcome && S._mRetestOutcome.id === id && _retestOutcomeKey(S._mRetestOutcome.outcome)) {
 
     var _rk = _retestOutcomeKey(S._mRetestOutcome.outcome);
     data.status = _RETEST_OUTCOMES[_rk].status;
@@ -53095,6 +53125,7 @@ async function saveFinding(id, aid, _opts) {
     data.retest_requested = false;
     data.retest_completed_at = new Date().toISOString();
     data.retest_completed_by = (S.profile && S.profile.name) || 'Tester';
+    _rtSaid.push('Retest completed - ' + _RETEST_OUTCOMES[_rk].words + ': ');
   }
   if (_hadEvidenceEditor) data.evidence = evidence;
   if (_fAs.had) data.affected_hosts = (_fAs.value || '').trim();
@@ -53216,7 +53247,14 @@ async function saveFinding(id, aid, _opts) {
 
     pendingEvidence = [];
     S._mRetestPending = null;
-    S._mRetestOutcome = null;
+    if (!_rtNeedWords) S._mRetestOutcome = null;
+    S._mRetestWithdraw = null;
+    if (S._mRtPrev && S._mRtPrev.id === id) S._mRtPrev = null;
+    if (id && _rtSaid.length) {
+      for (var _rsi = 0; _rsi < _rtSaid.length; _rsi++) {
+        try { await addTimelineEvent(aid, _rtSaid[_rsi] + ((savedData && savedData.title) || title || 'finding')); } catch (e) {}
+      }
+    }
 
     var _libAdded = false, _libDid = '';
     if (!id) {
@@ -53290,6 +53328,12 @@ async function saveFinding(id, aid, _opts) {
 
       if (_stayWhy && !_mm._mDraftSaid) { _mm._mDraftSaid = true; toast('Saved as a draft. ' + _stayWhy + '.', 'warning'); }
       if (id && data && data.status === 'remediated') _ticketsAfterRemediation(id);
+
+      if (_rtRound && id && _rtSaid.length) {
+        _mRtAfterSave((S.data.findings || []).find(function (x) { return x.id === id; }),
+          { read: _rtRead, prev: _rtPrev, finished: !!(_rtOutK || _rtWithdraw), withdrawn: _rtWithdraw });
+      }
+      if (_rtNeedWords) toast('Saved. Write what the retest found, and the result you marked is applied when you save.', 'info');
       return;
     }
 
@@ -59421,57 +59465,175 @@ async function deleteAssessmentFile(fileId) {
     }
   });
 }
+function _mRetestBlockInner(fi, o) {
+  o = o || {};
+  var h = '';
+  var _hasAI = !!((S.data.settings || {}).ai_provider || S._hasAiKey);
+  var _rtStatus = fi.retest_status || '';
+  var _rtPending = !!(S._mRetestPending && S._mRetestPending.id === fi.id);
+  var _rtOut = (S._mRetestOutcome && S._mRetestOutcome.id === fi.id) ? S._mRetestOutcome.outcome : null;
+
+  var _rtM = (S.modal && S.modal.type === 'finding' && S.modal.id === fi.id) ? S.modal : null;
+  var _rtRound = (_rtM && typeof _rtM.__rtRound === 'boolean') ? _rtM.__rtRound : (_rtStatus === 'requested' || _rtPending);
+  if (_rtM) _rtM.__rtRound = _rtRound;
+  if (_rtRound) {
+    var _rtD = _rtStatus === 'requested' ? _retestDraftOf(fi) : { draft: null, saved: null, rest: _retestUnmark(fi.retest_results || '') };
+
+    var _rtPrev = (S._mRtPrev && S._mRtPrev.id === fi.id) ? S._mRtPrev.html : _rtD.rest;
+
+    var _rtFig = null;
+    try { _rtFig = _figSeq(_figFrom(_figPlan((S.data.assessments || []).find(function (x) { return x.id === fi.assessment_id; })), fi.id, 'retest_results')); } catch (e) { _rtFig = null; }
+    return _retestCardHtml(fi, { where: 'dialog', draft: o.draft != null ? o.draft : (_rtD.draft || ''), saved: o.draft != null ? null : _rtD.saved,
+      rest: _rtPrev, ai: _hasAI, pending: _rtPending, requested: _rtStatus === 'requested', outcome: _rtOut, fig: _rtFig, vis: true, visOn: o.visOn,
+      withdraw: _rtStatus === 'requested' && !!(S._mRetestWithdraw && S._mRetestWithdraw.id === fi.id) });
+  }
+  var _rtBadge = (S._mRetestPending && S._mRetestPending.id === fi.id) ? badge('medium', 'Retest Requested')
+    : _rtStatus === 'requested' ? badge('medium', 'Retest Requested')
+    : _rtStatus === 'fixed' ? badge('success', 'Remediated')
+
+    : _rtStatus === 'not_fixed' ? badge('high', 'Not Remediated')
+
+    : _RETEST_OUTCOMES[_rtStatus] ? badge(_RETEST_OUTCOMES[_rtStatus].badge, _RETEST_OUTCOMES[_rtStatus].label)
+    : '';
+  h += '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.35rem;flex-wrap:wrap">';
+  h += '<label style="margin:0">' + esc(_ffLabel('retest_results')) + '</label>';
+  h += _rtBadge;
+
+  var _rtVisOpen = _rtPending || _rtStatus === 'requested' || !!(fi.retest_results || '').trim();
+  h += '<span style="margin-left:auto;display:inline-flex;align-items:center;gap:0.5rem">';
+  if (_rtVisOpen) h += _retestVisSwitchHtml(fi, true, o.visOn);
+  if (!_rtStatus || _rtStatus === 'not_fixed' || _rtStatus === 'part_fixed') {
+    h += '<button type="button" class="btn btn-ghost btn-sm" style="font-size:0.72rem"'
+      + ' onclick="_mRetestMark(\'' + fi.id + '\')" id="mRetestBtn">' + IC.refresh + ' '
+      + (_rtPending ? 'Retest will be requested on save' : 'Mark for retest') + '</button>';
+  }
+  h += '</span></div>';
+
+  var _rtOpen = _rtPending || _rtStatus === 'requested' || !!(fi.retest_results || '').trim();
+  h += '<div id="mRetestBody"' + (_rtOpen ? '' : ' style="display:none"') + '>';
+  var _rtSay = '<p class="hint" id="mRetestSay" style="margin:0 0 0.4rem"' + (_rtStatus === 'requested' || _rtPending ? '' : ' hidden') + '>'
+    + 'What you write here is the retest result, and it goes in the report.</p>';
+
+  if (_hasAI) h += _rtAiActsHtml('mRt', _rtSay.replace('margin:0 0 0.4rem', 'margin:0'));
+  else h += _rtSay;
+  h += buildEditorToolbar('mRt', false);
+  h += '<div class="rich-editor" id="mRt" contenteditable="true" style="min-height:110px" oninput="_evAiTouched(this)"'
+    + ' data-placeholder="What was re-tested, and what the result was">'
+    + _rewriteStorageSrc(o.whole != null ? o.whole : (fi.retest_results || '')) + '</div>';
+
+  h += '<div style="display:flex;gap:0.5rem;margin-top:0.6rem;flex-wrap:wrap" id="mRetestOutcome">';
+
+  _RETEST_OUTCOME_ORDER.forEach(function (k) { h += _mRtOutBtnHtml(fi.id, k, _rtOut === k, _rtOut !== null); });
+  h += '<span class="hint" id="mRtOutSay" style="align-self:center"' + (_rtOut === null ? ' hidden' : '')
+    + '>Applied when you save</span>';
+  h += '</div>';
+  h += '</div>';
+  return h;
+}
+window._mRetestBlockInner = _mRetestBlockInner;
 function _mRtOutId(k) {
   return k === 'fixed' ? 'mRtFixed' : k === 'not_fixed' ? 'mRtNot' : k === 'part_fixed' ? 'mRtPart' : 'mRtAccepted';
 }
-function _mRtOutCls(k, on) {
-  return on ? (k === 'fixed' ? 'btn-success' : 'btn-primary') : 'btn-secondary';
+function _mRtOutBtnHtml(fid, k, on, any) {
+  var cls = (k === 'fixed' ? 'btn-success' : 'btn-secondary') + (on ? ' rt-out-on' : any ? ' rt-out-off' : '');
+  return '<button type="button" class="btn ' + cls + ' btn-sm" data-retest-outcome="' + k + '" id="' + _mRtOutId(k) + '" aria-pressed="' + (on ? 'true' : 'false') + '"'
+    + ' onclick="_mRetestOutcomeSet(\'' + fid + '\',\'' + k + '\')"' + (k === 'not_fixed' ? ' style="color:var(--red-text)"' : '') + '>'
+    + _retestOutcomeIcon(k) + ' ' + _RETEST_OUTCOMES[k].label + '</button>';
+}
+function _mRtOutPaint(id) {
+  try {
+    var out = (S._mRetestOutcome && S._mRetestOutcome.id === id) ? S._mRetestOutcome.outcome : null;
+    var wd = !!(S._mRetestWithdraw && S._mRetestWithdraw.id === id);
+    _RETEST_OUTCOME_ORDER.forEach(function (k) {
+      var b = document.getElementById(_mRtOutId(k));
+      if (!b) return;
+      b.classList.toggle('rt-out-on', out === k);
+      b.classList.toggle('rt-out-off', (out !== null || wd) && out !== k);
+      b.setAttribute('aria-pressed', out === k ? 'true' : 'false');
+    });
+    var w = document.getElementById('mRtWithdraw');
+    if (w) { w.classList.toggle('rt-out-on', wd); w.setAttribute('aria-pressed', wd ? 'true' : 'false'); }
+    var say = document.getElementById('mRtOutSay');
+    if (say) say.hidden = (out === null && !wd);
+  } catch (e) {}
 }
 function _mRetestOutcomeSet(id, fixed) {
   var want = _retestOutcomeKey(fixed);
   var cur = (S._mRetestOutcome && S._mRetestOutcome.id === id) ? S._mRetestOutcome.outcome : null;
   var next = (cur === want) ? null : want;
   S._mRetestOutcome = next === null ? null : { id: id, outcome: next };
-  try {
-    _RETEST_OUTCOME_ORDER.forEach(function (k) {
-      var b = document.getElementById(_mRtOutId(k));
-      if (b) b.className = 'btn btn-sm ' + _mRtOutCls(k, next === k);
-    });
-    var say = document.getElementById('mRtOutSay');
-    if (say) say.hidden = (next === null);
-  } catch (e) {}
+  if (next !== null) S._mRetestWithdraw = null;
+  _mRtOutPaint(id);
   toast(next === null ? 'Retest outcome cleared'
     : 'Marked ' + _RETEST_OUTCOMES[next].words + ', applied when you save', 'info');
 }
 window._mRetestOutcomeSet = _mRetestOutcomeSet;
+function _mRetestWithdrawSet(id) {
+  var on = !(S._mRetestWithdraw && S._mRetestWithdraw.id === id);
+  S._mRetestWithdraw = on ? { id: id } : null;
+  if (on) S._mRetestOutcome = null;
+  _mRtOutPaint(id);
+  toast(on ? 'Taken off retest when you save: the request is withdrawn, and what is written for this retest is removed'
+    : 'Not for retest cleared', 'info');
+}
+window._mRetestWithdrawSet = _mRetestWithdrawSet;
 function _mRetestMark(id) {
   var on = !(S._mRetestPending && S._mRetestPending.id === id);
-  S._mRetestPending = on ? { id: id } : null;
-  try {
+  var fi = (S.data.findings || []).find(function (f) { return f.id === id; });
+  var ed = document.getElementById('mRt');
+  var held = ed ? ed.innerHTML : '';
+  var whole = null;
+  if (on) {
 
-    var body = document.getElementById('mRetestBody');
-    var keep = (S.data.findings || []).find(function (f) { return f.id === id; });
-    var hasText = !!(keep && String(keep.retest_results || '').trim());
-    var stays = hasText || (keep && keep.retest_status === 'requested');
-    if (body) body.style.display = (on || stays) ? '' : 'none';
-    var say = document.getElementById('mRetestSay');
-    if (say) say.hidden = !(on || (keep && keep.retest_status === 'requested'));
-    if (on) { try { var ed = document.getElementById('mRt'); if (ed) ed.focus(); } catch (e2) {} }
-    var b = document.getElementById('mRetestBtn');
-    if (b) b.innerHTML = (typeof IC !== 'undefined' ? IC.refresh : '') + ' '
-      + (on ? 'Retest will be requested on save' : 'Mark for retest');
+    var _same = _rtSameAsDrawn(held, (fi && fi.retest_results) || '');
+    S._mRtPrev = { id: id, html: _retestUnmark(_same ? ((fi && fi.retest_results) || '') : held), changed: !_same };
+    S._mRetestOutcome = null;
+  } else {
+    var prev = (S._mRtPrev && S._mRtPrev.id === id) ? S._mRtPrev.html : ((fi && fi.retest_results) || '');
+    whole = _retestHas(held) ? _buildRetestResultsHtml(held, prev) : prev;
+    S._mRtPrev = null;
+  }
+  S._mRetestPending = on ? { id: id } : null;
+  if (S.modal && S.modal.type === 'finding' && S.modal.id === id) S.modal.__rtRound = on;
+  try {
     var blk = document.getElementById('mRetestBlock');
-    var badgeEl = blk && blk.querySelector('.badge');
-    if (on && !badgeEl && blk) {
-      var lab = blk.querySelector('label');
-      if (lab) lab.insertAdjacentHTML('afterend', badge('medium', 'Retest Requested'));
-    } else if (!on && badgeEl && !((S.data.findings || []).find(function (f) { return f.id === id && f.retest_status; }))) {
-      badgeEl.remove();
+    if (blk && fi) {
+      var _vEl = document.getElementById('mRtVis');
+      var _vOn = _vEl ? !!_vEl.checked : null;
+      blk.innerHTML = _mRetestBlockInner(fi, on ? { draft: '', visOn: _vOn } : { whole: whole, visOn: _vOn });
+      if (!on && _retestHas(whole)) { var body = document.getElementById('mRetestBody'); if (body) body.style.display = ''; }
+      try { resolveStorageImages(blk); } catch (e3) {}
     }
+    if (on) { try { var ed2 = document.getElementById('mRt'); if (ed2) ed2.focus(); } catch (e2) {} }
   } catch (e) {}
   toast(on ? 'A retest will be requested when you save' : 'Retest mark removed', 'info');
 }
 window._mRetestMark = _mRetestMark;
+function _mRtAfterSave(fi, o) {
+  try {
+    var blk = document.getElementById('mRetestBlock'), ed = document.getElementById('mRt');
+    if (!blk || !ed || !fi || !S.modal || S.modal.id !== fi.id) return;
+    var now = ed.innerHTML;
+    var more = !o.withdrawn && _mkNorm({ h: now }) !== _mkNorm({ h: o.read });
+    var a = document.activeElement;
+    var caret = (!o.finished && a && (a === ed || ed.contains(a))) ? _mkCaretOf(blk) : null;
+    delete S.modal.__rtRound;
+    blk.innerHTML = _mRetestBlockInner(fi, more ? (o.finished ? { whole: _buildRetestResultsHtml(now, o.prev) } : { draft: now }) : {});
+    try { resolveStorageImages(blk); } catch (e) {}
+
+    if (_mkPaint && _mkPaint.fields) {
+      var els = _mkFields(blk);
+      Object.keys(els).forEach(function (k) { _mkPaint.fields[k] = _mkNorm(_mkRaw(els[k])); });
+      if (more) {
+        var t = document.createElement('template');
+        t.innerHTML = _rewriteStorageSrc(o.finished ? (fi.retest_results || '') : (_retestDraftOf(fi).draft || ''));
+        _mkPaint.fields['#mRt'] = _mkNorm({ h: t.innerHTML });
+      }
+    }
+    _mkCapture();
+    if (caret) _mkCaretPut(blk, caret);
+  } catch (e) {}
+}
 async function requestRetest(id) {
   var f = (S.data.findings || []).find(function(x) { return x.id === id; });
   var fName = f ? f.title : 'this finding';
@@ -60078,14 +60240,100 @@ function _retestDraftOf(f) {
     rest: _retestUnmark(html.slice(end + close.length).replace(/^\s*<hr\b[^>]*>/i, '')) };
 }
 function _retestDraftPut(row, html, at) {
-  var rest = _retestDraftOf(row).rest;
+  return _retestDraftOver(_retestDraftOf(row).rest, html, at);
+}
+function _retestDraftOver(rest, html, at) {
   return '<!--pental-retest-draft ' + at + '-->' + _retestUnmark(html) + '<!--/pental-retest-draft-->'
     + (_retestHas(rest) ? '<hr style="margin:1.5rem 0;border:none;border-top:1px solid var(--border)">' + rest : '');
 }
+function _rtSameAsDrawn(edHtml, html) {
+  try {
+    var t = document.createElement('template');
+    t.innerHTML = _rewriteStorageSrc(String(html == null ? '' : html));
+    return _mkNorm({ h: String(edHtml == null ? '' : edHtml) }) === _mkNorm({ h: t.innerHTML });
+  } catch (e) { return false; }
+}
 function _retestPrintable(f) {
+
+  if (S && S.profile && S.profile.role === 'client' && !_retestClientVisible(f)) return '';
   try { return _retestDraftOf(f).rest; } catch (e) { return _retestUnmark((f && f.retest_results) || ''); }
 }
 window._retestPrintable = _retestPrintable;
+function _retestCardHtml(f, o) {
+  o = o || {};
+  var dlg = o.where === 'dialog', edId = dlg ? 'mRt' : 'retestResultsEditor';
+  var q = function (v) { return "'" + String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; };
+  var state = (dlg && o.pending) ? badge('medium', 'Retest Requested') : badge('open', 'Awaiting Results');
+
+  if (o.vis) state = _retestVisSwitchHtml(f, dlg, o.visOn) + state;
+  var ai = o.ai ? _rtAiButtonsHtml(edId) : '';
+  var h = '<div class="card rt-card' + (dlg ? '' : ' mb-4') + '"' + (dlg ? ' id="mRetestBody"' : '') + ' style="border-color:var(--notification-color)">';
+  h += '<div class="card-header"><span class="card-title">' + IC.refresh + ' Retest In Progress</span>'
+    + ((ai || o.vis) ? '<div class="rt-ai-hd">' + ai + state + '</div>' : state) + '</div>';
+  h += '<div class="card-body">';
+  h += '<p class="sub-text"' + (dlg ? ' id="mRetestSay"' : '') + ' style="margin-bottom:0.75rem">Document your retest findings below. These results will be included in the report.'
+    + (o.draft ? ' Your draft' + (o.saved ? ' from ' + esc(fmtDateTime(o.saved)) : '') + ' is open here, so finish it and mark the result.' : '')
+    + (dlg && o.pending ? ' The retest is asked for when you save.' : '') + '</p>';
+  h += buildEditorToolbar(edId, false);
+
+  h += '<div class="rich-editor" id="' + edId + '" contenteditable="true" style="min-height:' + (dlg ? '110' : '150') + 'px" oninput="_evAiTouched(this)"'
+    + (dlg ? ' data-rt-round="1"' : ' data-rt-keep="' + esc(_rtKeepKeyOf(f, 'draft')) + '"')
+    + ' data-placeholder="Document retest methodology, observations, and conclusions...">' + (o.draft ? _rewriteStorageSrc(o.draft) : '') + '</div>';
+  h += '<div class="rt-card-acts"' + (dlg ? ' id="mRetestOutcome"' : '') + ' style="display:flex;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap;align-items:center">';
+  if (dlg) {
+    _RETEST_OUTCOME_ORDER.forEach(function (k) { h += _mRtOutBtnHtml(f.id, k, o.outcome === k, !!(o.outcome || o.withdraw)); });
+    h += '<span class="hint" id="mRtOutSay"' + (o.outcome || o.withdraw ? '' : ' hidden') + '>Applied when you save</span>';
+
+    if (o.pending) h += '<button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="_mRetestMark(' + q(f.id) + ')" id="mRetestBtn">' + IC.refresh + ' Retest will be requested on save</button>';
+    else if (o.requested) h += '<button type="button" class="btn btn-ghost btn-sm' + (o.withdraw ? ' rt-out-on' : '') + '" id="mRtWithdraw" data-not-for-retest aria-pressed="' + (o.withdraw ? 'true' : 'false') + '" onclick="_mRetestWithdrawSet(' + q(f.id) + ')" style="margin-left:auto" title="Withdraw this retest request when you save">Not for retest</button>';
+  } else {
+    h += '<button class="btn btn-primary btn-sm" onclick="saveRetestResults(' + q(f.id) + ')">Save Draft</button>';
+
+    _RETEST_OUTCOME_ORDER.forEach(function (k) { h += _retestOutcomeBtnHtml(k, 'completeRetestWithResults(' + q(f.id) + ',' + q(k) + ')'); });
+
+    h += '<button class="btn btn-ghost btn-sm" data-not-for-retest onclick="notForRetest(' + q(f.id) + ')" style="margin-left:auto" title="Withdraw this retest request">Not for retest</button>';
+  }
+  h += '</div></div>';
+  if (_retestHas(o.rest)) {
+    var fig = o.fig || function (x) { return x; };
+    h += '<div style="border-top:1px solid var(--border);padding:1rem"><p style="font-size:0.8rem;font-weight:600;color:var(--gray);margin-bottom:0.5rem">Previous Results</p>';
+    h += '<div style="font-size:0.9rem;color:var(--text);opacity:0.85" class="rich-content">' + fig(renderHtmlContent(o.rest)) + '</div></div>';
+  }
+  h += '</div>';
+  return h;
+}
+window._retestCardHtml = _retestCardHtml;
+function _retestClientVisible(f) { return !f || f.retest_client_visible !== false; }
+window._retestClientVisible = _retestClientVisible;
+function _retestVisSwitchHtml(f, inDialog, on) {
+  var vis = (on === true || on === false) ? on : _retestClientVisible(f);
+  return '<label class="tpl-toggle rt-vis" style="margin:0" title="Visible to client">'
+    + '<input type="checkbox"' + (inDialog ? ' id="mRtVis"' : ' data-rt-vis onchange="toggleRetestVisibility(\'' + f.id + '\',this.checked)"') + (vis ? ' checked' : '') + '>'
+    + '<span class="tpl-toggle-track"></span><span style="font-size:0.68rem;color:var(--gray);white-space:nowrap">Client Visible</span></label>';
+}
+async function toggleRetestVisibility(id, visible) {
+  var f = (S.data.findings || []).find(function (x) { return x.id === id; });
+  if (!f) return;
+
+  if (!Object.prototype.hasOwnProperty.call(f, 'retest_client_visible')) {
+    toast('Your database cannot keep this yet: run its latest update (Database update available, or byo-setup.sql again), then switch it.', 'error', 9000);
+    render();
+    return;
+  }
+  _showLoading();
+  try {
+
+    var r = await _coMove('findings', id, { retest_client_visible: !!visible },
+      { from: { retest_client_visible: f.retest_client_visible }, what: 'Changing who sees the retest' });
+    if (!r || !r.ok) { render(); return; }
+    toast(visible ? 'Retest results visible to client' : 'Retest results hidden from client', 'success');
+    render();
+  } catch (e) {
+    toast('Error: ' + (e.message || e), 'error');
+    render();
+  } finally { _hideLoading(); }
+}
+window.toggleRetestVisibility = toggleRetestVisibility;
 var _rtKeep = null;
 function _rtKeepWords(h) { return _mkNorm({ h: String(h == null ? '' : h).replace(/<img\b[^>]*>/gi, '<img>') }); }
 function _rtKeepKeyOf(f, mode) {
@@ -60101,7 +60349,7 @@ function _rtKeepEd() {
   if (key.split(':')[1] === 'edit' && !(S._rtEditOpen && S._rtEditOpen.id === key.split(':')[0])) return null;
   return ed;
 }
-function _rtKeepForget(id) { if (_rtKeep && (!id || _rtKeep.key.split(':')[0] === id)) _rtKeep = null; }
+function _rtKeepForget(id) { if (_rtKeep && (!id || _rtKeep.key.split(':')[0] === id)) _rtKeep = null; _rtStoreDrop(id); }
 function _rtKeepBefore() {
   try {
     var ed = _rtKeepEd();
@@ -60109,7 +60357,7 @@ function _rtKeepBefore() {
       var key = ed.getAttribute('data-rt-keep'), html = ed.innerHTML;
       if (_mkNorm({ h: html }) === ed.__rtDrawn) {
 
-        if (_rtKeep && _rtKeep.key === key) _rtKeep = null;
+        if (_rtKeep && _rtKeep.key === key && !_rtKeep.resumed) _rtKeep = null;
       } else {
         var a = document.activeElement;
         _rtKeep = { key: key, who: _rtKeepWho(), html: html, base: ed.__rtDrawn,
@@ -60147,9 +60395,224 @@ function _rtKeepAfter() {
 
     var a = document.activeElement;
     if (k.caret && !S.modal && (!a || a === document.body)) _mkCaretPut(ed.parentNode, k.caret);
-  } catch (e) {}
+
+    if (k.resumed) {
+      k.resumed = false;
+      var dropped = k.dropped || 0;
+      toast(dropped ? 'Your unsaved retest results are back. ' + dropped + ' pasted screenshot' + (dropped === 1 ? '' : 's') + ' could not be kept while you were away; paste ' + (dropped === 1 ? 'it' : 'them') + ' again.'
+        : 'Your unsaved retest results are back, as you left them.', dropped ? 'warning' : 'success', dropped ? 9000 : undefined);
+    }
+  } catch (e) {
+  } finally {
+    try { _rtStoreNow(); } catch (e2) {}
+  }
 }
 window._rtKeepForget = _rtKeepForget;
+function _rtKeepLetGo(id) {
+  if (_rtKeep && _rtKeep.key.split(':')[0] === id) _rtKeep = null;
+  _rtStoreDrop(id);
+  try {
+    var ed = document.getElementById('retestResultsEditor');
+    if (ed && !(ed.closest && ed.closest('.modal-overlay')) && typeof ed.__rtDrawnHtml === 'string'
+      && String(ed.getAttribute('data-rt-keep') || '').split(':')[0] === id) {
+      ed.innerHTML = ed.__rtDrawnHtml;
+      try { resolveStorageImages(ed); } catch (e) {}
+    }
+  } catch (e) {}
+}
+function _carryIntoDialog() {
+  var m = S && S.modal;
+  if (!m || m.__carried) return;
+  var root = document.querySelector('.modal-content');
+  if (!root || root.__mkKey !== _mkKeyOf(m)) return;
+  var els = _mkFields(root), keys = Object.keys(els);
+  if (!keys.length) return;
+  m.__carried = true;
+  var r = _lfRecordOf(m);
+  if (!r) return;
+  var carried = 0;
+  var put = function (el, raw) {
+    if (!raw || (typeof raw.h === 'string') !== _mkIsEd(el)) return false;
+
+    var k = _mFieldKey(el);
+    if ((_mkDraft && _mkDraft.ref === m && _mkDraft.typed && _mkDraft.typed[k]) || _mTyped.some(function (x) { return x.key === k; })) return false;
+    var before = _mFieldValue(el);
+    if (!_mkPut(el, raw)) return false;
+
+    if (k && !_mTyped.some(function (x) { return x.key === k; })) _mTyped.push({ key: k, el: el, original: before, last: _mFieldValue(el) });
+    if (_mkDraft && _mkDraft.ref === m) { _mkDraft.typed = _mkDraft.typed || {}; _mkDraft.typed[k] = true; }
+    carried++;
+    return true;
+  };
+
+  try {
+    var k0 = _rtKeep;
+    var ed = root.querySelector('#mRt');
+    if (r.table === 'findings' && k0 && ed && k0.who === _rtKeepWho()) {
+      var parts = k0.key.split(':');
+      var fi = (S.data.findings || []).find(function (x) { return x.id === r.id; });
+      if (parts[0] === r.id && fi && k0.key === _rtKeepKeyOf(fi, parts[1])
+        && (parts[1] === 'draft') === (ed.getAttribute('data-rt-round') === '1')
+        && put(ed, { h: k0.html })) m.__carriedRt = r.id;
+    }
+  } catch (e) {}
+
+  try {
+    _qaTypedOpen().forEach(function (fid) {
+      var box = _lfQaBox(S._qaEditing[fid]);
+      if (!box || box.table !== r.table || String(box.id) !== String(r.id)) return;
+      var raw = _mkRaw(document.getElementById(fid + '_rich') || document.getElementById(fid + '_textarea'));
+      for (var i = 0; i < keys.length; i++) {
+        var el = els[keys[i]];
+        if (_lfFieldOfEl(el, r) !== box.field) continue;
+        if (el.getAttribute('data-rt-round') === '1') return;
+        if (put(el, raw)) (m.__carriedQa = m.__carriedQa || []).push({ qa: fid, table: box.table, id: box.id });
+        return;
+      }
+    });
+  } catch (e) {}
+  if (carried) {
+    try { _mkCapture(); } catch (e) {}
+    try { toast(carried === 1 ? 'What you wrote on the page is here, not saved yet' : 'What you wrote on the page is here, not saved yet, in ' + carried + ' fields', 'info'); } catch (e) {}
+  }
+}
+function _carriedSaved(table, id) {
+  var m = S && S.modal;
+  if (!m || (!m.__carriedRt && !m.__carriedQa)) return;
+  if (table === 'findings' && m.__carriedRt === id) { _rtKeepLetGo(id); m.__carriedRt = null; }
+  (m.__carriedQa || []).slice().forEach(function (c) {
+    if (c.table !== table || String(c.id) !== String(id)) return;
+    try { cancelQAInlineEdit(c.qa); } catch (e) {}
+    m.__carriedQa = m.__carriedQa.filter(function (x) { return x !== c; });
+  });
+}
+var _RT_STORE = 'pental_rt_keep';
+var _rtStoreTimer = null;
+function _rtStoreDrop(id) {
+  try {
+    if (!id) { sessionStorage.removeItem(_RT_STORE); return; }
+    var r = JSON.parse(sessionStorage.getItem(_RT_STORE) || 'null');
+    if (r && String(r.key || '').split(':')[0] === id) sessionStorage.removeItem(_RT_STORE);
+  } catch (e) {}
+}
+function _rtTenant() { return (typeof TENANT_ID !== 'undefined' && TENANT_ID) ? String(TENANT_ID) : ''; }
+function _rtStoreNow() {
+  if (_rtStoreTimer) { clearTimeout(_rtStoreTimer); _rtStoreTimer = null; }
+  try {
+    if (!S || !S.profile || !S.profile.id) return;
+    var k = null, ed = _rtKeepEd(), edKey = ed ? ed.getAttribute('data-rt-keep') : '';
+    if (ed && typeof ed.__rtDrawn === 'string' && _mkNorm({ h: ed.innerHTML }) !== ed.__rtDrawn) {
+      k = { key: edKey, html: ed.innerHTML, base: ed.__rtDrawn };
+    } else if (_rtKeep && !_rtKeep.asked && _rtKeep.who === _rtKeepWho() && _rtKeep.key !== edKey) k = _rtKeep;
+    if (!k) { sessionStorage.removeItem(_RT_STORE); return; }
+    var fid = k.key.split(':')[0];
+    var open = (S._rtEditOpen && S._rtEditOpen.id === fid) ? { value: S._rtEditOpen.value, version: S._rtEditOpen.version } : null;
+
+    var rec = { v: 1, tenant: _rtTenant(), user: S.profile.id, at: Date.now(), key: k.key, base: k.base, open: open,
+      html: String(k.html || '').replace(/(<img\b[^>]*\bdata-sp="[^"]*"[^>]*?)\ssrc="blob:[^"]*"/gi, '$1 src="' + _MK_BLANK_GIF + '"') };
+    try { sessionStorage.setItem(_RT_STORE, JSON.stringify(rec)); return; } catch (e) {}
+    var n = 0;
+    rec.html = rec.html.replace(/<img\b[^>]*\bsrc="data:image\/[^"]*"[^>]*>/gi, function () { n++; return ''; });
+    rec.dropped = n;
+    try { sessionStorage.setItem(_RT_STORE, JSON.stringify(rec)); } catch (e) { sessionStorage.removeItem(_RT_STORE); }
+  } catch (e) {}
+}
+function _rtStoreSoon() {
+  if (_rtStoreTimer) clearTimeout(_rtStoreTimer);
+  _rtStoreTimer = setTimeout(_rtStoreNow, 400);
+}
+['input', 'paste', 'drop', 'cut'].forEach(function (t) {
+  document.addEventListener(t, function (e) {
+    try {
+      var el = e.target;
+      if (el && el.nodeType === 3) el = el.parentElement;
+      if (el && el.closest && el.closest('#retestResultsEditor')) _rtStoreSoon();
+    } catch (x) {}
+  }, true);
+});
+window.addEventListener('pagehide', function () { _rtStoreNow(); });
+document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') _rtStoreNow(); });
+function _rtKeepResume() {
+  if (_rtKeepResume.done) return;
+  _rtKeepResume.done = true;
+  try {
+    var r = JSON.parse(sessionStorage.getItem(_RT_STORE) || 'null');
+    if (!r) return;
+    var maxAge = (typeof _sessionIdleWindowMs === 'function') ? _sessionIdleWindowMs() : 16 * 3600000;
+    if (r.v !== 1 || !S.profile || r.user !== S.profile.id || r.tenant !== _rtTenant() || !r.at || Date.now() - r.at > maxAge || !r.key) {
+      sessionStorage.removeItem(_RT_STORE); return;
+    }
+    if (_rtKeep) return;
+    var p = String(r.key).split(':');
+    var f = (S.data.findings || []).find(function (x) { return x.id === p[0]; });
+    if (!f || _rtKeepKeyOf(f, p[1]) !== r.key) { sessionStorage.removeItem(_RT_STORE); return; }
+    _rtKeep = { key: r.key, who: S.profile.id, html: r.html, base: r.base, caret: null, resumed: true, dropped: r.dropped || 0 };
+    if (p[1] === 'edit' && !S._rtEditOpen) {
+      S._rtEditOpen = { id: f.id, value: r.open ? r.open.value : f.retest_results, version: r.open ? r.open.version : f.row_version, status: f.retest_status };
+    }
+  } catch (e) {}
+}
+function _pageUnsaved() {
+  try {
+    if (!S || !S.user) return null;
+    if (S.page === 'finding-detail') {
+      var ed = _rtKeepEd();
+      if (ed && typeof ed.__rtDrawn === 'string' && _mkNorm({ h: ed.innerHTML }) !== ed.__rtDrawn) {
+        var p = String(ed.getAttribute('data-rt-keep') || '').split(':');
+        return { kind: 'retest', id: p[0], mode: p[1] };
+      }
+    }
+    if (S.page === 'qa-review') {
+      var ids = _qaTypedOpen();
+      if (ids.length) return { kind: 'qa', ids: ids };
+    }
+  } catch (e) {}
+  return null;
+}
+async function _rtPageSave(u) {
+  if (u.mode === 'edit') await saveRetestResultsDirect(u.id);
+  else await saveRetestResults(u.id);
+  var n = _pageUnsaved();
+  return !(n && n.kind === 'retest' && n.id === u.id);
+}
+function _pageLeaving(go) {
+  if (S && S.modal) return false;
+  var u = _pageUnsaved();
+  if (!u) return false;
+  if (u.kind === 'retest') {
+    showConfirm('The retest results you wrote for this finding are not saved yet.', 'Save your retest results?',
+      async function () { if (await _rtPageSave(u)) go(); },
+      function () {},
+      { confirmText: u.mode === 'edit' ? 'Save' : 'Save draft', cancelText: 'Keep editing', altText: 'Discard',
+        onAlt: function () { _rtKeepLetGo(u.id); if (u.mode === 'edit' && S._rtEditOpen && S._rtEditOpen.id === u.id) S._rtEditOpen = null; go(); } });
+  } else {
+    showConfirm('You have changes in the review that have not been saved. Leaving now discards them.', 'Discard your changes?',
+      function () { u.ids.forEach(function (fid) { try { cancelQAInlineEdit(fid); } catch (e) {} }); go(); },
+      function () {},
+      { confirmText: 'Discard them', cancelText: 'Keep editing', variant: 'danger' });
+  }
+  return true;
+}
+window.addEventListener('beforeunload', function (e) {
+  var any = false;
+  try { any = !!_pageUnsaved() || !!(_rtKeep && !_rtKeep.asked && _rtKeep.who === _rtKeepWho()); } catch (x) { any = false; }
+  if (!any) return;
+  _rtStoreNow();
+  e.preventDefault();
+  e.returnValue = '';
+  return '';
+});
+function _pageSaveKey(repeat) {
+  if (!S || S.modal || S.page !== 'finding-detail') return false;
+  var ed = _rtKeepEd();
+  if (!ed) return false;
+  if (repeat) return true;
+  var u = _pageUnsaved();
+  if (!u) { toast('No changes to save', 'info'); return true; }
+  _rtPageSave(u);
+  return true;
+}
+window._pageLeaving = _pageLeaving;
 function toggleRetestEdit(id) {
   var panel = document.getElementById('retestEditPanel');
   var display = document.getElementById('retestResultsDisplay');

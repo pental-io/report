@@ -72,6 +72,8 @@ function _qaChangeReads() { return; }
 var _qaChangesCache = {};
 function _qaClSettingsHtml() { return; }
 function _qaClear() { return true; }
+function _qaDisplayEl() { return; }
+function _qaEditBody() { return; }
 function _qaFigPair() { return []; }
 async function _qaGoTo() { return Promise.resolve(null); }
 function _qaIsPendingSuggestion() { return; }
@@ -79,6 +81,8 @@ async function _qaListOp() { return Promise.resolve(null); }
 function _qaMarkupFor() { return null; }
 function _qaMarkupToast() { return; }
 function _qaOpenComments() { return; }
+function _qaPlaceOf() { return {}; }
+function _qaPutPlace() { return false; }
 function _qaReadyToDeliver() { return; }
 async function _qaRefetch() { return Promise.resolve(null); }
 function _qaRelight() { return; }
@@ -89,6 +93,7 @@ function _qaReviewCopyAction() { return null; }
 function _qaSelClear() { return; }
 function _qaStickSync() { return; }
 function _qaTargetOf() { return {}; }
+function _qaTypedOpen() { return; }
 function _qaWhere() { return; }
 function _qaWriteMarkup() { return; }
 function _renderAttestationTemplateFields() { return; }
