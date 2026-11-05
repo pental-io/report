@@ -36,7 +36,7 @@ param(
   [switch]$Local,
   [switch]$Tailscale,
   [string]$Dir = '',
-  [string]$Version = '0.1.21',
+  [string]$Version = '0.1.22',
   [switch]$Yes,
   [switch]$NoOpen,
   [switch]$NoTelemetry
