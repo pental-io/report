@@ -2300,7 +2300,7 @@ var S = {
   currentClient: null,
   modal: null,
   data: { clients: [], assessments: [], findings: [], proposals: [], invoices: [], library: [], users: [], clientUsers: [], files: [], settings: {}, meetings: [], meeting_attendees: [], assessment_comments: [], qa_comments: [], feedback: [], contractor_payments: [], contact_requests: [], checklists_runbooks: [], assessment_phase_checklist_state: [] },
-  actionCounts: { qa: 0, qaOpen: 0, revision: 0, signatures: 0, delivery: 0, assignment: 0, retests: 0, invoices: 0, comments: 0, readyToSend: 0, bankVerify: 0 },
+  actionCounts: { qa: 0, qaOpen: 0, revision: 0, signatures: 0, delivery: 0, assignment: 0, retests: 0, retested: 0, invoices: 0, comments: 0, readyToSend: 0, bankVerify: 0 },
   searchQuery: '',
   findingsSort: 'severity',
   qaTab: 'findings',
@@ -21104,7 +21104,7 @@ function _assAutomationNoteHtml(a) {
     + '<span>' + esc(n.text) + '</span></p>';
 }
 function calculateActionCounts() {
-  var ac = { qa: 0, qaOpen: 0, revision: 0, signatures: 0, delivery: 0, assignment: 0, retests: 0, invoices: 0, comments: 0, credentials: 0, readyToSend: 0, bankVerify: 0, finalPdf: 0 };
+  var ac = { qa: 0, qaOpen: 0, revision: 0, signatures: 0, delivery: 0, assignment: 0, retests: 0, retested: 0, invoices: 0, comments: 0, credentials: 0, readyToSend: 0, bankVerify: 0, finalPdf: 0 };
   var isClient = S.profile && S.profile.role === 'client';
   var _activeAssessments = _workAssessments().filter(function(a) { return !_isArchived(a); });
   var _activeProposals = (S.data.proposals || []).filter(function(p) { return !_isArchived(p); });
@@ -21146,12 +21146,9 @@ function calculateActionCounts() {
       ac.qaOpen += n;
     });
 
-    var _isAdminNav = S.profile && S.profile.role === 'admin';
-    _activeAssessments.forEach(function(a) {
-      (S.data.findings || []).filter(function(f) { return f.assessment_id === a.id && f.retest_requested && f.retest_status === 'requested'; }).forEach(function(f) {
-        if (_isAdminNav || a.lead_id === S.profile.id || f.created_by === S.profile.id || _conOnWork(a)) ac.retests++;
-      });
-    });
+    var _rtLists = _retestLists();
+    ac.retests = _rtLists.asked.length;
+    ac.retested = _rtLists.done.length;
 
     if (canManage()) {
       ac.delivery = _activeAssessments.filter(function(a) { return _qaReadyToDeliver(a); }).length;
@@ -27221,6 +27218,8 @@ function _mRecordTyping(e) {
 });
 function _mIsDirty() {
   if (!S || !S.modal) return false;
+
+  if (S.modal.type === 'libimport') { var _lb = S._lbi; return !!_lb && (_lb.stage === 'reading' || (_lb.stage === 'review' && _lb.entries.length > 0)); }
   var root = document.querySelector('.modal-content');
   for (var i = 0; i < _mTyped.length; i++) {
     var r = _mTyped[i];
@@ -27453,10 +27452,13 @@ async function _closeMAsking() {
   if (_mAsking) return;
   _mAsking = true;
   var go;
+  var _imp = !!(S.modal && S.modal.type === 'libimport');
   try {
     go = await confirmAsync(
-      'You have changes that have not been saved. Closing this now discards them.',
-      { title: 'Discard your changes?', confirmText: 'Discard them',
+      _imp ? 'What has been read is not in your library yet. Closing this stops the import, and nothing is added.'
+        : 'You have changes that have not been saved. Closing this now discards them.',
+      _imp ? { title: 'Close the import?', confirmText: 'Close it', cancelText: 'Keep it open', variant: 'danger' }
+        : { title: 'Discard your changes?', confirmText: 'Discard them',
         cancelText: 'Keep editing', variant: 'danger' });
   } finally { _mAsking = false; }
   if (!go) return;
@@ -27499,6 +27501,8 @@ function closeM() {
   S._mRetestOutcome = null;
   S._mRetestWithdraw = null;
   S._mRtPrev = null;
+
+  if (S.modal && S.modal.type === 'libimport' && S._lbi) { if (S._lbi.ctrl) S._lbi.ctrl.abort(); S._lbi = null; }
 
   try { _mkForget(); _mkStash = null; } catch (e) {}
 
@@ -30517,7 +30521,8 @@ function renderAssessmentDetail() {
     h += '<!--SEC:scope-->';
     var _scopeText = a.scope || (proposal ? proposal.scope : '') || '';
     if (_scopeText || canEdit() || isClient) {
-      h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + _smIconHtml('scope') + ' ' + esc(_smLabel('scope')) + '</span>';
+
+      h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + _smIconHtml('scope') + ' ' + esc(_smLabel('scope')) + '</span>' + _secDraftBadge(a, 'scope');
 
       if (canEdit()) {
         h += '<div class="flex gap-2" style="align-items:center">';
@@ -30779,7 +30784,8 @@ function renderAssessmentDetail() {
     h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + _smIconHtml('artifacts') + ' ' + esc(_smLabel('artifacts') !== 'Artifacts' ? _smLabel('artifacts') : (_rptTpl.heading_artifacts || 'Artifacts')) + '</span>' + _secDraftBadge(a, 'artifacts') + '</div>';
     h += '<div class="card-body"><p class="text-muted" style="margin:0">' + esc(_rptTpl.text_no_artifacts || 'No artifacts remain in the environment.') + '</p></div></div>';
   } else if (_artifacts.length || canEdit() || isClient) {
-    h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + _smIconHtml('artifacts') + ' ' + esc(_smLabel('artifacts') !== 'Artifacts' ? _smLabel('artifacts') : (_rptTpl.heading_artifacts || 'Artifacts')) + '</span>';
+
+    h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + _smIconHtml('artifacts') + ' ' + esc(_smLabel('artifacts') !== 'Artifacts' ? _smLabel('artifacts') : (_rptTpl.heading_artifacts || 'Artifacts')) + '</span>' + _secDraftBadge(a, 'artifacts');
     if (canEdit()) {
       h += '<div class="flex gap-2" style="align-items:center">';
       h += _secDraftToggle(a, 'artifacts');
@@ -30816,7 +30822,8 @@ function renderAssessmentDetail() {
     h += '<!--SEC:caveats--><div class="card mb-4"><div class="card-header"><span class="card-title">' + _smIconHtml('caveats') + ' ' + esc(_smLabel('caveats') !== 'Caveats' ? _smLabel('caveats') : (_rptTpl.heading_caveats || 'Caveats')) + '</span>' + _secDraftBadge(a, 'caveats') + '</div>';
     h += '<div class="card-body"><p class="text-muted">' + esc(_rptTpl.text_no_caveats || 'No caveats to report.') + '</p></div></div>';
   } else if (a.caveats || canEdit() || isClient) {
-    h += '<!--SEC:caveats--><div class="card mb-4"><div class="card-header"><span class="card-title">' + _smIconHtml('caveats') + ' ' + esc(_smLabel('caveats') !== 'Caveats' ? _smLabel('caveats') : (_rptTpl.heading_caveats || 'Caveats')) + '</span>';
+
+    h += '<!--SEC:caveats--><div class="card mb-4"><div class="card-header"><span class="card-title">' + _smIconHtml('caveats') + ' ' + esc(_smLabel('caveats') !== 'Caveats' ? _smLabel('caveats') : (_rptTpl.heading_caveats || 'Caveats')) + '</span>' + _secDraftBadge(a, 'caveats');
     if (canEdit()) {
       h += '<div class="flex gap-2" style="align-items:center">';
       h += _secDraftToggle(a, 'caveats');
@@ -33533,6 +33540,7 @@ function renderLibrary() {
   var _sh = _flibShelfHtml();
   if (_sh.tab === 'pental') {
     var _ph = '<div class="page-header">';
+    if (canManage()) _ph += '';
     if (canEdit()) _ph += '<button class="btn btn-primary" onclick="openM(\'kb\')">' + IC.plus + ' New Template</button>';
     return _ph + '</div>' + _sh.html + _flibBrowserHtml();
   }
@@ -33544,6 +33552,8 @@ function renderLibrary() {
   list = list.slice().sort(function(a, b) { var s = sevRank(a.severity) - sevRank(b.severity); return s !== 0 ? s : (b.cvss||0) - (a.cvss||0); });
 
   var h = '<div class="page-header">';
+
+  if (canManage()) h += '';
   if (canEdit()) h += '<button class="btn btn-primary" onclick="openM(\'kb\')">' + IC.plus + ' New Template</button>';
   h += '</div>';
   h += _sh.html;
@@ -40283,6 +40293,26 @@ function _staffFindingsCardHtml(list, title, opts) {
   h += '</div></div>';
   return h;
 }
+function _retestIsMine(f, a) {
+  if (!f || !a || !S.profile) return false;
+  return S.profile.role === 'admin' || a.lead_id === S.profile.id || f.created_by === S.profile.id || _conOnWork(a);
+}
+function _retestLists() {
+  var on = {}, at = {}, asked = [], done = [];
+  _workAssessments().forEach(function (a, i) { if (a && !_isArchived(a)) { on[a.id] = a; at[a.id] = i; } });
+  (S.data.findings || []).forEach(function (f) {
+    var a = f && on[f.assessment_id];
+    if (!a || !_retestIsMine(f, a)) return;
+    if (f.retest_requested && f.retest_status === 'requested') asked.push(f);
+    else if (_retestConcluded(f)) done.push(f);
+  });
+
+  asked.sort(function (x, y) { return at[x.assessment_id] - at[y.assessment_id]; });
+  var when = function (f) { return Date.parse(f.retest_completed_at || '') || 0; };
+  done.sort(function (x, y) { return when(y) - when(x); });
+  return { asked: asked, done: done };
+}
+window._retestLists = _retestLists;
 function _updateSettingsTabScrollArrows() {
   var bar = document.getElementById('settingsTabsBar');
   if (!bar) return;
@@ -44637,7 +44667,7 @@ function _ollamaAutoNumCtx(model, settings, promptTokens){
   return base;
 }
 function _ollamaIsThinkingModel(model){
-  return /qwen3|deepseek-?r1|\bqwq\b|magistral|reasoning|thinking|\br1\b/i.test(String(model || ''));
+  return /qwen3|deepseek-?r1|\bqwq\b|magistral|reasoning|thinking|\br1\b|gemma-?4/i.test(String(model || ''));
 }
 function _aiRateLimitWaitMs(err, attempt) {
   var waitMs = null;
@@ -47980,6 +48010,7 @@ function renderModal() {
     case 'client': content = renderClientModal(); break;
     case 'tracker': return '<div class="modal-overlay"><div class="modal-content modal-lg">' + renderTrackerModal() + '</div></div>';
     case 'migrate': return '<div class="modal-overlay"><div class="modal-content modal-lg">' + renderMigrateModal() + '</div></div>';
+    case 'libimport': return '<div class="modal-overlay"><div class="modal-content modal-lg">' + renderLibImportModal() + '</div></div>';
     case 'scanimport': return '<div class="modal-overlay"><div class="modal-content">' + renderScanImportModal() + '</div></div>';
 
     case 'scanplan': return '<div class="modal-overlay"><div class="modal-content modal-lg">' + renderScanPlanModal() + '</div></div>';
@@ -60154,6 +60185,9 @@ function _retestAskable(f) {
   if (f.retest_status === 'requested' || f.retest_status === 'fixed' || f.retest_status === 'accepted') return false;
   return !f.retest_requested || f.retest_status === 'not_fixed' || f.retest_status === 'part_fixed';
 }
+function _retestConcluded(f) {
+  return !!(f && Object.prototype.hasOwnProperty.call(_RETEST_OUTCOMES, String(f.retest_status || '')));
+}
 function _retestStatusWords(st) {
   st = String(st || '');
   if (!st) return '';
@@ -60212,11 +60246,12 @@ function _stripRetestDateHeader(html) {
   return h.replace(re, '');
 }
 window._stripRetestDateHeader = _stripRetestDateHeader;
+var _RT_SEP = '<hr style="margin:1.5rem 0;border:none;border-top:1px solid var(--border)">';
 function _buildRetestResultsHtml(newHtml, existingHtml) {
 
   var newBlock = newHtml;
   if (existingHtml && existingHtml.replace(/<br\s*\/?>/g,'').replace(/&nbsp;/g,'').replace(/<[^>]+>/g,'').trim()) {
-    return newBlock + '<hr style="margin:1.5rem 0;border:none;border-top:1px solid var(--border)">' + existingHtml;
+    return newBlock + _RT_SEP + existingHtml;
   }
   return newBlock;
 }
@@ -60244,7 +60279,7 @@ function _retestDraftPut(row, html, at) {
 }
 function _retestDraftOver(rest, html, at) {
   return '<!--pental-retest-draft ' + at + '-->' + _retestUnmark(html) + '<!--/pental-retest-draft-->'
-    + (_retestHas(rest) ? '<hr style="margin:1.5rem 0;border:none;border-top:1px solid var(--border)">' + rest : '');
+    + (_retestHas(rest) ? _RT_SEP + rest : '');
 }
 function _rtSameAsDrawn(edHtml, html) {
   try {
@@ -78142,7 +78177,7 @@ function _ftLex(src) {
     if (m) { out.push({ t: 'num', v: m[0] }); i += m[0].length; continue; }
     m = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/.exec(s.slice(i));
     if (m) { out.push({ t: /^(not|and|or|in|is)$/.test(m[0]) ? 'kw' : 'id', v: m[0] }); i += m[0].length; continue; }
-    var two = s.substr(i, 2);
+    var two = s.slice(i, i + 2);
     if (/^(==|!=|>=|<=|&&|\|\|)$/.test(two)) { out.push({ t: 'op', v: two }); i += 2; continue; }
     out.push({ t: 'op', v: c }); i++;
   }

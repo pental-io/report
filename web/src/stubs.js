@@ -178,6 +178,7 @@ function hasBankPayment() { return false; }
 function hasStripe() { return; }
 function isContractor() { return; }
 function joinMeetingLink() { return; }
+function libImportOpen() { return; }
 async function loadXeroStatus() { return Promise.resolve(null); }
 async function loadXeroSyncLog() { return Promise.resolve(null); }
 async function markInvoicePaid() { return Promise.resolve(null); }
@@ -210,6 +211,7 @@ function renderInvoiceModal() { return; }
 function renderInvoiceStatus() { return ''; }
 function renderInvoiceViewModal() { return ''; }
 function renderInvoices() { return ''; }
+function renderLibImportModal() { return ''; }
 function renderLoAColumn() { return ''; }
 function renderLoaEditorModal() { return ''; }
 function renderMeetingModal() { return; }
