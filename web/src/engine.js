@@ -33537,13 +33537,6 @@ function renderUsers() {
 }
 function renderLibrary() {
 
-  var _sh = _flibShelfHtml();
-  if (_sh.tab === 'pental') {
-    var _ph = '<div class="page-header">';
-    if (canManage()) _ph += '';
-    if (canEdit()) _ph += '<button class="btn btn-primary" onclick="openM(\'kb\')">' + IC.plus + ' New Template</button>';
-    return _ph + '</div>' + _sh.html + _flibBrowserHtml();
-  }
   var list = S.data.library;
   var q = S.searchQuery.toLowerCase();
   if (q) list = list.filter(function(k) { return k.title.toLowerCase().indexOf(q) >= 0 || (k.cwe || '').toLowerCase().indexOf(q) >= 0 || (k.category || '').toLowerCase().indexOf(q) >= 0; });
@@ -33552,11 +33545,8 @@ function renderLibrary() {
   list = list.slice().sort(function(a, b) { var s = sevRank(a.severity) - sevRank(b.severity); return s !== 0 ? s : (b.cvss||0) - (a.cvss||0); });
 
   var h = '<div class="page-header">';
-
-  if (canManage()) h += '';
   if (canEdit()) h += '<button class="btn btn-primary" onclick="openM(\'kb\')">' + IC.plus + ' New Template</button>';
   h += '</div>';
-  h += _sh.html;
 
   h += '<div class="card"><div class="card-header"><span class="card-title">' + IC.library + ' Library</span><span class="badge">' + list.length + '</span></div><div class="mob-table"><table class="dt"><thead><tr>';
 
@@ -33591,7 +33581,8 @@ function renderLibrary() {
     }
     h += '</div></td></tr>';
   });
-  if (!list.length) h += '<tr><td colspan="5" class="empty">No templates yet' + (canEdit() ? '. <a href="#" onclick="event.preventDefault();_flibFilter(\'tab\', \'pental\')">Add some from the finding library</a>' : '') + '</td></tr>';
+
+  if (!list.length) h += '<tr><td colspan="5" class="empty">No templates yet' + (canAccessPage('settings') ? '. <a href="#" onclick="event.preventDefault();_navSettingsTab(\'library\')">Add some from the finding library, under Settings, Library</a>' : canEdit() ? '. An administrator adds them from the finding library, in Settings.' : '') + '</td></tr>';
   h += '</tbody></table></div>';
 
   h += '<div class="mob-cards" style="display:none">';
@@ -33975,16 +33966,6 @@ async function openFlibPreview(key) {
   render(true);
 }
 window.openFlibPreview = openFlibPreview;
-function _flibShelfHtml() {
-  var st = _flibState();
-  var mine = (S.data.library || []).length;
-  var tab = st.tab || (st.tab = mine ? 'mine' : 'pental');
-  var h = '<div class="crbl-shelf"><div class="irv-seg" role="tablist" aria-label="Library">';
-  h += '<button type="button" role="tab" aria-selected="' + (tab === 'mine') + '" class="irv-seg-b' + (tab === 'mine' ? ' is-on' : '') + '" data-flib-shelf="mine" onclick="_flibFilter(\'tab\', \'mine\')">Your library<span>' + mine + '</span></button>';
-  h += '<button type="button" role="tab" aria-selected="' + (tab === 'pental') + '" class="irv-seg-b' + (tab === 'pental' ? ' is-on' : '') + '" data-flib-shelf="pental" onclick="_flibFilter(\'tab\', \'pental\')">Finding library<span>' + (_flibWhole ? _flibWhole.entries.length : '') + '</span></button>';
-  h += '</div></div>';
-  return { html: h, tab: tab };
-}
 var _API_GUIDE = 'https://pental.io/guides/pental-api';
 function _apiRoles() {
   var r = [['admin', 'Admin'], ['senior', 'Senior'], ['standard', 'Standard']];
@@ -41204,9 +41185,11 @@ function renderSettings__portal() {
   }
 
   if (_st === 'library') {
+
+    h += _lbiCardHtml();
     h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.library + ' Finding Library</span></div><div class="card-body">';
     h += _flibBrowserHtml();
-    h += '<p class="hint" style="margin-top:1rem">Your own library is on the <a href="#" onclick="event.preventDefault();_flibState().tab=\'mine\';nav(\'library\')">Library page</a>, where the finding library is too. Whether every finding you write is added to your library, and whether a rewritten finding replaces its wording, are under <a href="#" onclick="event.preventDefault();_setGoTab(\'findings\')">Findings</a>.</p>';
+    h += '<p class="hint" style="margin-top:1rem">Your own library is the <a href="#" onclick="event.preventDefault();nav(\'library\')">Library page</a>: what you add is there. Whether every finding you write is added to your library, and whether a rewritten finding replaces its wording, are under <a href="#" onclick="event.preventDefault();_setGoTab(\'findings\')">Findings</a>.</p>';
     h += '</div></div>';
   }
   if (_st === 'findings') {

@@ -47,6 +47,7 @@ function _invTeamShown() { return; }
 function _invTotalText() { return; }
 function _isScanFinding() { return false; }
 function _kitMail() { return; }
+function _lbiCardHtml() { return ''; }
 function _lfPaintQa() { return; }
 function _lfQaBox() { return {}; }
 function _loadSubscriptionData() { return Promise.resolve(null); }
@@ -178,7 +179,6 @@ function hasBankPayment() { return false; }
 function hasStripe() { return; }
 function isContractor() { return; }
 function joinMeetingLink() { return; }
-function libImportOpen() { return; }
 async function loadXeroStatus() { return Promise.resolve(null); }
 async function loadXeroSyncLog() { return Promise.resolve(null); }
 async function markInvoicePaid() { return Promise.resolve(null); }
