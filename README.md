@@ -36,7 +36,7 @@
 
 ## Install
 
-You need Docker: [Docker Desktop](https://www.docker.com/products/docker-desktop/) on a Mac or a Windows PC, or Docker Engine on Linux, which the installer offers to set up for you. The first time Docker Desktop opens, accept its terms, then skip signing in or create an account: it starts only once its main screen shows. Then run one command.
+Run one command. Pental Report runs in Docker, and the installer sets Docker up where it is missing: [Docker Desktop](https://www.docker.com/products/docker-desktop/) on a Mac or a Windows PC, or Docker Engine on Linux. On Windows it also sets up WSL, which Docker Desktop runs on, with Windows asking once for permission; if Windows has to restart to finish, the installer carries on by itself once you have signed in again. On a Mac it asks for your password once. Docker Desktop is free for personal use, education, non-commercial open source and businesses with fewer than 250 employees and under $10 million a year; others need a paid Docker subscription, and installing it accepts [Docker's terms](https://www.docker.com/legal/docker-subscription-service-agreement). The first time Docker Desktop opens, skip signing in or create an account, on to its main screen: it carries on from there.
 
 **macOS and Linux**
 
@@ -49,6 +49,8 @@ curl -fsSL https://pental.io/report/install.sh | sh
 ```powershell
 irm https://pental.io/report/install.ps1 | iex
 ```
+
+On Windows 10 version 22H2 or Windows 11 version 23H2 or later, 64-bit, with virtualisation turned on in the computer's firmware (the installer says so, and how, if it is off). Docker Desktop does not run on Windows Server: use a Linux server there.
 
 The installer checks Docker, downloads the latest release, makes your settings with new secrets, and starts Pental Report beside its own PostgreSQL. Then it opens your browser on the first-run page with the setup code already filled in: you name your firm, make the first administrator account, set up your authenticator app, and you are in. Your logo, colours and theme are in Settings, Branding. It finishes like this:
 
@@ -372,7 +374,7 @@ Two things are fetched from outside when you use them: the AI provider you choos
 
 To know of a new release, the server asks GitHub for Pental Report's latest one twice a day. The request carries nothing but the version it runs, and `UPDATE_CHECK=off` in `.env` stops it. An update is downloaded from GitHub too.
 
-Pental counts installs and running copies of Pental Report, to know how many use it. The installer tells pental.io when an install finishes, is updated or stops, and at which step it stopped; and the server tells pental.io once a day that it is running. Each says this copy's random ID (made when it was installed, `INSTALL_ID` in `.env`), the version, the system (Linux, macOS or Windows) and the processor, and nothing else: nothing about your firm, your team, your clients or your reports. pental.io keeps no address, only the country an install ran in. `TELEMETRY=off` in `.env` stops all of it, as does installing with `--no-telemetry` (`-NoTelemetry` on Windows) or with `DO_NOT_TRACK=1` set, which writes it there for you; `UPDATE_CHECK=off` stops the daily one too. The install command itself, fetched from pental.io, is counted the way a visit to the site is. Pental's [privacy policy](https://pental.io/privacy#report-tool) says how long the counts are kept.
+Pental counts installs and running copies of Pental Report, to know how many use it. The installer tells pental.io when an install finishes, is updated or stops, and at which step it stopped and why, where it can tell (Docker Desktop not starting, say, or Windows needing a restart); and the server tells pental.io once a day that it is running. Each says this copy's random ID (made the first time the installer runs, and then `INSTALL_ID` in `.env`, so trying again is the same install), the version, the system (Linux, macOS or Windows) and the processor, and nothing else: nothing about your firm, your team, your clients or your reports. pental.io keeps no address, only the country an install ran in. `TELEMETRY=off` in `.env` stops all of it, as does installing with `--no-telemetry` (`-NoTelemetry` on Windows) or with `DO_NOT_TRACK=1` set, which writes it there for you; `UPDATE_CHECK=off` stops the daily one too. The install command itself, fetched from pental.io, is counted the way a visit to the site is. Pental's [privacy policy](https://pental.io/privacy#report-tool) says how long the counts are kept.
 
 ## Moving to Pental
 

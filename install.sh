@@ -10,7 +10,7 @@
 #   curl -fsSL https://pental.io/report/install.sh | sh -s -- --domain reports.yourfirm.com
 #
 # It tells pental.io when it has installed or updated Pental Report, or at
-# which step it stopped, and the app says once a day that it is running: a
+# which step it stopped and why, and the app says once a day that it is running: a
 # random ID made here, the version, the system and the processor, and nothing
 # else. --no-telemetry, or TELEMETRY=off in .env, turns all of it off.
 #
@@ -185,6 +185,17 @@ run() {
   printf '\r%s[K' "$E"
   wait "$_pid"
 }
+# The same, tried again a little later when it fails (three times in all): a
+# download from Docker Hub or GitHub can fail once and work the next time.
+run_again() {
+  _n=1
+  while :; do
+    run "$@" && return 0
+    [ $_n -lt 3 ] || return 1
+    printf 'Trying again (%s of 3).\n' "$((_n + 1))" >>"$LOG"
+    sleep $((5 * _n)); _n=$((_n + 1))
+  done
+}
 
 say ""
 printf '  %s%sPENTAL%s  %sReport%s  %s%s%s\n' "$B" "$RED" "$R" "$B" "$R" "$D" "$VERSION" "$R"
@@ -205,18 +216,78 @@ command -v tar >/dev/null 2>&1 || fail "tar is needed to unpack Pental Report."
 SUDO=""
 [ "$(id -u)" = 0 ] || { command -v sudo >/dev/null 2>&1 && SUDO="sudo"; }
 
-STAGE=docker
-if ! command -v docker >/dev/null 2>&1; then
-  [ "$OS" = Darwin ] && fail "Docker is not installed." "Install Docker Desktop from https://www.docker.com/products/docker-desktop/," "open it and go on to its main screen (skip signing in, or create an account)," "then run this installer again."
-  warn "Docker is not installed."
-  # Installing it is asked, or given with --yes: never taken for granted.
+# What Docker asks of those who use Docker Desktop, said before it is installed.
+docker_terms() {
+  note 'Docker Desktop is free for personal use, education, non-commercial open source and'
+  note 'businesses with fewer than 250 employees and under $10 million a year; others need'
+  note 'a paid Docker subscription. Installing it here accepts its terms:'
+  note 'https://www.docker.com/legal/docker-subscription-service-agreement'
+}
+# Installing is asked, or given with --yes: never taken for granted. With no
+# terminal to ask, and no --yes, it stops and says how.
+want_install() {
+  # want_install "Question" "where to get it by hand"
   if [ $YES = 1 ]; then WANT=y
-  elif can_ask; then ask WANT "Install it now with Docker's own installer (get.docker.com)? [Y/n]" "y"
-  else fail "Docker is not installed." "Install it from https://docs.docker.com/engine/install/," "or run this again with --yes to have it installed for you."; fi
-  case "$WANT" in [nN]*) fail "Pental Report runs in Docker." "Install it from https://docs.docker.com/engine/install/, then run this again." ;; esac
-  [ -n "$SUDO" ] && $SUDO -v
+  elif can_ask; then ask WANT "$1" "y"
+  else STAGE=docker_no; fail "Docker is not installed." "Install it from $2," "or run this again with --yes to have it installed for you."; fi
+  case "$WANT" in [nN]*) STAGE=docker_no; fail "Pental Report runs in Docker." "Install it from $2, then run this again." ;; esac
+}
+# A Mac's Docker Desktop keeps its docker command in folders of its own, which
+# a new terminal finds and this one may not: they are added to the PATH here,
+# after whatever docker is found first already.
+mac_path() {
+  for _d in "$HOME/.docker/bin" /Applications/Docker.app/Contents/Resources/bin "$HOME/Applications/Docker.app/Contents/Resources/bin"; do
+    if [ -x "$_d/docker" ]; then case ":$PATH:" in *":$_d:"*) ;; *) PATH="$PATH:$_d"; export PATH ;; esac; fi
+  done
+}
+mac_app() { [ -d /Applications/Docker.app ] || [ -d "$HOME/Applications/Docker.app" ]; }
+mac_running() { pgrep -f 'Docker.app/Contents/MacOS' >/dev/null 2>&1; }
+# Docker Desktop for a Mac, from Docker: its disk image, checked to be signed
+# by Docker, put in Applications by its own installer (with your password,
+# asked for once), its terms accepted there as said above.
+mac_install_docker() {
+  case "$(uname -m)" in arm64|aarch64) _arch=arm64 ;; *) _arch=amd64 ;; esac
+  _url="https://desktop.docker.com/mac/main/$_arch/Docker.dmg"
+  _tmp=$(mktemp -d "${TMPDIR:-/tmp}/pental-report-docker.XXXXXX")
+  _dmg="$_tmp/Docker.dmg"; _mnt="$_tmp/Docker"; _rc=0
+  _gone() { hdiutil detach "$_mnt" -quiet >>"$LOG" 2>&1 || hdiutil detach "$_mnt" -force >>"$LOG" 2>&1 || true; rm -rf "$_tmp"; }
+  if command -v curl >/dev/null 2>&1; then _dl="curl -fsSL --retry 3 --retry-delay 5 -o"; else _dl="wget -q --tries=3 -O"; fi
+  run "Downloading Docker Desktop" $_dl "$_dmg" "$_url" \
+    || { rm -rf "$_tmp"; STAGE=docker_download; fail "Docker Desktop could not be downloaded." "From $_url" "Check this computer can reach desktop.docker.com, then try again."; }
+  mkdir -p "$_mnt"
+  run "Opening it" hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$_mnt" "$_dmg" \
+    || { _gone; STAGE=docker_install; fail "Docker Desktop's disk image could not be opened." "Install it from https://www.docker.com/products/docker-desktop/, then run this again."; }
+  if ! run "Checking it is Docker's own" codesign --verify --deep --strict "$_mnt/Docker.app" \
+    || ! codesign -dv --verbose=2 "$_mnt/Docker.app" 2>&1 | grep -q '^Authority=Developer ID Application: Docker'; then
+    _gone; STAGE=docker_signature
+    fail "The Docker Desktop that was downloaded is not signed by Docker, so it was not installed." "From $_url" "Try again. If it says this again, install Docker Desktop from https://www.docker.com/products/docker-desktop/."
+  fi
+  note "Your password is asked for once, to put Docker Desktop in Applications."
+  sudo -v || { _gone; STAGE=docker_permission; fail "Docker Desktop was not installed: it needs an administrator's password." "Run this again as an administrator of this Mac, or install Docker Desktop from https://www.docker.com/products/docker-desktop/."; }
+  run "Installing Docker Desktop, which takes a few minutes" sudo "$_mnt/Docker.app/Contents/MacOS/install" --accept-license --user="$(id -un)" || _rc=$?
+  _gone
+  { [ "$_rc" = 0 ] && mac_app; } || { STAGE=docker_install; fail "Docker Desktop could not be installed." "Install it from https://www.docker.com/products/docker-desktop/, then run this again."; }
+  step "Docker Desktop installed"
+}
+
+STAGE=docker
+FRESH=0
+if [ "$OS" = Darwin ]; then
+  mac_path
+  if ! command -v docker >/dev/null 2>&1 && ! mac_app; then
+    warn "Docker Desktop is not installed."
+    docker_terms
+    want_install "Install Docker Desktop now? [Y/n]" "https://www.docker.com/products/docker-desktop/"
+    mac_install_docker
+    mac_path
+    FRESH=1
+  fi
+elif ! command -v docker >/dev/null 2>&1; then
+  warn "Docker is not installed."
+  want_install "Install it now with Docker's own installer (get.docker.com)? [Y/n]" "https://docs.docker.com/engine/install/"
+  [ -n "$SUDO" ] && { $SUDO -v || { STAGE=docker_sudo; fail "Installing Docker needs sudo here, and sudo was not given."; }; }
   run "Installing Docker" sh -c "$GET https://get.docker.com | $SUDO sh" \
-    || fail "Docker could not be installed." "Install it from https://docs.docker.com/engine/install/, then run this again."
+    || { STAGE=docker_install; fail "Docker could not be installed." "Install it from https://docs.docker.com/engine/install/, then run this again."; }
   $SUDO systemctl enable --now docker >>"$LOG" 2>&1 || true
   step "Docker installed"
 fi
@@ -224,25 +295,81 @@ fi
 DOCKER="docker"
 if ! docker info >/dev/null 2>&1; then
   if [ "$OS" = Darwin ]; then
-    open -ga Docker >/dev/null 2>&1 || true
-    # Opened for the first time, it does not start until its terms are accepted
-    # and its sign-in skipped (or an account made), on to its main screen.
-    note "If Docker Desktop asks, accept its terms, then skip signing in or create an account,"
-    note "on to its main screen: it starts only then, and this carries on by itself."
-    _wait_docker() { _i=0; while [ $_i -lt 300 ]; do docker info >/dev/null 2>&1 && return 0; sleep 2; _i=$((_i + 1)); done; return 1; }
-    run "Starting Docker Desktop" _wait_docker || fail "Docker Desktop is not running." "Open Docker Desktop and go on to its main screen (if it asks, accept its terms," "then skip signing in or create an account). Once it says it is running, run this again."
+    if ! mac_app; then
+      # A docker command without Docker Desktop: another Docker of yours.
+      STAGE=docker_start
+      fail "Docker is not answering." "Start the Docker you use (Docker Desktop, OrbStack, Colima or Rancher Desktop), then run this again."
+    fi
+    if [ $FRESH = 1 ]; then
+      open -a Docker >/dev/null 2>&1 || true
+      note "Docker Desktop is opening for the first time: skip signing in, or create an account,"
+      note "on to its main screen. This carries on by itself once it has started."
+    else
+      open -ga Docker >/dev/null 2>&1 || true
+      # Opened for the first time, it does not start until its terms are accepted
+      # and its sign-in skipped (or an account made), on to its main screen.
+      note "If Docker Desktop asks, accept its terms, then skip signing in or create an account,"
+      note "on to its main screen: it starts only then, and this carries on by itself."
+    fi
+    # Ten minutes, fifteen the first time; opened again when it is closed
+    # meanwhile, three times at most.
+    _wait_docker() {
+      _i=0; _again=0
+      while [ $_i -lt "$1" ]; do
+        docker info >/dev/null 2>&1 && return 0
+        if [ $((_i % 25)) = 24 ] && [ $_again -lt 3 ] && ! mac_running; then
+          open -ga Docker >/dev/null 2>&1 || true; _again=$((_again + 1))
+        fi
+        sleep 2; _i=$((_i + 1))
+      done
+      return 1
+    }
+    if ! run "Starting Docker Desktop" _wait_docker "$([ $FRESH = 1 ] && echo 450 || echo 300)"; then
+      if mac_running; then
+        STAGE=docker_start
+        fail "Docker Desktop has not started." "Open Docker Desktop: if it is on its terms or its sign-in, accept them, then skip signing in" "or create an account. Once it says it is running, run this again."
+      fi
+      STAGE=docker_closed
+      fail "Docker Desktop was closed before it had started." "Open Docker Desktop from Applications and wait until it says it is running, then run this again."
+    fi
   elif [ -n "$SUDO" ]; then
     # Not in the docker group: Docker is asked through sudo, once for the password.
-    $SUDO -v || fail "Docker needs sudo here, and sudo was not given."
+    $SUDO -v || { STAGE=docker_sudo; fail "Docker needs sudo here, and sudo was not given."; }
     $SUDO systemctl start docker >>"$LOG" 2>&1 || true
-    $SUDO docker info >/dev/null 2>&1 || fail "Docker is installed but not running." "Start it with: sudo systemctl start docker, then run this again."
+    $SUDO docker info >/dev/null 2>&1 || { STAGE=docker_daemon; fail "Docker is installed but not running." "Start it with: sudo systemctl start docker, then run this again."; }
     DOCKER="$SUDO docker"
   else
     systemctl start docker >>"$LOG" 2>&1 || true
-    docker info >/dev/null 2>&1 || fail "Docker is installed but not running." "Start it with: systemctl start docker, then run this again."
+    docker info >/dev/null 2>&1 || { STAGE=docker_daemon; fail "Docker is installed but not running." "Start it with: systemctl start docker, then run this again."; }
   fi
 fi
-$DOCKER compose version >/dev/null 2>&1 || fail "Docker Compose v2 is needed (the 'docker compose' command)." "Install the Compose plugin: https://docs.docker.com/compose/install/"
+# Docker from a Linux's own packages can come without Compose: added from the
+# same packages, when this system has them and you say yes.
+if ! $DOCKER compose version >/dev/null 2>&1; then
+  if [ "$OS" = Linux ] && { command -v apt-get >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; }; then
+    warn "Docker Compose v2 is not installed (the 'docker compose' command)."
+    if [ $YES = 1 ]; then WANT=y; elif can_ask; then ask WANT "Install it now with this system's packages? [Y/n]" "y"; else WANT=n; fi
+    case "$WANT" in
+      [nN]*) ;;
+      *)
+        if [ -n "$SUDO" ]; then $SUDO -v || true; fi
+        if command -v apt-get >/dev/null 2>&1; then
+          run "Installing Docker Compose" sh -c "$SUDO apt-get update -qq && { $SUDO apt-get install -y -qq docker-compose-plugin || $SUDO apt-get install -y -qq docker-compose-v2; }" || true
+        elif command -v dnf >/dev/null 2>&1; then
+          run "Installing Docker Compose" $SUDO dnf install -y docker-compose-plugin || true
+        else
+          run "Installing Docker Compose" $SUDO yum install -y docker-compose-plugin || true
+        fi
+        ;;
+    esac
+    $DOCKER compose version >/dev/null 2>&1 && step "Docker Compose installed"
+  fi
+  if ! $DOCKER compose version >/dev/null 2>&1; then
+    STAGE=docker_compose
+    if [ "$OS" = Darwin ]; then fail "Docker Compose v2 is needed (the 'docker compose' command)." "Update Docker Desktop, then run this again."; fi
+    fail "Docker Compose v2 is needed (the 'docker compose' command)." "Install the Compose plugin: https://docs.docker.com/compose/install/"
+  fi
+fi
 DV=$($DOCKER version --format '{{.Server.Version}}' 2>/dev/null || true)
 step "Docker${DV:+ $DV} is ready"
 
@@ -253,7 +380,7 @@ UPDATE=0
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 URL="https://github.com/$REPO/archive/refs/tags/v$VERSION.tar.gz"
-run "Downloading Pental Report $VERSION" sh -c "$GET '$URL' | tar -xzf - -C '$TMP'" \
+run_again "Downloading Pental Report $VERSION" sh -c "rm -rf '${TMP:?}'/* && $GET '$URL' | tar -xzf - -C '$TMP'" \
   || fail "Pental Report $VERSION could not be downloaded." "From $URL" "Check this computer can reach github.com, then try again."
 SRC=$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 { [ -n "$SRC" ] && [ -f "$SRC/docker-compose.yml" ]; } || fail "That download was not a Pental Report release." "From $URL"
@@ -339,12 +466,12 @@ fi
 # ── Start ──────────────────────────────────────────────────────────────────
 STAGE=start
 if [ -n "$DOMAIN" ]; then
-  run "Fetching PostgreSQL and Caddy" $DOCKER compose pull --quiet db caddy || fail "PostgreSQL and Caddy could not be fetched." "Check this computer can reach Docker Hub, then try again."
+  run_again "Fetching PostgreSQL and Caddy" $DOCKER compose pull --quiet db caddy || fail "PostgreSQL and Caddy could not be fetched." "Check this computer can reach Docker Hub, then try again."
 else
-  run "Fetching PostgreSQL" $DOCKER compose pull --quiet db || fail "PostgreSQL could not be fetched." "Check this computer can reach Docker Hub, then try again."
+  run_again "Fetching PostgreSQL" $DOCKER compose pull --quiet db || fail "PostgreSQL could not be fetched." "Check this computer can reach Docker Hub, then try again."
 fi
 step "PostgreSQL${DOMAIN:+ and Caddy} fetched"
-if run "Fetching Pental Report $VERSION" $DOCKER pull --quiet "$IMAGE:$VERSION"; then
+if run_again "Fetching Pental Report $VERSION" $DOCKER pull --quiet "$IMAGE:$VERSION"; then
   step "Pental Report $VERSION fetched"
 else
   run "Building Pental Report $VERSION from its source" $DOCKER compose build report || fail "Pental Report could not be built."
