@@ -37,7 +37,9 @@ function renderSidebar() {
   setTimeout(_rpUpdKick, 0);
   // The version links to where Pental Report's source is published
   // (AGPL-3.0, section 13: a user of the network service can get its source).
-  h += '<div class="rp-side-note"><a class="rp-ver" href="' + esc(REPORTER.sourceUrl) + '" target="_blank" rel="noopener" title="Pental Report is free software (AGPL-3.0): its source">Pental Report ' + esc(REPORTER.version) + '</a>'
+  // 2009: a class of its own: the portal's report versions are `.rp-ver`
+  // (2005), a box, which the tool's styles carry since 0.1.27.
+  h += '<div class="rp-side-note"><a class="rp-side-ver" href="' + esc(REPORTER.sourceUrl) + '" target="_blank" rel="noopener" title="Pental Report is free software (AGPL-3.0): its source">Pental Report ' + esc(REPORTER.version) + '</a>'
     + '<button type="button" class="rp-move-btn" onclick="_reporterMove()">Move to Pental</button></div>';
   h += '<div class="sidebar-footer"><div class="user-info">';
   // Your picture where you have put one up, and nothing in its place where you
@@ -77,7 +79,7 @@ function _reporterMove() {
     // 1977: [stated] Arian: "clear that you need to upload the zip". The
     // file is named for what it is, and where it goes is the step after next.
     + '<li><strong>Download everything from here.</strong> One .zip file, named pental-backup and the date, with your team, '
-    + 'clients, assessments, findings, Library, custom fields, sections, prompts, Word templates and uploaded files. Keep it as it is: '
+    + 'clients, assessments, findings, Library, custom fields, sections, prompts, reports, Word templates and uploaded files. Keep it as it is: '
     + 'there is no need to unzip it. Your AI key stays behind.'
     + (admin ? '<div><button type="button" class="btn btn-primary btn-sm" id="rpMoveExport">Download Everything</button></div>'
              : '<div class="rp-hint">An administrator downloads it.</div>')

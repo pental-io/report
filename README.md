@@ -168,7 +168,7 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/screens/fields-dark.png">
-    <img alt="Settings for finding fields: the report's own list, opened from its button, with each field's name in it, its order, and whether it is on, required and printed in the report" src=".github/assets/screens/fields-light.png" width="100%">
+    <img alt="Settings for finding fields: the report's own list, opened from its button, with each field's name in it, its order, whether it is on, required and printed in the report, and under each field the AI writes its AI prompt, the Title's opened" src=".github/assets/screens/fields-light.png" width="100%">
   </picture>
   <br><sub>Finding fields, set up the way the firm writes</sub>
 </p>
@@ -253,7 +253,7 @@ The AI drafts from the evidence your testers capture, in your firm's own words, 
 
 ### Your Own Prompts
 
-Every field and section the AI writes, built-in or your own, has a prompt of its own, under **Settings, Findings** and **Settings, Assessments**. Rewrite them in your firm's voice: how a description opens, what a remediation covers, how much detail a summary gives. **Reset to default** puts the built-in prompt back. What the AI is asked is always what you can read there.
+Every field and section the AI writes, built-in or your own, has a prompt of its own, under **Settings, Findings** and **Settings, Assessments**. Rewrite them in your firm's voice: how a description opens, what a remediation covers, how much detail a summary gives. **Reset to default** puts the built-in prompt back. A report of your own, a partner's say, can have its own prompt for any of them, changed in its list under **Settings, Documents**. What the AI is asked is always a prompt you can read.
 
 ### Your Provider, or Your Hardware
 
@@ -278,7 +278,7 @@ Every engagement becomes a report two ways, both in your own brand.
 
 **Your own Word template.** Upload a `.docx` under Settings, Documents, and every report is your template filled in, as a Word document, with the PDF made from it in your browser if you like, and the finding fields and assessment sections you fill in are set to the ones it prints. Start from a draft, a ready-made template in your colours with every placeholder in it, including your own fields, or let the **Document Builder** turn a report you already send into one. The report's **Placeholders** lists everything you can place, with the draft beside them.
 
-**A report for each partner or kind of work.** Each Word file you upload after your own is a report of its own: offered when an engagement is created, with exactly the fields and sections it prints, and its own severity names and branding. Under each report, **Add a version** puts another Word file of it, a retest layout or an executive summary, in the dropdown beside its DOCX download button. An engagement moved to another report shows what would change first, and nothing written is lost.
+**A report for each partner or kind of work.** Each Word file you upload after your own is a report of its own: offered when an engagement is created, with exactly the fields and sections it prints, and its own severity names. Under each report, **Add a version** puts another Word file of it, a retest layout or an executive summary, in the dropdown beside its DOCX download button. An engagement moved to another report shows what would change first, and nothing written is lost.
 
 **A template from another reporting tool, brought across.** Upload the Word template you used elsewhere on the same Report row: Pental Report recognises it from its placeholders and turns each into its own, with the loops, conditions and table rows around them kept and everything else in the file as you made it. Before it is saved you see what each placeholder became, what has nothing here that means the same, and the finding fields it prints, which saving adds.
 
@@ -295,7 +295,7 @@ Every engagement becomes a report two ways, both in your own brand.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/screens/templates-dark.png">
-    <img alt="Settings, Documents, the report's row: your report, the Default, with its versions beneath it, a partner's report of its own, and the area to upload another" src=".github/assets/screens/templates-light.png" width="100%">
+    <img alt="Settings, Documents, the report's row: your report, the Default, with its versions beneath it, a partner's report of its own, each with the buttons to build its Word file and to download a draft with its placeholders, and the area to upload another" src=".github/assets/screens/templates-light.png" width="100%">
   </picture>
   <br><sub>Your reports and their versions</sub>
 </p>
@@ -388,7 +388,7 @@ Pental counts installs and running copies of Pental Report, to know how many use
 - **Credentials.** Clients send their test credentials encrypted, for your lead tester to view once, and are reminded by email before an authenticated test starts while theirs are still outstanding.
 - **And the rest.** Attestation letters, findings pushed to your clients' Jira, ServiceNow and other trackers with their state read back, and scanner output imported as findings.
 
-**Move to Pental**, at the foot of the sidebar, walks you through it: download everything from Pental Report (one .zip), start a Pental trial, and upload the .zip in your new portal: its setup asks for it at Bring Your Data Across, and Settings, Data has it too. Before anything is written you choose what comes across: your team, each new person invited by email, added without one, or left out; your clients, assessments and findings; the library and checklists; and whether your branding, fields, sections, prompts and Word templates replace the portal's or sit beside them. What comes across arrives as it is.
+**Move to Pental**, at the foot of the sidebar, walks you through it: download everything from Pental Report (one .zip), start a Pental trial, and upload the .zip in your new portal: its setup asks for it at Bring Your Data Across, and Settings, Data has it too. Before anything is written you choose what comes across: your team, each new person invited by email, added without one, or left out; your clients, assessments and findings; the library and checklists; and whether your branding, fields, sections, prompts, reports and Word templates replace the portal's or sit beside them. What comes across arrives as it is.
 
 ## Security
 

@@ -19402,10 +19402,10 @@ async function _rbAiShape(predict, maxLines) {
 
       var _csM = /^custom_summary_(.+)$/.exec(key), _cfM = !_csM && /^custom_(.+)$/.exec(key);
       if (!p && _csM) {
-        (_smCustom() || []).forEach(function (c) { if (c.id === _csM[1] && !_afSectionPromptIsShipped(c)) p = c.ai_prompt || p; });
+        (_smCustom() || []).forEach(function (c) { if (c.id !== _csM[1]) return; var o = typeof _rtOwnPrompt === 'function' ? _rtOwnPrompt('cs', c.id) : ''; if (o) p = o; else if (!_afSectionPromptIsShipped(c)) p = c.ai_prompt || p; });
       }
       if (!p && _cfM) {
-        (_ffCustom() || []).forEach(function (c) { if (c.id === _cfM[1] && !_afFieldPromptIsShipped(c)) p = c.ai_prompt || p; });
+        (_ffCustom() || []).forEach(function (c) { if (c.id !== _cfM[1]) return; var o = typeof _rtOwnPrompt === 'function' ? _rtOwnPrompt('cf', c.id) : ''; if (o) p = o; else if (!_afFieldPromptIsShipped(c)) p = c.ai_prompt || p; });
       }
 
       p = String(p).replace(/\s+/g, ' ').trim();
@@ -41752,6 +41752,7 @@ function renderSettings__portal() {
       _tpInner += '<button class="btn btn-ghost btn-sm" style="margin-top:0.3rem" onclick="_resetPromptField(\'ff_prompt_title\',\'field_title\')" title="Put back the built-in prompt">Reset to default</button>';
       _tpInner += '<p style="font-size:0.68rem;color:var(--gray);margin-top:3px">Controls how AI writes the Title field from the evidence.</p>';
       _tpInner += _aiContractNote(_AI_REPLY_CONTRACTS.title);
+      _tpInner += _rtPromptWarn(true, 'f', 'title', null);
       h += _ffPromptDisclosure(_stdFieldIsCustom('title'), _tpInner);
     }
     h += '</div>';
@@ -41796,6 +41797,7 @@ function renderSettings__portal() {
         : '<p style="font-size:0.68rem;color:var(--gray);margin-top:3px">Controls how AI writes the ' + esc(d.label) + ' field. Use this to match a client\'s house style.</p>';
 
       _pi += _ffContractNote(d.key);
+      _pi += _rtPromptWarn(true, 'f', d.key, null);
       h += _ffPromptDisclosure(_stdFieldIsCustom(d.key), _pi);
     }
     h += '</div>';
@@ -46751,30 +46753,14 @@ async function _ensurePdfTemplates() {
     S.data.settings.pdf_templates = {};
   }
 }
-var _RT_BRAND_KEYS = ['logo_url', 'accent_color', 'company_name', 'company_email', 'company_phone', 'company_address', 'company_website', 'company_number'];
-function _rtBrand(tid) {
-  if (!tid || tid === '*') return null;
-  var t = _rtById(tid);
-  var b = t && t.brand;
-  return (b && typeof b === 'object') ? b : null;
-}
-function _rtBranded(tid, s) {
-  var b = _rtBrand(tid);
-  if (!b) return s;
-  var out = Object.assign({}, s || {});
-  var any = false;
-  _RT_BRAND_KEYS.forEach(function (k) {
-    var v = b[k];
-    if (typeof v === 'string' && v.trim()) { out[k] = v.trim(); any = true; }
-  });
-
-  if (typeof b.logo_url === 'string' && b.logo_url.trim()) out.logo_url_light = b.logo_url.trim();
-  return any ? out : s;
-}
+function _rtBrand(tid) { return null; }
+function _rtBranded(tid, s) { return s; }
 var _RT_SEV_KEYS = ['critical', 'high', 'medium', 'low', 'info'];
 function _rtSev(tid) {
   if (tid === undefined) tid = _rtActiveId();
-  if (!tid || tid === '*') return null;
+  if (tid === '*') return null;
+
+  if (!tid) { var dv = _rtDefLayer().severity; return (dv && typeof dv === 'object') ? dv : null; }
   var t = _rtById(tid);
   var v = t && t.severity;
   return (v && typeof v === 'object') ? v : null;
@@ -51843,6 +51829,23 @@ function _rtStore() {
   if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = null; } }
   return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
 }
+function _rtDefLayer() {
+  var v = _rtStore().def;
+  return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+}
+function _rtDefOf(d) {
+  var o = {}, sv = (d && d.severity) || {};
+  var names = {}, colors = {};
+  Object.keys(sv.names || {}).forEach(function (k) { var x = String(sv.names[k] || '').trim(); if (x && _RT_SEV_KEYS.indexOf(k) >= 0) names[k] = x.slice(0, 40); });
+  Object.keys(sv.colors || {}).forEach(function (k) { var x = String(sv.colors[k] || '').trim(); if (/^#[0-9a-f]{6}$/i.test(x) && _RT_SEV_KEYS.indexOf(k) >= 0) colors[k] = x; });
+  var levels = Array.isArray(sv.levels) ? _RT_SEV_KEYS.filter(function (k) { return sv.levels.indexOf(k) >= 0; }) : [];
+  var se = {};
+  if (Object.keys(names).length) se.names = names;
+  if (Object.keys(colors).length) se.colors = colors;
+  if (levels.length && levels.length < _RT_SEV_KEYS.length) se.levels = levels;
+  if (Object.keys(se).length) o.severity = se;
+  return o;
+}
 function _rtList() {
   var s = (S.data && S.data.settings) || {};
   var src = s.report_templates;
@@ -52074,7 +52077,7 @@ function _rtLay(base, tid, kind, keys) {
   if (kind === 'findings') out.v = Math.max(typeof base.v === 'number' ? base.v : 0, 2);
   return out;
 }
-var _RT_TABS = [['fields', 'Finding fields'], ['sections', 'Sections'], ['document', 'Document'], ['severity', 'Severity'], ['branding', 'Branding']];
+var _RT_TABS = [['fields', 'Finding fields'], ['sections', 'Sections'], ['severity', 'Severity']];
 function _rtNewId() {
   var s = '';
   var abc = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -52167,7 +52170,13 @@ function _rtDefaultDraft() {
   var keep = _rtDraftView, snap;
   _rtDraftView = null;
   try { snap = _rtSnapshotOf(''); } finally { _rtDraftView = keep; }
-  return { id: '', __def: true, name: _rtName(''), findings: snap.findings, sections: snap.sections };
+
+  var lay = _rtDefLayer();
+  var d = { id: '', __def: true, name: _rtName(''), findings: snap.findings, sections: snap.sections,
+    severity: Object.assign(_coCopy(lay.severity || {}), { cvss: ((S.data.settings || {}).cvss_version === '4.0') ? '4.0' : '3.1' }) };
+
+  if (lay.prompts && typeof lay.prompts === 'object' && Object.keys(lay.prompts).length) d.prompts = _coCopy(lay.prompts);
+  return d;
 }
 function _rtDraft() {
   var d = S._rtDraft;
@@ -52731,7 +52740,8 @@ function _rdBaseHtml(tid, main, auto, mgr, canTpl) {
     bits.push(tid ? 'Made with ' + _rtDocText(tid, 'report') : 'Pental’s own PDF');
   }
   bits.push(_rtUsesText(uses));
-  h += '<div class="rp-meta">' + esc(bits.join(' · ')) + '</div>';
+
+  h += '<div class="rp-meta">' + esc(bits.join(' · ')) + (tid ? ' · <span class="rp-apiid" title="Its id, for the API (p_report_template)">API id <code>' + idTxt + '</code></span>' : '') + '</div>';
 
   h += '<div class="rp-roles">'
     + '<span class="afm-dest rp-role" title="' + (tid ? 'Offered when an engagement is created, and on the engagement to move it to' : 'An engagement is created on it unless another report is picked') + '">' + _RD_ROLE.create + (tid ? 'Offered when an engagement is created' : 'Engagements are created on it') + '</span>'
@@ -52776,6 +52786,7 @@ function _rdBaseHtml(tid, main, auto, mgr, canTpl) {
   } else if (tid && mgr && !main) {
     h += '<div class="rp-vers"><button class="rp-ver-add" onclick="uploadDocxTemplate(\'report\', undefined, { own: \'' + idTxt + '\' })">' + IC.upload + '<span>Upload its Word file</span><small>It goes on the ' + esc(_rdBtnName()) + ' of its engagements, and sets their assessment and finding fields to the ones it prints.</small></button></div>';
   }
+  if (mgr) h += _rdToolsHtml(tid, main);
   if (open) h += _rtEditorHtml(tid);
   return h + '</div>';
 }
@@ -52807,10 +52818,6 @@ function _rdDrop(ev, how) {
   } catch (e) { console.warn('[report] drop', e); }
 }
 window._rdDrop = _rdDrop;
-function _rtDocPick(key, v) {
-  _rtSet('docs.' + key, v, true);
-}
-window._rtDocPick = _rtDocPick;
 function _rtMoveKind(tid, key) {
   return _rtWith(tid, function () {
     if (key === 'description' || key === 'remediation') return 'rich';
@@ -53083,12 +53090,19 @@ async function _rtSaveDraft() {
     if (_ans === 'mine') _letGo.push(_keys[_ki]);
   }
   _rtKeepUnprinted(d);
+  var _all = _rtPromptsAll(d), _own = _rtPromptsOwn(d, _all);
   _showLoading();
   try {
+
+    if (!(await _rtPromptsShare(_all))) return;
     var ok = await _rtPut(function (v) {
       var i = v.list.findIndex(function (x) { return x && x.id === d.id; });
       if (i < 0) return false;
-      v.list[i] = _rtCopy(d);
+      var c = _rtCopy(d);
+      delete c._pAll;
+      if (Object.keys(_own).length) c.prompts = _own; else delete c.prompts;
+      v.list[i] = c;
+      _rtPromptsDrop(v, Object.keys(_all));
     });
     if (!ok) return;
     for (var _li = 0; _li < _letGo.length; _li++) await _rtLetDefaultGo(_letGo[_li]);
@@ -53167,6 +53181,20 @@ async function _rtSaveDefault(d) {
       }
     });
     if (!r2 || !r2.ok) { _settingsSaveFailed('summary_fields'); return; }
+
+    var _all = _rtPromptsAll(d), _own = _rtPromptsOwn(d, _all);
+    if (!(await _rtPromptsShare(_all))) return;
+    var _lay = _rtDefLayer(), _def = _rtDefOf(d), _was = _rtDefOf({ severity: _lay.severity });
+    if (Object.keys(_own).length) _def.prompts = _own;
+    if (_lay.prompts && typeof _lay.prompts === 'object' && Object.keys(_lay.prompts).length) _was.prompts = _lay.prompts;
+    if (JSON.stringify(_coCanon(_def)) !== JSON.stringify(_coCanon(_was)) || Object.keys(_all).length) {
+      if (!(await _rtPut(function (v) { if (Object.keys(_def).length) v.def = _def; else delete v.def; _rtPromptsDrop(v, Object.keys(_all)); }))) return;
+    }
+    var _cv = (d.severity && d.severity.cvss === '4.0') ? '4.0' : '3.1';
+    if (_cv !== (((S.data.settings || {}).cvss_version === '4.0') ? '4.0' : '3.1')) {
+      var r3 = await _setPut({ cvss_version: _cv });
+      if (r3 && r3.error) { _settingsSaveFailed('cvss_version'); return; }
+    }
     S._rtDraft = null;
     toast('Settings saved', 'success');
   } finally { _hideLoading(); }
@@ -53287,17 +53315,14 @@ function _rtEditorHtml(id, only) {
   _rtIrUsed = _irU ? { used: _irU, any: _rtAnyPrinted(_irU) } : null;
   try {
 
-    var tabs = d.__def ? _RT_TABS.filter(function (tb) { return tb[0] === 'fields' || tb[0] === 'sections' || tb[0] === 'document'; }) : _RT_TABS;
+    var tabs = _RT_TABS;
 
     if (only) tabs = tabs.filter(function (tb) { return tb[0] === only; });
     var tab = only || S._rtTab || 'fields';
     if (!tabs.some(function (tb) { return tb[0] === tab; })) tab = 'fields';
 
     var h = '<div class="rt-editor' + (d.__def ? ' rt-ed-def' : '') + '" data-nodirty>';
-    if (!d.__def && !only) h += '<div class="form-group" style="max-width:420px"><label class="form-label" for="rt_name">Name</label>'
-      + '<input class="form-input" id="rt_name" value="' + esc(d.name) + '" maxlength="80" oninput="_rtSet(\'name\', this.value)">'
 
-      + '<p class="hint rt-id" style="margin-top:0.35rem">Its id, for the API: <code>' + esc(d.id) + '</code></p></div>';
     if (!only) {
       h += '<div class="qa-tabs rt-tabs" role="tablist">';
       tabs.forEach(function (tb) {
@@ -53307,9 +53332,7 @@ function _rtEditorHtml(id, only) {
     }
     h += _rtWith(d.id, function () {
       if (tab === 'sections') return _rtSectionsHtml(d);
-      if (tab === 'document') return _rtDocumentHtml(d);
       if (tab === 'severity') return _rtSeverityHtml(d);
-      if (tab === 'branding') return _rtBrandingHtml(d);
       return _rtFieldsHtml(d);
     });
     h += '<div class="rt-save"><button class="btn btn-primary" onclick="_rtSaveDraft()">' + (d.__def ? 'Save the Default' : 'Save template') + '</button>'
@@ -53411,7 +53434,7 @@ function _rtArrows(kind, key, first, last) {
 var _RT_TYPE_WORD = { html: 'Rich text', textarea: 'Long text', text: 'Text', short: 'Short text', number: 'Number', date: 'Date', select: 'Choice', multi: 'Choices', url: 'Link' };
 function _rtFieldsHtml(d) {
   var h = '<p class="hint" style="margin:0.6rem 0 0.7rem">The fields an engagement on this report has on its findings, in this order and under these names. '
-    + 'A name left empty is the field’s own. What a field is (its type, choices and AI prompt) is shared by every report: change it under Settings, Finding Fields. '
+    + 'A name left empty is the field’s own. What a field is (its type and choices) is shared by every report, under Settings, Finding Fields. Its AI prompt, under it here, is the one every report uses until it is changed here for this report. '
 
     + '<b>In report</b> says whether the field is printed in the report, as well as kept on the finding.</p>';
   h += _rtFitLineHtml(d, 'fields');
@@ -53422,7 +53445,7 @@ function _rtFieldsHtml(d) {
     h += '<div class="sg-row rt-frow rt-f6"><span class="g-ord"></span>'
       + '<span class="g-lab"><input class="form-input" value="' + esc(o.label || '') + '" placeholder="' + esc(_ffLabelDefault(k)) + '" oninput="_rtSet(\'findings.fields.' + k + '.label\', this.value)" aria-label="Name of ' + esc(_ffLabelDefault(k)) + '"></span>'
       + '<span class="g-c g-na">Always</span><span class="g-c g-na">' + (k === 'title' ? 'Always' : 'n/a') + '</span><span class="g-c g-na">Always</span>'
-      + '<span class="rt-kind">' + esc(_ffLabelDefault(k)) + '</span></div>';
+      + '<span class="rt-kind">' + esc(_ffLabelDefault(k)) + '</span>' + (k === 'title' ? _rtPromptHtml(d, 'f', 'title', _ffLabelDefault(k)) : '') + '</div>';
   });
   var order = _ffOrder();
   order.forEach(function (key, i) {
@@ -53439,7 +53462,7 @@ function _rtFieldsHtml(d) {
         + '<label class="g-c"><input type="checkbox"' + (on ? ' checked' : '') + ' onchange="_rtTickOn(\'findings.custom.' + c.id + '\', this.checked)"> On</label>'
         + '<label class="g-c"><input type="checkbox"' + (co.required ? ' checked' : '') + (on ? '' : ' disabled') + ' onchange="_rtSet(\'findings.custom.' + c.id + '.required\', this.checked)"> Required</label>'
         + _rtIrCell('findings', true, c.id, on, 'findings.custom.' + c.id, co.in_report !== false)
-        + '<span class="rt-kind">' + esc(cat) + ' <em>' + esc(_RT_TYPE_WORD[_cffType(c)] || 'Field') + '</em></span></div>';
+        + '<span class="rt-kind">' + esc(cat) + ' <em>' + esc(_RT_TYPE_WORD[_cffType(c)] || 'Field') + '</em></span>' + _rtPromptHtml(d, 'cf', c.id, cat) + '</div>';
       return;
     }
     var dd = e.def;
@@ -53451,14 +53474,16 @@ function _rtFieldsHtml(d) {
       + (dd.key === 'status' ? '<span class="g-c g-na">n/a</span>'
         : '<label class="g-c"><input type="checkbox"' + (_ffRequired(dd.key) ? ' checked' : '') + (en ? '' : ' disabled') + ' onchange="_rtSet(\'findings.fields.' + dd.key + '.required\', this.checked)"> Required</label>')
       + _rtIrCell('findings', false, dd.key, en, 'findings.fields.' + dd.key, _ffInReport(dd.key))
-      + '<span class="rt-kind">' + esc(_ffLabelDefault(dd.key)) + '</span></div>';
+      + '<span class="rt-kind">' + esc(_ffLabelDefault(dd.key)) + '</span>' + (dd.ai ? _rtPromptHtml(d, 'f', dd.key, _ffLabelDefault(dd.key)) : '') + '</div>';
   });
   h += '</div>';
   h += '<div class="rt-add"><input class="form-input" id="rt_newfield" placeholder="A field of its own, e.g. Business Impact" maxlength="60">'
     + '<select class="form-select" id="rt_newtype" aria-label="Kind of field">'
     + [['html', 'Rich text'], ['textarea', 'Long text'], ['text', 'Text'], ['select', 'Choice'], ['number', 'Number'], ['date', 'Date'], ['url', 'Link']].map(function (o) { return '<option value="' + o[0] + '">' + o[1] + '</option>'; }).join('')
     + '</select><input class="form-input" id="rt_newopts" placeholder="Choices, comma separated (for Choice)">'
-    + '<button class="btn btn-secondary btn-sm" onclick="_rtAddField()">Add field</button></div>';
+    + '<button class="btn btn-secondary btn-sm" onclick="_rtAddField()">Add field</button></div>'
+
+    + '<textarea class="form-textarea rt-add-prompt" id="rt_newprompt" rows="2" aria-label="AI prompt for the new field" placeholder="Its AI prompt, if you like: how AI writes it. Left empty, it has a prompt made for its name, under it once added."></textarea>';
   return h;
 }
 function _rtSectionsHtml(d) {
@@ -53475,57 +53500,19 @@ function _rtSectionsHtml(d) {
     var own = isC ? ((_rtWith('', function () { var x = _smCustomById(key); return x && x.label; })) || cs.label || 'Section') : _smLabelDefault(key);
     var en = _smEnabled(key), ir = _smInReport(key);
     var path = isC ? 'sections.custom.' + key : 'sections.fields.' + key;
+    var _sd = isC ? null : _smDefByKey(key);
     h += '<div class="sg-row rt-frow' + (en ? '' : ' rt-off') + '">' + _rtArrows('sections', key, first, last)
       + '<span class="g-lab"><input class="form-input" value="' + esc(o.label || '') + '" placeholder="' + esc(own) + '" oninput="_rtSet(\'' + path + '.label\', this.value)" aria-label="Name of ' + esc(own) + '"></span>'
       + '<label class="g-c"><input type="checkbox"' + (en ? ' checked' : '') + ' onchange="_rtTickOn(\'' + path + '\', this.checked)"> On</label>'
       + _rtIrCell('sections', isC, key, en, path, ir)
-      + '<span class="rt-kind">' + esc(own) + (isC ? ' <em>Your own</em>' : '') + '</span></div>';
+      + '<span class="rt-kind">' + esc(own) + (isC ? ' <em>Your own</em>' : '') + '</span>'
+      + (isC ? _rtPromptHtml(d, 'cs', key, own) : (_sd && _sd.ai && SM_PROMPT_COLS[key] ? _rtPromptHtml(d, 's', key, own) : '')) + '</div>';
   });
   h += '</div>';
   h += '<div class="rt-add"><input class="form-input" id="rt_newsection" placeholder="A section of its own, e.g. Attack Narrative" maxlength="60">'
-    + '<button class="btn btn-secondary btn-sm" onclick="_rtAddSection()">Add section</button></div>';
-  return h;
-}
-function _rtDocumentHtml(d) {
+    + '<button class="btn btn-secondary btn-sm" onclick="_rtAddSection()">Add section</button></div>'
 
-  var h = '<p class="hint" style="margin:0.6rem 0 0.7rem">The document an engagement on this report is made with.</p>';
-  if (d.__def) {
-
-    var dm = _rdMainOf('');
-    h += '<div class="form-group" style="max-width:560px"><span class="form-label">Report</span><p class="rt-doc-own">' + _RD_DOC + '<span>'
-      + (dm ? 'Made with <b>' + esc(dm.name || dm.filename || 'its Word file') + '</b>. Replace it, or add versions for its download menu, on its card above.'
-        : 'Made with Pental’s own PDF. To make it with a Word file of yours, upload it under the reports above.') + '</span></p></div>';
-    h += '<p class="hint">Its severity colours and its branding are your firm’s own: <a href="#" onclick="event.preventDefault();_setGoTab(\'branding\')">Branding</a> and <a href="#" onclick="event.preventDefault();_setGoTab(\'company\')">Company Details</a>.</p>';
-    h += '<div class="rt-doc-acts"><button class="btn btn-secondary btn-sm" onclick="_rtOpenBuilder(\'\')">Build a Word template for it with the Document Builder</button>'
-      + '<button class="btn btn-ghost btn-sm" onclick="downloadDraftDocxTemplate(\'report\')" title="A Word file with its fields and sections as placeholders, under its names, to build its layout on">Draft with its placeholders</button></div>';
-    return h;
-  }
-  var docs = d.docs || {};
-  var own = _rdMainOf(d.id);
-  if (own) {
-    h += '<div class="form-group" style="max-width:560px"><span class="form-label">Report</span><p class="rt-doc-own">' + _RD_DOC + '<span>Made with <b>' + esc(own.name || own.filename || 'its Word file') + '</b>. Replace it, or add versions for its download menu, on its card above.</span></p></div>';
-  } else {
-    var cur = docs.report || '';
-    h += '<div class="form-group" style="max-width:520px"><label class="form-label" for="rt_doc_report">Report</label><select class="form-select" id="rt_doc_report" onchange="_rtDocPick(\'report\', this.value)">'
-      + '<option value=""' + (cur !== 'builtin' ? ' selected' : '') + '>As the Default (' + esc(_rtDocText('', 'report')) + ')</option>'
-      + '<option value="builtin"' + (cur === 'builtin' ? ' selected' : '') + '>Pental’s own PDF</option></select>'
-      + '<p class="hint" style="margin-top:0.4rem">To make it with a Word file of its own, use <b>Upload its Word file</b> on its card.</p></div>';
-  }
-  if (typeof _attestationOn === 'function' && _attestationOn()) {
-    var list = _listDocxTemplates('loa');
-    var cl = docs.loa || '';
-    var o = '<div class="form-group" style="max-width:520px"><label class="form-label" for="rt_doc_loa">Attestation</label><select class="form-select" id="rt_doc_loa" onchange="_rtDocPick(\'loa\', this.value)">';
-    o += '<option value=""' + (!cl ? ' selected' : '') + '>As the Default (' + esc(_rtDocText('', 'loa')) + ')</option>';
-    o += '<option value="builtin"' + (cl === 'builtin' ? ' selected' : '') + '>Pental’s own PDF</option>';
-    list.forEach(function (t) {
-
-      var by = _rtList().filter(function (x) { return x.id !== d.id && x.docs && x.docs.loa === t.id; })[0];
-      o += '<option value="' + esc(t.id) + '"' + (cl === t.id ? ' selected' : '') + '>' + esc(t.name || 'Word template') + (by ? ' (' + esc(by.name) + '’s too)' : '') + '</option>';
-    });
-    h += o + '</select></div>';
-  }
-  h += '<div class="rt-doc-acts"><button class="btn btn-secondary btn-sm" onclick="_rtOpenBuilder(\'' + esc(d.id) + '\')">Build a Word template for it with the Document Builder</button>'
-    + '<button class="btn btn-ghost btn-sm" onclick="downloadDraftDocxTemplate(\'report\', \'' + esc(d.id) + '\')" title="A Word file with this report\'s fields and sections as placeholders, under its names, to build its layout on">Draft with its placeholders</button></div>';
+    + '<textarea class="form-textarea rt-add-prompt" id="rt_newsprompt" rows="2" aria-label="AI prompt for the new section" placeholder="Its AI prompt, if you like: how AI writes it. Left empty, it has a prompt made for its name, under it once added."></textarea>';
   return h;
 }
 var _RT_SEV_WORD = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', info: 'Info' };
@@ -53534,9 +53521,9 @@ function _rtSeverityHtml(d) {
   var names = sv.names || {}, colors = sv.colors || {};
   var levels = Array.isArray(sv.levels) && sv.levels.length ? sv.levels : _RT_SEV_KEYS.slice();
   var firm = _sevColors();
-  var h = '<p class="hint" style="margin:0.6rem 0 0.7rem">What this template calls each level, which it offers on a finding, and their colours in its reports. '
-    + 'Counts, charts and filters work on the same five levels whatever they are called. A name left empty is the usual one.</p>';
-  h += '<div class="sg-wrap rt-grid"><div class="sg-row rt-srow sg-head"><span>Level</span><span>Name in this template</span><span>Offered</span><span>Colour in its reports</span></div>';
+  var h = '<p class="hint" style="margin:0.6rem 0 0.7rem">What this report calls each level, which it offers on a finding, and their colours in its reports. '
+    + 'Counts, charts and filters work on the same five levels whatever they are called. A name left empty is the usual one, and a colour your usual, under Settings, Branding.</p>';
+  h += '<div class="sg-wrap rt-grid"><div class="sg-row rt-srow sg-head"><span>Level</span><span>Name in this report</span><span>Offered</span><span>Colour in its reports</span></div>';
   _RT_SEV_KEYS.forEach(function (k) {
     var col = colors[k] || '';
     h += '<div class="sg-row rt-srow"><span class="rt-kind"><span class="rt-swatch" style="background:' + esc(col || firm[k] || SEV_DEFAULTS[k]) + '"></span>' + _RT_SEV_WORD[k] + '</span>'
@@ -53547,8 +53534,10 @@ function _rtSeverityHtml(d) {
   });
   h += '</div>';
   h += '<div class="form-group" style="max-width:320px;margin-top:0.9rem"><label class="form-label" for="rt_cvss">CVSS</label><select class="form-select" id="rt_cvss" onchange="_rtSet(\'severity.cvss\', this.value)">'
-    + '<option value=""' + (!sv.cvss ? ' selected' : '') + '>As the Default (' + esc(((S.data.settings || {}).cvss_version === '4.0') ? 'CVSS 4.0' : 'CVSS 3.1') + ')</option>'
-    + '<option value="3.1"' + (sv.cvss === '3.1' ? ' selected' : '') + '>CVSS 3.1</option><option value="4.0"' + (sv.cvss === '4.0' ? ' selected' : '') + '>CVSS 4.0</option></select></div>';
+
+    + (d.__def ? '' : '<option value=""' + (!sv.cvss ? ' selected' : '') + '>As the Default (' + esc(((S.data.settings || {}).cvss_version === '4.0') ? 'CVSS 4.0' : 'CVSS 3.1') + ')</option>')
+    + '<option value="3.1"' + (sv.cvss === '3.1' ? ' selected' : '') + '>CVSS 3.1</option><option value="4.0"' + (sv.cvss === '4.0' ? ' selected' : '') + '>CVSS 4.0</option></select>'
+    + (d.__def ? '<p class="hint" style="margin-top:0.4rem">Your firm’s, the same as under Settings, Findings, and what another report’s As the Default follows.</p>' : '') + '</div>';
   return h;
 }
 function _rtSevLevel(k, on) {
@@ -53563,116 +53552,267 @@ function _rtSevLevel(k, on) {
   if (sv.levels.length === _RT_SEV_KEYS.length) delete sv.levels;
 }
 window._rtSevLevel = _rtSevLevel;
-var _RT_BRAND_WORD = [['company_name', 'Company name'], ['company_email', 'Email'], ['company_phone', 'Phone'], ['company_website', 'Website'], ['company_number', 'Company number'], ['company_address', 'Address']];
-function _rtBrandUse(d) {
-  var out = { pdf: [], files: [] };
-  var main = _rdMainOf(d.id);
-  if (main) out.files.push({ what: 'report', file: main, used: _rdPrintsNow(d.id) });
-  else out.pdf.push('report');
-  var on = false;
-  try { on = typeof _attestationOn === 'function' && _attestationOn(); } catch (e) { on = false; }
-  if (on) {
-    var lm = null;
-    try { lm = _getDocxTemplateMeta('loa'); } catch (e) { lm = null; }
-    if (lm && lm.id) out.files.push({ what: 'letter of attestation', file: lm, used: _rdDocPrintsNow('loa', lm) });
-    else out.pdf.push('letter of attestation');
-  }
+var _rtPromptBaseN = 0;
+function _rtPromptsBase(fn) { _rtPromptBaseN++; try { return fn(); } finally { _rtPromptBaseN--; } }
+function _rtOwnPrompts(tid) {
+  var o = tid ? ((_rtById(tid) || {}).prompts) : _rtDefLayer().prompts;
+  return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+}
+function _rtOwnPrompt(kind, key) {
+  if (_rtPromptBaseN || S.page === 'settings') return '';
+  var tid = _rtActiveId();
+  if (tid === '*') return '';
+  var v = _rtOwnPrompts(tid)[kind + ':' + key];
+  return (typeof v === 'string' && v.trim()) ? v.replace(/\r\n/g, '\n').trim() : '';
+}
+window._rtOwnPrompt = _rtOwnPrompt;
+function _rtPromptOwners(pk) {
+  var out = [];
+  var dp = _rtDefLayer().prompts;
+  if (dp && typeof dp === 'object' && typeof dp[pk] === 'string' && dp[pk].trim()) out.push(_rtName(''));
+  _rtList().forEach(function (t) { var p = t.prompts; if (p && typeof p === 'object' && typeof p[pk] === 'string' && p[pk].trim()) out.push(t.name.trim()); });
   return out;
 }
-function _rdDocPrintsNow(type, file) {
-  if (!file || !file.id) return null;
-  var k = type + '|' + _rdTokKey(file);
-  if (Object.prototype.hasOwnProperty.call(_rdTokDone, k)) return _rdTokDone[k];
-  if (!_rdTokDone['?' + k]) {
-    _rdTokDone['?' + k] = true;
-    _rtTokensOfWord(type, file.id).then(function (u) {
-      if (!u) { delete _rdTokDone['?' + k]; return; }
-      _rdTokDone[k] = u;
-      try { if (S.page === 'settings' && S._rtOpen) render(); } catch (e) {}
-    });
-  }
-  return null;
-}
-function _rtBrandingHtml(d) {
-  var b = d.brand || {};
-  var s = S.data.settings || {};
-  var u = _rtBrandUse(d);
-  var reading = u.files.some(function (x) { return x.used == null; });
-  var prints = function (k) { return u.pdf.length > 0 || reading || u.files.some(function (x) { return x.used && x.used[k]; }); };
-  var logo = u.pdf.length > 0;
-  var colour = logo || prints('accent_color');
-  var shown = _RT_BRAND_WORD.filter(function (f) { return prints(f[0]) || String(b[f[0]] || '').trim(); });
-  var h = '<p class="hint" style="margin:0.6rem 0 0.7rem">Who its documents say they are from. Empty is your own; a partner’s report carries the partner’s. ';
-  if (u.files.length) {
-    var said = [];
-    if (!reading) _RT_BRAND_WORD.concat([['accent_color', '']]).forEach(function (f) { if (u.files.some(function (x) { return x.used && x.used[f[0]]; })) said.push('{' + f[0] + '}'); });
-    h += 'Its Word ' + (u.files.length > 1 ? 'files carry' : 'file carries') + ' its own logo and colours'
-      + (reading ? '.' : (said.length ? ', and ' + (u.files.length > 1 ? 'print' : 'prints') + ' ' + _genList(said) + ' from here.' : ', and ' + (u.files.length > 1 ? 'have' : 'has') + ' no placeholder for anything here.'));
-  }
-  if (u.pdf.length) h += (u.files.length ? ' ' : '') + 'Its ' + _genList(u.pdf) + (u.pdf.length > 1 ? ' are' : ' is') + ' made with Pental’s own PDF, which prints the logo, colour, name and details below.';
-  h += '</p>';
-  if (!logo && !colour && !shown.length) {
-    h += '<p class="rt-doc-own">' + _RD_DOC + '<span>Nothing here would be printed. To fill its Word file’s name and details from here, put {company_name}, {company_email} and the rest in it (Placeholders, on the report’s row).</span></p>';
-    return h;
-  }
-  h += '<div class="rt-brand">';
-  if (logo) {
-    h += '<div class="rt-logo">' + (b.logo_url ? '<img src="' + esc(b.logo_url) + '" alt="This template’s logo">' : '<span class="rt-usual">Your own logo</span>') + '</div>';
-    h += '<div class="rt-logo-acts"><label class="btn btn-secondary btn-sm" style="cursor:pointer">' + (b.logo_url ? 'Change logo' : 'Add a logo')
-      + '<input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden onchange="_rtLogo(event)"></label>'
-      + (b.logo_url ? '<button class="btn btn-ghost btn-sm" onclick="_rtSet(\'brand.logo_url\', \'\', true)">Use your own</button>' : '') + '</div>';
-  }
-  if (colour) h += '<div class="form-group" style="max-width:260px"><label class="form-label" for="rt_accent">Colour</label><div class="rt-colour"><input type="color" id="rt_accent" value="' + esc(b.accent_color || s.accent_color || '#991b1b') + '" onchange="_rtSet(\'brand.accent_color\', this.value, true)">'
-    + (b.accent_color ? '<button class="btn btn-ghost btn-sm" onclick="_rtSet(\'brand.accent_color\', \'\', true)">Your usual</button>' : '<span class="rt-usual">Your usual</span>') + '</div></div>';
-  h += '<div class="rt-brand-grid">';
-  shown.forEach(function (f) {
-    var multi = f[0] === 'company_address';
-    h += '<div class="form-group"><label class="form-label" for="rt_b_' + f[0] + '">' + esc(f[1]) + '</label>'
-      + (multi ? '<textarea class="form-textarea" rows="2" id="rt_b_' + f[0] + '" placeholder="' + esc(s[f[0]] || '') + '" oninput="_rtSet(\'brand.' + f[0] + '\', this.value)">' + esc(b[f[0]] || '') + '</textarea>'
-        : '<input class="form-input" id="rt_b_' + f[0] + '" value="' + esc(b[f[0]] || '') + '" placeholder="' + esc(s[f[0]] || '') + '" oninput="_rtSet(\'brand.' + f[0] + '\', this.value)">')
-      + '</div>';
+function _rtPromptNorm(v) { return String(v == null ? '' : v).replace(/\r\n/g, '\n').trim(); }
+function _rtPromptShared(kind, key) {
+  return _rtPromptsBase(function () {
+    if (kind === 'f') return _ffPromptShown(key);
+    if (kind === 's' || kind === 'cs') return _smPromptShown(key);
+    var c = _rtWith('', function () { return _ffCustomAll().filter(function (x) { return x.id === key; })[0]; });
+    return c ? ((typeof _afResolveFieldPrompt === 'function' ? _afResolveFieldPrompt(c, true) : c.ai_prompt) || _afCustomFieldPrompt(c.label)) : '';
   });
-  h += '</div></div>';
-  return h;
 }
-function _rtLogo(e) {
-  var file = e.target.files && e.target.files[0];
-  if (!file) return;
-  if (file.size > 2 * 1024 * 1024) { toast('Logo must be under 2 MB', 'error'); return; }
-  if (!/^image\/(png|jpeg|svg\+xml|webp)$/.test(file.type)) { toast('PNG, JPG, SVG or WebP only', 'error'); return; }
-  var reader = new FileReader();
-  reader.onload = function (ev) {
-    var src = ev.target.result;
-    if (file.type === 'image/svg+xml') {
-      if (src.length > 400000) { toast('That logo is too large: use a smaller image', 'error'); return; }
-      _rtSet('brand.logo_url', src, true);
-      return;
-    }
-    var img = new Image();
-    img.onload = function () {
-      var w = img.naturalWidth || img.width, hh = img.naturalHeight || img.height;
-      if (!w || !hh) { toast('That image could not be read', 'error'); return; }
-      var r = Math.min(1, 800 / Math.max(w, hh));
-      var c = document.createElement('canvas');
-      c.width = Math.max(1, Math.round(w * r)); c.height = Math.max(1, Math.round(hh * r));
-      var g = c.getContext('2d');
-      g.drawImage(img, 0, 0, c.width, c.height);
-      var out = c.toDataURL('image/png');
-      if (out.length > 400000) {
+function _rtPromptDefault(kind, key, label) {
+  if (kind === 'f') return _smEffectivePrompt(_stdFieldDefaultKey(key), '');
+  if (kind === 's') return _smEffectivePrompt(key, '');
+  if (kind === 'cs') return _afCustomSectionPrompt(label);
+  return _afCustomFieldPrompt(label);
+}
+function _rtPromptIsShipped(kind, key, v, label) {
+  if (!String(v || '').trim()) return true;
+  if (kind === 'f') return _smIsShippedPrompt(_stdFieldDefaultKey(key), v);
+  if (kind === 's') return _smIsShippedPrompt(key, v);
+  if (kind === 'cs') return _afSectionPromptIsShipped({ label: label }, v);
+  return _afFieldPromptIsShipped({ label: label }, v);
+}
+function _rtPromptWarn(field, kind, key, here) {
+  if (!_rtList().length) return '';
+  var who = [];
+  try { who = _rtUsedBy(field ? 'findings' : 'sections', kind === 'cf' ? 'custom_' + key : key); } catch (e) { who = []; }
+  var own = _rtPromptOwners(kind + ':' + key);
+  return '<p class="rt-pwarn"><b>Every report that has this ' + (field ? 'field' : 'section') + (who.length ? ' (' + esc(_genList(who)) + ')' : '') + ' uses this prompt</b>, unless it has its own'
+    + (own.length ? ': ' + esc(_genList(own)) + (own.length === 1 ? ' has its own' : ' have their own') : '')
+    + '. A report’s own is changed in its list, from its button above.</p>';
+}
+function _rtPromptNote(kind, key, mine, all, many) {
+  if (!many) return '<p class="rt-pnote">Settings’ list has this prompt too, and a report you add uses it until it is changed in that report’s own list.</p>';
+  var pk = kind + ':' + key, field = kind === 'f' || kind === 'cf';
+  var who = [];
+  try { who = _rtUsedBy(field ? 'findings' : 'sections', kind === 'cf' ? 'custom_' + key : key); } catch (e) { who = []; }
+  return '<p class="rt-pnote">' + (all ? '<b>Saved, it is every report’s prompt</b>, and any report’s own is replaced.'
+      : mine ? '<b>This report’s own prompt.</b> The other reports keep theirs.'
+      : '<b>The prompt every report uses</b>, as Settings’ list has it. Changed here, it is this report’s own, and the others keep theirs.') + '</p>'
+    + '<label class="rt-pall"><input type="checkbox"' + (all ? ' checked' : '') + ' onchange="_rtPromptAll(\'' + esc(pk) + '\', this.checked)"> Change it for every report that has it'
+    + (who.length > 1 ? ' (' + esc(_genList(who)) + ')' : '') + '</label>';
+}
+function _rtPromptHtml(d, kind, key, label) {
+  var pk = kind + ':' + key;
+  var shared = _rtPromptShared(kind, key);
+  var has = !!(d.prompts && typeof d.prompts[pk] === 'string');
+  var v = has ? d.prompts[pk] : shared;
+  var many = _rtList().length > 0;
+  var all = many && !!(d._pAll && d._pAll[pk]);
+  var mine = many && has && _rtPromptNorm(v) !== _rtPromptNorm(shared);
+  var open = !!(S._rtPromptOpen && S._rtPromptOpen[pk]);
 
-        var c2 = document.createElement('canvas'); c2.width = c.width; c2.height = c.height;
-        var g2 = c2.getContext('2d'); g2.fillStyle = '#ffffff'; g2.fillRect(0, 0, c2.width, c2.height); g2.drawImage(c, 0, 0);
-        out = c2.toDataURL('image/jpeg', 0.86);
-      }
-      if (out.length > 400000) { toast('That logo is too large: use a smaller image', 'error'); return; }
-      _rtSet('brand.logo_url', out, true);
-    };
-    img.onerror = function () { toast('That image could not be read', 'error'); };
-    img.src = src;
-  };
-  reader.readAsDataURL(file);
+  var h = '<div class="rt-pwrap"><button type="button" class="rt-ptoggle" aria-expanded="' + open + '" onclick="_rtPromptToggle(\'' + esc(pk) + '\')">'
+    + (open ? '▾' : '▸') + ' AI prompt' + (mine && !all ? ' (this report’s own)' : (_rtPromptIsShipped(kind, key, v, label) ? '' : ' (customised)')) + '</button>';
+  if (open) {
+    h += '<div class="rt-pbox"><textarea class="form-textarea rt-prompt" data-pk="' + esc(pk) + '" rows="4" oninput="_rtPromptEdit(this)" aria-label="AI prompt for ' + esc(label) + '">' + esc(v) + '</textarea>'
+      + '<div class="rt-pacts"><button type="button" class="btn btn-ghost btn-sm" onclick="_rtPromptReset(\'' + esc(pk) + '\', ' + esc(JSON.stringify(String(label || ''))).replace(/'/g, '&#39;') + ')">Reset to default</button>'
+      + (mine ? '<button type="button" class="btn btn-ghost btn-sm" onclick="_rtPromptUnown(\'' + esc(pk) + '\')">Use the shared prompt</button>' : '') + '</div>'
+      + _rtPromptNote(kind, key, mine, all, many) + '</div>';
+  }
+  return h + '</div>';
 }
-window._rtLogo = _rtLogo;
+function _rtPromptToggle(pk) {
+  S._rtPromptOpen = S._rtPromptOpen || {};
+  if (S._rtPromptOpen[pk]) delete S._rtPromptOpen[pk]; else S._rtPromptOpen[pk] = true;
+  render();
+}
+window._rtPromptToggle = _rtPromptToggle;
+function _rtPromptEdit(el) {
+  var d = _rtDraft();
+  if (!d) return;
+  (d.prompts || (d.prompts = {}))[el.getAttribute('data-pk')] = el.value;
+}
+window._rtPromptEdit = _rtPromptEdit;
+function _rtPromptReset(pk, label) {
+  var d = _rtDraft();
+  if (!d) return;
+  var i = pk.indexOf(':');
+  (d.prompts || (d.prompts = {}))[pk] = _rtPromptDefault(pk.slice(0, i), pk.slice(i + 1), label);
+  S._rtPromptOpen = S._rtPromptOpen || {};
+  S._rtPromptOpen[pk] = true;
+  render();
+}
+window._rtPromptReset = _rtPromptReset;
+function _rtPromptUnown(pk) {
+  var d = _rtDraft();
+  if (!d) return;
+  if (d.prompts) delete d.prompts[pk];
+  if (d._pAll) { delete d._pAll[pk]; if (!Object.keys(d._pAll).length) delete d._pAll; }
+  render();
+}
+window._rtPromptUnown = _rtPromptUnown;
+function _rtPromptAll(pk, on) {
+  var d = _rtDraft();
+  if (!d) return;
+  var a = d._pAll || (d._pAll = {});
+  if (on) a[pk] = true; else delete a[pk];
+  if (!Object.keys(a).length) delete d._pAll;
+  render();
+}
+window._rtPromptAll = _rtPromptAll;
+function _rtPromptsAll(d) {
+  var out = {}, p = (d && d.prompts) || {}, a = (d && d._pAll) || {};
+  var one = !_rtList().length;
+  Object.keys(one ? p : a).forEach(function (pk) {
+    if (!one && !a[pk]) return;
+    var v = _rtPromptNorm(typeof p[pk] === 'string' ? p[pk] : '');
+    if (!v) { var i = pk.indexOf(':'); v = _rtPromptNorm(_rtPromptShared(pk.slice(0, i), pk.slice(i + 1))); }
+    if (v) out[pk] = v.slice(0, 8000);
+  });
+  return out;
+}
+function _rtPromptsOwn(d, all) {
+  var out = {}, p = (d && d.prompts) || {};
+  if (!_rtList().length) return out;
+  Object.keys(p).forEach(function (pk) {
+    if (all && Object.prototype.hasOwnProperty.call(all, pk)) return;
+    var v = _rtPromptNorm(p[pk]).slice(0, 8000);
+    var i = pk.indexOf(':');
+    if (!v || v === _rtPromptNorm(_rtPromptShared(pk.slice(0, i), pk.slice(i + 1)))) return;
+    out[pk] = v;
+  });
+  return out;
+}
+function _rtPromptsDrop(v, keys) {
+  if (!keys || !keys.length) return;
+  var drop = function (o) {
+    if (!o || typeof o !== 'object' || !o.prompts || typeof o.prompts !== 'object') return;
+    keys.forEach(function (pk) { delete o.prompts[pk]; });
+    if (!Object.keys(o.prompts).length) delete o.prompts;
+  };
+  (Array.isArray(v.list) ? v.list : []).forEach(drop);
+  if (v.def && typeof v.def === 'object') { drop(v.def); if (!Object.keys(v.def).length) delete v.def; }
+}
+async function _rtPromptsShare(p) {
+  p = p || {};
+  var ks = Object.keys(p);
+  if (!ks.length) return true;
+  var std = {}, cols = {}, cf = {}, cs = {};
+  ks.forEach(function (pk) {
+    var i = pk.indexOf(':'), kind = pk.slice(0, i), key = pk.slice(i + 1), v = String(p[pk] == null ? '' : p[pk]).trim().slice(0, 8000);
+    if (kind === 'f') std[key] = v; else if (kind === 's' && SM_PROMPT_COLS[key]) cols[key] = v; else if (kind === 'cf') cf[key] = v; else if (kind === 'cs') cs[key] = v;
+  });
+  if (Object.keys(std).length) {
+    var w = {};
+    var r0 = await _setPutIn('standard_field_prompts', function (m) {
+      Object.keys(std).forEach(function (k) {
+        var v = std[k], over = !!v && !_smIsShippedPrompt(_stdFieldDefaultKey(k), v);
+        if (over) m[k] = v; else delete m[k];
+        if (k === 'description') w.finding_desc_prompt = over ? v : null;
+        if (k === 'remediation') w.finding_rem_prompt = over ? v : null;
+      });
+    });
+    if (!r0 || !r0.ok) { _settingsSaveFailed('standard_field_prompts'); return false; }
+    if (Object.keys(w).length) { var r1 = await _setPut(w); if (r1 && r1.error) { _settingsSaveFailed('finding_desc_prompt'); return false; } }
+  }
+  if (Object.keys(cols).length) {
+    var wc = {};
+    Object.keys(cols).forEach(function (k) { var v = cols[k]; wc[SM_PROMPT_COLS[k]] = (v && !_smIsShippedPrompt(k, v)) ? v : null; });
+    var r2 = await _setPut(wc);
+    if (r2 && r2.error) { _settingsSaveFailed('section prompts'); return false; }
+  }
+  if (Object.keys(cf).length) {
+    var r3 = await _setPutIn('finding_fields', function (v) {
+      (Array.isArray(v.custom) ? v.custom : []).forEach(function (c) {
+        if (!c || !Object.prototype.hasOwnProperty.call(cf, c.id)) return;
+        var t = cf[c.id];
+        c.ai_prompt = (t && !_afFieldPromptIsShipped({ label: c.label }, t)) ? t : '';
+      });
+    });
+    if (!r3 || !r3.ok) { _settingsSaveFailed('finding_fields'); return false; }
+  }
+  if (Object.keys(cs).length) {
+    var r4 = await _setPutIn('summary_fields', function (v) {
+      (Array.isArray(v.custom) ? v.custom : []).forEach(function (c) {
+        if (!c || !Object.prototype.hasOwnProperty.call(cs, c.id)) return;
+        var t = cs[c.id];
+        if (t && !_afSectionPromptIsShipped({ label: c.label }, t)) c.ai_prompt = t; else delete c.ai_prompt;
+      });
+    });
+    if (!r4 || !r4.ok) { _settingsSaveFailed('summary_fields'); return false; }
+  }
+
+  Object.keys(std).forEach(function (k) { if (S._ffPromptDraft) delete S._ffPromptDraft[k]; });
+  Object.keys(cols).concat(Object.keys(cs)).forEach(function (k) { if (S._smPromptDraft) delete S._smPromptDraft[k]; });
+  return true;
+}
+function _rdToolsHtml(tid, main) {
+  var idTxt = esc(tid || '');
+  var h = '<div class="rp-tools">';
+  h += '<button type="button" class="btn btn-ghost btn-sm" onclick="_rtOpenBuilder(\'' + idTxt + '\')" title="Build its Word file from a report you already send">Build its Word file with the Document Builder</button>';
+  h += '<button type="button" class="btn btn-ghost btn-sm" onclick="downloadDraftDocxTemplate(\'report\'' + (tid ? ', \'' + idTxt + '\'' : '') + ')" title="A Word file with its fields and sections as placeholders, under its names, to build its layout on">Download a draft with its placeholders</button>';
+  var t = tid ? _rtById(tid) : null;
+  if (t) {
+    var docs = t.docs || {};
+    if (!main) {
+      var cur = docs.report === 'builtin' ? 'builtin' : '';
+      h += '<label class="rp-pick"><span>Until it has a Word file, made</span><select class="form-select" id="rp_rep_' + idTxt + '" onchange="_rdDocSet(\'' + idTxt + '\', \'report\', this.value)">'
+        + '<option value=""' + (cur ? '' : ' selected') + '>like the Default (' + esc(_rtDocText('', 'report')) + ')</option>'
+        + '<option value="builtin"' + (cur ? ' selected' : '') + '>with Pental’s own PDF</option></select></label>';
+    }
+    if (typeof _attestationOn === 'function' && _attestationOn()) {
+      var cl = docs.loa || '';
+      var o = '<label class="rp-pick"><span>Its letter of attestation</span><select class="form-select" id="rp_loa_' + idTxt + '" onchange="_rdDocSet(\'' + idTxt + '\', \'loa\', this.value)">';
+      o += '<option value=""' + (!cl ? ' selected' : '') + '>As the Default (' + esc(_rtDocText('', 'loa')) + ')</option>';
+      o += '<option value="builtin"' + (cl === 'builtin' ? ' selected' : '') + '>Pental’s own PDF</option>';
+      _listDocxTemplates('loa').forEach(function (x) {
+        var by = _rtList().filter(function (y) { return y.id !== tid && y.docs && y.docs.loa === x.id; })[0];
+        o += '<option value="' + esc(x.id) + '"' + (cl === x.id ? ' selected' : '') + '>' + esc(x.name || 'Word template') + (by ? ' (' + esc(by.name) + '’s too)' : '') + '</option>';
+      });
+      h += o + '</select></label>';
+    }
+  }
+  return h + '</div>';
+}
+async function _rdDocSet(tid, key, v) {
+  var t = _rtById(tid);
+  if (!t) return;
+  v = v || '';
+  var was = (t.docs && t.docs[key]) || '';
+  if (v === was) return;
+  var ans = 'none';
+  if (v && v !== 'builtin') { ans = await _rtAskDefault(key, v, t.name); if (ans === null) { render(); return; } }
+  _showLoading();
+  try {
+    var ok = await _rtPut(function (s) {
+      var x = s.list.filter(function (y) { return y && y.id === tid; })[0];
+      if (!x) return false;
+      var dc = x.docs || (x.docs = {});
+      if (v) dc[key] = v; else delete dc[key];
+    });
+    if (!ok) return;
+
+    if (S._rtDraft && S._rtDraft.id === tid) { var dd = S._rtDraft.docs || (S._rtDraft.docs = {}); if (v) dd[key] = v; else delete dd[key]; }
+    if (ans === 'mine') await _rtLetDefaultGo(key);
+    toast('Settings saved', 'success');
+  } finally { _hideLoading(); }
+  render();
+}
+window._rdDocSet = _rdDocSet;
 async function _rtAddField() {
   var d = _rtDraft();
   if (!d) return;
@@ -53681,6 +53821,7 @@ async function _rtAddField() {
   if (!label) { toast('Name the field', 'error'); if (nameEl) nameEl.focus(); return; }
   var type = (typeEl && typeEl.value) || 'html';
   var opts = String((optEl && optEl.value) || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+  var prEl = document.getElementById('rt_newprompt'), pr = String((prEl && prEl.value) || '').trim();
   if (type === 'select' && !opts.length) { toast('Give "' + label + '" its choices, comma separated', 'error'); if (optEl) optEl.focus(); return; }
   var taken = _rtWith('*', function () {
     return ['title', 'severity'].concat(_ffDefs().map(function (x) { return x.key; })).map(function (k) { return _ffLabel(k).toLowerCase(); })
@@ -53692,7 +53833,7 @@ async function _rtAddField() {
   try {
     var r = await _setPutIn('finding_fields', function (v) {
       if (!Array.isArray(v.custom)) v.custom = [];
-      var def = { id: id, label: label, type: type, enabled: false, required: false, reusable: false, ai_prompt: '' };
+      var def = { id: id, label: label, type: type, enabled: false, required: false, reusable: false, ai_prompt: (pr && !_afFieldPromptIsShipped({ label: label }, pr)) ? pr.slice(0, 4000) : '' };
       if (type === 'select') def.options = opts.join(', ');
       v.custom.push(def);
       if (Array.isArray(v.order) && v.order.length) v.order.push('custom_' + id);
@@ -53715,6 +53856,7 @@ async function _rtAddSection() {
   var nameEl = document.getElementById('rt_newsection');
   var label = String((nameEl && nameEl.value) || '').replace(/\s+/g, ' ').trim();
   if (!label) { toast('Name the section', 'error'); if (nameEl) nameEl.focus(); return; }
+  var prEl = document.getElementById('rt_newsprompt'), pr = String((prEl && prEl.value) || '').trim();
   var taken = _rtWith('*', function () { return _smOrder().map(function (k) { return String(_smLabel(k) || '').toLowerCase(); }); });
   if (taken.indexOf(label.toLowerCase()) >= 0) { toast('There is already a section called ' + label + ': switch it on here instead', 'error'); return; }
   var id = 'cs_' + _rtNewId().slice(3, 9);
@@ -53722,7 +53864,9 @@ async function _rtAddSection() {
   try {
     var r = await _setPutIn('summary_fields', function (v) {
       if (!Array.isArray(v.custom)) v.custom = [];
-      v.custom.push({ id: id, label: label, enabled: false, in_report: true, client_default: false });
+      var cs = { id: id, label: label, enabled: false, in_report: true, client_default: false };
+      if (pr && !_afSectionPromptIsShipped({ label: label }, pr)) cs.ai_prompt = pr.slice(0, 4000);
+      v.custom.push(cs);
       if (Array.isArray(v.order) && v.order.length) v.order.push(id);
     });
     if (!r || !r.ok) { _settingsSaveFailed('summary_fields'); return; }
@@ -53904,7 +54048,7 @@ function renderRtSwitchModal() {
   if (!a) return '<div class="modal-body">This engagement is not here any more.</div>';
   var h = '<div class="modal-header"><h2 class="modal-title">Report</h2><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
   h += '<div class="modal-body">';
-  h += '<p class="hint" style="margin-bottom:0.8rem;line-height:1.55">Which report ' + esc(a.name || 'this engagement') + ' uses: the Word file its report is made with, its finding fields and assessment sections, its severity names and its branding. Nothing written is lost by moving: what the new one does not show can be added to something it does, or kept aside.</p>';
+  h += '<p class="hint" style="margin-bottom:0.8rem;line-height:1.55">Which report ' + esc(a.name || 'this engagement') + ' uses: the Word file its report is made with, its finding fields and assessment sections, and its severity names. Nothing written is lost by moving: what the new one does not show can be added to something it does, or kept aside.</p>';
   h += '<div class="form-group"><label class="form-label" for="rtSwPick">Report</label>' + _rtPickerHtml('rtSwPick', m.pick || '', 'S.modal.pick=this.value;document.getElementById(\'rtSwDiff\').innerHTML=_rtDiffHtml(_rtAssessment(S.modal.id),this.value)') + '</div>';
   h += '<div id="rtSwDiff" class="rt-diff">' + _rtDiffHtml(a, m.pick || '') + '</div>';
   h += '</div>';
@@ -54375,6 +54519,9 @@ function _stdFieldPrompt(key) {
   return _smEffectivePrompt(_stdFieldDefaultKey(key), _stdFieldSaved(key));
 }
 function _stdFieldSaved(key) {
+
+  var own = typeof _rtOwnPrompt === 'function' ? _rtOwnPrompt('f', key) : '';
+  if (own) return own;
   var s = S.data.settings || {};
   if (key === 'description' && s.finding_desc_prompt && String(s.finding_desc_prompt).trim()) return String(s.finding_desc_prompt).trim();
   if (key === 'remediation' && s.finding_rem_prompt && String(s.finding_rem_prompt).trim()) return String(s.finding_rem_prompt).trim();
@@ -54654,7 +54801,7 @@ function _smPromptFor(key) {
   if (!col) return '';
   var s = S.data.settings || {};
 
-  var eff = _smEffectivePrompt(key, s[col]);
+  var eff = _smEffectivePrompt(key, (typeof _rtOwnPrompt === 'function' ? _rtOwnPrompt('s', key) : '') || s[col]);
 
   if (key === 'executive_summary' && _esLegacyByPhase()) eff = _esWithByPhase(eff);
   return eff;
@@ -54780,7 +54927,7 @@ function _rdRowHtml(dt) {
 
     var rtOwn = _rtList().filter(function (x) { return x.docs && x.docs[_docxKeyOf(key)] === t.id; })[0];
     var rtAlone = !!rtOwn && t.id !== _rtDefaultDocOf(_docxKeyOf(key));
-    var defTitle = rtAlone ? rtOwn.name + '’s own, chosen on its Document tab' : (isDefault ? 'The default' : 'Make it the default');
+    var defTitle = rtAlone ? rtOwn.name + '’s own, chosen on its card' : (isDefault ? 'The default' : 'Make it the default');
     h += '<div class="doc-tpl">';
     h += '<button class="doc-def' + (isDefault ? ' is-on' : '') + '"' + (rtAlone ? ' disabled' : '') + ' onclick="setDefaultDocxTemplate(\'' + key + '\',\'' + esc(t.id) + '\')" title="' + esc(defTitle) + '" aria-label="' + esc(defTitle) + '" aria-pressed="' + isDefault + '">'
       + '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/>' + (isDefault ? '<circle cx="12" cy="12" r="5" fill="currentColor"/>' : '') + '</svg></button>';
@@ -66367,6 +66514,7 @@ function _cffRowHtml(f) {
   _cfInner += '<p style="font-size:0.68rem;color:var(--gray);margin-top:3px">Controls how AI writes this field. The built-in prompt is written for the field\'s name, and is shown so you can read and change it. The answer\'s format is set by the style, so a dropdown is answered with one of its choices, multiple choice with any of its own, yes or no with Yes or No, and a number with a number.</p>';
 
   _cfInner += _cfdLineHtml(f);
+  _cfInner += _rtPromptWarn(true, 'cf', id, null);
   h += _ffPromptDisclosure(!_afFieldPromptIsShipped(f), _cfInner);
   h += '</div>';
   return h;
@@ -67227,6 +67375,7 @@ function _smBuiltinRowHtml(d) {
     _pIn += _aiContractNote((d.key === 'executive_summary' || d.key === 'retest_summary')
       ? (d.key === 'executive_summary' ? _AI_SUMMARY_GROUNDING + '\n\n' : '') + _AI_REPLY_CONTRACTS.summary
       : _AI_REPLY_CONTRACTS.html);
+    _pIn += _rtPromptWarn(false, 's', d.key, null);
     h += _ffPromptDisclosure(!_smIsShippedPrompt(d.key, _pShown), _pIn);
   }
   return h;
@@ -67262,7 +67411,8 @@ function _smRowHtml(f) {
   h += _ffPromptDisclosure(!_afSectionPromptIsShipped(Object.assign({}, f, { label: label }), _cShown),
     '<textarea class="form-textarea sm-cs-prompt" data-csid="' + id + '" id="sm_prompt_' + id + '" rows="5" style="width:100%;font-size:0.82rem">' + esc(_cShown) + '</textarea>'
     + '<button class="btn btn-ghost btn-sm" style="margin-top:0.3rem" onclick="_resetPromptField(\'sm_prompt_' + id + '\',\'cs:' + id + '\')" title="Restore the built-in prompt for this section\'s name">Reset to default</button>'
-    + '<span class="sm-contract">' + _aiContractNote(_fsAiFormat(f)) + '</span>');
+    + '<span class="sm-contract">' + _aiContractNote(_fsAiFormat(f)) + '</span>'
+    + _rtPromptWarn(false, 'cs', id, null));
   return h;
 }
 function _smTypeChanged(sel, id) {
@@ -75646,6 +75796,9 @@ async function importAllData(evt, opts) {
         try {
           var _mr = await supabaseClient.from('settings').select('pdf_templates').limit(1).maybeSingle();
           if (_mr && !_mr.error && _mr.data) _mineS.pdf_templates = _mr.data.pdf_templates;
+
+          var _mr2 = await supabaseClient.from('settings').select('report_templates').limit(1).maybeSingle();
+          if (_mr2 && !_mr2.error && _mr2.data) _mineS.report_templates = _mr2.data.report_templates;
         } catch (e) {  }
         _s = _irvSettings(_s, C, !!opts.fromReport, _mineS);
       }
@@ -83651,11 +83804,17 @@ window._afSectionPromptIsShipped = _afSectionPromptIsShipped;
 function _afResolveFieldPrompt(cf, forDisplay) {
 
   cf = cf || {};
+
+  var own = (cf.id && typeof _rtOwnPrompt === 'function') ? _rtOwnPrompt('cf', cf.id) : '';
+  if (own) return own;
   if (_afFieldPromptIsShipped(cf)) return _afCustomFieldPrompt(cf.label);
   return String(cf.ai_prompt).trim();
 }
 function _afResolveSectionPrompt(cs, forDisplay) {
   cs = cs || {};
+
+  var own = (cs.id && typeof _rtOwnPrompt === 'function') ? _rtOwnPrompt('cs', cs.id) : '';
+  if (own) return own;
   if (_afSectionPromptIsShipped(cs)) return _afCustomSectionPrompt(cs.label);
   return String(cs.ai_prompt).trim();
 }
@@ -89541,7 +89700,8 @@ var _IRV_GROUPS = {
     'login_button_text', 'login_custom_text', 'login_show_company_name', 'login_show_logo', 'login_show_title', 'login_subtitle', 'login_support_email', 'login_title'],
   fields: ['finding_fields', 'summary_fields', 'summary_sections', 'standard_field_prompts', 'exec_summary_prompt', 'retest_summary_prompt', 'notes_prompt',
     'caveats_prompt', 'finding_desc_prompt', 'finding_rem_prompt', 'cvss_version', 'finding_default_draft', 'assessment_types', 'vuln_report_fields', 'library_enabled'],
-  report: ['pdf_templates', 'pdf_font_body', 'pdf_font_heading', 'pdf_logo_variant', 'filename_templates', 'final_pdf_names', 'date_format'],
+
+  report: ['pdf_templates', 'report_templates', 'pdf_font_body', 'pdf_font_heading', 'pdf_logo_variant', 'filename_templates', 'final_pdf_names', 'date_format'],
   company: ['company_name', 'company_email', 'company_phone', 'company_website', 'company_address', 'company_number', 'company_ending', 'public_ip'],
   ai: ['ai_provider', 'ai_custom_model', 'ai_custom_url', 'ai_custom_format', 'ai_custom_max_tokens', 'ai_parallel_requests', 'ai_requests_per_minute', 'ai_ollama_num_ctx']
 };
@@ -89569,6 +89729,31 @@ function _irvMergePdfTemplates(mine, theirs, mode) {
   });
   return out;
 }
+function _irvMergeReportTemplates(mine, theirs, mode, from) {
+  var obj = function (v) {
+    if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = null; } }
+    return (v && typeof v === 'object' && !Array.isArray(v)) ? JSON.parse(JSON.stringify(v)) : {};
+  };
+  mine = obj(mine); theirs = obj(theirs);
+  if (mode === 'replace') return theirs;
+  var list = Array.isArray(mine.list) ? mine.list : [];
+  var ids = {}, names = {};
+  list.forEach(function (t) { if (t && t.id) ids[t.id] = 1; if (t && t.name) names[String(t.name).trim().toLowerCase()] = 1; });
+  (Array.isArray(theirs.list) ? theirs.list : []).forEach(function (t) {
+    if (!t || typeof t !== 'object' || !t.id || ids[t.id]) return;
+    var n = String(t.name || '').trim();
+    if (n && names[n.toLowerCase()]) t.name = (n + ' (' + (from || 'from the backup') + ')').slice(0, 80);
+    names[String(t.name || '').trim().toLowerCase()] = 1;
+    ids[t.id] = 1;
+    list.push(t);
+  });
+  var out = mine;
+  out.list = list;
+  if (!(out.def && typeof out.def === 'object' && Object.keys(out.def).length) && theirs.def && typeof theirs.def === 'object' && Object.keys(theirs.def).length) out.def = theirs.def;
+  if (list.length || out.def) out.v = 1;
+  return out;
+}
+window._irvMergeReportTemplates = _irvMergeReportTemplates;
 function _irvSettings(s, C, fromReport, mine) {
   mine = mine || {};
   var out = {};
@@ -89578,6 +89763,7 @@ function _irvSettings(s, C, fromReport, mine) {
     var choice = C ? C[g] : 'replace';
     if (choice === 'keep') return;
     if (k === 'pdf_templates') { out.pdf_templates = _irvMergePdfTemplates(mine.pdf_templates, s.pdf_templates, choice === 'replace' ? 'replace' : 'add'); return; }
+    if (k === 'report_templates') { out.report_templates = _irvMergeReportTemplates(mine.report_templates, s.report_templates, choice === 'replace' ? 'replace' : 'add', fromReport ? 'from Pental Report' : 'from the backup'); return; }
     if (g === 'report' && choice === 'add' && mine[k] != null && mine[k] !== '') return;
     out[k] = s[k];
   });
@@ -89600,6 +89786,11 @@ var _IRV_IC = {
 var _irvIsTool = function () { return typeof REPORTER !== 'undefined' && !!REPORTER; };
 var _IRV_ROLE = { admin: 'Admin', senior: 'Senior', standard: 'Standard', sales: 'Sales', marketing: 'Marketing', contractor: 'External', client: 'Client' };
 var _irvN = function (n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); };
+function _irvReports(v) {
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = null; } }
+  var l = (v && typeof v === 'object' && Array.isArray(v.list)) ? v.list : [];
+  return l.filter(function (t) { return t && t.id && typeof t.name === 'string' && t.name.trim(); }).map(function (t) { return t.name.trim(); });
+}
 async function _irvRead(file, source) {
   var name = String(file.name || '');
   var data = null, zip = null, files = [];
@@ -89657,7 +89848,7 @@ async function _irvRead(file, source) {
       comments: (data.assessment_comments || []).length, library: (data.kb_entries || []).length, checklists: (data.checklists_runbooks || []).length,
       proposals: (data.proposals || []).length, invoices: (data.invoices || []).length
     },
-    tpls: tpls, fields: { custom: (ff.custom || []).length, sections: (sf.custom || []).length, prompts: prompts },
+    tpls: tpls, reports: _irvReports(st.report_templates), fields: { custom: (ff.custom || []).length, sections: (sf.custom || []).length, prompts: prompts },
     branding: { logo: logo, logoLight: logoLight, accent: st.accent_color || '', font: st.font_display || st.font_body || '' },
     company: st.company_name || '', ai: st.ai_provider || '',
     has: { branding: has('branding'), fields: has('fields'), report: has('report'), company: has('company'), ai: has('ai') }, other: other,
@@ -89739,6 +89930,7 @@ function _irvSummary(P, C) {
   if (C.work && P.counts.assessments) bits.push(_irvN(P.counts.assessments, 'engagement') + ' with ' + _irvN(P.counts.findings, 'finding'));
   if (C.library && P.counts.library) bits.push(_irvN(P.counts.library, 'Library entry', 'Library entries'));
   if (C.checklists && P.counts.checklists) bits.push(_irvN(P.counts.checklists, 'checklist or runbook', 'checklists and runbooks'));
+  if (C.report !== 'keep' && P.reports && P.reports.length) bits.push(_irvN(P.reports.length, 'report') + ' beside the Default');
   if (C.report !== 'keep' && P.tpls.length) bits.push(_irvN(P.tpls.length, 'Word template'));
   var s = bits.length ? 'Brings ' + bits.join(', ').replace(/, ([^,]*)$/, ' and $1') : 'Brings no records';
   var uses = [];
@@ -89850,7 +90042,9 @@ function _irvHtml() {
   }
   if (P.has.report) {
     var tl = P.tpls.length ? P.tpls.map(function (t) { return esc(t.name); }).join(', ') : '';
-    h += _irvRow(_IRV_IC.report, 'Word templates and report design', (P.tpls.length ? _irvN(P.tpls.length, 'Word template') + ': ' + tl : 'The built-in PDF’s design') + ', file names and dates',
+
+    var rl = P.reports && P.reports.length ? _irvN(P.reports.length, 'report') + ' beside the Default: ' + P.reports.map(esc).join(', ') + '. ' : '';
+    h += _irvRow(_IRV_IC.report, 'Word templates and report design', rl + (P.tpls.length ? _irvN(P.tpls.length, 'Word template') + ': ' + tl : 'The built-in PDF’s design') + ', file names and dates',
       _irvSeg('report', C.report, [['add', 'Add beside yours'], ['replace', 'Replace yours'], ['keep', 'Leave out']]),
       C.report === 'add' ? '<p class="irv-note">Your own stay, with yours still the default where you have one.</p>' : C.report === 'replace' ? '<p class="irv-note">Yours are replaced by the backup’s.</p>' : '', C.report === 'keep');
   }
