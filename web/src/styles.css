@@ -5589,6 +5589,11 @@ body.afm-dragging,body.afm-dragging *{cursor:grabbing!important;-webkit-user-sel
 .rt-strip-btn[aria-expanded="true"]{border-color:rgba(var(--accent-rgb),0.55)}
 .rt-strip-ed{margin-top:0.6rem;border:1px solid rgba(var(--accent-rgb),0.45);border-radius:8px;overflow:hidden;background:var(--card)}
 .rt-strip-ed .rt-editor{border-top:0}
+.rt-brand{display:grid;gap:0.6rem}
+.rt-logo{width:12rem;max-width:100%;height:4.5rem;border:1px dashed var(--border);border-radius:6px;display:flex;align-items:center;justify-content:center;background:#fff;overflow:hidden}
+.rt-logo img{max-width:100%;max-height:100%;object-fit:contain}
+.rt-logo-acts{display:flex;gap:0.4rem;flex-wrap:wrap}
+.rt-brand-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:0 0.8rem}
 .rt-chip{display:inline-flex;align-items:center;gap:0.3rem;padding:0.1rem 0.5rem;border:1px solid var(--border);border-radius:999px;background:var(--card);color:var(--text);font:inherit;font-size:0.8rem;cursor:pointer;white-space:nowrap;vertical-align:middle}
 .rt-chip svg{width:13px;height:13px}
 /* 2001: REPORTS & DOCUMENTS. Each document a row: its name and how it is
@@ -5683,22 +5688,6 @@ body.afm-dragging,body.afm-dragging *{cursor:grabbing!important;-webkit-user-sel
 .rp-add.is-over .rp-add-drop{display:flex;position:absolute;inset:0;align-items:center;justify-content:center;border-radius:10px;background:rgba(var(--accent-rgb),0.1);color:var(--accent);font-weight:700;font-size:0.9rem;pointer-events:none}
 .rp-db{font-size:0.8rem;margin:0}
 .rp-base .rt-editor{border-top:1px solid var(--border)}
-/* 2009: a field's or section's AI prompt in a report's own list (every report's, said so), and the card's tools (what its Document tab held). */
-.rt-grid .rt-frow > .rt-pwrap{grid-column:1/-1;margin:0.15rem 0 0 calc(56px + 0.5rem)}
-.rt-ptoggle{background:none;border:0;padding:0.1rem 0;font:inherit;font-size:0.72rem;color:var(--accent);cursor:pointer}
-.rt-ptoggle:hover{text-decoration:underline}
-.rt-ptoggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
-.rt-pbox{margin-top:0.3rem;padding-left:0.5rem;border-left:2px solid var(--border)}
-.rt-pbox .rt-prompt{width:100%;font-size:0.8rem}
-.rt-pbox .btn{margin-top:0.3rem}
-.rt-pwarn{font-size:0.72rem;line-height:1.45;color:var(--gray);margin:0.35rem 0 0.1rem;max-width:100ch}
-.rt-pwarn b{color:var(--text);font-weight:600}
-.rt-add-prompt{width:100%;margin-top:0.4rem;font-size:0.8rem}
-.rp-meta .rp-apiid code{font-size:0.72rem;padding:0 0.25rem;border-radius:4px;background:var(--bg);user-select:all}
-.rp-tools{border-top:1px solid var(--border);padding:0.5rem 0.85rem 0.6rem 3.85rem;display:flex;flex-wrap:wrap;align-items:center;gap:0.4rem 0.6rem}
-.rp-tools > .btn{font-size:0.78rem}
-.rp-pick{display:flex;align-items:center;gap:0.45rem;font-size:0.76rem;color:var(--gray);flex-wrap:wrap}
-.rp-pick .form-select{width:auto;min-width:11rem;max-width:100%;font-size:0.8rem;padding-top:0.3rem;padding-bottom:0.3rem}
 .rt-doc-own{display:flex;align-items:flex-start;gap:0.5rem;font-size:0.84rem;color:var(--text);margin:0.25rem 0 0;line-height:1.5}
 .rt-doc-own svg{flex-shrink:0;color:var(--gray);margin-top:0.15rem}
 .rt-move{display:inline-block;width:auto;max-width:100%;margin:0.3rem 0 0;font-size:0.8rem;padding:0.2rem 1.8rem 0.2rem 0.5rem;vertical-align:baseline}
@@ -5710,8 +5699,6 @@ body.afm-dragging,body.afm-dragging *{cursor:grabbing!important;-webkit-user-sel
   .rp-ver-main{flex:1 1 calc(100% - 2rem)}
   .rp-ver .rp-icons{width:100%;justify-content:flex-start;margin-left:1.6rem}
   .rp-add-btns{width:100%}
-  .rp-tools{padding-left:0.85rem}
-  .rt-grid .rt-frow > .rt-pwrap{margin-left:0}
 }
 .doc-every .set-p{margin:0.4rem 0 0;font-size:0.8rem}
 /* 2004: Settings no wider than reads well, and in the middle of the space

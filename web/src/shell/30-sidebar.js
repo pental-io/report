@@ -37,9 +37,7 @@ function renderSidebar() {
   setTimeout(_rpUpdKick, 0);
   // The version links to where Pental Report's source is published
   // (AGPL-3.0, section 13: a user of the network service can get its source).
-  // 2009: a class of its own: the portal's report versions are `.rp-ver`
-  // (2005), a box, which the tool's styles carry since 0.1.27.
-  h += '<div class="rp-side-note"><a class="rp-side-ver" href="' + esc(REPORTER.sourceUrl) + '" target="_blank" rel="noopener" title="Pental Report is free software (AGPL-3.0): its source">Pental Report ' + esc(REPORTER.version) + '</a>'
+  h += '<div class="rp-side-note"><a class="rp-ver" href="' + esc(REPORTER.sourceUrl) + '" target="_blank" rel="noopener" title="Pental Report is free software (AGPL-3.0): its source">Pental Report ' + esc(REPORTER.version) + '</a>'
     + '<button type="button" class="rp-move-btn" onclick="_reporterMove()">Move to Pental</button></div>';
   h += '<div class="sidebar-footer"><div class="user-info">';
   // Your picture where you have put one up, and nothing in its place where you

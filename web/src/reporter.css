@@ -18,8 +18,8 @@
 .rp-wide{width:100%;margin-top:20px;justify-content:center}
 .rp-side-note{font-size:11.5px;line-height:1.5;color:var(--gray);padding:10px 16px 12px;border-top:1px solid var(--border)}
 .rp-side-note a{color:var(--text);text-decoration:underline;text-underline-offset:2px}
-.rp-side-note a.rp-side-ver{color:var(--gray);text-decoration:none}
-.rp-side-note a.rp-side-ver:hover{color:var(--text);text-decoration:underline}
+.rp-side-note a.rp-ver{color:var(--gray);text-decoration:none}
+.rp-side-note a.rp-ver:hover{color:var(--text);text-decoration:underline}
 
 /* The paid parts' controls, hidden (see shell/70-paid-parts.js): switches
    that share a section, finding or file with the client, the setup wizard
