@@ -87,6 +87,8 @@ var _REPORTER_SETTINGS_TABS = {
   api: 1,
   // 1979: Pental's finding library, to add to the team's own.
   library: 1,
+  // 1999: report templates, one per engagement (a partner's, or a kind of work),
+  // a card on Documents (pdf_templates) since 2001.
 };
 function _setTabOn(id) {
   if (id === 'api' && !(S.profile && S.profile.role === 'admin')) return false;
@@ -95,6 +97,9 @@ function _setTabOn(id) {
 function renderSettings() {
   // 1977: a Testing IPs tab remembered from before opens Assessments, where the card is.
   if (S.settingsTab === 'testing_ip') S.settingsTab = 'assessments';
+  // 2001: and Report Templates, Documents, where the card is (the
+  // portal's renderSettings goes to it).
+  if (S.settingsTab === 'report_templates') return renderSettings__portal();
   if (!S._embedSettings && !_REPORTER_SETTINGS_TABS[S.settingsTab]) S.settingsTab = 'branding';
   return renderSettings__portal();
 }
@@ -103,7 +108,6 @@ function renderSettings() {
 // Settings cards for the paid parts, by their title.
 var _REPORTER_CARDS_OUT = {
   'Lead Tester Card': 1,      // Teams and Slack buttons
-  'QA Module': 1,
   'Plan Usage': 1,            // Pental's plans
   'Custom Domain': 1,         // set up at pental.io; Pental Report's is its own
 };

@@ -3320,11 +3320,19 @@ hr.page-break { display: none; }
    the heading goes and a row is two lines, the name on the first and the
    switches under it, each carrying its own name. */
 .sg-row{display:grid;grid-template-columns:var(--sg-cols);column-gap:0.5rem;align-items:center}
-.sg-ff{--sg-cols:46px minmax(0,1fr) 120px 110px 150px 158px 24px}
+/* 2007: every report's shared list: the field, its reuse, the reports it is
+   on for, its placeholder. On, Required, In report and the order are each
+   report's own, on its list. */
+.sg-ff{--sg-cols:minmax(0,1fr) 150px minmax(7rem,13rem) 158px 24px}
 /* 1946: with the Library off there is no Reuse column (its boxes are kept,
    hidden, so a save keeps what they say). */
-.sg-wrap-ff.sg-nolib .sg-ff{--sg-cols:46px minmax(0,1fr) 120px 110px 158px 24px}
-.sg-sm{--sg-cols:46px 44px minmax(0,1fr) 60px 60px 60px 78px 158px 24px}
+.sg-wrap-ff.sg-nolib .sg-ff{--sg-cols:minmax(0,1fr) minmax(7rem,13rem) 158px 24px}
+.sg-sm{--sg-cols:44px minmax(0,1fr) 60px 78px minmax(7rem,13rem) 158px 24px}
+/* The reports a row is on for, cut to its column and said whole on hover. */
+.sg-row .g-used{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.76rem;color:var(--text)}
+.sg-row .g-used.g-na{color:var(--gray)}
+/* 2007: a document's switch stands in the Used by column, and wraps there. */
+.sg-row .g-c.sm-doc-on{white-space:normal;line-height:1.25}
 .sg-at{--sg-cols:1.5rem minmax(0,1fr) 70px 24px}
 /* The heading's cells start where the boxed rows' cells do: past the box's
    padding and its border. */
@@ -3356,25 +3364,24 @@ hr.page-break { display: none; }
    list becomes two lines when its fixed columns would leave the name less than
    about 11rem. */
 .sg-wrap{container-type:inline-size}
-@container (max-width:52rem){
+@container (max-width:47rem){
   .sg-wrap-ff .sg-ff.sg-head{display:none}
-  .sg-wrap-ff .sg-ff{row-gap:0.4rem;--sg-cols:46px minmax(0,1fr) 24px;grid-template-areas:"ord lab x" ". ctl ctl"}
-  .sg-wrap-ff.sg-nolib .sg-ff{--sg-cols:46px minmax(0,1fr) 24px}
-  .sg-wrap-ff .sg-ff > .g-ord{grid-area:ord}
+  .sg-wrap-ff .sg-ff{row-gap:0.4rem;--sg-cols:minmax(0,1fr) 24px;grid-template-areas:"lab x" "ctl ctl"}
+  .sg-wrap-ff.sg-nolib .sg-ff{--sg-cols:minmax(0,1fr) 24px}
   .sg-wrap-ff .sg-ff > .g-lab{grid-area:lab}
   .sg-wrap-ff .sg-ff > .g-x{grid-area:x}
   .sg-wrap-ff .sg-ff > .sg-ctl{grid-area:ctl;display:flex;flex-wrap:wrap;align-items:center;gap:0.4rem 0.75rem}
   /* One width for every switch, so the switches still stand in columns when
      the rows are two lines, and wrap at the same place on every row. */
   .sg-wrap-ff .sg-ctl > .g-c{flex:0 0 7rem}
+  .sg-wrap-ff .sg-ctl > .g-used{flex:1 1 12rem}
   .sg-wrap-ff .g-tok{justify-content:flex-start}
   .sg-wrap-ff [data-lb]::before{content:attr(data-lb)}
   .sg-wrap-ff .sg-arr:not(.sg-stack) .btn{height:30px;flex:1 1 0;justify-content:center}
 }
-@container (max-width:48rem){
+@container (max-width:50rem){
   .sg-wrap-sm .sg-sm.sg-head{display:none}
-  .sg-wrap-sm .sg-sm{row-gap:0.4rem;--sg-cols:46px 44px minmax(0,1fr) 24px;grid-template-areas:"ord ico lab x" ". ctl ctl ctl"}
-  .sg-wrap-sm .sg-sm > .g-ord{grid-area:ord}
+  .sg-wrap-sm .sg-sm{row-gap:0.4rem;--sg-cols:44px minmax(0,1fr) 24px;grid-template-areas:"ico lab x" ". ctl ctl"}
   .sg-wrap-sm .sg-sm > .g-ico{grid-area:ico}
   .sg-wrap-sm .sg-sm > .g-lab{grid-area:lab}
   .sg-wrap-sm .sg-sm > .g-x{grid-area:x}
@@ -3382,6 +3389,8 @@ hr.page-break { display: none; }
   .sg-wrap-sm .g-mid{justify-content:flex-start}
   /* As above; a switch a section does not have keeps its place, empty. */
   .sg-wrap-sm .sg-ctl > .g-c,.sg-wrap-sm .sg-ctl > span:empty{flex:0 0 5rem}
+  .sg-wrap-sm .sg-ctl > .g-used,.sg-wrap-sm .sg-ctl > .sm-doc-on{flex:1 1 12rem}
+  .sg-wrap-sm [data-lb]::before{content:attr(data-lb)}
   .sg-wrap-sm .g-tok{justify-content:flex-start}
   .sg-wrap-sm [data-la]::after{content:attr(data-la)}
   .sg-wrap-sm .sg-arr:not(.sg-stack) .btn{height:30px;flex:1 1 0;justify-content:center}
@@ -4092,7 +4101,10 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
 .sm-docs .sg-row > .g-lab::before{content:"";position:absolute;left:0.3rem;top:-0.45rem;height:calc(50% + 0.45rem);width:0.7rem;border-left:2px solid var(--border);border-bottom:2px solid var(--border);border-bottom-left-radius:5px;pointer-events:none}
 /* The note stands where the documents' names start: the grip and icon
    columns, their gaps, the row's padding and border, and the step. */
-.sm-docs-note{font-size:0.72rem;color:var(--gray);margin:0 0 5px calc(46px + 44px + 1rem + 0.5rem + 1px + 1.35rem)}
+.sm-docs-note{font-size:0.72rem;color:var(--gray);margin:0 0 5px calc(44px + 1rem + 0.5rem + 1px + 1.35rem)}
+/* 2007: a document's order beside its name, on one line. */
+.sm-docs .sg-row > .g-lab{flex-wrap:nowrap}
+.sm-docs .g-lab > .g-ord{flex:0 0 auto}
 /* 1819: one bar, at the foot of a Settings page, while a change waits. */
 .set-dirty-bar{position:fixed;left:50%;bottom:22px;z-index:900;display:flex;align-items:center;gap:0.6rem;
   padding:0.55rem 0.6rem 0.55rem 1rem;border-radius:12px;border:1px solid var(--border);background:var(--card);
@@ -5535,3 +5547,201 @@ body.afm-dragging,body.afm-dragging *{cursor:grabbing!important;-webkit-user-sel
   .pst-ow-bar{grid-column:1/-1;order:3}
   .ast-frow{grid-template-columns:4.6rem minmax(0,1fr)}
 }
+
+/* 1999: REPORT TEMPLATES. The editor's rows on the settings lists' own grid,
+   and the engagement's chip (2005: the reports themselves are cards on the
+   report's row, .rp-base). */
+.rt-head-acts{display:inline-flex;gap:0.4rem;margin-left:auto}
+.card-header .rt-head-acts{flex-wrap:wrap}
+.rt-meta{font-size:0.75rem;color:var(--gray);padding:0.1rem 0.45rem;border:1px solid var(--border);border-radius:999px;white-space:nowrap}
+.rt-editor{border-top:1px solid var(--border);padding:0.85rem 0.75rem 0.9rem}
+.rt-tabs{margin:0.2rem 0 0.4rem}
+.rt-grid .rt-frow{--sg-cols:56px minmax(0,1.2fr) 88px 112px minmax(0,1fr)}
+/* 2006: a report's finding fields, with In report beside Required. */
+.rt-grid .rt-frow.rt-f6{--sg-cols:56px minmax(0,1.2fr) 88px 112px 112px minmax(0,1fr)}
+.rt-grid .rt-srow{--sg-cols:minmax(0,0.9fr) minmax(0,1.2fr) 100px minmax(0,1fr)}
+.rt-grid .rt-frow:not(.sg-head),.rt-grid .rt-srow:not(.sg-head){padding:0.4rem 0.5rem;border:1px solid var(--border);border-radius:6px;margin-bottom:5px;background:var(--bg)}
+.rt-grid .rt-off .g-lab .form-input,.rt-grid .rt-off .rt-kind{opacity:0.55}
+.rt-ord{display:flex;gap:2px}
+.rt-ord .btn-icon{min-width:24px;height:26px;padding:0;border:1px solid var(--border);border-radius:4px;background:var(--card);color:var(--gray);cursor:pointer;font-size:0.6rem;line-height:1}
+.rt-ord .btn-icon:disabled{opacity:0.35;cursor:default}
+.rt-kind{font-size:0.78rem;color:var(--gray);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rt-kind em{font-style:normal;margin-left:0.3rem;padding:0 0.35rem;border:1px solid var(--border);border-radius:4px;font-size:0.7rem}
+.rt-swatch{display:inline-block;width:0.8rem;height:0.8rem;border-radius:3px;margin-right:0.45rem;vertical-align:-1px}
+.rt-colour{display:flex;align-items:center;gap:0.5rem}
+.rt-colour input[type=color]{width:2.2rem;height:1.8rem;padding:0;border:1px solid var(--border);border-radius:4px;background:none;cursor:pointer}
+.rt-usual{font-size:0.75rem;color:var(--gray)}
+.rt-add{display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center;margin-top:0.6rem}
+.rt-add .form-input,.rt-add .form-select{flex:1 1 12rem;min-width:0;width:auto}
+.rt-add #rt_newfield,.rt-add #rt_newsection{flex:2 1 16rem}.rt-add #rt_newtype{flex:0 1 10rem}
+.rt-chip-wrap{white-space:nowrap}
+.rt-save{display:flex;align-items:center;gap:0.5rem;margin-top:1rem;flex-wrap:wrap}
+.rt-doc-acts{display:flex;flex-wrap:wrap;gap:0.4rem}
+/* 2007: a setting Pental's own PDF alone uses, said beside its name. */
+.form-label .doc-chip.pdf-only{margin-left:0.4rem;vertical-align:1px;font-weight:600}
+/* 2007: where a report's lists and its Word file disagree, and the way to match. */
+.rt-fit{display:flex;align-items:center;justify-content:space-between;gap:0.6rem;flex-wrap:wrap;margin:0 0 0.6rem;padding:0.5rem 0.7rem;border:1px solid rgba(var(--accent-rgb),0.35);border-radius:6px;background:rgba(var(--accent-rgb),0.06);font-size:0.8rem;color:var(--text)}
+.rt-grid .rt-ir-na{font-size:0.74rem;white-space:normal;line-height:1.25}
+/* 2007: the reports over a shared list, each opening its own list there. */
+.rt-strip{margin:0 0 0.85rem;padding:0.6rem 0.7rem;border:1px solid var(--border);border-radius:8px;background:var(--card)}
+.rt-strip-t{margin:0 0 0.45rem;font-size:0.8rem;color:var(--gray)}
+.rt-strip-btns{display:flex;flex-wrap:wrap;gap:0.35rem}
+.rt-strip-btn[aria-expanded="true"]{border-color:rgba(var(--accent-rgb),0.55)}
+.rt-strip-ed{margin-top:0.6rem;border:1px solid rgba(var(--accent-rgb),0.45);border-radius:8px;overflow:hidden;background:var(--card)}
+.rt-strip-ed .rt-editor{border-top:0}
+.rt-brand{display:grid;gap:0.6rem}
+.rt-logo{width:12rem;max-width:100%;height:4.5rem;border:1px dashed var(--border);border-radius:6px;display:flex;align-items:center;justify-content:center;background:#fff;overflow:hidden}
+.rt-logo img{max-width:100%;max-height:100%;object-fit:contain}
+.rt-logo-acts{display:flex;gap:0.4rem;flex-wrap:wrap}
+.rt-brand-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:0 0.8rem}
+.rt-chip{display:inline-flex;align-items:center;gap:0.3rem;padding:0.1rem 0.5rem;border:1px solid var(--border);border-radius:999px;background:var(--card);color:var(--text);font:inherit;font-size:0.8rem;cursor:pointer;white-space:nowrap;vertical-align:middle}
+.rt-chip svg{width:13px;height:13px}
+/* 2001: REPORTS & DOCUMENTS. Each document a row: its name and how it is
+   made, what to do with it, then its own Word templates; and what is on every
+   document, side by side. */
+.doc-list{display:flex;flex-direction:column;gap:0.5rem}
+.doc-item{border:1px solid var(--border);border-radius:8px;background:var(--card)}
+.doc-row{display:flex;align-items:center;gap:0.5rem 0.75rem;flex-wrap:wrap;padding:0.65rem 0.75rem}
+.doc-what{flex:1 1 15rem;min-width:0}
+.doc-name{font-weight:700;font-size:0.92rem;color:var(--text);margin-right:0.5rem}
+.doc-chip{display:inline-block;font-size:0.72rem;line-height:1.5;color:var(--gray);padding:0 0.5rem;border:1px solid var(--border);border-radius:999px;white-space:nowrap;vertical-align:1px}
+.doc-chip.is-word{color:var(--accent);border-color:rgba(var(--accent-rgb),0.45);background:rgba(var(--accent-rgb),0.08)}
+.doc-desc{font-size:0.78rem;color:var(--gray);margin-top:0.15rem}
+.doc-acts{display:flex;gap:0.25rem;flex-wrap:wrap;margin-left:auto}
+.doc-auto{display:flex;align-items:flex-start;gap:0.55rem;margin:0;padding:0.6rem 0.75rem;font-size:0.84rem;color:var(--text);cursor:pointer;border-bottom:1px solid var(--border)}
+.doc-auto input{margin-top:0.2rem;flex-shrink:0}
+.doc-auto small{display:block;color:var(--gray);font-size:0.77rem;line-height:1.5;margin-top:0.1rem}
+.doc-tpls{border-top:1px solid var(--border);background:var(--bg)}
+.doc-tpls:last-child{border-radius:0 0 8px 8px}
+.doc-tpl{display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.75rem}
+.doc-tpl + .doc-tpl{border-top:1px solid var(--border)}
+.doc-def{display:inline-flex;padding:0.25rem;background:none;border:none;border-radius:50%;color:var(--gray);cursor:pointer;flex-shrink:0}
+.doc-def.is-on{color:var(--accent)}
+.doc-def:disabled{opacity:0.4;cursor:not-allowed}
+.doc-def:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.doc-tpl-main{flex:1;min-width:0}
+.doc-tpl-name{display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;font-size:0.84rem;font-weight:600;color:var(--text)}
+.doc-tpl-name > span:first-child{overflow-wrap:anywhere}
+.doc-default{font-size:0.68rem;font-weight:700;padding:0 0.4rem;border-radius:4px;color:var(--accent);background:rgba(var(--accent-rgb),0.12);border:1px solid rgba(var(--accent-rgb),0.5)}
+.doc-tpl-file{font-size:0.72rem;font-weight:400;color:var(--gray);overflow-wrap:anywhere}
+.doc-convs{display:flex;align-items:center;gap:0.4rem 0.8rem;margin-top:0.35rem;flex-wrap:wrap}
+.doc-conv{display:inline-flex;align-items:center;gap:0.3rem;font-size:0.74rem;color:var(--text);cursor:pointer}
+.doc-conv.is-off{color:var(--gray);cursor:not-allowed}
+.doc-conv-none{font-size:0.72rem;color:var(--gray)}
+.doc-tpl-acts{display:flex;gap:0.15rem;flex-shrink:0}
+.doc-tpl-acts .btn{padding:0.25rem 0.45rem}
+.doc-del{color:var(--red-text,#dc2626)}
+.doc-every{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:0 1.5rem}
+.doc-every .form-group{margin-bottom:0.9rem}
+/* 2005: the report's row. Its reports, each a card: the Word file it is made
+   with, what its engagements show, and its versions (the report button's
+   menu beside it); then the area a report is uploaded into. */
+.doc-report .doc-auto{border-top:1px solid var(--border);border-bottom:none}
+.rp-body{display:flex;flex-direction:column;gap:0.65rem;padding:0.75rem;border-top:1px solid var(--border);background:var(--bg);border-radius:0 0 8px 8px}
+.rp-list{display:flex;flex-direction:column;gap:0.65rem}
+.rp-base{border:1px solid var(--border);border-radius:10px;background:var(--card);overflow:hidden;transition:border-color .2s}
+.rp-base.is-open{border-color:rgba(var(--accent-rgb),0.55)}
+.rp-base.is-new{animation:rp-new 2.4s ease-out}
+@keyframes rp-new{0%{box-shadow:0 0 0 3px rgba(var(--accent-rgb),0.4)}100%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),0)}}
+@media (prefers-reduced-motion:reduce){.rp-base.is-new{animation:none;border-color:var(--accent)}}
+.rp-head{display:flex;align-items:flex-start;gap:0.75rem;padding:0.8rem 0.85rem}
+.rp-icon{flex-shrink:0;width:2.25rem;height:2.25rem;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;color:var(--gray);background:var(--bg);border:1px solid var(--border)}
+.rp-icon.is-default{color:var(--accent);background:rgba(var(--accent-rgb),0.1);border-color:rgba(var(--accent-rgb),0.35)}
+.rp-main{flex:1 1 14rem;min-width:0}
+.rp-title{display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap}
+.rp-name{font-weight:700;font-size:0.95rem;color:var(--text);overflow-wrap:anywhere}
+.rp-meta{font-size:0.76rem;color:var(--gray);margin-top:0.15rem;overflow-wrap:anywhere}
+.rp-roles{display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.4rem}
+.rp-role{background:var(--bg);color:var(--text);border:1px solid var(--border)}
+/* 2007: a long role wraps on a phone rather than run past the card. */
+.rp-roles .rp-role{white-space:normal;border-radius:10px}
+.rp-roles .afm-dest-main{border:1px solid rgba(var(--accent-rgb),0.35)}
+.rp-vers-head{display:flex;align-items:center;flex-wrap:wrap;gap:0.4rem}
+.rp-vers-head > span:last-child{font-size:0.74rem;color:var(--gray)}
+.rp-acts{display:flex;align-items:center;gap:0.25rem;flex-wrap:wrap;justify-content:flex-end;margin-left:auto}
+.rp-icons{display:inline-flex;gap:0.1rem}
+.rp-icons .btn{padding:0.3rem 0.45rem}
+.rp-icons .btn svg{width:15px;height:15px}
+.rp-vers{border-top:1px solid var(--border);padding:0.6rem 0.85rem 0.75rem 3.85rem;display:flex;flex-direction:column;gap:0.35rem}
+.rp-vers-head{margin:0 0 0.1rem}
+.rp-ver{display:flex;align-items:center;gap:0.6rem;padding:0.4rem 0.4rem 0.4rem 0.55rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)}
+.rp-ver-icon{flex-shrink:0;color:var(--gray);display:inline-flex}
+.rp-ver-icon svg{width:16px;height:16px}
+.rp-ver-main{flex:1;min-width:0}
+.rp-ver-name{font-size:0.84rem;font-weight:600;color:var(--text);display:flex;align-items:baseline;gap:0.5rem;flex-wrap:wrap;overflow-wrap:anywhere}
+.rp-ver-meta{font-size:0.72rem;font-weight:400;color:var(--gray)}
+.rp-ver-add{display:flex;align-items:center;gap:0.25rem 0.5rem;flex-wrap:wrap;width:100%;padding:0.45rem 0.55rem;border:1px dashed var(--border);border-radius:8px;background:none;color:var(--accent);font:inherit;font-size:0.82rem;font-weight:600;cursor:pointer;text-align:left}
+.rp-ver-add svg{width:15px;height:15px;flex-shrink:0}
+.rp-ver-add small{font-weight:400;font-size:0.74rem;color:var(--gray)}
+.rp-ver-add:hover{border-color:rgba(var(--accent-rgb),0.6);background:rgba(var(--accent-rgb),0.05)}
+.rp-ver-add:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.rp-add{display:flex;align-items:center;gap:0.85rem;flex-wrap:wrap;padding:0.95rem 1rem;border:1.5px dashed var(--border);border-radius:10px;background:var(--card);cursor:pointer;position:relative;transition:border-color .15s,background .15s}
+.rp-add:hover{border-color:rgba(var(--accent-rgb),0.55)}
+.rp-add.is-over{border-color:var(--accent);background:rgba(var(--accent-rgb),0.06)}
+.rp-add-icon{flex-shrink:0;width:2.25rem;height:2.25rem;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;color:var(--accent);background:rgba(var(--accent-rgb),0.1)}
+.rp-add-icon svg{width:17px;height:17px}
+.rp-add-text{flex:1 1 16rem;min-width:0}
+.rp-add-text strong{display:block;font-size:0.9rem;color:var(--text)}
+.rp-add-text small{display:block;font-size:0.77rem;line-height:1.5;color:var(--gray);margin-top:0.1rem}
+.rp-add-btns{display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center}
+.rp-add-drop{display:none}
+.rp-add.is-over .rp-add-drop{display:flex;position:absolute;inset:0;align-items:center;justify-content:center;border-radius:10px;background:rgba(var(--accent-rgb),0.1);color:var(--accent);font-weight:700;font-size:0.9rem;pointer-events:none}
+.rp-db{font-size:0.8rem;margin:0}
+.rp-base .rt-editor{border-top:1px solid var(--border)}
+.rt-doc-own{display:flex;align-items:flex-start;gap:0.5rem;font-size:0.84rem;color:var(--text);margin:0.25rem 0 0;line-height:1.5}
+.rt-doc-own svg{flex-shrink:0;color:var(--gray);margin-top:0.15rem}
+.rt-move{display:inline-block;width:auto;max-width:100%;margin:0.3rem 0 0;font-size:0.8rem;padding:0.2rem 1.8rem 0.2rem 0.5rem;vertical-align:baseline}
+@media (max-width:640px){
+  .rp-head{flex-wrap:wrap}
+  .rp-acts{width:100%;justify-content:flex-start;margin-left:3rem}
+  .rp-vers{padding-left:0.85rem}
+  .rp-ver{flex-wrap:wrap;align-items:flex-start}
+  .rp-ver-main{flex:1 1 calc(100% - 2rem)}
+  .rp-ver .rp-icons{width:100%;justify-content:flex-start;margin-left:1.6rem}
+  .rp-add-btns{width:100%}
+}
+.doc-every .set-p{margin:0.4rem 0 0;font-size:0.8rem}
+/* 2004: Settings no wider than reads well, and in the middle of the space
+   beside the sidebar: on a wide screen a row's buttons sat a screen's width
+   from its name. */
+@media (min-width:1280px){.set-page{max-width:84rem;margin-left:auto;margin-right:auto}}
+@media (max-width:640px){.doc-acts{margin-left:0}.doc-tpl{align-items:flex-start}}
+.rt-chip:hover{background:var(--hover)}
+.rt-chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.rt-chip-ro{cursor:default}
+.rt-chip-ro:hover{background:var(--card)}
+.rt-chip-caret{font-size:0.65rem;color:var(--gray)}
+.rt-diff{display:flex;flex-direction:column;gap:0.6rem;max-height:46vh;overflow:auto}
+.rt-diff-title{font-size:0.72rem;font-weight:700;color:var(--gray);margin-bottom:0.2rem}
+.rt-diff ul{margin:0;padding-left:1.1rem;font-size:0.84rem;line-height:1.55}
+@container (max-width:40rem){
+  .rt-grid .sg-head{display:none}
+  .rt-grid .rt-frow,.rt-grid .rt-frow.rt-f6{--sg-cols:56px minmax(0,1fr);row-gap:0.35rem}
+  .rt-grid .rt-frow > .g-c,.rt-grid .rt-frow > .rt-kind{grid-column:2}
+  .rt-grid .rt-srow{--sg-cols:minmax(0,1fr);row-gap:0.35rem}
+}
+
+/* 2003: SETTINGS IN GROUPS. Thirty tabs on one rail, most of them off the
+   screen, read as a list nobody could take in; on a wide screen they are a
+   column beside the page, under the headings the setup wizard asks them in,
+   scrolling with the page (taller than a screen, a column of its own that
+   scrolled inside the page was a second scroll, which 1976 took out). On a
+   narrow one, the rail above the page, as it was. */
+.set-group{display:none}
+@media (min-width:1280px){
+  .set-layout{display:grid;grid-template-columns:12.5rem minmax(0,1fr);gap:1.75rem;align-items:start}
+  .set-nav .settings-tabs-wrap{position:static;margin:0;padding:0 0 1rem;border-bottom:none;background:none}
+  .set-nav .settings-tabs-scroll{display:none}
+  .set-nav .settings-tabs-bar{flex-direction:column;gap:1px;overflow:visible;margin:0}
+  .set-nav .settings-tab{width:100%;padding:0.34rem 0.7rem;border-bottom:none;border-left:2px solid transparent;border-radius:0 6px 6px 0;font-size:0.8rem;white-space:normal;text-align:left}
+  .set-nav .settings-tab.is-active{border-left-color:var(--accent);background:rgba(var(--accent-rgb),0.08)}
+  .set-group{display:block;font-size:0.72rem;font-weight:700;color:var(--gray);padding:0.85rem 0.7rem 0.25rem}
+  .set-group:first-child{padding-top:0.25rem}
+}
+/* Sentences in a settings card are sentences (1819's rule, everywhere at
+   once): `.sub-text` is the monospace of metadata a line long. */
+.set-main .sub-text,#wizStepBody .sub-text{font-family:var(--font-body);font-size:0.8rem;line-height:1.55}
+/* A module's tile on Feature Modules: where its own settings are. */
+.mod-go{display:inline-block;margin-top:0.4rem;padding:0;border:none;background:none;color:var(--accent);font:inherit;font-size:0.74rem;font-weight:600;cursor:pointer}
+.mod-go:hover{text-decoration:underline}
+.mod-go:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}

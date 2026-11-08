@@ -13,6 +13,8 @@ var _SCAN_NOT_UPDATED = '';
 var _SCAN_PROVIDER_COLS = null;
 var _SCAN_SEV_ORDER = {};
 var _TRACKER_COLS = '';
+function _assInvoiceOf() { return; }
+function _assProposalOf() { return; }
 function _astFindingOwnersHtml() { return ''; }
 function _attestationOn() { return false; }
 async function _bulkRaiseFindingTickets() { return Promise.resolve(null); }
@@ -59,6 +61,7 @@ async function _patchProposalAuth() { return Promise.resolve(null); }
 async function _payReturned() { return; }
 function _pmBarHtml() { return ''; }
 function _pmDests() { return; }
+function _pmHash() { return; }
 async function _pmLoad() { return Promise.resolve(null); }
 function _pmOpFlush() { return; }
 function _pmSettingsCardHtml() { return ''; }

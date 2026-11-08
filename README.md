@@ -168,7 +168,7 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/screens/fields-dark.png">
-    <img alt="Settings for finding fields: rename, reorder, require, reuse and add your own" src=".github/assets/screens/fields-light.png" width="100%">
+    <img alt="Settings for finding fields: the report's own list, opened from its button, with each field's name in it, its order, and whether it is on, required and printed in the report" src=".github/assets/screens/fields-light.png" width="100%">
   </picture>
   <br><sub>Finding fields, set up the way the firm writes</sub>
 </p>
@@ -211,7 +211,7 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 **Reports**
 
 - **The built-in PDF**: your cover, a contents page, a version history, a severity summary and chart, every finding, your appendices and your footer.
-- **Your own Word templates**, with the Draft, the Document Builder and the Placeholder Key. See [Your Reports](#your-reports).
+- **Your own Word templates**, with the Document Builder, and each document's Placeholders with a draft holding them all. See [Your Reports](#your-reports).
 - **The same document every time.** The same engagement renders the same file, so this quarter's report sits beside last quarter's cleanly.
 - **Dates and file names your way**: how dates are written in documents, and the name of each kind of file Pental Report makes.
 - **Download** a report from the list of engagements, or, as an administrator, every report at once from Settings, Data, as a ZIP of PDFs.
@@ -276,11 +276,13 @@ Every engagement becomes a report two ways, both in your own brand.
   </picture>
 </p>
 
-**Your own Word template.** Upload a `.docx` under Settings, PDF & DOCX, and every report is your template filled in, as a Word document, with the PDF made from it in your browser if you like. Start from the **Draft**, a ready-made template in your colours with every placeholder in it, including your own fields, or let the **Document Builder** turn a report you already send into one. The **Placeholder Key** lists everything you can place.
+**Your own Word template.** Upload a `.docx` under Settings, Documents, and every report is your template filled in, as a Word document, with the PDF made from it in your browser if you like, and the finding fields and assessment sections you fill in are set to the ones it prints. Start from a draft, a ready-made template in your colours with every placeholder in it, including your own fields, or let the **Document Builder** turn a report you already send into one. The report's **Placeholders** lists everything you can place, with the draft beside them.
+
+**A report for each partner or kind of work.** Each Word file you upload after your own is a report of its own: offered when an engagement is created, with exactly the fields and sections it prints, and its own severity names and branding. Under each report, **Add a version** puts another Word file of it, a retest layout or an executive summary, in the dropdown beside its DOCX download button. An engagement moved to another report shows what would change first, and nothing written is lost.
 
 **A template from another reporting tool, brought across.** Upload the Word template you used elsewhere on the same Report row: Pental Report recognises it from its placeholders and turns each into its own, with the loops, conditions and table rows around them kept and everything else in the file as you made it. Before it is saved you see what each placeholder became, what has nothing here that means the same, and the finding fields it prints, which saving adds.
 
-**Edited in Word, brought back.** Download the report as your Word file, edit it in Word or send it round for review, and upload it back beside the report's button. Pental Report shows what changed before anything is written: plain edits and tracked changes (each one yours to accept), and Word comments, which join the engagement's Comments saying who wrote them and where. The file you upload can then be the report your team downloads, kept up to date with anything changed since.
+**Edited in Word, brought back.** Download the report as your Word file, edit it in Word or send it round for review, and upload it back beside the DOCX download button. Pental Report shows what changed before anything is written: plain edits and tracked changes (each one yours to accept), and Word comments, which join the engagement's Comments saying who wrote them and where. The file you upload can then be the report your team downloads, kept up to date with anything changed since.
 
 <p align="center">
   <picture>
@@ -293,9 +295,9 @@ Every engagement becomes a report two ways, both in your own brand.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/screens/templates-dark.png">
-    <img alt="Settings, PDF and DOCX: the firm's Word template, the Document Builder, the Draft and the Placeholder Key" src=".github/assets/screens/templates-light.png" width="100%">
+    <img alt="Settings, Documents, the report's row: your report, the Default, with its versions beneath it, a partner's report of its own, and the area to upload another" src=".github/assets/screens/templates-light.png" width="100%">
   </picture>
-  <br><sub>Where the template is kept</sub>
+  <br><sub>Your reports and their versions</sub>
 </p>
 
 <p align="center">

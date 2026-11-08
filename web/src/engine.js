@@ -1055,7 +1055,7 @@ async function _smResetDefaults() {
   if (!(await confirmAsync('The built-in section names, icons, order and toggles go back to how they shipped. Your custom sections are kept exactly as they are.', { title: 'Restore built-in sections?', confirmText: 'Restore defaults', variant: 'warn' }))) return;
   _showLoading();
   try {
-    var cfg = _smCfg();
+    var cfg = _smCfgBase();
     var custom = _smCustom();
     var fresh = {
       fields: {},
@@ -4361,6 +4361,13 @@ function _sevCased(sv, cfg) {
   var v = String(sv == null ? '' : sv);
   cfg = cfg || _sevStyleCfg();
   if (!v) return '';
+
+  var _rn = (typeof _rtSevNameOf === 'function') ? _rtSevNameOf(v) : '';
+  if (_rn) {
+    if (cfg.case === 'upper') return _rn.toUpperCase();
+    if (cfg.case === 'lower') return _rn.toLowerCase();
+    return _rn;
+  }
   if (cfg.case === 'upper') return v.toUpperCase();
   if (cfg.case === 'lower') return v.toLowerCase();
   if (cfg.case === 'title') return v.charAt(0).toUpperCase() + v.slice(1).toLowerCase();
@@ -4581,6 +4588,8 @@ function _sevBadgeStyle(t){
     + 'color:var('+v+'-text,'+_tc+')';
 }
 function badge(t,x){var d=_SLABEL_MAP[x]||x;
+
+  if(_SEV_BADGE_KEYS.indexOf(t)!==-1&&String(x||'').toLowerCase()===t&&typeof _rtSevNameOf==='function'){var _rn=_rtSevNameOf(t);if(_rn)d=esc(_rn);}
   if(_SEV_BADGE_KEYS.indexOf(t)!==-1) return '<span class="badge" style="'+_sevBadgeStyle(t)+';font-weight:700">'+d+'</span>';
   return '<span class="badge badge-'+t+'">'+d+'</span>'}
 function canEdit(){return S.profile&&S.profile.role!=="client"&&S.profile.role!=="sales"&&S.profile.role!=="marketing"}
@@ -4727,6 +4736,22 @@ function _methodologyOn(){return assessmentsEnabled() && checklistsEnabled()}
 function _libUseOn(){return libraryEnabled() && (!isContractor() || contractorsLibraryOn())}
 function _financeOn(){return proposalsEnabled() || invoicesEnabled()}
 function _andList(arr) { return arr.length <= 1 ? (arr[0] || '') : arr.slice(0, -1).join(', ') + ' and ' + arr[arr.length - 1]; }
+var _SET_GROUPS = [
+  { t: 'Look and feel', ids: ['login', 'branding', 'pdf_templates', 'filenames'] },
+  { t: 'Your work', ids: ['modules', 'assessments', 'findings', 'library', 'checklists', 'attestation', 'proposals', 'scanning', 'dashboard', 'feedback'] },
+  { t: 'Your company', ids: ['company', 'finance', 'bank', 'signature', 'sig_box'] },
+  { t: 'Email', ids: ['notifications', 'email', 'templates'] },
+  { t: 'Connections', ids: ['integrations', 'docsync', 'ai', 'automation', 'api'] },
+  { t: 'System', ids: ['security', 'data', 'updates', 'feature'] },
+];
+function _setGrouped(list) {
+  var order = [], gOf = {};
+  _SET_GROUPS.forEach(function (g) { g.ids.forEach(function (id) { order.push(id); gOf[id] = g.t; }); });
+  var rank = function (t) { var i = order.indexOf(t.id); return i < 0 ? 999 : i; };
+  return list.slice().sort(function (a, b) { return rank(a) - rank(b); }).map(function (t) { return Object.assign({}, t, { group: gOf[t.id] || 'System' }); });
+}
+window._setGrouped = _setGrouped;
+var _SET_MOVED = { report_templates: 'pdf_templates', invoices: 'modules', contractors: 'modules', meetings: 'modules', contacts: 'modules', calendar: 'modules' };
 function _betaPill() {
   if (S.profile && S.profile.role === 'client') return '';
   return '<span class="nav-badge beta">' + 'BETA' + '</span>';
@@ -5323,7 +5348,7 @@ var _findingExportColumns = [
   { key: 'category',       label: 'Category',        def: true,
     get: function(f) { return f.category || ''; } },
   { key: 'severity',       label: 'Severity',        def: true,
-    get: function(f) { return (f.severity || '').toUpperCase(); } },
+    get: function(f) { return _rtIn(f, function () { return _sevName(f.severity || ''); }).toUpperCase(); } },
   { key: 'cvss',           label: 'CVSS',            def: true,
 
     get: function(f) { return Number(f.cvss) > 0 ? Number(f.cvss).toFixed(1) : ''; } },
@@ -5390,9 +5415,13 @@ function _allFindingExportColumns() {
       var fk = _EXPORT_COL_FIELD[c.key];
       if (!fk || typeof _ffLabel !== 'function') return c;
       var lbl = _ffLabel(fk);
+
+      if (typeof _ffInReport === 'function' && !_ffInReport(fk)) c = Object.assign({}, c, { internalOnly: true });
       return (lbl && lbl !== c.label) ? Object.assign({}, c, { label: lbl }) : c;
     })
-    .concat(_customFindingExportColumns());
+    .concat(_customFindingExportColumns().map(function (c) {
+      return (typeof _ffInReport === 'function' && !_ffInReport(c.key)) ? Object.assign({}, c, { internalOnly: true }) : c;
+    }));
 }
 function _decodeHtmlEntities(s) {
   return String(s == null ? '' : s)
@@ -6386,6 +6415,8 @@ function exportFindingsCsv(assessmentId, phaseFilter) {
   });
 }
 function openFindingsExportModal(opts) {
+
+  if (opts && opts.assessmentId && _rtNeeds(opts.assessmentId)) return _rtWith(opts.assessmentId, function () { return openFindingsExportModal(opts); });
   var isClientUser = !!(S.profile && S.profile.role === 'client');
   var prefs = _getExportPrefs() || {};
   var savedCols = prefs.columns;
@@ -6405,12 +6436,12 @@ function openFindingsExportModal(opts) {
   var includeEvidenceDefault = prefs.includeEvidence !== false;
 
   var _xlsxOk = typeof _canExportFindings !== 'function' || _canExportFindings();
-  var _pdfOk = typeof _canExportFindingsDoc === 'function' && _canExportFindingsDoc();
+  var _docFmt = _fxFormat();
   var _fmts = [];
   if (_xlsxOk) _fmts.push('xlsx');
-  if (_pdfOk) _fmts.push('pdf');
-  if (_pdfOk && _fxWordOn()) _fmts.push('docx');
+  if (_docFmt) _fmts.push(_docFmt);
   if (!_fmts.length) _fmts.push('xlsx');
+  var _fxT = _docFmt ? _fxTemplates() : [];
   var _fmt0 = _fmts.indexOf(prefs.format) >= 0 ? prefs.format : _fmts[0];
   var _fv = _expFmtView(_fmt0);
 
@@ -6434,6 +6465,12 @@ function openFindingsExportModal(opts) {
     h += '<input type="radio" name="exp_fmt" value="' + _fmt0 + '" checked hidden>';
   }
   h += '<p class="hint" id="expDocNote" style="' + (_fv.f === 'xlsx' ? 'display:none;' : '') + 'margin:0 0 0.9rem">' + esc(_fv.note) + '</p>';
+  if (_fxT.length > 1) {
+    h += '<div class="form-group" id="expTplWrap" style="' + (_fv.f === 'xlsx' ? 'display:none;' : '') + 'margin:0 0 0.9rem"><label class="form-label" for="exp_tpl">Template</label>'
+      + '<select class="form-select" id="exp_tpl" style="max-width:340px">';
+    _fxT.forEach(function (t, i) { h += '<option value="' + esc(t.id) + '"' + (i ? '' : ' selected') + '>' + esc(t.name || t.filename || 'Template') + '</option>'; });
+    h += '</select></div>';
+  }
   h += '<div id="expXlsxOpts"' + (_fv.f === 'xlsx' ? '' : ' style="display:none"') + '>';
 
   h += '<div class="form-group" style="margin-bottom:0.6rem">';
@@ -6499,10 +6536,42 @@ function _canExportFindingsDoc() {
   return true;
 }
 window._canExportFindingsDoc = _canExportFindingsDoc;
-function _fxWordOn() {
-  return _fxTemplateOn() && !(S.profile && S.profile.role === 'client') && _canExportFindingsDoc();
+function _fxFormat() {
+  if (!_canExportFindingsDoc()) return '';
+  if (!_fxTemplateOn()) return 'pdf';
+  var cl = !!(S.profile && S.profile.role === 'client');
+  if (_docxAutoPdfOn(_FX_SLOT)) return (!cl || _fxTemplates().length) ? 'pdf' : '';
+  return cl ? '' : 'docx';
 }
-window._fxWordOn = _fxWordOn;
+window._fxFormat = _fxFormat;
+function _fxTemplates() {
+  if (!_fxTemplateOn()) return [];
+  var cl = !!(S.profile && S.profile.role === 'client');
+  var list = _docxAutoPdfOn(_FX_SLOT) ? _docxTemplatesFor(_FX_SLOT, cl)
+    : (cl ? [] : _rtDocxOffered(_FX_SLOT, _listDocxTemplates(_FX_SLOT)));
+  var did = _getDefaultDocxTemplateId(_FX_SLOT);
+  return list.filter(function (t) { return t.id === did; }).concat(list.filter(function (t) { return t.id !== did; }));
+}
+window._fxTemplates = _fxTemplates;
+function _fxButtonHtml(fn, rec, o) {
+  var fmt = _fxFormat();
+  if (!fmt) return '';
+  var tpls = _fxTemplates();
+  var label = (o.prefix || '') + (fmt === 'docx' ? 'Word' : 'PDF');
+  var title = (fmt === 'docx' ? o.what + ' as a Word file, from your Findings export template'
+    : o.what + ' as a PDF' + (tpls.length ? ', made from your Findings export template' : ''));
+  var id = o.ids ? o.ids[fmt] : '';
+  if (!tpls.length) {
+    return '<button class="btn btn-' + o.variant + ' btn-sm"' + (id ? ' id="' + id + '"' : '') + ' onclick="' + fn + '(\'' + rec + '\')" style="' + o.style + '" title="' + esc(title) + '">' + IC.dl + ' ' + esc(label) + '</button>';
+  }
+  return _renderDocxDownloadButton(_FX_SLOT, rec, fn, { label: label, variant: o.variant, style: o.style, templates: tpls, mainId: id, title: title });
+}
+function _fxOneExport(fid, templateId) {
+  var f = (S.data.findings || []).find(function (x) { return x.id === fid; });
+  if (!f) { toast('That finding is not here', 'error'); return null; }
+  return exportFindingsDoc(f.assessment_id, [fid], _fxFormat(), { templateId: templateId || '' });
+}
+window._fxOneExport = _fxOneExport;
 function _fxFindings(aid, ids) {
   var a = (S.data.assessments || []).find(function (x) { return x.id === aid; }) || null;
   if (!a) return { a: null, list: [] };
@@ -6558,16 +6627,22 @@ async function exportFindingsDoc(aid, ids, fmt, o) {
   }
   await _ensurePdfTemplates();
   var pick = got.list.map(function (f) { return f.id; });
-  if (fmt === 'docx') {
-    if (S.profile && S.profile.role === 'client') { toast('Findings are exported to you as a PDF', 'info'); return null; }
-    if (!_fxTemplateOn()) {
-      toast('Upload a Findings export template under Settings, Document Templates, to export findings as a Word file. Until then they export as a PDF.', 'info', 9000);
-      return null;
-    }
-    return _fxDocx(aid, pick, o);
+
+  var way = _fxFormat();
+  if (!way) { toast('Findings are not exported as a PDF here', 'info'); return null; }
+  if (fmt && fmt !== way) {
+    toast(way === 'docx' ? 'Findings export as a Word file, from your Findings export template' : 'Findings export as a PDF', 'info', 8000);
+    return null;
   }
 
-  if (_fxTemplateOn()) return _pdfOnlyRun(_fxDocx, [aid, pick, o]);
+  if (_fxTemplateOn()) {
+    var tpls = _fxTemplates();
+    var tid = o.templateId || (tpls[0] && tpls[0].id) || '';
+    if (!tpls.some(function (t) { return t.id === tid; })) { toast('That template is not one findings are exported with', 'error'); return null; }
+    o = Object.assign({}, o, { templateId: tid });
+    if (way === 'docx') return _fxDocx(aid, pick, o);
+    return _pdfOnlyRun(_fxDocx, [aid, pick, o]);
+  }
   return genPDF(aid, false, 'findings', { ids: pick, phase: o.phase || '' });
 }
 window.exportFindingsDoc = exportFindingsDoc;
@@ -6580,8 +6655,8 @@ async function _fxDocx(aid, ids, o) {
     await _loadDocxLibs();
     var got = _fxFindings(aid, ids);
     if (!got.a || !got.list.length) { toast('There are no findings here to export yet', 'info'); return null; }
-    var templateBuf = await _fetchDocxTemplate(_FX_SLOT);
-    if (!templateBuf) { toast('The Findings export template could not be read. Upload it again under Settings, Document Templates.', 'error'); return null; }
+    var templateBuf = await _fetchDocxTemplate(_FX_SLOT, o.templateId || undefined);
+    if (!templateBuf) { toast('The Findings export template could not be read. Upload it again under Settings, Documents.', 'error'); return null; }
     _docxStyleOverride = (getTemplate(_FX_SLOT) || {}).style_map || null;
     var data = await buildReportData(aid, 'report', { findingIds: got.list.map(function (f) { return f.id; }) });
     if (!data) return null;
@@ -6597,7 +6672,7 @@ async function _fxDocx(aid, ids, o) {
   } finally { _hideLoading(); }
 }
 window._fxDocx = _fxDocx;
-function _bulkExportFindings(fmt) {
+function _bulkExportFindings(fmt, templateId) {
   var ids = _findingSelIds();
   if (!ids.length) return null;
   var picked = ids.map(function (id) { return (S.data.findings || []).find(function (x) { return x.id === id; }); }).filter(Boolean);
@@ -6609,7 +6684,7 @@ function _bulkExportFindings(fmt) {
   if (aids.length > 1) { toast('These findings are from ' + aids.length + ' engagements. Tick the findings of one engagement to export them together.', 'info', 8000); return null; }
   var left = picked.length - own.length;
   if (left) toast('Scan results are exported in the scan\u2019s own report, so ' + left + ' ' + (left === 1 ? 'was' : 'were') + ' left out', 'info', 8000);
-  return exportFindingsDoc(aids[0], own.map(function (f) { return f.id; }), fmt);
+  return exportFindingsDoc(aids[0], own.map(function (f) { return f.id; }), fmt, { templateId: templateId || '' });
 }
 window._bulkExportFindings = _bulkExportFindings;
 var _EXP_FMT_SAY = {
@@ -6634,6 +6709,8 @@ function _expFmt(fmt) {
   var say = document.getElementById('expFmtSay'), go = document.getElementById('expGoBtn');
   if (x) x.style.display = v.f === 'xlsx' ? '' : 'none';
   if (n) { n.style.display = v.f === 'xlsx' ? 'none' : ''; n.textContent = v.note; }
+  var tw = document.getElementById('expTplWrap');
+  if (tw) tw.style.display = v.f === 'xlsx' ? 'none' : '';
   if (say) say.textContent = v.say;
   if (go) go.innerHTML = IC.dl + ' ' + esc(v.go);
 }
@@ -6646,10 +6723,12 @@ function _doFindingsExportGo(aid, phase, mode) {
     return _doFindingsExport(aid, phase, mode);
   }
   _saveExportPrefs(Object.assign({}, _getExportPrefs() || {}, { format: fmt }));
+  var tp = document.getElementById('exp_tpl');
+  var tid = tp ? tp.value : '';
   closeM();
   var ids = null;
   if (mode === 'phase' && phase) ids = _docFindings(aid, 'report').filter(function (f) { return f.phase === phase; }).map(function (f) { return f.id; });
-  return exportFindingsDoc(aid, ids, fmt, { phase: mode === 'phase' ? (phase || '') : '' });
+  return exportFindingsDoc(aid, ids, fmt, { phase: mode === 'phase' ? (phase || '') : '', templateId: tid });
 }
 window._doFindingsExportGo = _doFindingsExportGo;
 var _VENDOR = {
@@ -7197,7 +7276,7 @@ async function _doFindingsExport(assessmentId, phaseFilter, mode) {
   if (!a) { toast('Assessment not found', 'error'); return; }
   var isClientUser = !!(S.profile && S.profile.role === 'client');
 
-  var activeCols = selectedCols.map(function(k) { return _allFindingExportColumns().find(function(c) { return c.key === k; }); }).filter(Boolean);
+  var activeCols = _rtIn(assessmentId, function () { return selectedCols.map(function(k) { return _allFindingExportColumns().find(function(c) { return c.key === k; }); }).filter(Boolean); });
   if (!activeCols.length) { toast('No columns selected', 'error'); return; }
 
   _showLoading();
@@ -7363,8 +7442,7 @@ function _findingBulkBarHtml(isClient, opts) {
     }
 
     if (!_scanBar && _canExportFindingsDoc()) {
-      h += '<button class="btn btn-secondary btn-sm" onclick="_bulkExportFindings(\'pdf\')" style="white-space:nowrap" title="Download the ticked findings as one PDF">' + IC.dl + ' Export PDF</button>';
-      if (_fxWordOn()) h += '<button class="btn btn-secondary btn-sm" onclick="_bulkExportFindings(\'docx\')" style="white-space:nowrap" title="Download the ticked findings as one Word file, from your Findings export template">' + IC.dl + ' Export Word</button>';
+      h += _fxButtonHtml('_bulkExportFindings', _fxFormat(), { prefix: 'Export ', what: 'Download the ticked findings', variant: 'secondary', style: 'white-space:nowrap' });
     }
     if (!isClient && canDeleteFinding()) h += '<button class="btn btn-danger btn-sm" onclick="_bulkDeleteFindings()" style="white-space:nowrap">' + IC.trash + ' Delete</button>';
 
@@ -7390,22 +7468,25 @@ function _findingRowHasActions() {
 window._findingRowHasActions = _findingRowHasActions;
 function _fVisibleCols(list) {
   var rows = list || [];
-  var on = function (key) {
-    return (typeof _ffEnabled !== 'function') || _ffEnabled(key);
+
+  var on = function (key, f) {
+    if (typeof _ffEnabled !== 'function') return true;
+    var see = function () { return _ffEnabled(key) && (typeof _ffClientSees !== 'function' || _ffClientSees(key)); };
+    return f ? _rtIn(f, see) : see();
   };
   var any = function (fn) {
     for (var i = 0; i < rows.length; i++) { if (fn(rows[i])) return true; }
     return false;
   };
   return {
-    affected_hosts: on('affected_hosts') && any(function (f) {
-      return String((f && f.affected_hosts) || '').trim();
+    affected_hosts: any(function (f) {
+      return String((f && f.affected_hosts) || '').trim() && on('affected_hosts', f);
     }),
-    category: on('category') && any(function (f) { return String((f && f.category) || '').trim(); }),
-    cvss: on('cvss') && any(function (f) { return Number(f && f.cvss) > 0; }),
+    category: any(function (f) { return String((f && f.category) || '').trim() && on('category', f); }),
+    cvss: any(function (f) { return Number(f && f.cvss) > 0 && on('cvss', f); }),
 
-    cwe: on('cwe') && any(function (f) { return String((f && f.cwe) || '').trim(); }),
-    status: on('status'),
+    cwe: any(function (f) { return String((f && f.cwe) || '').trim() && on('cwe', f); }),
+    status: rows.length ? any(function (f) { return on('status', f); }) : on('status'),
   };
 }
 window._fVisibleCols = _fVisibleCols;
@@ -8553,6 +8634,8 @@ function _findingActionsTh(attrs) {
 }
 window._findingActionsTh = _findingActionsTh;
 function _renderFindingRow(f, a, isClient, opts) {
+
+  if (f && _rtNeeds(f)) return _rtWith(f, function () { return _renderFindingRow(f, a, isClient, opts); });
   var r = '';
   var retestBadge = f.retest_status === 'requested' ? ' ' + badge('medium', 'Retest') : '';
   var fCode = (typeof _isScanFinding === 'function' && _isScanFinding(f))
@@ -8576,7 +8659,7 @@ function _renderFindingRow(f, a, isClient, opts) {
 
   var _colOn = function (key) {
     if (_c) return !!_c[key];
-    return (typeof _ffEnabled !== 'function') || _ffEnabled(key);
+    return (typeof _ffEnabled !== 'function') || (_ffEnabled(key) && (typeof _ffClientSees !== 'function' || _ffClientSees(key)));
   };
   if (opts && opts.affected && _colOn('affected_hosts')) {
     r += '<td class="aff-cell">' + _affectedCellHtml(f) + '</td>';
@@ -8623,6 +8706,7 @@ function _renderFindingRow(f, a, isClient, opts) {
   return r;
 }
 function _renderFindingMobCard(f, a) {
+  if (f && _rtNeeds(f)) return _rtWith(f, function () { return _renderFindingMobCard(f, a); });
   var fCode = (typeof _isScanFinding === 'function' && _isScanFinding(f))
     ? '' : _findCodeOf(f, a);
   var r = '<div class="mob-card" style="cursor:pointer" onclick="viewFinding(\'' + f.id + '\',\'' + a.id + '\')">';
@@ -8816,7 +8900,7 @@ function _friendlyErrorText(message) {
     return 'The document renderer did not load, so nothing could be laid out. A refresh usually fixes it; if it does not, the console has the detail.';
   }
   if (/template/i.test(m) && /not found|missing|could not be fetched/i.test(m)) {
-    return 'That Word template could not be fetched. Check it is still listed under Settings \u203a Document Templates.';
+    return 'That Word template could not be fetched. Check it is still listed under Settings \u203a Documents.';
   }
   if (m.length > 160 || /[{}\[\]<>]|\bat \w+ \(|^[A-Z0-9]{5}$|https?:\/\//.test(m)) {
 
@@ -12092,16 +12176,17 @@ function _rbPalette() {
   finding.push({ t: '{retest_status}', label: 'Retest status', loop: true });
   finding.push({ t: '{finding_index}', label: 'Finding number', loop: true });
   finding.push({ t: '{phase}', label: 'Finding\u2019s phase', loop: true });
+
   try {
     (_ffDefs() || []).forEach(function (d) {
-      if (typeof _ffEnabled === 'function' && !_ffEnabled(d.key)) return;
-      var tok = (typeof _dcrFirstClassTok === 'function') ? null : null;
       var t = _RB_FIELD_TOKEN[d.key];
 
-      if (t) finding.push({ t: '{' + t + '}', label: _ffLabel(d.key), dl: (typeof _ffLabelDefault === 'function' ? _ffLabelDefault(d.key) : ''), loop: true });
+      if (t) finding.push({ t: '{' + t + '}', label: _ffLabel(d.key), dl: (typeof _ffLabelDefault === 'function' ? _ffLabelDefault(d.key) : ''), loop: true,
+        off: (typeof _ffEnabled === 'function' && !_ffEnabled(d.key)) || undefined });
     });
-    (_ffCustomEnabled() || []).forEach(function (cf) {
-      finding.push({ t: '{custom_' + cf.id + '}', label: cf.label, loop: true, custom: true });
+    ((_ffCfg() || {}).custom || []).forEach(function (cf) {
+      if (!cf || !cf.id || !cf.label) return;
+      finding.push({ t: '{custom_' + cf.id + '}', label: cf.label, loop: true, custom: true, off: cf.enabled === false || undefined });
     });
 
   } catch (e) {
@@ -12151,8 +12236,8 @@ function _rbPalette() {
     (_smDefs() || []).forEach(function (d) {
       var t = _RB_SECTION_TOKEN[d.key];
       if (!t) return;
-      if (typeof _smEnabled === 'function' && !_smEnabled(d.key)) return;
-      sections.push({ t: '{' + t + '}', label: _smLabel(d.key) });
+
+      sections.push({ t: '{' + t + '}', label: _smLabel(d.key), off: (typeof _smEnabled === 'function' && !_smEnabled(d.key)) || undefined });
     });
 
 var _RB_SCAN = [
@@ -12163,8 +12248,9 @@ var _RB_SCAN = [
   { t: '{scan_finished}', label: 'Scan finished' },
 ];
 
-    (typeof _smCustomEnabled === 'function' ? (_smCustomEnabled() || []) : []).forEach(function (cs) {
-      sections.push({ t: '{custom_summary_' + cs.id + '}', label: cs.label, custom: true });
+    (typeof _smCustom === 'function' ? (_smCustom() || []) : []).forEach(function (cs) {
+      if (!cs || !cs.label || !String(cs.label).trim()) return;
+      sections.push({ t: '{custom_summary_' + cs.id + '}', label: cs.label, custom: true, off: cs.enabled === false || undefined });
     });
 
   } catch (e) {
@@ -12216,7 +12302,11 @@ var _RB_DOC_TYPES = [
 ];
 function _fxSlotTypes() {
   try { if (typeof assessmentsEnabled === 'function' && !assessmentsEnabled()) return []; } catch (e) { return []; }
-  return [{ key: 'findings', label: 'Findings export', desc: 'Findings exported from an engagement as a Word file, and the PDF made from it', exportOnly: true }];
+  return [{ key: 'findings', label: 'Findings export', desc: 'Findings exported from a finding or the findings list', exportOnly: true }];
+}
+function _rdKeyLabel(key) {
+  var t = _docTemplateTypes().concat(_fxSlotTypes()).filter(function (x) { return x.key === key || x.editorKey === key; })[0];
+  return t ? t.label : String(key || 'this document');
 }
 function _docTemplateTypes() {
   return _rbDocTypes().map(function (t) {
@@ -12459,6 +12549,14 @@ function renderReportBuilder() {
   try { _rbRemember(); } catch (e) {}
 
   var h = '<div class="rb">';
+
+  if (typeof S._rbForRt === 'string' && _rtById(S._rbForRt)) {
+
+    h += '<div class="alert alert-info rb-rt" style="margin-bottom:0.75rem;font-size:0.84rem;justify-content:space-between">'
+      + '<span style="flex:1 1 24rem">Building for the report template <b>' + esc(_rtName(S._rbForRt)) + '</b>. '
+      + 'Its fields and sections are the ones offered; a field or section made here is its own, and Save makes this Word file its report.</span>'
+      + '<button class="btn btn-ghost btn-sm" onclick="S._rbForRt=undefined;render()">Build for the Default instead</button></div>';
+  }
   h += '<div class="page-header rb-top"><div>';
 
   var _running = !!(S_ && S_.aiRun && !S_.aiRun.done);
@@ -12646,7 +12744,7 @@ function _rbEmptyState() {
       + '<span class="rb-flow-t">' + esc(st[1]) + '</span><span class="rb-flow-s">' + esc(st[2]) + '</span></li>';
   });
   h += '</ol>';
-  h += '<p class="rb-empty-foot">Saved templates live under Settings › Document Templates, one list per document type.</p>';
+  h += '<p class="rb-empty-foot">Saved templates are under Settings › Documents, on each document\u2019s row.</p>';
 
   h += '</div></div>';
   return h;
@@ -13199,6 +13297,8 @@ function _rbSectionSuggestions() {
       if (b.k !== 'h') return;
       if (_rbInBlockLoop(b.i) || _rbInSection(b.i)) return;
       if (_rbInDrop(b.i)) return;
+
+      if ((S.rb.aiSecSeen || {})[b.i] || ((S.rb.sections || {})['sec:' + b.i] || {}).t) return;
       var label = String(_rbTextOf(b.i) || '').replace(/[:：]\s*$/, '').trim();
       if (label.length < 3 || label.length > 40) return;
       var k = flat2(label);
@@ -13277,17 +13377,18 @@ function _rbWrittenSectionMatches() {
       var label = String(_rbTextOf(b.i) || '').replace(/[:：]\s*$/, '').trim();
       var k = flat2(label);
       if (k.length < 4) return;
-      var hit = null;
+      var hit = null, near = null;
       (inFinding ? loopFields : prose).forEach(function (it) {
-        if (hit) return;
 
         [it.label, it.dl].forEach(function (lab) {
-          if (hit || !lab) return;
+          if (!lab) return;
           var n2 = flat2(lab);
           if (n2.length < 4) return;
-          if (n2 === k || k.indexOf(n2) > -1 || n2.indexOf(k) > -1) hit = it;
+          if (n2 === k) { if (!hit) hit = it; }
+          else if (!near && (k.indexOf(n2) > -1 || n2.indexOf(k) > -1)) near = it;
         });
       });
+      hit = hit || near;
       if (!hit) return;
 
       var _r0 = null;
@@ -13668,6 +13769,26 @@ function _rbDidHtml() {
     h += '<div class="rb-did-g"><strong>' + cells.length + ' cell'
       + (cells.length === 1 ? '' : 's') + ' filled from its own label</strong>';
     cells.forEach(function (d) { h += '<span>' + esc(d.what) + '</span>'; });
+    h += '</div>';
+  }
+
+  var made = did.filter(function (d) { return d.kind === 'made'; });
+  if (made.length) {
+    h += '<div class="rb-did-g"><strong>' + made.length + ' section' + (made.length === 1 ? '' : 's') + ' and field'
+      + (made.length === 1 ? '' : 's') + ' of your own made</strong>';
+    made.forEach(function (d) { h += '<span>' + esc(d.what) + '</span>'; });
+    h += '<span>Switched off until you save this template, which switches them on for the report it is.</span></div>';
+  }
+  var backOn = did.filter(function (d) { return d.kind === 'on'; });
+  if (backOn.length) {
+    h += '<div class="rb-did-g"><strong>Switched on when you save</strong>';
+    backOn.forEach(function (d) { h += '<span>' + esc(d.what) + '</span>'; });
+    h += '</div>';
+  }
+  var skippedD = did.filter(function (d) { return d.kind === 'skipped'; });
+  if (skippedD.length) {
+    h += '<div class="rb-did-g rb-did-lost"><strong>' + skippedD.length + ' part' + (skippedD.length === 1 ? '' : 's') + ' of the build did NOT run</strong>';
+    skippedD.forEach(function (d) { h += '<span>' + esc(d.what) + '</span>'; });
     h += '</div>';
   }
 
@@ -14061,8 +14182,14 @@ async function _rbAiCheckPlacements(predict) {
     var p = S.rb.placements[k];
     return p && p.by === 'ai';
   });
-  if (keys.length < 2) return { undone: 0, moved: 0 };
+
+  var _rd = (S.rb._readBack = S.rb._readBack || {});
+  var _any = Object.keys(_rd).length > 0;
+  keys = keys.filter(function (k) { return !_rd[k]; });
+  if (keys.length < (_any ? 1 : 2)) return { undone: 0, moved: 0, asked: 0, left: 0 };
+  var _left = Math.max(0, keys.length - 40);
   keys = keys.slice(0, 40);
+  keys.forEach(function (k) { _rd[k] = 1; });
 
   var lines = [], byN = {};
   keys.forEach(function (k, n) {
@@ -14117,10 +14244,10 @@ async function _rbAiCheckPlacements(predict) {
   var raw;
   try { raw = await callAI(user, sys, predict || 700, _rbAiOpts()); } catch (e) {
     try { console.warn('[builder] the check question did not finish (' + ((e && e.message) || e) + ')'); } catch (e2) {}
-    return { undone: 0, moved: 0 };
+    return { undone: 0, moved: 0, asked: 1, left: _left, failed: true, why: String((e && e.message) || e || '') };
   }
   var parsed = _rbAiReadReply(raw, function (o) { return !!(o && Array.isArray(o.wrong)); });
-  if (!parsed) return { undone: 0, moved: 0 };
+  if (!parsed) return { undone: 0, moved: 0, asked: 1, left: _left, failed: true, why: 'its answer could not be read' };
 
   var undone = 0, moved = 0;
   (parsed.wrong || []).forEach(function (w) {
@@ -14140,7 +14267,7 @@ async function _rbAiCheckPlacements(predict) {
       if (r && r.kept) { moved++; _rbDid('moved', (p.label || p.t) + ' \u2192 ' + t + ' (the AI corrected itself)'); }
     }
   });
-  return { undone: undone, moved: moved };
+  return { undone: undone, moved: moved, asked: 1, left: _left };
 }
 async function _rbAiFindMissing(predict) {
   var missing = _rbMissingEssentials();
@@ -14184,10 +14311,10 @@ async function _rbAiFindMissing(predict) {
   var raw;
   try { raw = await callAI(user, sys, predict || 900, _rbAiOpts()); } catch (e) {
     try { console.warn('[builder] the missing-fields question did not finish (' + ((e && e.message) || e) + ')'); } catch (e2) {}
-    return { placed: 0, absent: 0 };
+    return { placed: 0, absent: 0, failed: true, why: String((e && e.message) || e || '') };
   }
   var parsed = _rbAiReadReply(raw, function (o) { return !!(o && (Array.isArray(o.found) || Array.isArray(o.absent))); });
-  if (!parsed) return { placed: 0, absent: 0 };
+  if (!parsed) return { placed: 0, absent: 0, failed: true, why: 'its answer could not be read' };
 
   var byId = {};
   flat.forEach(function (b) { byId[b.i] = b; });
@@ -14231,6 +14358,230 @@ async function _rbAiFindMissing(predict) {
   }
   return { placed: placed, absent: absent.length };
 }
+function _rbSecCandidates() {
+  var flat = [], out = [];
+  ((S.rb.digest || {}).parts || []).forEach(function (p) { if (p.p === 'body') flat = flat.concat(p.b || []); });
+  flat.forEach(function (b, n) {
+    if (b.k !== 'h') return;
+    if (_rbInDrop(b.i)) return;
+    if (((S.rb.sections || {})['sec:' + b.i] || {}).t) return;
+    var _in = _rbInSection(b.i);
+    if (_in && _in.t) return;
+    if (_rbIsFindingTitle(b.i)) return;
+    var _pl = _rbInPhaseLoop(b.i);
+    if (_pl && _pl.from === b.i) return;
+    var label = String(_rbTextOf(b.i) || '').replace(/[:：]\s*$/, '').trim();
+    if (!label || label === '(empty)') return;
+
+    var prose = [], tables = 0, placed = {}, chars = 0;
+    for (var j = n + 1; j < flat.length && flat[j].k !== 'h'; j++) {
+      var x = flat[j];
+      if (_rbInDrop(x.i)) continue;
+      if (_rbAiSkippable(x)) continue;
+      Object.keys(S.rb.placements || {}).forEach(function (k) { var q = S.rb.placements[k]; if (q.i === x.i) placed[q.t] = 1; });
+      if (x.k === 'tbl') { tables++; continue; }
+      var t = '';
+      try { t = String(_rbFullText(x.i) || '').replace(/\s+/g, ' ').trim(); } catch (e) { t = ''; }
+      if (!t || t === '(empty)') continue;
+      prose.push({ i: x.i, t: t });
+      chars += t.length;
+    }
+    if (!prose.length || chars < 60) return;
+    out.push({ i: b.i, l: b.l || 1, label: label, inFinding: !!_rbInBlockLoop(b.i), prose: prose, tables: tables, placed: Object.keys(placed) });
+  });
+  return out;
+}
+window._rbSecCandidates = _rbSecCandidates;
+function _rbSecFieldsKnown() {
+  var sec = {}, loop = {};
+  _rbPalette().forEach(function (g) {
+    (g.items || []).forEach(function (it) {
+      if (it.loop) loop[it.t] = it;
+      else if (/written sections/i.test(String(g.title || ''))) sec[it.t] = it;
+    });
+  });
+  return { sec: sec, loop: loop };
+}
+function _rbSecName(v) {
+  return String(v == null ? '' : v).replace(/[{}⟦⟧]/g, '').replace(/\s+/g, ' ').trim()
+    .replace(/^\d+(?:\.\d+)*[.)]?\s+/, '').slice(0, 60).trim();
+}
+function _rbSecByName(name, inFinding, known) {
+  var flat2 = function (v) { return String(v || '').toLowerCase().replace(/[^a-z0-9]/g, ''); };
+  var k = flat2(name), hit = null;
+  if (!k) return null;
+  var pool = inFinding ? known.loop : known.sec;
+  Object.keys(pool).forEach(function (t) {
+    var it = pool[t];
+    if (!hit && (flat2(it.label) === k || (it.dl && flat2(it.dl) === k))) hit = it;
+  });
+  return hit;
+}
+function _rbSecLoopTaken(t) {
+  var taken = false;
+  Object.keys(S.rb.placements || {}).forEach(function (k) {
+    var q = S.rb.placements[k];
+    if (q.t === t && (_rbInBlockLoop(q.i) || _rbInSection(q.i))) taken = true;
+  });
+  Object.keys(S.rb.sections || {}).forEach(function (k) {
+    var sc = S.rb.sections[k];
+    if (sc && sc.t === t && _rbInBlockLoop(sc.from)) taken = true;
+  });
+  return taken;
+}
+async function _rbAiSections(predict, per) {
+  var res = { asked: 0, failed: 0, why: '', field: 0, made: [], kept: 0, candidates: 0 };
+
+  var _dt = (typeof _rbDocTypes === 'function') ? _rbDocType() : ((S.rb && S.rb.docType) || 'report');
+  if (_dt !== 'report') return res;
+  var cands = _rbSecCandidates();
+  res.candidates = cands.length;
+  if (!cands.length) return res;
+  var known = _rbSecFieldsKnown();
+  var purpose = function (it) {
+    var key = String(it.t || '').replace(/[{}]/g, '');
+    var p = (typeof _RB_FIELD_PURPOSE === 'object' && _RB_FIELD_PURPOSE[key]) || '';
+    return it.t + ' = ' + it.label + (p ? ': ' + p : '');
+  };
+  var fieldsText = 'Written once for each engagement:\n'
+    + Object.keys(known.sec).map(function (t) { return purpose(known.sec[t]); }).join('\n')
+    + '\nWritten for every finding:\n'
+    + Object.keys(known.loop).map(function (t) { return purpose(known.loop[t]); }).join('\n');
+  var sys = 'A security consultancy is turning its report (a finished one, or the blank it fills in by hand) into a template '
+    + 'for every client. Its fields are already placed. Under each heading below is writing that still belongs to the last '
+    + 'engagement, and no field stands for it yet.\n'
+    + 'For EACH heading say which it is:\n'
+    + '- "field": a field that ALREADY EXISTS holds this kind of writing. Use it whatever the firm calls the heading: '
+    + '"Assessment Limitations" is {caveats}, "Management Overview" is {executive_summary}, and inside a finding '
+    + '"Recommendation" is {remediation}. A field written for every finding only ever goes inside the finding.\n'
+    + '- "new": the writing is done afresh for every engagement (or, inside the finding, for every finding) and no field '
+    + 'holds it: an attack narrative, recommendations written for this client, a conclusion; inside a finding, a business '
+    + 'impact or a likelihood. Give the name the firm would give it, without its numbering.\n'
+    + '- "keep": STANDING wording, the same in every report this firm writes: a methodology, how its ratings are defined, '
+    + 'the tools it uses, terms and conditions, an introduction to the firm. It stays as it is.\n'
+    + 'Reply with JSON only: {"sections":[{"i":<heading number>,"field":"{token}"},{"i":<heading number>,"new":"<name>"},{"i":<heading number>,"keep":true}]}\n'
+    + 'Answer every heading once. Never invent a heading number or a field, and never give one field to two headings.';
+  per = Math.max(4, per || 30);
+  var byId = {}, seen = {}, named = {};
+  cands.forEach(function (c) { byId[c.i] = c; });
+  S.rb.aiSecSeen = S.rb.aiSecSeen || {};
+  var flat2 = function (v) { return String(v || '').toLowerCase().replace(/[^a-z0-9]/g, ''); };
+  for (var at = 0; at < cands.length; at += per) {
+    if (S.rb && S.rb.aiStop) break;
+    var batch = cands.slice(at, at + per);
+    var lines = [];
+    batch.forEach(function (c) {
+      lines.push(c.i + ' HEADING' + c.l + ' "' + _rbClip(c.label, 80) + '" ('
+        + (c.inFinding ? 'inside the finding the template keeps' : 'in the body of the report') + ')');
+      lines.push('   ' + c.prose.length + ' paragraph' + (c.prose.length === 1 ? '' : 's') + ' under it'
+        + (c.tables ? ' and ' + c.tables + ' table' + (c.tables === 1 ? '' : 's') : '') + ', starting: "' + _rbClip(c.prose[0].t, 220) + '"');
+      if (c.prose[1]) lines.push('   then: "' + _rbClip(c.prose[1].t, 160) + '"');
+      if (c.placed.length) lines.push('   (fields already placed under it: ' + c.placed.join(' ') + ')');
+    });
+    var raw;
+    res.asked++;
+    try {
+      raw = await callAI('FIELDS THAT ALREADY EXIST\n' + fieldsText + '\n\nHEADINGS STILL HOLDING THE LAST ENGAGEMENT’S WRITING:\n' + lines.join('\n'),
+        sys, predict || 1500, _rbAiOpts());
+    } catch (e) {
+      try { console.warn('[builder] the sections question did not finish (' + ((e && e.message) || e) + ')'); } catch (e2) {}
+      res.failed++; res.why = res.why || String((e && e.message) || e || '');
+      continue;
+    }
+    var parsed = _rbAiReadReply(raw, function (o) { return !!(o && Array.isArray(o.sections)); });
+    if (!parsed) { res.failed++; res.why = res.why || 'its answer could not be read'; continue; }
+    parsed.sections.forEach(function (a) {
+      if (!a || typeof a.i !== 'number') return;
+      var c = byId[a.i];
+      if (!c || seen[a.i] || batch.indexOf(c) < 0) return;
+      seen[a.i] = 1;
+      var useField = function (it, how) {
+        if (!it) return false;
+        if (c.inFinding ? _rbSecLoopTaken(it.t) : _rbAlreadyPlaced(it.t)) return false;
+        var ok = false;
+        try { ok = _rbReplaceSectionWith(c.i, it.t, it.label); } catch (e) { ok = false; }
+        if (ok) { res.field++; S.rb.aiSecSeen[c.i] = 'field'; _rbDid('section', c.label + ' → ' + it.label + ' (' + how + ')'); }
+        else _rbDid('lost', c.label + ' → ' + it.label + ' (nothing under it to replace)');
+        return ok;
+      };
+      if (a.keep === true) { res.kept++; S.rb.aiSecSeen[c.i] = 'keep'; return; }
+      if (typeof a.field === 'string' && a.field.trim()) {
+        var t = a.field.trim();
+        useField((c.inFinding ? known.loop : known.sec)[t], 'the AI said it holds this');
+        return;
+      }
+      if (typeof a['new'] === 'string') {
+        var name = _rbSecName(a['new']) || _rbSecName(c.label);
+        if (!name || name.length < 3) return;
+
+        var same = _rbSecByName(name, c.inFinding, known);
+        if (same) { useField(same, 'the name it gave is a field you have'); return; }
+        if (named[(c.inFinding ? 'f:' : 's:') + flat2(name)]) return;
+        var id = (c.inFinding ? 'cf_' : 'cs_') + _rtNewId().slice(3, 9);
+        var token = c.inFinding ? '{custom_' + id + '}' : '{custom_summary_' + id + '}';
+        var ok = false;
+        try { ok = _rbReplaceSectionWith(c.i, token, name); } catch (e) { ok = false; }
+        if (!ok) { _rbDid('lost', c.label + ' → ' + name + ' (nothing under it to replace)'); return; }
+        named[(c.inFinding ? 'f:' : 's:') + flat2(name)] = 1;
+        S.rb.aiSecSeen[c.i] = 'new';
+        res.made.push({ kind: c.inFinding ? 'field' : 'section', id: id, t: token, label: name, i: c.i, heading: c.label, sample: c.prose[0].t });
+      }
+    });
+  }
+  return res;
+}
+window._rbAiSections = _rbAiSections;
+async function _rbMakeOwn(made) {
+  var out = { sections: 0, fields: 0, failed: [] };
+  if (!made || !made.length) return out;
+  var draft = function (m) {
+    if (m.kind === 'field') return _rbAdoptPrompt({ label: m.label, value: m.sample });
+    return 'Write the "' + m.label + '" section of a penetration test report, in the same voice and length as this example '
+      + 'from the firm’s own report:\n\n' + _rbClip(_rbScrubSample(m.sample), 400);
+  };
+  var undo = function (list, why) {
+    list.forEach(function (m) {
+      var k = 'sec:' + m.i;
+      if (((S.rb.sections || {})[k] || {}).t === m.t) delete S.rb.sections[k];
+      out.failed.push(m.label);
+      _rbDid('lost', m.heading + ' → ' + m.label + ' (it could not be added to your settings: ' + why + ')');
+    });
+  };
+  var secs = made.filter(function (m) { return m.kind === 'section'; });
+  var flds = made.filter(function (m) { return m.kind === 'field'; });
+  if (secs.length) {
+    try {
+      var w = _setSavedCopy('summary_fields');
+      var add = secs.map(function (m) { return { id: m.id, label: m.label, enabled: false, in_report: true, client_default: false, icon: '', ai_prompt: draft(m) }; });
+      add.forEach(function (f) { w.custom.push(f); if (w.order.length && w.order.indexOf(f.id) === -1) w.order.push(f.id); });
+      await _settingsWriteBlob({ summary_fields: w });
+      var c = _smMutCfg();
+      add.forEach(function (f) {
+        if (!c.custom.some(function (x) { return x.id === f.id; })) c.custom.push(JSON.parse(JSON.stringify(f)));
+        if (c.order.length && c.order.indexOf(f.id) === -1) c.order.push(f.id);
+      });
+      if (typeof _setBase !== 'undefined' && _setBase) _setBase.summary_fields = w;
+      out.sections = secs.length;
+      secs.forEach(function (m) { _rbDid('made', m.label + ': a new assessment section, from “' + _rbClip(m.heading, 40) + '”'); });
+    } catch (e) { undo(secs, String((e && e.message) || e)); }
+  }
+  if (flds.length) {
+    try {
+      var w2 = _setSavedCopy('finding_fields');
+      var add2 = flds.map(function (m) { return { id: m.id, label: m.label, type: 'html', enabled: false, reusable: false, required: false, ai_prompt: draft(m) }; });
+      add2.forEach(function (f) { w2.custom.push(f); if (w2.order.length && w2.order.indexOf('custom_' + f.id) === -1) w2.order.push('custom_' + f.id); });
+      await _settingsWriteBlob({ finding_fields: w2 });
+      var c2 = _ffMutCfg();
+      add2.forEach(function (f) { if (!c2.custom.some(function (x) { return x.id === f.id; })) c2.custom.push(JSON.parse(JSON.stringify(f))); });
+      if (Array.isArray(c2.order) && c2.order.length) add2.forEach(function (f) { if (c2.order.indexOf('custom_' + f.id) === -1) c2.order.push('custom_' + f.id); });
+      if (typeof _setBase !== 'undefined' && _setBase) _setBase.finding_fields = w2;
+      out.fields = flds.length;
+      flds.forEach(function (m) { _rbDid('made', m.label + ': a new part of every finding, from “' + _rbClip(m.heading, 40) + '”'); });
+    } catch (e2) { undo(flds, String((e2 && e2.message) || e2)); }
+  }
+  return out;
+}
+window._rbMakeOwn = _rbMakeOwn;
 async function _rbAiStrip(predict, width, onStretch) {
   var lines = [], byLine = {};
   var w = Math.max(60, width || 150);
@@ -14312,14 +14663,16 @@ async function _rbAiStrip(predict, width, onStretch) {
     if (S.rb && S.rb.aiStop) break;
     if (typeof onStretch === 'function') onStretch(n + 1, packs.length, out.length);
     var raw;
+    out.asked = (out.asked || 0) + 1;
     try {
       raw = await callAI('WORDING LEFT IN THE DOCUMENT:\n' + packs[n].join('\n'), sys, predict || 1200, _rbAiOpts());
     } catch (e) {
       try { console.warn('[builder] a stripping stretch did not finish (' + ((e && e.message) || e) + ')'); } catch (e2) {}
+      out.failed = (out.failed || 0) + 1; out.why = out.why || String((e && e.message) || e || '');
       continue;
     }
     var parsed = _rbAiReadReply(raw, function (o) { return !!(o && Array.isArray(o.values)); });
-    if (!parsed) continue;
+    if (!parsed) { out.failed = (out.failed || 0) + 1; out.why = out.why || 'its answer could not be read'; continue; }
     parsed.values.forEach(function (it) {
       if (!it || typeof it.v !== 'string') return;
       out.push({ v: it.v.trim(), why: String(it.why || 'from the last engagement').slice(0, 60), t: (typeof it.t === 'string' ? it.t.trim() : '') });
@@ -14781,6 +15134,7 @@ function _rbForeignFields() {
     flat.forEach(function (b) {
       if (b.k !== 'h' || !_rbInBlockLoop(b.i) || _rbIsFindingTitle(b.i)) return;
       if (_rbInDrop(b.i)) return;
+      if ((S.rb.aiSecSeen || {})[b.i]) return;
       var sec = _rbInSection(b.i);
       if (sec) return;
       if (_rbSectionOf(b.i)) return;
@@ -15685,7 +16039,7 @@ function _rbSectionFieldFor(heading) {
     notes: 'notes', testernotes: 'notes',
   };
   var key = aliases[flat];
-  if (key && typeof _smEnabled === 'function' && !_smEnabled(key)) key = null;
+
   return { t: key ? '{' + key + '}' : '', heading: String(heading || '').trim() };
 }
 function _rbNearestHeading(i, level) {
@@ -17319,6 +17673,8 @@ async function _rbAiBuild() {
   if (S.rb.aiExtra) _aixKeepNow('rb', S.rb.aiExtra, S.rb, true);
 
   S.rb.did = [];
+  S.rb.aiSecSeen = {};
+  S.rb._readBack = {};
   S.rb.barGone = false;
   window._rbRefusals = [];
 
@@ -17412,6 +17768,15 @@ async function _rbAiBuild() {
         + (res && res.done < res.parts
         ? 'Your model managed ' + res.done + ' of ' + res.parts + ' parts, so some of it was not looked at; '
           + 'place those bits yourself. '
+        : '')
+
+        + (res && res.made && (res.made.sections || res.made.fields)
+        ? 'For parts no field covered it made ' + (res.made.sections ? res.made.sections + ' new assessment section' + (res.made.sections === 1 ? '' : 's') : '')
+          + (res.made.sections && res.made.fields ? ' and ' : '') + (res.made.fields ? res.made.fields + ' new part' + (res.made.fields === 1 ? '' : 's') + ' of every finding' : '')
+          + ': they are in your settings, switched off until you save this template, which switches them on for the report it is. '
+        : '')
+        + (res && res.skipped && res.skipped.length
+        ? 'NOT ALL OF IT RAN: ' + res.skipped.join('; ') + '. '
         : '')
         + (_noLoop
         ? 'IT DID NOT FIND ANYWHERE FOR FINDINGS TO REPEAT, which is the one thing this template cannot do '
@@ -17599,6 +17964,7 @@ function _rbAiProgressHtml() {
     ['place', 'Placing Pental\u2019s fields', ''],
     ['check', 'Checking its own work', 'reading back what it placed'],
     ['missing', 'Finding sections still missing', 'asking where the rest belong'],
+    ['sections', 'Sections of your own', 'asking what each part no field covers is'],
     ['strip', 'Taking out the last client\u2019s details', ''],
   ];
   var ids = stages.map(function (x) { return x[0]; });
@@ -17688,6 +18054,25 @@ function _rbReviewFacts() {
     f.attn.push({ title: 'Still to place: ' + toPlace.slice(0, 4).map(function (w) { return w.label; }).join(', ')
         + (toPlace.length > 4 ? ' and ' + (toPlace.length - 4) + ' more' : ''),
       body: 'Click the place in your report where ' + (toPlace.length === 1 ? 'it goes' : 'each goes') + ', then choose the field in the panel.' });
+  }
+
+  var skipped = did.filter(function (d) { return d.kind === 'skipped'; });
+  if (skipped.length) {
+    f.attn.unshift({ level: 'high', title: 'Not all of the build ran',
+      body: esc(skipped.map(function (d) { return d.what; }).join('; ')) + '. What it did not reach still holds the last engagement\u2019s words: build again, or place those parts yourself.',
+      acts: '<button class="btn btn-secondary btn-sm" onclick="_rbAiBuild()">Build again</button>' });
+  }
+  var backOn = did.filter(function (d) { return d.kind === 'on'; });
+  if (backOn.length) {
+    f.attn.push({ level: 'info', title: 'Fields this report has off, in the file it built',
+      body: esc(backOn.map(function (d) { return d.what; }).join('; ')) + '.' });
+  }
+  var made = did.filter(function (d) { return d.kind === 'made'; });
+  if (made.length) {
+    f.attn.push({ level: 'info', title: 'It made ' + made.length + ' section' + (made.length === 1 ? '' : 's') + ' and field' + (made.length === 1 ? '' : 's') + ' of your own',
+      body: '<span class="rb-attn-tags">' + made.map(function (d) { return '<span>' + esc(String(d.what).split(':')[0]) + '</span>'; }).join('') + '</span>'
+        + 'For parts of your report no field covered. Each is in your settings with a prompt drafted from what your report says there, '
+        + 'switched off until you save this template; saving switches them on for the report it is. Ctrl+Z takes back the last one.' });
   }
   var lost = did.filter(function (d) { return d.kind === 'lost'; });
   if (lost.length) {
@@ -18158,7 +18543,8 @@ function _rbAiSizing() {
     || window._ollamaThinkMode === 'low' || window._ollamaNoThink === false && /qwen3/.test(model);
 
   if (provider === 'anthropic' || provider === 'openai' || provider === 'google' || provider === 'groq') {
-    return { chunk: 120, predict: 8000, thinks: thinks, width: 180, why: 'cloud model' };
+
+    return { chunk: 120, predict: 8000, thinks: thinks, width: provider === 'groq' ? 180 : 600, why: 'cloud model' };
   }
 
   if (provider === 'ollama' || provider === 'custom' || !provider) {
@@ -18416,14 +18802,30 @@ async function _rbAiPlacements(onProgress) {
   } catch (e) { console.warn('[builder] section swaps skipped:', e && e.message); }
 
   var _rbStopped = function () { return !!(S.rb && S.rb.aiStop); };
+
+  var skipped = [];
+  var _skip = function (what, why) {
+    var line = what + (why ? ' (' + _rbClip(String(why), 120) + ')' : '');
+    skipped.push(line);
+    _rbDid('skipped', line);
+  };
+  if (totalDone < totalParts) _skip('your model answered ' + totalDone + ' of the ' + totalParts + ' parts of the document it was asked about; the rest were not read');
   _rbStage('check');
   if (!_rbStopped()) try {
-    var _chk = await _rbAiCheckPlacements(Math.min(700, size.predict));
+    var _chk = { undone: 0, moved: 0, asked: 0, failed: 0, why: '' };
+    for (var _cn = 0; _cn < 100 && !_rbStopped(); _cn++) {
+      var _c1 = await _rbAiCheckPlacements(Math.min(700, size.predict));
+      if (!_c1.asked) break;
+      _chk.asked++;
+      if (_c1.failed) { _chk.failed++; _chk.why = _chk.why || _c1.why || ''; } else { _chk.undone += _c1.undone; _chk.moved += _c1.moved; }
+      if (!_c1.left) break;
+    }
     if ((_chk.undone || _chk.moved) && typeof onProgress === 'function') {
       onProgress(0, 0, { shapeNotes: ['took back ' + _chk.undone + ' placement' + (_chk.undone === 1 ? '' : 's') + ' that did not belong'
         + (_chk.moved ? ', ' + _chk.moved + ' corrected' : '')] }, rounds);
     }
-  } catch (e) { console.warn('[builder] the check question was skipped:', e && e.message); }
+    if (_chk.failed) _skip(_chk.failed === _chk.asked ? 'the check of what it placed did not run' : 'the check of what it placed ran for ' + (_chk.asked - _chk.failed) + ' of ' + _chk.asked + ' parts', _chk.why);
+  } catch (e) { console.warn('[builder] the check question was skipped:', e && e.message); _skip('the check of what it placed did not run', e && e.message); }
 
   _rbStage('missing');
   if (!_rbStopped()) try {
@@ -18431,7 +18833,20 @@ async function _rbAiPlacements(onProgress) {
     if (_found.placed && typeof onProgress === 'function') {
       onProgress(0, 0, { shapeNotes: ['found where ' + _found.placed + ' more field' + (_found.placed === 1 ? '' : 's') + ' belong'] }, rounds);
     }
-  } catch (e) { console.warn('[builder] the missing-fields question was skipped:', e && e.message); }
+    if (_found.failed) _skip('the look for the fields still missing did not run', _found.why);
+  } catch (e) { console.warn('[builder] the missing-fields question was skipped:', e && e.message); _skip('the look for the fields still missing did not run', e && e.message); }
+
+  var _secs = { asked: 0, failed: 0, field: 0, made: [], kept: 0, candidates: 0 };
+  _rbStage('sections');
+  if (!_rbStopped()) try {
+    _secs = await _rbAiSections(Math.min(1500, size.predict), Math.max(4, Math.floor((size.chunk || 30) / 4)));
+    if (typeof onProgress === 'function' && (_secs.field || _secs.made.length)) {
+      onProgress(0, 0, { shapeNotes: [(_secs.made.length ? 'made ' + _secs.made.length + ' section' + (_secs.made.length === 1 ? '' : 's') + ' and field' + (_secs.made.length === 1 ? '' : 's') + ' of your own' : '')
+        + (_secs.made.length && _secs.field ? ', ' : '') + (_secs.field ? 'gave ' + _secs.field + ' more section' + (_secs.field === 1 ? '' : 's') + ' an existing field' : '')] }, rounds);
+    }
+    if (_secs.failed) _skip(_secs.failed === _secs.asked ? 'the look at the sections no field covers did not run, so they still hold the last engagement\u2019s words'
+      : 'the look at the sections no field covers ran for ' + (_secs.asked - _secs.failed) + ' of ' + _secs.asked + ' parts', _secs.why);
+  } catch (e) { console.warn('[builder] the sections question was skipped:', e && e.message); _skip('the look at the sections no field covers did not run', e && e.message); }
 
   var stripped = { kept: 0, refused: 0 };
   _rbStage('strip');
@@ -18449,12 +18864,34 @@ async function _rbAiPlacements(onProgress) {
           + (stripped.kept === 1 ? '' : 's') + ' still naming the last engagement'] }, rounds);
       }
     }
+    if (vals.failed) _skip(vals.failed === vals.asked ? 'the look for the last client\u2019s details did not run' : 'the look for the last client\u2019s details read ' + (vals.asked - vals.failed) + ' of ' + vals.asked + ' parts', vals.why);
   } catch (e) {
     try { console.warn('[builder] the stripping pass did not run: ' + ((e && e.message) || e)); } catch (e2) {}
+    _skip('the look for the last client\u2019s details did not run', e && e.message);
   }
 
+  var made = { sections: 0, fields: 0, failed: [] };
+  if (_secs.made && _secs.made.length) {
+    try { made = await _rbMakeOwn(_secs.made); } catch (e) { _skip('the new sections could not be added to your settings', e && e.message); }
+  }
+  if (_rbStopped()) _skip('you stopped the build, so what came after that point did not run');
+
+  try {
+    var _have = _rbPlacedTokens(), _offs = [];
+    var _new = {};
+    ((_secs && _secs.made) || []).forEach(function (m) { _new[m.t] = 1; });
+    _rbPalette().forEach(function (g) {
+      (g.items || []).forEach(function (it) {
+        if (it.off && _have[it.t] && !_new[it.t] && _offs.indexOf(it.label) < 0) _offs.push(it.label);
+      });
+    });
+    if (_offs.length) _rbDid('on', _offs.join(', ') + ': switched off for this report now; the file it built prints '
+      + (_offs.length === 1 ? 'it' : 'them') + ', so saving it switches ' + (_offs.length === 1 ? 'it' : 'them') + ' on');
+  } catch (e) {}
+
   return { repeats: repeats, removeOthers: removeOthers, parts: totalParts, done: totalDone,
-    rounds: rounds, placed: placedTotal, shape: shape, shapeNotes: shapeNotes, stripped: stripped };
+    rounds: rounds, placed: placedTotal, shape: shape, shapeNotes: shapeNotes, stripped: stripped,
+    sections: _secs, made: made, skipped: skipped };
 }
 function _rbStyleOf() {
   if (S.rb && S.rb._styleOf) return S.rb._styleOf;
@@ -20110,6 +20547,15 @@ function _syncBegin() {
   return p;
 }
 function _syncErr(r) { return (r && r.error && (r.error.message || r.error.code)) || 'no answer'; }
+async function _dbSchemaVersion() {
+  if (_sync && typeof _sync.lastVer === 'number') return _sync.lastVer;
+  try { if (_sync && _sync.probe) { var v = await _sync.probe; if (typeof v === 'number') return v; } } catch (e) {}
+  try {
+    var r = await supabaseClient.rpc('rpc_get_schema_version');
+    var n = r && !r.error ? parseInt(r.data, 10) : NaN;
+    return isFinite(n) ? n : 0;
+  } catch (e) { return 0; }
+}
 function _dbAtLeast(v) { return !!(_sync && typeof _sync.lastVer === 'number' && _sync.lastVer >= v); }
 function _syncRead(q) {
   var st = _sync, ent = st.keys[q.key], probe = st.probe || Promise.resolve(null);
@@ -20332,6 +20778,8 @@ async function _loadAllDataInner() {
   p1.finding_fields = _syncQ('1:finding_fields', 'settings', _asIs, 'id,finding_fields,created_at');
   p1.summary_fields = _syncQ('1:summary_fields', 'settings', _asIs, 'id,summary_fields,summary_sections,created_at');
 
+  p1.report_templates = _syncQ('1:report_templates', 'settings', _asIs, 'id,report_templates,created_at');
+
   p1.crb = supabaseClient.from('settings').select('id,enable_checklists_runbooks,created_at');
   p1.secret_flags = supabaseClient.rpc('rpc_check_settings_secrets');
 
@@ -20423,7 +20871,7 @@ async function _loadAllDataInner() {
   keys1.forEach(function(k, i) {
     r1[k] = vals1[i];
 
-    if (vals1[i] && vals1[i].error && k !== 'crb' && k !== 'secret_flags' && k !== 'contractor_teams' && k !== 'team_links' && k !== 'my_team') {
+    if (vals1[i] && vals1[i].error && k !== 'crb' && k !== 'secret_flags' && k !== 'contractor_teams' && k !== 'team_links' && k !== 'my_team' && k !== 'report_templates') {
       console.warn('[loadAllData] Phase 1 "' + k + '" returned error:', vals1[i].error.message || vals1[i].error.code || vals1[i].error);
     }
   });
@@ -20495,6 +20943,16 @@ async function _loadAllDataInner() {
     if (!_sfRow) _sfRow = _sfRows[0];
     if (_sfRow && _sfRow.summary_fields != null && !_setOvertaken) { _setSavedTake({ summary_fields: _sfRow.summary_fields }); _setTake('summary_fields', _sfRow.summary_fields, _setEd); }
     if (_sfRow && _sfRow.summary_sections != null && !_setOvertaken) { _setSavedTake({ summary_sections: _sfRow.summary_sections }); S.data.settings.summary_sections = _sfRow.summary_sections; }
+  }
+
+  if (S.data.settings && r1.report_templates && !r1.report_templates.error && Array.isArray(r1.report_templates.data)) {
+    var _rtRows = _sortByOldest(r1.report_templates.data);
+    var _rtRow = (S.data.settings.id != null) ? _rtRows.filter(function(row) { return row && row.id === S.data.settings.id; })[0] : null;
+    if (!_rtRow) _rtRow = _rtRows[0];
+    if (_rtRow && !_setOvertaken) {
+      var _rtV = (_rtRow.report_templates && typeof _rtRow.report_templates === 'object') ? _rtRow.report_templates : {};
+      _setSavedTake({ report_templates: _rtV }); _setTake('report_templates', _rtV, _setEd);
+    }
   }
 
   if (_setEd && S.data.settings) Object.keys(_setEd).forEach(function (k) { if (!Object.prototype.hasOwnProperty.call(S.data.settings, k)) S.data.settings[k] = _setEd[k]; });
@@ -20827,6 +21285,8 @@ async function _loadAllDataInner() {
 
 }
 async function _prefetchAllFinalPdfs() {
+
+  _finalPdfListing = null;
   if (!TENANT_ID) return;
   var dir = TENANT_ID + '/final-pdfs';
 
@@ -20865,8 +21325,11 @@ async function _prefetchAllFinalPdfs() {
   var _hasReportTpl = false, _hasLoaTpl = false;
   try { _hasReportTpl = !!_getDocxTemplateMeta('report'); } catch(_e) {}
   try { _hasLoaTpl = !!_getDocxTemplateMeta('loa'); } catch(_e) {}
+
+  var _rtEach = _rtList().length > 0;
   for (var ai = 0; ai < asms.length; ai++) {
     var aid = asms[ai].id;
+    if (_rtEach) { _hasReportTpl = _rtUsesWord(asms[ai], 'report'); _hasLoaTpl = _rtUsesWord(asms[ai], 'loa'); }
     if (_hasReportTpl) {
       var rk = 'report_' + aid;
       if (_uploadedPdfs[rk] === undefined) _uploadedPdfs[rk] = !!present[rk];
@@ -21310,7 +21773,7 @@ async function toggleFindingVisibility(findingId, assessmentId, visible, severit
   if (visible && isHighCrit && _wouldNotify) {
 
     confirmDialog('Make this finding visible?',
-      'This <strong>' + (severity || '').toUpperCase() + '</strong> finding will be visible to the client. '
+      'This <strong>' + esc(_rtIn(findingId, function () { return _sevName(severity || ''); }).toUpperCase()) + '</strong> finding will be visible to the client. '
       + 'They can be emailed about it now, or see it without an email.',
       async function() {
         await _setFindingVisible(findingId, assessmentId, true, true, _was);
@@ -26475,7 +26938,7 @@ function renderMobBottomNav() {
 function renderMainRegion() {
 
   var _under = !!(S.wizard && (S.page === 'settings' || S.page === 'contractors'));
-  return '<main class="main"><header class="header"><button class="mob-toggle" onclick="toggleMobileMenu()" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button><h2>' + getTitle() + '</h2>' + (_under ? '' : renderHeaderSearch()) + '</header><div class="content">' + (_under ? '' : renderMoveBanner() + renderOverLimitBanner() + renderSchemaUpdateBanner() + renderBreadcrumbs() + renderPage()) + '</div></main>';
+  return '<main class="main"><header class="header"><button class="mob-toggle" onclick="toggleMobileMenu()" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button><h2>' + getTitle() + '</h2>' + (_under ? '' : renderHeaderSearch()) + '</header><div class="content">' + (_under ? '' : renderMoveBanner() + renderOverLimitBanner() + renderSchemaUpdateBanner() + renderBreadcrumbs() + _rtPageDraw()) + '</div></main>';
 }
 function renderOverLimitBanner() {
   var ol = TENANT_INFO && TENANT_INFO.over_limit;
@@ -26692,6 +27155,20 @@ var _FEATURE_MODULES = [
     { key: 'assets_enabled',       label: 'Assets', desc: 'Each client\u2019s hosts, ranges, domains and cloud resources with their owners, imported from Nmap, masscan, subfinder, amass, httpx and the cloud inventories. Every finding is paired with its asset and owner.', def: false },
     { key: 'scanning_enabled',     label: 'Scans', desc: 'Connect your own scanner (Burp, Nessus, Tenable and others), import results, and let clients run scans against assets you approve. Off hides the area and its navigation for everyone.', def: false, beta: true }
   ];
+var _MOD_GO = {
+  proposals_enabled: ['proposals', 'Its settings'],
+  invoices_enabled: ['finance', 'VAT and currency, under Finance'],
+  feedback_enabled: ['feedback', 'Its settings'],
+  meetings_enabled: ['integrations', 'Teams, under Integrations'],
+  contacts_enabled: ['integrations', 'Its contact form, under Integrations'],
+  contractors_enabled: ['@contractors', 'Open External'],
+  dashboard_enabled: ['dashboard', 'Its layout'],
+  qa_enabled: ['assessments', 'Its checklist, under Assessments'],
+  enable_checklists_runbooks: ['checklists', 'Its templates'],
+  assessments_enabled: ['assessments', 'Its settings'],
+  library_enabled: ['library', 'Pental\u2019s finding library'],
+  scanning_enabled: ['scanning', 'Its settings'],
+};
 function wizStep_features() {
   var s = (S.data && S.data.settings) || {};
 
@@ -26708,7 +27185,14 @@ function wizStep_features() {
 
       + (m.beta ? '<span style="display:inline-block;margin-left:0.4rem;padding:0.05rem 0.35rem;background:rgba(168,85,247,0.15);color:#a855f7;border-radius:8px;font-family:var(--font-mono);font-size:0.6rem;vertical-align:1px">BETA</span>' : '')
       + '</div>';
-    h += '<div style="font-size:0.72rem;color:var(--gray);margin-top:2px;line-height:1.4">' + esc(m.desc) + '</div></div>';
+    h += '<div style="font-size:0.72rem;color:var(--gray);margin-top:2px;line-height:1.4">' + esc(m.desc) + '</div>';
+
+    var _go = _MOD_GO[m.key];
+    if (_go && on && S.page === 'settings' && !S.wizard && !S._embedSettings && _modOn(m.key)) {
+      h += '<button type="button" class="mod-go" onclick="event.preventDefault();event.stopPropagation();'
+        + (_go[0] === '@contractors' ? 'nav(\'contractors\')' : '_setGoTab(\'' + _go[0] + '\')') + '">' + esc(_go[1]) + '</button>';
+    }
+    h += '</div>';
     h += '</label>';
   };
   var core = modules.filter(function(m) { return !m.beta; }), beta = modules.filter(function(m) { return !!m.beta; });
@@ -26900,7 +27384,7 @@ function renderPage() {
     case 'report-builder': return renderReportBuilder();
     case 'scans': return renderScans();
     case 'scan-detail': return renderScanDetail();
-    case 'settings': return renderSettings();
+    case 'settings': return '<div class="set-page">' + renderSettings() + '</div>';
     case 'qa': return renderQAQueue();
     case 'qa-review': return renderQAReview();
     case 'signatures': return renderSignatures();
@@ -26929,10 +27413,6 @@ function _conOffPage() {
     + '<p><button class="btn btn-secondary" onclick="nav(\'my-profile\')">' + IC.user + ' Your profile</button></p></div>';
 }
 window._conOffPage = _conOffPage;
-function _conTabHolds() {
-  var _lib = libraryEnabled(), _pay = invoicesEnabled();
-  return 'your teams' + (_lib && _pay ? ', the library and the rate' : _lib ? ' and the library' : _pay ? ' and the rate' : '');
-}
 function _conTeamErr(e) {
   var m = String((e && (e.message || e.details)) || e || '');
   if (/contractor_teams_name_key|duplicate key/i.test(m)) return 'There is already a team with that name.';
@@ -26954,7 +27434,7 @@ async function conTeamSetMember(profileId, teamId) {
 }
 window.conTeamSetMember = conTeamSetMember;
 var _navSuppressHistory = false;
-async function nav(p) { try { if (typeof _dashEdUndoPreview === 'function') _dashEdUndoPreview(); } catch (e) {}  if (p !== S.page && typeof _pageLeaving === 'function' && _pageLeaving(function () { nav(p); })) return;  if (S.page === 'settings' && p !== 'settings' && !S.wizard && typeof _setIsDirty === 'function' && _setIsDirty()) { _setLeaveAsk(function () { nav(p); }); return; } if (!canAccessPage(p)) { toast('You do not have access to that area', 'error'); return; } try { if (p !== 'qa-review') _coLeave(); } catch (e) {} try { _lfLeftPage(p); } catch (e) {} S.page = p; try { _coWhere({ page: p, aid: p === 'qa-review' ? (S.qa_review_id || '') : '' }); } catch (e) {} S.currentAssessment = null; S.currentFinding = null; S.currentClient = null; S.currentScanRun = null; S.searchQuery = '';
+async function nav(p) { if (p !== 'report-builder') S._rbForRt = undefined;  try { if (typeof _dashEdUndoPreview === 'function') _dashEdUndoPreview(); } catch (e) {}  if (p !== S.page && typeof _pageLeaving === 'function' && _pageLeaving(function () { nav(p); })) return;  if (S.page === 'settings' && p !== 'settings' && !S.wizard && typeof _setIsDirty === 'function' && _setIsDirty()) { _setLeaveAsk(function () { nav(p); }); return; } if (!canAccessPage(p)) { toast('You do not have access to that area', 'error'); return; } try { if (p !== 'qa-review') _coLeave(); } catch (e) {} try { _lfLeftPage(p); } catch (e) {} S.page = p; try { _coWhere({ page: p, aid: p === 'qa-review' ? (S.qa_review_id || '') : '' }); } catch (e) {} S.currentAssessment = null; S.currentFinding = null; S.currentClient = null; S.currentScanRun = null; S.searchQuery = '';
 
   S._ffOpen = null; if (!_navSuppressHistory) pushNavHistory(); saveNavState(); closeMobileMenu(); render(); }
 function toggleMobileMenu() { var sb = document.querySelector('.sidebar'); var ov = document.getElementById('mobOverlay'); if (sb) sb.classList.toggle('open'); if (ov) ov.classList.toggle('open'); }
@@ -29324,7 +29804,7 @@ async function downloadListDoc(kind, id) {
   var d = _LIST_DOCS[kind] || _LIST_DOCS.report;
   if (S.profile && S.profile.role === 'client') return d.client(id);
   await _ensurePdfTemplates();
-  if (!_getDocxTemplateMeta(d.slot)) return d.built(id);
+  if (!_rtWith(id, function () { return _getDocxTemplateMeta(d.slot); })) return d.built(id);
   var issued = _uploadedPdfs[d.slot + '_' + id] || await hasFinalPdf(d.slot, id);
   var rec = null;
   try { rec = _finalPdfRec(d.slot, id); } catch (e) { rec = null; }
@@ -29336,7 +29816,7 @@ async function downloadListDoc(kind, id) {
 window.downloadListDoc = downloadListDoc;
 async function _builtInRefused(slot, id, returnDoc) {
   await _ensurePdfTemplates();
-  if (!_getDocxTemplateMeta(slot)) return false;
+  if (!_rtWith(id, function () { return _getDocxTemplateMeta(slot); })) return false;
   try { console.info('[pdf] ' + slot + ': the firm uses its own Word template, so the built-in document is not made'); } catch (e) {}
   if (!returnDoc) {
     if (slot === 'vuln_report') await _ssDownloadScanReport(id, 'pdf');
@@ -29816,6 +30296,9 @@ function renderAssessmentDetail() {
     _leadChip += ' &bull;&nbsp;<span style="white-space:nowrap">Team: <strong>' + esc(_conTeamName(a.contractor_team_id)) + '</strong></span>';
   }
 
+  var _rtChip = !isClient ? _rtChipHtml(a) : '';
+  if (_rtChip) _leadChip += ' <span class="rt-chip-wrap">&bull;&nbsp;' + _rtChip + '</span>';
+
   var h = '<div style="margin-bottom:0.75rem">';
   h += '<div style="display:flex;align-items:flex-start;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.15rem">';
   h += '<div style="flex:1;min-width:200px">';
@@ -29977,12 +30460,13 @@ function renderAssessmentDetail() {
     } else if (!isClient && !_usesDocxTemplate) {
 
       h += '<div style="order:' + _smDocOrder('doc_report') + ';flex:1 1 200px;min-width:0;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:0.75rem">';
-      h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem">';
+
+      h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap">';
       h += '<div style="display:flex;align-items:center;gap:0.5rem">';
       h += '<div style="width:28px;height:28px;border-radius:6px;background:rgba(59,130,246,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0">' + _smDocIcon('doc_report') + '</div>';
       h += '<span style="font-size:0.8rem;font-weight:600;color:var(--text)">' + esc(_smLabel('doc_report')) + '</span></div>';
 
-      h += '<div style="display:flex;align-items:center;gap:0.4rem">';
+      h += '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;justify-content:flex-end;margin-left:auto">';
       h += _assDocAddPdfHtml(a, 'report', isClient, true);
 
       var _bi = _docPdfExtraActions(a, 'report', isClient, 'downloadReport');
@@ -30076,13 +30560,24 @@ function renderAssessmentDetail() {
       } else if (!isClient && !_usesLoaTemplate) {
 
         h += '<div style="order:' + _smDocOrder('doc_attestation') + ';flex:1 1 200px;min-width:0;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:0.75rem">';
-        h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem">';
+
+        h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap">';
         h += '<div style="display:flex;align-items:center;gap:0.5rem">';
         h += '<div style="width:28px;height:28px;border-radius:6px;background:rgba(34,197,94,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0">' + _smDocIcon('doc_attestation') + '</div>';
         h += '<span style="font-size:0.8rem;font-weight:600;color:var(--text)">' + esc(_smLabel('doc_attestation')) + '</span></div>';
-        h += '<div style="display:flex;gap:0.25rem">';
+        h += '<div style="display:flex;align-items:center;gap:0.25rem;flex-wrap:wrap;justify-content:flex-end;margin-left:auto">';
         if (canEdit()) h += '<button class="btn btn-secondary btn-sm" onclick="openLoaEditor(\'' + a.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem">' + IC.edit + '</button>';
-        h += '<button class="btn btn-secondary btn-sm" onclick="downloadAttestation(\'' + a.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem">' + IC.dl + '</button>';
+
+        h += _assDocAddPdfHtml(a, 'attestation', isClient, true);
+        var _ati = _docPdfExtraActions(a, 'attestation', isClient, 'downloadAttestation');
+
+        if (_ati.length) {
+          h += _renderDocxDownloadButton('loa', a.id, 'downloadAttestation',
+            { label: _smDocBtnLabel('doc_attestation'), variant: 'primary', extraActions: _ati,
+              mainCall: 'downloadAttestation(\'' + a.id + '\')', builtIn: true });
+        } else {
+          h += '<button class="btn btn-primary btn-sm" onclick="downloadAttestation(\'' + a.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.55rem">' + IC.dl + ' ' + esc(_smDocBtnLabel('doc_attestation')) + '</button>';
+        }
         h += '</div></div></div>';
       } else if (isClient && !_usesLoaTemplate) {
 
@@ -30130,40 +30625,65 @@ function renderAssessmentDetail() {
 
     if (_hasProposal) {
       var _usesProposalTpl = !!_getDocxTemplateMeta('proposal');
-      var _adPdfReady = !!_uploadedPdfs['proposal_' + proposal.id];
+
+      var _adPdfReady = _finalPdfKnown('proposal_' + proposal.id) === true;
+
+      var _pHome = _docHome(a, proposal);
+      var _pRow = _usesProposalTpl && proposal.status === 'draft' && !isClient;
+      var _pEx = isClient ? [] : _docPdfExtraActions(_pHome, 'proposal', false, 'downloadProposal', proposal.id);
       h += '<div style="order:' + _smDocOrder('doc_proposal') + ';flex:1 1 200px;min-width:0;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:0.75rem">';
-      h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:' + (_usesProposalTpl && proposal.status === 'draft' ? '0.5rem' : '0') + '">';
+      h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;margin-bottom:' + (_usesProposalTpl && proposal.status === 'draft' ? '0.5rem' : '0') + '">';
       h += '<div style="display:flex;align-items:center;gap:0.5rem">';
       h += '<div style="width:28px;height:28px;border-radius:6px;background:rgba(168,85,247,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0">' + _smDocIcon('doc_proposal') + '</div>';
       h += '<span style="font-size:0.8rem;font-weight:600;color:var(--text)">' + esc(_smLabel('doc_proposal')) + '</span></div>';
-      h += '<div style="display:flex;gap:0.25rem">';
-      h += '<button class="btn btn-secondary btn-sm" onclick="downloadProposal(\'' + proposal.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem">' + IC.dl + '</button>';
+      h += '<div style="display:flex;align-items:center;gap:0.25rem;flex-wrap:wrap;justify-content:flex-end;margin-left:auto">';
+
+      if (_pRow) h += '<button class="btn btn-secondary btn-sm" onclick="downloadProposal(\'' + proposal.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem">' + IC.dl + '</button>';
+
+      else if (isClient) h += _clientDocDownloadHtml(_pHome, 'proposal', { gen: 'downloadProposal', rid: proposal.id });
+      else {
+        var _pBuilt = _docIsBuiltIn('proposal');
+        var _pFoot = _pBuilt ? '' : _assDocAddPdfHtml(_pHome, 'proposal', false, false, false, proposal.id);
+        if (_pBuilt) h += _assDocAddPdfHtml(_pHome, 'proposal', false, true, false, proposal.id);
+        if (_pEx.length || _pFoot) {
+          h += _renderDocxDownloadButton('proposal', proposal.id, 'downloadProposal',
+            { label: _smDocBtnLabel('doc_proposal'), variant: 'primary', extraActions: _pEx, footer: _pFoot,
+              mainCall: 'downloadProposal(\'' + proposal.id + '\')', builtIn: true });
+        } else {
+          h += '<button class="btn btn-primary btn-sm" onclick="downloadProposal(\'' + proposal.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.55rem">' + IC.dl + ' ' + esc(_smDocBtnLabel('doc_proposal')) + '</button>';
+        }
+      }
       if (!_usesProposalTpl && proposal.status === 'draft' && (canManage() || isContractor())) h += '<button class="btn btn-primary btn-sm" onclick="sendForSigning(\'' + proposal.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem">' + IC.send + ' Send</button>';
       if (canManage()) h += '<button class="btn btn-ghost btn-sm" onclick="duplicateProposal(\'' + proposal.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem" title="Duplicate"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>';
       if (canManage()) h += '<button class="btn btn-ghost btn-sm" onclick="deleteProposal(\'' + proposal.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem;color:var(--red-text)" title="Delete proposal">' + IC.trash + '</button>';
       h += '</div></div>';
 
-      if (_usesProposalTpl && proposal.status === 'draft' && !isClient) {
+      if (_pRow) {
         h += '<div style="display:flex;align-items:center;gap:0.3rem;white-space:nowrap">';
         if (_docxAutoPdfOn('proposal')) {
-          h += _renderDocxDownloadButton('proposal', proposal.id, 'pdfFromDocxProposal', { label: _smDocBtnLabel('doc_proposal'), variant: 'primary', style: 'font-size:0.65rem;padding:0.15rem 0.35rem' });
+
+          h += _renderDocxDownloadButton('proposal', proposal.id, 'pdfFromDocxProposal', { label: _smDocBtnLabel('doc_proposal'), variant: 'primary', style: 'font-size:0.65rem;padding:0.15rem 0.35rem',
+            extraActions: _pEx, footer: _assDocAddPdfHtml(_pHome, 'proposal', false, false, false, proposal.id) });
         } else {
           h += _renderDocxDownloadButton('proposal', proposal.id, 'genProposalDOCX', {label:'DOCX',style:'font-size:0.65rem;padding:0.15rem 0.35rem'});
         }
 
         var _propAuto = _docxAutoPdfOn('proposal');
+
         if (_adPdfReady) {
-          if (!_propAuto) h += '<button class="btn btn-secondary btn-sm" onclick="downloadProposalPdf(\'' + proposal.id + '\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.dl + ' PDF</button>';
-          if (!_propAuto) h += '<button class="btn btn-ghost btn-sm" onclick="uploadFinalPdf(\'proposal\',\'' + proposal.id + '\',\'Proposal\')" style="font-size:0.6rem;padding:0.1rem 0.3rem">Replace</button>';
-          if (canManage() && !_propAuto) h += '<button class="btn btn-ghost btn-sm" onclick="deleteFinalPdf(\'proposal\',\'' + proposal.id + '\')" style="font-size:0.6rem;padding:0.1rem 0.3rem;color:var(--red-text)">Remove</button>';
           h += '<button class="btn btn-primary btn-sm" onclick="sendForSigning(\'' + proposal.id + '\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.send + ' Send</button>';
-        } else if (!_propAuto) {
-          h += '<button class="btn btn-secondary btn-sm" onclick="uploadFinalPdf(\'proposal\',\'' + proposal.id + '\',\'Proposal\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.upload + ' PDF</button>';
-        } else {
+        } else if (_propAuto) {
 
           h += '<span style="font-size:0.62rem;color:var(--gray);white-space:normal">Press ' + esc(_smDocBtnLabel('doc_proposal')) + ' to produce the PDF, then send it.</span>';
         }
         h += '</div>';
+
+        if (!_propAuto) {
+          h += '<div class="afm-row" data-afm-aid="' + esc(_pHome.id) + '" style="display:flex;gap:0.4rem;align-items:stretch;flex-wrap:wrap;margin-top:0.5rem">';
+          h += '<div style="flex:1 1 190px;min-width:0"' + _afmSlotAttrs('proposal') + '>' + renderFinalPdfSection('proposal', proposal.id, 'Proposal') + '</div>';
+          h += _assDocChipsHtml(_pHome, 'proposal', false, { slot: true, rid: proposal.id });
+          h += '</div>';
+        }
       }
       h += '</div>';
     }
@@ -30176,10 +30696,12 @@ function renderAssessmentDetail() {
       var _inv9PdfReady = !!_uploadedPdfs['invoice_' + invoice.id];
       var _inv9CanDownload = !isClient || !_invDocxMeta || _inv9PdfReady;
 
+      var _iHome = _docHome(a, invoice);
+
       if (!isClient && _invDocxMeta) {
         h += '<div style="order:' + _smDocOrder('doc_proposal') + ';flex:1 1 200px;min-width:0;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:0.75rem">';
 
-        h += '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem">';
+        h += '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem' + (_docxAutoPdfOn('invoice') ? '' : ';margin-bottom:0.5rem') + '">';
         h += '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:0.25rem 0.4rem;min-width:0;flex:1 1 8rem">';
         h += '<div style="width:28px;height:28px;border-radius:6px;background:rgba(34,197,94,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0">' + _smDocIcon('doc_invoice') + '</div>';
         h += '<span style="font-size:0.8rem;font-weight:600;color:var(--text)">' + esc(_smLabel('doc_invoice')) + '</span>';
@@ -30190,21 +30712,27 @@ function renderAssessmentDetail() {
         else if (_invStatus === 'draft') { h += '<span class="badge badge-info" style="font-size:0.6rem;padding:0.1rem 0.35rem;flex-shrink:0">DRAFT</span>'; }
         h += '<span class="mono" style="font-size:0.85rem;font-weight:700;color:' + (_isPaid ? 'var(--green)' : 'var(--text)') + ';margin-left:auto;flex-shrink:0;white-space:nowrap">' + _invAmountText(invoice) + '</span>';
         h += '</div>';
-        h += '<div style="display:flex;gap:0.25rem;flex-shrink:0">';
+
+        h += '<div style="display:flex;align-items:center;gap:0.25rem;flex-wrap:wrap;justify-content:flex-end;margin-left:auto">';
         h += '<button class="btn btn-secondary btn-sm" onclick="openM(\'invoiceview\',\'' + invoice.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem">' + IC.eye + '</button>';
         if (_docxAutoPdfOn('invoice')) {
 
           h += _renderDocxDownloadButton('invoice', invoice.id, 'pdfFromDocxInvoice',
             { label: _smDocBtnLabel('doc_invoice'), variant: 'primary',
-              extraActions: _docPdfExtraActions(a, 'invoice', isClient, 'pdfFromDocxInvoice', invoice.id),
-              footer: _assDocAddPdfHtml(a, 'invoice', isClient) });
+              extraActions: _docPdfExtraActions(_iHome, 'invoice', isClient, 'pdfFromDocxInvoice', invoice.id),
+              footer: _assDocAddPdfHtml(_iHome, 'invoice', isClient, false, false, invoice.id) });
         } else {
           h += _renderDocxDownloadButton('invoice', invoice.id, 'downloadInvoice', {label:'DOCX'});
         }
         if (canManage()) h += '<button class="btn btn-ghost btn-sm" onclick="deleteInvoice(\'' + invoice.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem;color:var(--red-text)" title="Delete invoice">' + IC.trash + '</button>';
         h += '</div></div>';
 
-        if (!_docxAutoPdfOn('invoice')) h += renderFinalPdfSection('invoice', invoice.id, 'Invoice');
+        if (!_docxAutoPdfOn('invoice')) {
+          h += '<div class="afm-row" data-afm-aid="' + esc(_iHome.id) + '" style="display:flex;gap:0.4rem;align-items:stretch;flex-wrap:wrap;margin-top:0.5rem">';
+          h += '<div style="flex:1 1 190px;min-width:0"' + _afmSlotAttrs('invoice') + '>' + renderFinalPdfSection('invoice', invoice.id, 'Invoice') + '</div>';
+          h += _assDocChipsHtml(_iHome, 'invoice', isClient, { slot: true, rid: invoice.id });
+          h += '</div>';
+        }
         h += '</div>';
       } else {
 
@@ -30220,10 +30748,22 @@ function renderAssessmentDetail() {
         else if (_invStatus === 'draft') { h += '<span class="badge badge-info" style="font-size:0.6rem;padding:0.1rem 0.35rem;flex-shrink:0">DRAFT</span>'; }
         h += '<span class="mono" style="font-size:0.85rem;font-weight:700;color:' + (_isPaid ? 'var(--green)' : 'var(--text)') + ';margin-left:auto;flex-shrink:0;white-space:nowrap">' + _invAmountText(invoice) + '</span>';
         h += '</div>';
-        h += '<div style="display:flex;gap:0.25rem;flex-shrink:0">';
+        h += '<div style="display:flex;align-items:center;gap:0.25rem;flex-wrap:wrap;justify-content:flex-end;margin-left:auto">';
         h += '<button class="btn btn-secondary btn-sm" onclick="openM(\'invoiceview\',\'' + invoice.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem">' + IC.eye + '</button>';
-        if (_inv9CanDownload) {
-          h += '<button class="btn btn-secondary btn-sm" onclick="' + (isClient && _invDocxMeta ? 'downloadInvoicePdf' : 'downloadInvoice') + '(\'' + invoice.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem" title="Download">' + IC.dl + '</button>';
+        if (isClient) {
+
+          h += _clientDocDownloadHtml(_iHome, 'invoice', { gen: _invDocxMeta ? 'downloadInvoicePdf' : 'downloadInvoice', rid: invoice.id, noMain: !_inv9CanDownload });
+        } else if (_inv9CanDownload) {
+
+          h += _assDocAddPdfHtml(_iHome, 'invoice', false, true, false, invoice.id);
+          var _iEx = _docPdfExtraActions(_iHome, 'invoice', false, 'downloadInvoice', invoice.id);
+          if (_iEx.length) {
+            h += _renderDocxDownloadButton('invoice', invoice.id, 'downloadInvoice',
+              { label: _smDocBtnLabel('doc_invoice'), variant: 'primary', extraActions: _iEx,
+                mainCall: 'downloadInvoice(\'' + invoice.id + '\')', builtIn: true });
+          } else {
+            h += '<button class="btn btn-primary btn-sm" onclick="downloadInvoice(\'' + invoice.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.55rem" title="Download">' + IC.dl + ' ' + esc(_smDocBtnLabel('doc_invoice')) + '</button>';
+          }
         }
         if (isClient && _invStatus === 'sent') {
           if (hasStripe()) h += '<button class="btn btn-primary btn-sm" onclick="payInvoice(\'' + invoice.id + '\')" style="font-size:0.7rem;padding:0.2rem 0.5rem">' + IC.cash + ' Pay</button>';
@@ -30844,11 +31384,12 @@ function renderAssessmentDetail() {
 
   if (_smEnabled('severity')) {
   h += '<!--SEC:severity--><div class="severity-summary" style="margin-bottom:1rem">';
-  h += '<div class="sev-box crit"><span class="sev-count">' + cnt.critical + '</span><span class="sev-label">Critical</span></div>';
-  h += '<div class="sev-box high"><span class="sev-count">' + cnt.high + '</span><span class="sev-label">High</span></div>';
-  h += '<div class="sev-box medium"><span class="sev-count">' + cnt.medium + '</span><span class="sev-label">Medium</span></div>';
-  h += '<div class="sev-box low"><span class="sev-count">' + cnt.low + '</span><span class="sev-label">Low</span></div>';
-  h += '<div class="sev-box info"><span class="sev-count">' + cnt.info + '</span><span class="sev-label">Info</span></div>';
+
+  var _rtLvls = _rtSevLevels();
+  [['critical', 'crit'], ['high', 'high'], ['medium', 'medium'], ['low', 'low'], ['info', 'info']].forEach(function (lv) {
+    if (_rtLvls.indexOf(lv[0]) < 0 && !cnt[lv[0]]) return;
+    h += '<div class="sev-box ' + lv[1] + '"><span class="sev-count">' + cnt[lv[0]] + '</span><span class="sev-label">' + esc(_sevName(lv[0])) + '</span></div>';
+  });
   h += '</div>';
   }
 
@@ -31404,7 +31945,7 @@ async function notifyComment(assessmentId, parentId, content, authorName, author
         var replyTo = _getNotifyEmail(parent.user_id, parent.user_role, a);
         if (replyTo) {
           var mr = _kitMail('comment_reply', { author_name: authorName || '', assessment_name: a.name || '', snippet: snippet });
-          _sends.push(queueEmail(replyTo, mr.subject, mr.html, 'comment_reply', assessmentId, null, mr.pental));
+          _sends.push(queueEmail(replyTo, mr.subject, mr.html, 'comment_reply', assessmentId, null, mr.pental, null, mr.named));
         }
       }
     }
@@ -31414,14 +31955,14 @@ async function notifyComment(assessmentId, parentId, content, authorName, author
     var recipients = _getStaffEmails(a);
     recipients.forEach(function(email) {
       var mn = _kitMail('comment_new', { author_name: authorName || '', assessment_name: a.name || '', snippet: snippet });
-      _sends.push(queueEmail(email, mn.subject, mn.html, 'comment_new', assessmentId, null, mn.pental));
+      _sends.push(queueEmail(email, mn.subject, mn.html, 'comment_new', assessmentId, null, mn.pental, null, mn.named));
     });
   } else if (_isClientVisible) {
     var client = (S.data.clients || []).find(function(c) { return c.id === a.client_id; });
     var _cEmail = _getClientEmail(client);
     if (_cEmail) {
       var mc = _kitMail('comment_new', { author_name: authorName || '', assessment_name: a.name || '', snippet: snippet });
-      _sends.push(queueEmail(_cEmail, mc.subject, mc.html, 'comment_new', assessmentId, null, mc.pental));
+      _sends.push(queueEmail(_cEmail, mc.subject, mc.html, 'comment_new', assessmentId, null, mc.pental, null, mc.named));
     }
   }
 
@@ -31568,12 +32109,12 @@ function renderFindingDetail() {
   var _fdDraft = '';
   try { _fdDraft = _findingDraftBadge(f) || ''; } catch (e) { _fdDraft = ''; }
   if (_fdDraft) h += _fdDraft.replace(/^\s+/, '');
-  h += _fdPill(_ffLabel('severity'), f.severity || 'info', _sevStyle,
+  h += _fdPill(_ffLabel('severity'), _sevName(f.severity || 'info'), _sevStyle,
                _sevStyle ? null : 'badge-' + String(f.severity || 'info'));
-  if (_ffEnabled('cvss') && f.cvss && f.cvss > 0) {
+  if (_ffEnabled('cvss') && _ffClientSees('cvss') && f.cvss && f.cvss > 0) {
     h += _fdPill(_ffLabel('cvss'), Number(f.cvss).toFixed(1), _sevStyle);
   }
-  if (_ffEnabled('status')) {
+  if (_ffEnabled('status') && _ffClientSees('status')) {
     h += _fdPill(_ffLabel('status'), (_SLABEL_MAP[f.status] || f.status || 'open').replace(/_/g, ' '),
                  null, 'badge-' + String(f.status || 'open'));
   }
@@ -31591,9 +32132,10 @@ function renderFindingDetail() {
     if (!value && isClient) return;
     _facts.push({ label: label, value: value, html: html || '' });
   };
-  if (_ffEnabled('cwe')) _pushFact(_ffLabel('cwe'), f.cwe || '');
-  if (_ffEnabled('attack')) _pushFact(_ffLabel('attack'), _attackTidy(f.attack), _attackHtml(f.attack));
-  if (_ffEnabled('category')) _pushFact(_ffLabel('category'), f.category || '');
+
+  if (_ffEnabled('cwe') && _ffClientSees('cwe')) _pushFact(_ffLabel('cwe'), f.cwe || '');
+  if (_ffEnabled('attack') && _ffClientSees('attack')) _pushFact(_ffLabel('attack'), _attackTidy(f.attack), _attackHtml(f.attack));
+  if (_ffEnabled('category') && _ffClientSees('category')) _pushFact(_ffLabel('category'), f.category || '');
   (function () {
     var cfs = (typeof _ffCustomEnabled === 'function') ? _ffCustomEnabled() : [];
     if (!cfs.length || typeof _cffIsCompact !== 'function') return;
@@ -31603,6 +32145,7 @@ function renderFindingDetail() {
     cfs.forEach(function (x) { if (ordered.indexOf(x) === -1) ordered.push(x); });
     ordered.forEach(function (cf) {
       if (!_cffIsCompact(cf)) return;
+      if (!_ffClientSees('custom_' + cf.id)) return;
       var v = vals[cf.id];
 
       var t = _cfHasContent(v) ? _fsText(cf, String(v), { report: true }) : '';
@@ -31624,8 +32167,7 @@ function renderFindingDetail() {
   if (canEdit() && _libUseOn()) h += '<button class="btn btn-ghost btn-sm" onclick="addToKB(\'' + f.id + '\')" style="font-size:0.75rem">' + IC.library + ' Library</button>';
 
   if (!(typeof _isScanFinding === 'function' && _isScanFinding(f)) && _canExportFindingsDoc()) {
-    h += '<button class="btn btn-ghost btn-sm" id="fdPdfBtn" onclick="exportFindingsDoc(\'' + f.assessment_id + '\',[\'' + f.id + '\'],\'pdf\')" style="font-size:0.75rem" title="Download this finding as a PDF">' + IC.dl + ' PDF</button>';
-    if (_fxWordOn()) h += '<button class="btn btn-ghost btn-sm" id="fdDocxBtn" onclick="exportFindingsDoc(\'' + f.assessment_id + '\',[\'' + f.id + '\'],\'docx\')" style="font-size:0.75rem" title="Download this finding as a Word file, from your Findings export template">' + IC.dl + ' Word</button>';
+    h += _fxButtonHtml('_fxOneExport', f.id, { what: 'Download this finding', variant: 'ghost', style: 'font-size:0.75rem', ids: { pdf: 'fdPdfBtn', docx: 'fdDocxBtn' } });
   }
 
   if ((isClient || canEdit()) && _retestAskable(f) && _canRetestFinding(f)) {
@@ -31691,6 +32233,7 @@ function renderFindingDetail() {
   };
 
   _ffOrder().forEach(function(_k) {
+    if (!_ffClientSees(_k)) return;
 
     if (_k.indexOf('custom_') === 0) {
       var cf = _dCustom.find(function(x) { return 'custom_' + x.id === _k; });
@@ -32102,14 +32645,15 @@ function _assFileGripHtml(f, i, n, o) {
     + '<circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/>'
     + '<circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg></button>';
 }
-function _afmBtnName(slot) { return _smDocBtnLabel(slot === 'loa' ? 'doc_attestation' : 'doc_report') + ' button'; }
+function _afmBtnName(slot) { return _smDocBtnLabel(_docLabelKey(slot)) + ' button'; }
+function _rdBtnName() { return _docxAutoPdfOn('report') ? _afmBtnName('report') : 'DOCX download button'; }
 var _AFM_DEST_ICON = {
   btn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><polyline points="7 11 12 16 17 11"/><path d="M5 20h14"/></svg>',
   menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>'
 };
-function _afmDestHtml(main, slot, next) {
-  var btn = esc(_afmBtnName(slot));
-  if (main) return '<span class="afm-dest afm-dest-main" title="' + (next ? 'The PDF uploaded here is what the ' : 'This is what the ') + btn + ' downloads">'
+function _afmDestHtml(main, slot, next, name) {
+  var btn = esc(name || _afmBtnName(slot));
+  if (main) return '<span class="afm-dest afm-dest-main" title="' + (name ? 'What its engagements’ ' + btn + ' gives' : (next ? 'The PDF uploaded here is what the ' : 'This is what the ') + btn + ' downloads') + '">'
     + _AFM_DEST_ICON.btn + (next ? 'Goes on the ' : 'On the ') + btn + '</span>';
   return '<span class="afm-dest" title="Listed in the dropdown beside the ' + btn + '">' + _AFM_DEST_ICON.menu + (next ? 'Goes in the dropdown' : 'In the dropdown') + '</span>';
 }
@@ -32452,7 +32996,9 @@ Object.assign(window, { _afmDown: _afmDown, _afmClick: _afmClick, _afmKey: _afmK
 function _assFilePromotable(f) {
   if (!f || f.scan_run_id || f.uploaded_by_client || !canEdit()) return false;
   var t = f.doc_type || '';
-  if (t !== 'report' && t !== 'attestation') return false;
+
+  if (t !== 'report' && t !== 'attestation' && t !== 'proposal' && t !== 'invoice') return false;
+  if ((t === 'proposal' || t === 'invoice') && !_docSlotId(f.assessment_id, t)) return false;
   if (!(canManage() || f.uploaded_by === (S.profile || {}).id)) return false;
   return /\.pdf$/i.test(String(f.file_name || '')) || /pdf/i.test(String(f.mime_type || ''));
 }
@@ -32477,22 +33023,25 @@ async function _assFilePromote(fileId, opts) {
   opts = opts || {};
   var f = (S.data.files || []).find(function (x) { return x.id === fileId; });
   if (!f) { toast('That document is not here', 'error'); return false; }
-  var type = f.doc_type || '', slot = type === 'attestation' ? 'loa' : 'report', btn = _afmBtnName(slot);
+  var type = f.doc_type || '', slot = _docxKeyOf(type), btn = _afmBtnName(slot);
   if (!_assFilePromotable(f)) { toast('Only whoever added this PDF, or a manager, can move it to the ' + btn, 'info'); return false; }
   if (typeof _docxAutoPdfOn === 'function' && _docxAutoPdfOn(slot)) {
     toast('The ' + btn + ' makes its PDF from your template here, so an uploaded PDF cannot be put on it', 'info');
     return false;
   }
-  var aid = f.assessment_id, key = slot + '_' + aid, path = _finalPdfPath(slot, aid);
+
+  var aid = f.assessment_id, rid = _docSlotId(aid, type) || aid, key = slot + '_' + rid, path = _finalPdfPath(slot, rid);
   var store = supabaseClient.storage.from('assessment-files');
-  var pName = f.file_name || 'Document.pdf', rName = _finalPdfName(slot, aid, slot === 'loa' ? 'Attestation' : 'Report');
+  var pName = f.file_name || 'Document.pdf', rName = _finalPdfName(slot, rid, { loa: 'Attestation', proposal: 'Proposal', invoice: 'Invoice' }[slot] || 'Report');
+
+  var pPath = f.storage_path;
   var rec = _afmSlotRec(key), had = false, rBlob = null, made = null, wrote = false, back = null, err = null;
   try { await _assFileQ; } catch (e) {}
   _showLoading();
   try {
 
-    had = await hasFinalPdf(slot, aid);
-    var dp = await store.download(f.storage_path);
+    had = await hasFinalPdf(slot, rid);
+    var dp = await store.download(pPath);
     if (dp.error || !dp.data) throw new Error(_storageErrText(dp.error || { message: 'nothing came back' }, 'reading ' + pName));
     var pBlob = new Blob([dp.data], { type: 'application/pdf' });
     if (had) {
@@ -32506,7 +33055,7 @@ async function _assFilePromote(fileId, opts) {
     }
     if (had) {
       wrote = true;
-      await _putFinalPdf(slot, aid, pBlob, pName, null, true);
+      await _putFinalPdf(slot, rid, pBlob, pName, null, true);
     } else {
 
       var cr = await store.upload(path, pBlob, { contentType: 'application/pdf', upsert: false, cacheControl: 'no-store' });
@@ -32530,19 +33079,19 @@ async function _assFilePromote(fileId, opts) {
     }
 
     try {
-      var rm = await store.remove([f.storage_path]);
+      var rm = await store.remove([pPath]);
       if (rm.error || !rm.data || !rm.data.length) console.warn('[promote] the old copy of ' + pName + ' was left in storage');
     } catch (e) {}
     if (had) Object.assign(f, res.data[0]);
     else {
       back = { name: pName, type: type, visible: f.client_visible !== false, created_at: f.created_at,
-        place: _assFileHas(f, 'sort_order') ? f.sort_order : undefined };
+        place: _assFileHas(f, 'sort_order') ? f.sort_order : undefined, aid: aid };
       S.data.files = (S.data.files || []).filter(function (x) { return x.id !== f.id; });
     }
     _uploadedPdfs[key] = true;
   } catch (e) {
     err = e;
-    if (wrote) await _afmSlotPutBack(slot, aid, had, rBlob, rec);
+    if (wrote) await _afmSlotPutBack(slot, rid, had, rBlob, rec);
     if (made) { try { await store.remove([made]); } catch (x) {} }
   } finally { _hideLoading(); }
   if (err) {
@@ -32551,21 +33100,22 @@ async function _assFilePromote(fileId, opts) {
     toast('Could not move ' + pName + ' to the ' + btn + '. ' + _friendlyErrorText(why), 'error');
     return false;
   }
-  _afmFlash.push('#final-pdf-' + slot + '-' + aid);
+  _afmFlash.push('#final-pdf-' + slot + '-' + rid);
   if (had) _afmFlash.push('[data-afm-item="' + f.id + '"]');
   render();
   _afmSay(pName + ' is now on the ' + btn);
   if (opts.undo) { toast('Undone. ' + pName + ' is back on the ' + btn + '.', 'success'); return true; }
   toast(pName + ' is now on the ' + btn + '. Click here to undo.', 'success', 10000, function () {
     if (had) _assFilePromote(f.id, { undo: true });
-    else _assSlotDemote(slot, aid, back);
+    else _assSlotDemote(slot, rid, back);
   });
   return true;
 }
 window._assFilePromote = _assFilePromote;
-async function _assSlotDemote(slot, aid, back) {
+async function _assSlotDemote(slot, rid, back) {
   if (!back) return false;
-  var store = supabaseClient.storage.from('assessment-files'), path = _finalPdfPath(slot, aid), key = slot + '_' + aid, btn = _afmBtnName(slot);
+  var aid = back.aid || rid;
+  var store = supabaseClient.storage.from('assessment-files'), path = _finalPdfPath(slot, rid), key = slot + '_' + rid, btn = _afmBtnName(slot);
   var made = null, row = null, err = null;
   try { await _assFileQ; } catch (e) {}
   _showLoading();
@@ -32648,6 +33198,45 @@ async function _assDocReplace(fileId, inputEl) {
   }
 }
 window._assDocReplace = _assDocReplace;
+function _docIsBuiltIn(key, rid) {
+  var slot = _docxKeyOf(key);
+  if (slot !== 'report' && slot !== 'loa' && slot !== 'proposal' && slot !== 'invoice') return false;
+
+  if (rid && (slot === 'report' || slot === 'loa') && _rtNeeds(rid)) return _rtWith(rid, function () { return _docIsBuiltIn(key, rid); });
+  try { return !_getDocxTemplateMeta(slot); } catch (e) { return false; }
+}
+window._docIsBuiltIn = _docIsBuiltIn;
+function _docLabelKey(slot) {
+  return { loa: 'doc_attestation', attestation: 'doc_attestation', proposal: 'doc_proposal', invoice: 'doc_invoice' }[slot] || 'doc_report';
+}
+window._docLabelKey = _docLabelKey;
+function _docSlotId(aid, type) {
+  if (type !== 'proposal' && type !== 'invoice') return aid;
+  var a = (S.data.assessments || []).find(function (x) { return x.id === aid; }) || { id: aid };
+  var r = type === 'proposal' ? _assProposalOf(a) : _assInvoiceOf(a);
+  return r ? r.id : null;
+}
+window._docSlotId = _docSlotId;
+function _docHome(a, rec) {
+  var hid = rec && rec.assessment_id;
+  if (hid && a && hid !== a.id && (S.data.assessments || []).some(function (x) { return x.id === hid; })) return { id: hid };
+  return a;
+}
+window._docHome = _docHome;
+var _finalPdfProbing = {};
+function _docLeftPdf(slot, id) {
+  var key = slot + '_' + id;
+  var k = _finalPdfKnown(key);
+  if (k !== undefined) return k === true;
+  if (!_finalPdfProbing[key] && _finalPdfRec(slot, id)) {
+    _finalPdfProbing[key] = true;
+    hasFinalPdf(slot, id).then(function (exists) {
+      _uploadedPdfs[key] = !!exists;
+      if (exists) render();
+    }).catch(function () {});
+  }
+  return false;
+}
 function _docPdfExtraActions(a, type, isClient, fn, recordId) {
   var slot = _docxKeyOf(type);
 
@@ -32660,6 +33249,16 @@ function _docPdfExtraActions(a, type, isClient, fn, recordId) {
     return !isClient && (canManage() || (f && f.uploaded_by === (S.profile || {}).id));
   };
   var _btn = 'class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:0.1rem 0.35rem;align-self:center"';
+
+  if (false) {
+    var _leftName = _finalPdfName(slot, rid, _smLabel(_docLabelKey(slot)));
+    var _left = { id: 'final_' + slot, label: _leftName, hint: (rec && rec.size) ? _ssFileSize(rec.size) : '',
+      call: 'downloadFinalPdf(\'' + slot + '\',\'' + esc(rid) + '\',' + jsArg(_leftName) + ')' };
+    if (!isClient && canEdit()) _left.manage =
+      '<button ' + _btn + ' title="Rename" onclick="_renameFinalPdf(\'' + slot + '\',\'' + esc(rid) + '\',' + jsArg(_smLabel(_docLabelKey(slot))) + ')">' + IC.edit + '</button>'
+      + '<button ' + _btn.replace('align-self:center', 'align-self:center;color:var(--red-text)') + ' title="Remove" onclick="deleteFinalPdf(\'' + slot + '\',\'' + esc(rid) + '\')">' + IC.trash + '</button>';
+    out.push(_left);
+  }
 
   var _files = _assDocFiles(a, type, isClient);
   var _ordered = _assFileOrderable(_files, isClient);
@@ -32691,9 +33290,10 @@ function _assDocChipsHtml(a, key, isClient, opts) {
 
   var rows = _assDocFiles(a, key, isClient);
   var _ordered = _assFileOrderable(rows, isClient);
-  var _slot = (opts && opts.slot && !isClient) ? (key === 'attestation' ? 'loa' : key) : '';
+  var _slot = (opts && opts.slot && !isClient) ? _docxKeyOf(key) : '';
+  var _rid = (opts && opts.rid) || _docSlotId(a.id, key) || a.id;
 
-  var _slotKey = (key === 'attestation' ? 'loa' : key) + '_' + a.id;
+  var _slotKey = _docxKeyOf(key) + '_' + _rid;
   var _hasFinal = _finalPdfKnown(_slotKey) === true;
 
   var canAdd = !isClient && canEdit() && _hasFinal && !(opts && opts.noAdd);
@@ -32716,7 +33316,7 @@ function _assDocChipsHtml(a, key, isClient, opts) {
       + '<div style="font-size:0.74rem;font-weight:600;color:var(--text);'
       + 'overflow-wrap:anywhere">' + esc(f.file_name || 'Document') + '</div>'
       + '<div style="font-size:0.66rem;color:var(--gray)">' + esc(_ssFileSize(f.file_size)) + '</div>'
-      + '<div style="margin-top:0.3rem">' + _afmDestHtml(false, key === 'attestation' ? 'loa' : 'report') + '</div></div></div>';
+      + '<div style="margin-top:0.3rem">' + _afmDestHtml(false, _docxKeyOf(key)) + '</div></div></div>';
 
     h += '<div style="display:flex;align-items:center;gap:0.25rem;justify-content:flex-end;flex-wrap:wrap">';
     h += '<button class="btn btn-ghost btn-sm" onclick="downloadAssessmentFile(\'' + esc(f.id) + '\')"'
@@ -32735,7 +33335,7 @@ function _assDocChipsHtml(a, key, isClient, opts) {
     h += '</div></div>';
   });
 
-  if (canAdd) h += _assDocAddPdfHtml(a, key, isClient, false, true);
+  if (canAdd) h += _assDocAddPdfHtml(a, key, isClient, false, true, _rid);
   return h;
 }
 window._assDocChipsHtml = _assDocChipsHtml;
@@ -32819,6 +33419,17 @@ function _assessmentOtherFilesHtml(a, isClient) {
   return h;
 }
 window._assessmentOtherFilesHtml = _assessmentOtherFilesHtml;
+function _assFileListAdd(row) {
+  if (!row) return row;
+  S.data.files = S.data.files || [];
+  var i = S.data.files.findIndex(function (x) { return x && x.id === row.id; });
+  if (i < 0) { S.data.files.unshift(row); return row; }
+  var have = Object.assign(S.data.files[i], row);
+  S.data.files.splice(i, 1);
+  S.data.files.unshift(have);
+  return have;
+}
+window._assFileListAdd = _assFileListAdd;
 function renderKbLinkModal() {
   var f = (S.data.findings || []).find(function (x) { return x.id === S._libLinkFinding; }) || {};
 
@@ -33186,6 +33797,11 @@ function renderClientDetail() {
       h += '<td onclick="event.stopPropagation()">';
       if (_getDocxTemplateMeta('proposal')) {
         h += '<div style="display:flex;align-items:center;gap:0.25rem;flex-wrap:wrap">';
+
+        if (_docxAutoPdfOn('proposal')) {
+          h += _renderDocxDownloadButton('proposal', p.id, 'pdfFromDocxProposal', {label:'PDF',style:'font-size:0.65rem;padding:0.15rem 0.35rem'});
+          if (_cpPdfReady) h += '<button class="btn btn-primary btn-sm" onclick="sendForSigning(\'' + p.id + '\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.send + ' Send</button>';
+        } else {
         h += _renderDocxDownloadButton('proposal', p.id, 'genProposalDOCX', {label:'DOCX',style:'font-size:0.65rem;padding:0.15rem 0.35rem'});
         if (_cpPdfReady) {
           h += '<button class="btn btn-secondary btn-sm" onclick="downloadProposalPdf(\'' + p.id + '\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.dl + ' PDF</button>';
@@ -33194,6 +33810,7 @@ function renderClientDetail() {
           h += '<button class="btn btn-primary btn-sm" onclick="sendForSigning(\'' + p.id + '\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.send + ' Send</button>';
         } else {
           h += '<button class="btn btn-secondary btn-sm" onclick="uploadFinalPdf(\'proposal\',\'' + p.id + '\',\'Proposal\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.upload + ' PDF</button>';
+        }
         }
         h += '</div>';
       } else {
@@ -33386,6 +34003,11 @@ function renderClientDetail() {
       h += '<td onclick="event.stopPropagation()">';
       if (pst === 'draft' && _cdDocxOn) {
         h += '<div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap">';
+
+        if (_docxAutoPdfOn('invoice')) {
+          h += _renderDocxDownloadButton('invoice', inv.id, 'pdfFromDocxInvoice', {label:'PDF',cls:'btn-table'});
+          if (_invPdfReady && canManage()) h += '<button class="btn btn-primary btn-table" onclick="sendInvoice(\'' + inv.id + '\')">' + IC.send + ' Send</button>';
+        } else {
         h += _renderDocxDownloadButton('invoice', inv.id, 'downloadInvoice', {label:'DOCX',cls:'btn-table'});
         if (_invPdfReady) {
           h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
@@ -33396,6 +34018,7 @@ function renderClientDetail() {
           }
         } else if (canManage()) {
           h += '<button class="btn btn-secondary btn-table" onclick="uploadFinalPdf(\'invoice\',\'' + inv.id + '\',\'Invoice\')">' + IC.upload + ' PDF</button>';
+        }
         }
         h += '</div>';
       } else if (pst === 'draft') {
@@ -34820,6 +35443,7 @@ async function duplicateAssessment(id) {
     if (a.phases && Array.isArray(a.phases) && a.phases.length) row.phases = a.phases;
     if (a.notes) row.notes = a.notes;
     if (a.caveats) row.caveats = a.caveats;
+    if (_rtIdOf(a)) row.report_template = a.report_template;
 
     if (newJobCode) row.job_code = newJobCode;
 
@@ -38517,6 +39141,9 @@ var _CVSS4_METRICS = [
   ['SA', 'Availability (systems beyond)', [['H', 'High'], ['L', 'Low'], ['N', 'None']]],
 ];
 function _cvssVersion() {
+
+  var _rsv = (typeof _rtSev === 'function') ? _rtSev() : null;
+  if (_rsv && (_rsv.cvss === '3.1' || _rsv.cvss === '4.0')) return _rsv.cvss;
   var v = ((S.data.settings || {}).cvss_version || '3.1');
   return (v === '4.0') ? '4.0' : '3.1';
 }
@@ -40139,8 +40766,9 @@ function _chipCounts(list, pick, order) {
 var _SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 function _ffBarHtml(scope, all) {
   return _chipBarHtml(scope, [
-    { key: 'sev', name: 'Severity', values: _chipCounts(all, function (f) { return f.severity; }, _SEV_ORDER) },
-    { key: 'status', name: 'Status', values: _chipCounts(all, function (f) { return f.status; }) },
+
+    { key: 'sev', name: _ffLabel('severity'), values: _chipCounts(all, function (f) { return f.severity; }, _SEV_ORDER).map(function (c) { c.label = _sevName(c.v); return c; }) },
+    { key: 'status', name: _ffLabel('status'), values: _chipCounts(all, function (f) { return f.status; }) },
   ], _FINDING_SORTS);
 }
 var _FINDING_SORTS = [
@@ -40325,6 +40953,12 @@ function renderSettings__portal() {
 
   if (S.settingsTab === 'testing_ip') S.settingsTab = (assessmentsEnabled() || !proposalsEnabled()) ? 'assessments' : 'proposals';
 
+  if (_SET_MOVED[S.settingsTab]) {
+    var _wasTab = S.settingsTab;
+    S.settingsTab = _SET_MOVED[_wasTab];
+    if (_wasTab === 'report_templates') setTimeout(function () { var el = document.getElementById('set_doc_report'); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start' }); }, 80);
+  }
+
   try { localStorage.setItem('pental_settings_tab', S.settingsTab); } catch(e) {}
   var _st = S.settingsTab;
   var _stOriginal = _st;
@@ -40355,33 +40989,29 @@ function renderSettings__portal() {
     {id:'login',label:'Login Page',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>'},
     {id:'branding',label:'Branding',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r="2.5"/><path d="M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10c.55 0 1-.45 1-1v-1.67c0-.55-.45-1-1-1H9.17C7.76 17.33 7 16.12 7 14.67c0-2.46 2.69-4.34 5-4.34 1.65 0 3.14.69 4.22 1.78"/></svg>'},
     {id:'modules',label:'Feature Modules',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>'},
-    {id:'pdf_templates',label:'PDF & DOCX',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>'},
+    {id:'pdf_templates',label:'Documents',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>'},
     {id:'filenames',label:'File Naming',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'},
 
     {id:'company',label:'Company',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg>'},
     {id:'finance',label:'Finance',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>'},
     {id:'bank',label:'Bank',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>'},
     {id:'dashboard',label:'Dashboard',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>'},
-    {id:'signature',label:'Signature',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>'},
+    {id:'signature',label:'Director Signature',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>'},
     {id:'sig_box',label:'Signature Box',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>'},
 
     {id:'assessments',label:'Assessments',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>'},
 
     {id:'library',label:'Library',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>'},
     {id:'findings',label:'Findings',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'},
+
     {id:'proposals',label:'Proposals',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>'},
-    {id:'invoices',label:'Invoices',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="7" y1="15" x2="10" y2="15"/></svg>'},
-    {id:'contractors',label:'External',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>'},
     {id:'attestation',label:'Attestation',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>'},
     {id:'checklists',label:'Checklists & Runbooks',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="14" height="17" rx="2"/><path d="M7 9l2 2 4-4"/><path d="M7 15h6"/></svg>'},
 
-    {id:'feedback',label:'Feedback',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'},
-    {id:'meetings',label:'Meetings',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>'},
-    {id:'contacts',label:'Contacts',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>'},
-    {id:'calendar',label:'Sales Calendar',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>'},
+    {id:'feedback',label:'Client Feedback',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'},
 
     {id:'notifications',label:'Notifications',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>'},
-    {id:'email',label:'SMTP & Signature',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>'},
+    {id:'email',label:'Email',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>'},
     {id:'templates',label:'Email Templates',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/><line x1="8" y1="10" x2="16" y2="10"/></svg>'},
     {id:'automation',label:'Automation',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9c.26.46.4.99.4 1.51V12"/></svg>'},
 
@@ -40398,6 +41028,8 @@ function renderSettings__portal() {
     {id:'updates',label:'Updates',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>'},
     {id:'feature',label:'Send Feedback',icon:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>'}
   ];
+
+  _stabs = _setGrouped(_stabs);
 
   var _stabsAll = _stabs;
   _stabs = _stabs.filter(function (t) { return _setTabOn(t.id); });
@@ -40436,16 +41068,20 @@ function renderSettings__portal() {
   }
   if (!S._embedSettings) {
 
+  h += '<div class="set-layout"><nav class="set-nav" aria-label="Settings">';
   h += '<div class="settings-tabs-wrap">';
   h += '<button class="settings-tabs-scroll settings-tabs-scroll-left" type="button" aria-label="Scroll tabs left" onclick="_scrollSettingsTabs(-1)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg></button>';
   h += '<div class="settings-tabs-bar" id="settingsTabsBar">';
+  var _gPrev = null;
   _stabs.forEach(function(tab) {
+    if (tab.group && tab.group !== _gPrev) { h += '<div class="set-group" aria-hidden="true">' + esc(tab.group) + '</div>'; _gPrev = tab.group; }
     var isActive = _stOriginal === tab.id;
-    h += '<button type="button" class="settings-tab' + (isActive ? ' is-active' : '') + '" onclick="_setGoTab(\'' + tab.id + '\')">' + tab.icon + '<span>' + esc(tab.label) + '</span></button>';
+    h += '<button type="button" class="settings-tab' + (isActive ? ' is-active' : '') + '"' + (isActive ? ' aria-current="page"' : '') + ' onclick="_setGoTab(\'' + tab.id + '\')">' + tab.icon + '<span>' + esc(tab.label) + '</span></button>';
   });
   h += '</div>';
   h += '<button class="settings-tabs-scroll settings-tabs-scroll-right" type="button" aria-label="Scroll tabs right" onclick="_scrollSettingsTabs(1)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></button>';
   h += '</div>';
+  h += '</nav><div class="set-main">';
 
   requestAnimationFrame(function() {
     _updateSettingsTabScrollArrows();
@@ -40813,7 +41449,7 @@ function renderSettings__portal() {
   h += '<span style="font-size:0.85rem;font-weight:700;color:var(--text)">Fonts</span>';
   h += '<span style="font-size:0.66rem;color:var(--green);border:1px solid rgba(34,197,94,0.3);background:rgba(34,197,94,0.08);padding:0.1rem 0.4rem;border-radius:99px;font-weight:600">Saved automatically</span>';
   h += '</div>';
-  h += '<div style="font-size:0.7rem;color:var(--gray);margin-bottom:0.75rem">Applies across Pental Report and the sign-in page. Report fonts are set per template under PDF &amp; DOCX, since different reports can use different faces.</div>';
+  h += '<div style="font-size:0.7rem;color:var(--gray);margin-bottom:0.75rem">Applies across Pental Report and the sign-in page. Report fonts are set per document under Documents (Customise), since different documents can use different faces.</div>';
   h += '<div style="display:flex;gap:1.25rem;align-items:flex-start;flex-wrap:wrap">';
   h += _fontPicker('display', 'font_display', 'Headings', 'Titles, page headings and the logo wordmark');
   h += _fontPicker('body', 'font_body', 'Body text', 'Everything else in Pental Report');
@@ -40826,136 +41462,7 @@ function renderSettings__portal() {
   }
 
   if (!S._wizBrandingSection || S._wizBrandingSection === 'pdf_templates' || S._wizBrandingSection === 'full') {
-  h += '<div class="card mt-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> Document Templates</span></div><div class="card-body">';
-
-  h += '<div style="font-weight:700;font-size:0.85rem;margin-bottom:0.5rem">Custom Word Templates</div>';
-  h += '<p style="color:var(--text);margin-bottom:0.75rem;font-size:0.82rem;line-height:1.6">Upload your own .docx templates for full control over document output. Design in Word with your branding, layout, fonts, headers, footers, and tables. Place variable placeholders where Pental Report should put your data. When downloading, Pental Report fills the template and outputs a completed .docx file. Tick <strong>Produce the PDF automatically</strong> on a document type and the filled document is also made into a PDF, contents page and page numbers included, and kept as the final PDF of that document. That happens in your browser, with nothing to set up and nothing sent to Pental.</p>';
-
-  h += '<div style="margin-bottom:1rem;padding:0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:8px">';
-  h += '<div style="font-weight:600;font-size:0.82rem;margin-bottom:0.35rem">Document Builder</div>';
-
-  var _dbKinds = _rbDocTypes().map(function (t) { var w = String(t.shortLabel || t.label || '').toLowerCase(); return (/^[aeiou]/.test(w) ? 'an ' : 'a ') + w; });
-  h += '<div style="font-size:0.72rem;color:var(--gray);margin-bottom:0.6rem;line-height:1.5">The <strong>Document Builder</strong> turns any document you already send' + (_dbKinds.length ? ', ' + _andList(_dbKinds) + ',' : '') + ' into the one Pental Report fills in, in your own style. The AI takes the last engagement out and places the fields; you check and save. Nothing needs you to know anything about how a Word file is put together.</div>';
-  h += '<div style="font-size:0.72rem;color:var(--gray);margin-bottom:0.6rem;line-height:1.5">Building a template by hand? Use <strong>Placeholder Key</strong> below for the full list of every placeholder you can drop in, including your own custom finding fields, or <strong>Draft</strong> for a ready-made .docx containing them all.</div>';
-  h += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap">';
-  h += '<button class="btn btn-primary btn-sm" onclick="nav(\'report-builder\')" style="font-size:0.78rem;padding:0.4rem 0.85rem;border-radius:6px">' + IC.edit + ' Open the Document Builder</button>';
-  h += '</div></div>';
-
-  var _docxTypes = _docTemplateTypes().concat(_fxSlotTypes());
-
-  _docxTypes.forEach(function(dt, _dti) {
-    var list = _listDocxTemplates(dt.key);
-    var defaultId = _getDefaultDocxTemplateId(dt.key);
-    var hasAny = list.length > 0;
-
-    h += '<div style="padding:0.75rem 0' + (_dti < _docxTypes.length - 1 ? ';border-bottom:1px solid var(--border)' : '') + '">';
-
-    h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap">';
-    h += '<div style="flex:1;min-width:200px"><div style="display:flex;align-items:center;gap:0.5rem"><strong style="font-size:0.85rem">' + esc(dt.label) + '</strong>';
-    if (hasAny) h += '<span class="badge badge-success" style="font-size:0.6rem;padding:0.1rem 0.35rem">' + list.length + ' CUSTOM</span>';
-    else h += '<span class="badge" style="font-size:0.6rem;padding:0.1rem 0.35rem;background:var(--bg);color:var(--gray);border:1px solid var(--border)">BUILT-IN PDF</span>';
-    h += '</div>';
-    h += '<div style="font-size:0.72rem;color:var(--gray);margin-top:1px">' + esc(dt.desc) + '</div>';
-    h += '</div>';
-    h += '<div class="flex gap-1" style="flex-shrink:0;flex-wrap:wrap">';
-    h += '<button class="btn btn-ghost btn-sm" onclick="downloadDraftDocxTemplate(\'' + dt.key + '\')" style="border-radius:6px;font-size:0.72rem" title="Download a reference .docx with all variable placeholders">' + IC.dl + ' Draft</button>';
-    h += '<button class="btn btn-ghost btn-sm" onclick="showDocxVariableRef(\'' + dt.key + '\')" style="border-radius:6px;font-size:0.72rem;color:var(--blue);font-weight:600" title="Full list of every placeholder you can put in your .docx, including your custom fields"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg> Placeholder Key</button>';
-    if (hasAny) h += '<button class="btn btn-ghost btn-sm" onclick="showStyleMapping(\'' + dt.key + '\')" style="border-radius:6px;font-size:0.72rem;color:#7c3aed" title="Review and change the styles the AI picked for code, headings, captions and lists"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg> Styles</button>';
-    h += '<button class="btn btn-ghost btn-sm" onclick="uploadDocxTemplate(\'' + dt.key + '\')" style="border-radius:6px;font-size:0.72rem;color:var(--green)" title="Upload a new .docx template">' + IC.dl + (hasAny ? ' Add Template' : ' Upload') + '</button>';
-    h += '</div></div>';
-
-    if (hasAny && dt.exportOnly) {
-      h += '<p style="margin:0.5rem 0 0;font-size:0.75rem;color:var(--gray)">Used for Export as Word on a finding and on the findings list, and for the PDF made from it in your browser. Without one, findings export as a PDF in your report\u2019s styles.</p>';
-    }
-    if (hasAny && !dt.exportOnly) {
-      var _autoPdf = _docxAutoPdfOn(dt.key);
-
-      h += '<label style="display:flex;align-items:flex-start;gap:0.45rem;margin-top:0.5rem;font-size:0.75rem;color:var(--gray);cursor:pointer">'
-        + '<input type="checkbox"' + (_autoPdf ? ' checked' : '') + ' onchange="_setDocxAutoPdf(\'' + dt.key + '\', this.checked, this)" style="margin-top:0.15rem">'
-        + '<span><strong>Produce the PDF automatically</strong> whenever this document is generated or an edited copy is uploaded. It is '
-        + 'kept as the final PDF unless you uploaded one yourself. Saves as soon as you tick it. '
-        + 'Made in your browser, the same way for everybody who downloads it, with nothing to set up.'
-        + '</span></label>';
-    }
-
-    if (hasAny) {
-      h += '<div style="margin-top:0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;overflow:hidden">';
-      list.forEach(function(t, idx) {
-        var isDefault = t.id === defaultId;
-        var displayName = t.name || t.filename || ('Template ' + (idx + 1));
-        h += '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.55rem 0.75rem' + (idx < list.length - 1 ? ';border-bottom:1px solid var(--border)' : '') + '">';
-
-        h += '<button class="btn btn-ghost btn-sm" onclick="setDefaultDocxTemplate(\'' + dt.key + '\',\'' + esc(t.id) + '\')" title="' + (isDefault ? 'This is the default' : 'Set as default') + '" style="padding:0.15rem;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;flex-shrink:0' + (isDefault ? ';color:var(--accent)' : ';color:var(--gray)') + '">';
-        if (isDefault) {
-          h += '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" fill="none"/><circle cx="12" cy="12" r="5"/></svg>';
-        } else {
-          h += '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>';
-        }
-        h += '</button>';
-
-        h += '<div style="flex:1;min-width:0">';
-        h += '<div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">';
-        h += '<span style="font-size:0.82rem;font-weight:600;color:var(--text)">' + esc(displayName) + '</span>';
-        if (isDefault) h += '<span class="badge" style="font-size:0.55rem;padding:0.05rem 0.3rem;background:rgba(var(--accent-rgb),0.15);color:var(--accent);border:1px solid var(--accent);text-transform:uppercase;letter-spacing:0.04em;font-weight:700">Default</span>';
-        h += '</div>';
-        h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:1px;overflow-wrap:anywhere">' + esc(t.filename || 'template.docx') + (t.size ? ' · ' + (t.size / 1024).toFixed(0) + ' KB' : '') + '</div>';
-
-        if (!dt.exportOnly && _docxAutoPdfOn(dt.key)) {
-          var _cv = _docxConvFor(dt.key, t.id);
-          var _box = function (on, dis, on_, label, title) {
-            return '<label title="' + esc(title) + '" style="display:inline-flex;align-items:center;gap:0.25rem;font-size:0.66rem;'
-              + 'color:var(--' + (dis ? 'gray' : 'text') + ');cursor:' + (dis ? 'not-allowed' : 'pointer') + '">'
-              + '<input type="checkbox"' + (on ? ' checked' : '') + (dis ? ' disabled' : '')
-              + ' onchange="_setDocxConv(\'' + dt.key + '\',\'' + esc(t.id) + '\',\'' + on_ + '\')">' + esc(label) + '</label>';
-          };
-          h += '<div style="display:flex;align-items:center;gap:0.7rem;margin-top:0.3rem;flex-wrap:wrap">';
-
-          h += _box(_cv !== 'none', isDefault, _cv === 'both' ? 'both' : (_cv === 'none' ? 'internal' : 'none'),
-            'Convert to PDF', isDefault
-              ? 'The default is always converted for you: it is what the download button makes.'
-              : 'Show this template\u2019s PDF in your own download menu.');
-          if (_cv === 'none') h += '<span style="font-size:0.63rem;color:var(--gray)">not converted</span>';
-          h += '</div>';
-        }
-        h += '</div>';
-
-        h += '<div style="display:flex;gap:0.25rem;flex-shrink:0">';
-        h += '<button class="btn btn-ghost btn-sm" onclick="downloadCustomDocxTemplate(\'' + dt.key + '\',\'' + esc(t.id) + '\')" style="border-radius:6px;font-size:0.7rem;padding:0.25rem 0.5rem" title="Download this template">' + IC.dl + '</button>';
-        h += '<button class="btn btn-ghost btn-sm" onclick="renameDocxTemplate(\'' + dt.key + '\',\'' + esc(t.id) + '\')" style="border-radius:6px;font-size:0.7rem;padding:0.25rem 0.5rem" title="Rename">' + IC.edit + '</button>';
-        h += '<button class="btn btn-ghost btn-sm" onclick="deleteDocxTemplate(\'' + dt.key + '\',\'' + esc(t.id) + '\')" style="border-radius:6px;font-size:0.7rem;padding:0.25rem 0.5rem;color:var(--red-text)" title="Delete this template">' + IC.trash + '</button>';
-        h += '</div>';
-        h += '</div>';
-      });
-      h += '</div>';
-    }
-    h += '</div>';
-  });
-
-  h += '<div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">';
-  h += '<div style="font-weight:700;font-size:0.85rem;margin-bottom:0.25rem">Built-in PDF & DOCX Customiser</div>';
-  h += '<p style="color:var(--gray);margin-bottom:0.5rem;font-size:0.78rem">Customise the built-in PDF and DOCX output per document type. Section order, finding fields, colours and labels apply to both formats; page layout options such as borders apply to the PDF. Used as the default when no custom Word template is uploaded above.</p>';
-  h += '<div style="display:flex;gap:0.35rem;align-items:center;flex-wrap:wrap">';
-
-  _docTemplateTypes().forEach(function (t) {
-    h += '<button class="btn btn-secondary btn-sm" onclick="openTemplateEditor(\'' + t.editorKey + '\')" style="font-size:0.78rem;padding:0.35rem 0.65rem">' + IC.edit + ' ' + esc(t.label) + '</button>';
-  });
-  h += '</div></div>';
-
-  var _curFooterMode = (s.pdf_templates || {}).footer_mode || 'company_name';
-  h += '<div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">';
-  h += '<label class="form-label" style="font-weight:700;font-size:0.85rem;margin-bottom:0.35rem">PDF Footer, Left Side</label>';
-  h += '<select class="form-select" id="set_footer_mode" style="max-width:250px">';
-  h += '<option value="company_name"' + (_curFooterMode === 'company_name' ? ' selected' : '') + '>Company Name</option>';
-  h += '<option value="logo"' + (_curFooterMode === 'logo' ? ' selected' : '') + '>Logo</option>';
-  h += '</select>';
-  h += '<p class="sub-text" style="margin-top:0.25rem;font-size:0.78rem">Choose whether your company logo or name appears in the footer of all generated PDFs.</p>';
-  h += '<button class="btn btn-secondary btn-sm" onclick="saveBranding()" style="font-size:0.78rem;margin-top:0.75rem">Save PDF footer</button>';
-  h += '</div>';
-  h += _logoVariantPicker('pdf_logo_variant', 'Logo used in PDFs',
-    'Applies to reports, proposals and invoices. Documents are on a white page, so the light-mode logo is usually the right one if your main logo is white.');
-
-  h += '</div></div>';
-  h += _datesCardHtml();
+    h += _rdSettingsHtml();
   }
 
   if (!S._wizBrandingSection || S._wizBrandingSection === 'filenames' || S._wizBrandingSection === 'full') {
@@ -41028,13 +41535,6 @@ function renderSettings__portal() {
   }
 
   if (_st === 'feedback') {
-
-  h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.star + ' Feedback Module</span></div><div class="card-body">';
-  h += '<div class="checkbox-row"><input type="checkbox" id="set_feedback_enabled"' + (feedbackEnabled() ? ' checked' : '') + '><label for="set_feedback_enabled">Enable Feedback</label></div>';
-  h += '<p class="sub-text" style="margin-top:0.25rem;margin-bottom:0.75rem">When disabled, the feedback section is hidden from navigation and clients are not prompted to leave feedback. Disable this if you collect feedback through your own external platform.</p>';
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves every module toggle on this tab, not just this one.</div>';
-  h += '<button class="btn btn-primary" onclick="saveFeatureSettings()">Save Feedback Module Setting</button>';
-  h += '</div></div>';
 
   h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.star + ' Client Feedback</span></div><div class="card-body">';
   var _fbMode = s.feedback_mode || 'internal';
@@ -41111,7 +41611,7 @@ function renderSettings__portal() {
   if (!_hasReviewLink) h += '<p class="sub-text" style="margin-top:0.25rem;color:var(--notification-color)">Add your Google review link above to unlock the Google review modes. No API key needed.</p>';
   h += '</div>';
 
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves every module toggle on this tab, not just this one.</div>';
+  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the feedback settings above.</div>';
   h += '<button class="btn btn-primary" onclick="saveFeatureSettings()">Save Feedback Settings</button>';
   h += '</div></div>';
   }
@@ -41155,10 +41655,12 @@ function renderSettings__portal() {
   h += '</div></div>';
 
   h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.doc + ' Assessment Sections</span></div><div class="card-body">';
-  h += '<p class="hint" style="margin-bottom:0.75rem">The assessment sections, in order. Reorder with the arrows, rename a heading, give it an icon, or add your own with the button below. <b>Show</b> enables the section and gives it an editor on the assessment. <b>Report</b> controls whether it is included in the generated report. <b>On new</b> shows the section on the new assessment form, so you can fill it in while creating them. Notes, Caveats and custom sections appear as rich text editors. Files lets you pick attachments that upload once the assessment is created. The AI summaries and Findings cannot be pre-filled, so they have no On new option. The order here is the assessment page\u2019s; the report\u2019s own order is set on its template, under PDF & DOCX.</p>';
+
+  h += '<p class="hint" style="margin-bottom:0.75rem">Every assessment section your reports can use. Rename a heading, give it an icon, or add your own with the button below. <b>On new</b> shows the section on the new assessment form, so you can fill it in while creating them. Notes, Caveats and custom sections appear as rich text editors. Files lets you pick attachments that upload once the assessment is created. The AI summaries and Findings cannot be pre-filled, so they have no On new option.</p>';
+  h += _rtStripHtml('sections');
 
   h += '<div class="sg-wrap sg-wrap-sm">';
-  h += '<div class="sg-row sg-sm sg-head"><span>Order</span><span style="text-align:center">Icon</span><span>Section heading</span><span style="text-align:center">Show</span><span style="text-align:center">Report</span><span style="text-align:center">Client</span><span style="text-align:center">On new</span><span style="text-align:right">Token</span><span></span></div>';
+  h += '<div class="sg-row sg-sm sg-head"><span style="text-align:center">Icon</span><span>Section heading</span><span style="text-align:center">Client</span><span style="text-align:center">On new</span><span title="The reports whose engagements show it">Used by</span><span style="text-align:right">Token</span><span></span></div>';
   h += '<div id="smList">';
   h += _smTitleRowHtml();
   _smOrder().forEach(function(key) {
@@ -41179,7 +41681,7 @@ function renderSettings__portal() {
 
   h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the summary section settings above.</div>';
   h += '<div style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center"><button class="btn btn-primary" onclick="saveSummaryFieldsConfig()">Save Assessment Sections</button>';
-  h += '<button class="btn btn-ghost btn-sm" onclick="_smResetDefaults()" title="Restore the built-in names, icons, order and toggles">Reset to defaults</button></div>';
+  h += '<button class="btn btn-ghost btn-sm" onclick="_smResetDefaults()" title="Restore the built-in names and icons, and the Default’s order and switches">Reset to defaults</button></div>';
   h += '</div></div>';
   }
   }
@@ -41201,7 +41703,9 @@ function renderSettings__portal() {
   h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:5px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Finding Fields</span></div><div class="card-body">';
 
   var _ffLib = libraryEnabled();
-  h += '<p class="hint" style="margin-bottom:0.75rem">Rename a field' + (_ffLib ? ', choose whether it appears on the finding form, and choose whether it is reused from the Library.' : ' and choose whether it appears on the finding form.') + ' A renamed field is reflected on the finding form, in the finding view and in reports (PDF and DOCX).' + (_ffLib ? ' A reused field is stored on the Library entry and pulled in when you load that entry, for example Description. Fields that are not reused stay specific to each engagement, for example Evidence.' : '') + ' Title and Severity are always shown and stay at the top. Use the arrows to order everything else, including your own custom fields, which can sit anywhere in the list.</p>';
+
+  h += '<p class="hint" style="margin-bottom:0.75rem">Every finding field your reports can use. Rename a field' + (_ffLib ? ', choose its kind and how AI writes it, and whether it is reused from the Library.' : ', and choose its kind and how AI writes it.') + ' A renamed field is renamed on the finding form, in the finding view and in reports.' + (_ffLib ? ' A reused field is stored on the Library entry and pulled in when you load that entry, for example Description. Fields that are not reused stay specific to each engagement, for example Evidence.' : '') + '</p>';
+  h += _rtStripHtml('fields');
 
   var _nfs = (S._ffPend && 'newFinding' in S._ffPend) ? S._ffPend.newFinding : _newFindingState();
   h += '<div class="form-group nf-state" style="margin-bottom:0.85rem"><label for="set_new_finding" style="display:block;margin-bottom:0.4rem">New findings are saved as</label>'
@@ -41229,35 +41733,16 @@ function renderSettings__portal() {
     + 'Either way the score is worked out from the metrics chosen, 4.0\'s as FIRST\'s calculator works it out.</p></div>';
   h += '</div></div>';
 
-  var _reqCount = 0, _fieldTotal = 1;
-  try {
-    _ffDefs().forEach(function(d) { if (_ffRequired(d.key)) _reqCount++; _fieldTotal++; });
-    _ffCustom().forEach(function(cf) { if (_ffCustomRequired(cf)) _reqCount++; _fieldTotal++; });
-    _reqCount++;
-  } catch (e) {}
-  h += '<div class="alert ' + (_reqCount > 1 ? 'alert-info' : 'alert-warning') + '" style="margin-bottom:0.75rem;font-size:0.8rem">';
-  if (_reqCount > 1) {
-    h += '<strong>' + _reqCount + ' of ' + _fieldTotal + ' fields are required.</strong> '
-      + 'A finding missing any of them is shown as a draft, and Save as final and close asks for it before letting the finding through.';
-  } else {
-    h += '<strong>Only the title is required.</strong> Nothing else being required means '
-      + '<strong>no finding is shown as a draft for something missing</strong> and Save as final and close never asks for anything. '
-      + 'Tick Required on the fields a report should not go out without.';
-  }
-  h += '</div>';
-
   h += '<div class="sg-wrap sg-wrap-ff' + (_ffLib ? '' : ' sg-nolib') + '">';
-  h += '<div class="sg-row sg-ff sg-head"><span>Order</span><span>Field label</span><span>Show in form</span><span>Required</span>' + (_ffLib ? '<span>Reuse from Library</span>' : '') + '<span style="text-align:right">Token</span><span></span></div>';
+  h += '<div class="sg-row sg-ff sg-head"><span>Field label</span>' + (_ffLib ? '<span>Reuse from Library</span>' : '') + '<span title="The reports whose engagements show it">Used by</span><span style="text-align:right">Token</span><span></span></div>';
   [{ key: 'title', label: 'Title' }, { key: 'severity', label: 'Severity' }].forEach(function(t) {
     h += '<div class="sg-box">';
     h += '<div class="sg-row sg-ff">';
 
-    h += '<span class="g-ord"></span>';
     h += '<span class="g-lab"><input type="text" class="form-input" id="ff_label_' + t.key + '" value="' + esc(_ffLabel(t.key)) + '" placeholder="' + esc(t.label) + '" title="Default: ' + esc(t.label) + '" style="height:30px;font-size:0.85rem;font-weight:600;padding:0.25rem 0.5rem"></span>';
     h += '<span class="sg-ctl">';
-    h += '<span class="g-c g-na" data-lb="Show: ">Always</span>';
-    h += '<span class="g-c g-na" data-lb="Required: " title="' + (t.key === 'title' ? 'A finding cannot be saved without a title' : 'Severity always carries a value, so it can never be empty') + '">' + (t.key === 'title' ? 'Always' : 'n/a') + '</span>';
     if (_ffLib) h += '<span class="g-c g-na" data-lb="Reuse: ">Always</span>';
+    h += '<span class="g-c g-na g-used" data-lb="Used by: ">Every report</span>';
     h += _tokSlot(_docxTokenHtml(_docxTokenForField(t.key), 'DOCX placeholder for this field'));
     h += '</span><span class="g-x"></span>';
     h += '</div>';
@@ -41280,15 +41765,8 @@ function renderSettings__portal() {
     var en = _ffEnabled(d.key);
     h += '<div data-ff-key="' + d.key + '" class="sg-box">';
     h += '<div class="sg-row sg-ff">';
-    h += _ffArrows(d.key);
     h += '<span class="g-lab"><input type="text" class="form-input" id="ff_label_' + d.key + '" value="' + esc(_ffLabel(d.key)) + '" placeholder="' + esc(d.label) + '" title="Default: ' + esc(d.label) + '" style="height:30px;font-size:0.85rem;font-weight:600;padding:0.25rem 0.5rem"></span>';
     h += '<span class="sg-ctl">';
-    h += '<label class="g-c"><input type="checkbox" id="ff_en_' + d.key + '"' + (en ? ' checked' : '') + '> Show</label>';
-    if (d.key === 'status') {
-      h += '<span class="g-c g-na" data-lb="Required: " title="Status always carries a value, so it can never be empty">n/a</span>';
-    } else {
-      h += '<label class="g-c" title="Marked with an asterisk on the finding form, and Save as final and close refuses until it is filled. Save as draft and close keeps a half-finished finding."><input type="checkbox" id="ff_req_' + d.key + '"' + (_ffRequired(d.key) ? ' checked' : '') + '> Required</label>';
-    }
     if (d.reuseLock === 'off') {
       if (_ffLib) h += '<span class="g-c g-na" data-lb="Reuse: " title="Engagement-specific, never saved to the Library">Never</span>';
     } else {
@@ -41296,6 +41774,7 @@ function renderSettings__portal() {
       h += _ffLib ? '<label class="g-c"><input type="checkbox" id="ff_re_' + d.key + '"' + (re ? ' checked' : '') + '> Reuse</label>'
         : '<input type="checkbox" id="ff_re_' + d.key + '"' + (re ? ' checked' : '') + ' hidden>';
     }
+    h += _rtUsedByHtml('findings', d.key);
     h += _tokSlot(_docxTokenHtml(_docxTokenForField(d.key), 'DOCX placeholder for this field'));
     h += '</span><span class="g-x"></span>';
     h += '</div>';
@@ -41327,7 +41806,7 @@ function renderSettings__portal() {
 
   h += '<div id="cffList"></div>';
   h += '<button class="btn btn-secondary btn-sm" style="margin-top:0.5rem" onclick="_addCustomFindingField()">+ Add Custom Field</button>';
-  h += '<p class="hint" style="margin-top:0.6rem">A custom field appears in the list above and can be moved anywhere in the order, including above a built-in field.' + (_ffLib ? ' Tick Reuse to also store it on Library entries so it is pulled in when you load one.' : '') + ' Drag a row by its handle, or use its arrows, to put it where you want it on the finding form and the finding view; the report\u2019s own order is set on its template, under PDF &amp; DOCX.</p>';
+  h += '<p class="hint" style="margin-top:0.6rem">A field you add here is on for the Default' + (_rdMainOf('') ? ', and kept out of its report until its Word file has the field\u2019s placeholder' : '') + '. Switch it on for another report, and put it in the order you want, on that report\u2019s own list above.' + (_ffLib ? ' Tick Reuse to also store it on Library entries so it is pulled in when you load one.' : '') + '</p>';
 
   if (libraryEnabled()) {
   h += '<div style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--border)">';
@@ -41357,7 +41836,7 @@ function renderSettings__portal() {
 
   h += '<div style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--border)">';
   h += '<div style="font-size:0.8rem;font-weight:700;margin-bottom:0.3rem">Exporting findings</div>';
-  h += '<p class="hint" style="margin-bottom:0.6rem">Your team can always export findings: to Excel, and as a PDF from a finding or the findings list (as a Word file too, once you upload a Findings export template under Document Templates). Turn these on to give clients the same in their portal, for the findings you have released to them. A client is given a PDF, never a Word file.</p>';
+  h += '<p class="hint" style="margin-bottom:0.6rem">Your team can always export findings: to Excel, and as a document from a finding or the findings list, a PDF unless you give the findings export a Word template of your own under Documents (then that Word file, or the PDF made from it where its PDF is made automatically). Turn these on to give clients the same in their portal, for the findings you have released to them. A client is given a PDF, never a Word file.</p>';
   h += '<label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer">';
   h += '<input type="checkbox" id="ff_export_clients"' + (_ffExportClients() ? ' checked' : '') + '>';
   h += '<span>Let clients export their findings to Excel</span>';
@@ -41478,24 +41957,10 @@ function renderSettings__portal() {
 
   if (_st === 'assessments' && assessmentsEnabled()) {
 
-  h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.qa + ' QA Module</span></div><div class="card-body">';
-  h += '<div class="checkbox-row"><input type="checkbox" id="set_qa_enabled"' + (qaEnabled() ? ' checked' : '') + '><label for="set_qa_enabled">Enable the QA Queue</label></div>';
-  h += '<p class="sub-text" style="margin-top:0.25rem;margin-bottom:0.75rem">A second pair of eyes on a report before it goes out: comments, suggested changes and sign-off, with the review carried in and out of Word. Turn it off if reports go straight from the tester to the client; the queue is then hidden from navigation for everyone.</p>';
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves every module toggle on this tab, not just this one.</div>';
-  h += '<button class="btn btn-primary" onclick="saveFeatureSettings()">Save QA Module Setting</button>';
-  h += '</div></div>';
-
   if (qaEnabled()) h += _qaClSettingsHtml();
   }
 
   if (_st === 'proposals') {
-
-  h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/></svg> Proposals Module</span></div><div class="card-body">';
-  h += '<div class="checkbox-row"><input type="checkbox" id="set_proposals_enabled"' + (proposalsEnabled() ? ' checked' : '') + '><label for="set_proposals_enabled">Enable Proposals</label></div>';
-  h += '<p class="sub-text" style="margin-top:0.25rem;margin-bottom:0.75rem">When disabled, the proposals section is hidden from navigation and assessments can be created directly without a proposal. Disable this if you manage proposals through your own external platform.</p>';
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves every module toggle on this tab, not just this one.</div>';
-  h += '<button class="btn btn-primary" onclick="saveFeatureSettings()">Save Proposals Module Setting</button>';
-  h += '</div></div>';
 
   h += '<div class="card mt-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/></svg> Proposal Authorisation</span></div><div class="card-body">';
   h += '<p style="color:var(--gray);margin-bottom:1rem;font-size:0.8rem">Controls who signs the vendor section on proposals. This appears alongside the client\'s signature on the PDF.</p>';
@@ -41537,97 +42002,13 @@ function renderSettings__portal() {
   if (!assessmentsEnabled()) h += _testingIpsCardHtml();
   }
 
-  if (_st === 'contractors') {
-
-  h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg> External Testers</span></div><div class="card-body">';
-
-  h += '<div class="checkbox-row"><input type="checkbox" id="set_contractors_enabled"' + (contractorsEnabled() ? ' checked' : '') + '><label for="set_contractors_enabled">Enable external testers</label></div>';
-  h += '<p class="sub-text" style="margin-top:0.25rem;margin-bottom:0.75rem">On, you can hand an engagement to an external tester or to a team from another consultancy, and an External tab beside Users keeps ' + _conTabHolds() + '. Each external tester sees the engagements they lead and the ones handed to their team, with those engagements\' clients, findings and files, and nothing else of your firm\'s. Off, no external tester can open anything, the External role is not offered, and the External tab and payments to external testers are hidden.</p>';
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves every module toggle on this tab, not just this one.</div>';
-  h += '<button class="btn btn-primary" onclick="saveFeatureSettings()">Save External Testers Setting</button>';
-  h += '</div></div>';
-
-  if (contractorsEnabled()) {
-
-    var _cmLib = libraryEnabled(), _cmPay = invoicesEnabled();
-    h += '<div class="card mb-4" id="set_con_moved"><div class="card-header"><span class="card-title">' + (_cmLib && _cmPay ? 'Teams, Library and Rate' : _cmLib ? 'Teams and Library' : _cmPay ? 'Teams and Rate' : 'External Teams') + '</span></div><div class="card-body">';
-    h += '<p class="sub-text" style="margin-bottom:0.75rem">Your external teams' + (_cmLib && _cmPay ? ', whether external testers can use your finding library, and the rate you pay them are' : _cmLib ? ' and whether external testers can use your finding library are' : _cmPay ? ' and the rate you pay them are' : ' are') + ' on the External tab, in the sidebar beside Users.</p>';
-    h += '<button class="btn btn-secondary" onclick="nav(\'contractors\')">' + IC.contractor + ' Open External</button>';
-    h += '</div></div>';
-  }
-  }
-
-  if (_st === 'invoices') {
-
-  h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="7" y1="15" x2="10" y2="15"/></svg> Invoices Module</span></div><div class="card-body">';
-  h += '<div class="checkbox-row"><input type="checkbox" id="set_invoices_enabled"' + (invoicesEnabled() ? ' checked' : '') + '><label for="set_invoices_enabled">Enable Invoices</label></div>';
-  h += '<p class="sub-text" style="margin-top:0.25rem;margin-bottom:0.75rem">When disabled, the invoices section is hidden from navigation and no invoice prompts appear in the assessment workflow. Disable this if you handle billing through your own external platform.</p>';
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves every module toggle on this tab, not just this one.</div>';
-  h += '<button class="btn btn-primary" onclick="saveFeatureSettings()">Save Invoices Module Setting</button>';
-  h += '</div></div>';
-
-  h += '<div class="card"><div class="card-header"><span class="card-title">Related Settings</span></div><div class="card-body">';
-
-  h += '<p class="sub-text" style="margin-bottom:0.5rem">How an invoice looks, its layout and field labels, is set on the <strong style="color:var(--accent);cursor:pointer" onclick="S.settingsTab=\'pdf_templates\';render()">PDF &amp; DOCX tab</strong>, under the invoice template.</p>';
-  h += '<p class="sub-text" style="margin-bottom:0.5rem">The bank details an invoice gives are on the <strong style="color:var(--accent);cursor:pointer" onclick="S.settingsTab=\'bank\';render()">Bank tab</strong>, and card payments are set up on the <strong style="color:var(--accent);cursor:pointer" onclick="S.settingsTab=\'integrations\';render()">Integrations tab</strong>.</p>';
-  h += '<p class="sub-text">VAT rate and currency are on the <strong style="color:var(--accent);cursor:pointer" onclick="S.settingsTab=\'finance\';render()">Finance tab</strong>.</p>';
-  h += '</div></div>';
-  }
-
-  if (_st === 'meetings') {
-
-  h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg> Meetings Module</span></div><div class="card-body">';
-  h += '<div class="checkbox-row"><input type="checkbox" id="set_meetings_enabled"' + (meetingsEnabled() ? ' checked' : '') + '><label for="set_meetings_enabled">Enable Meetings</label></div>';
-  h += '<p class="sub-text" style="margin-top:0.25rem;margin-bottom:0.75rem">When disabled, the Meetings section is hidden from navigation and no meeting prompts appear in workflows. Disable this if you schedule client meetings through your own external platform.</p>';
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves every module toggle on this tab, not just this one.</div>';
-  h += '<button class="btn btn-primary" onclick="saveFeatureSettings()">Save Meetings Module Setting</button>';
-  h += '</div></div>';
-
-  h += '<div class="card"><div class="card-header"><span class="card-title">Related Settings</span></div><div class="card-body">';
-  h += '<p class="sub-text">Microsoft Teams, which makes a confirmed meeting\'s link, is configured in the <strong style="color:var(--accent);cursor:pointer" onclick="S.settingsTab=\'integrations\';render()">Integrations tab</strong>.</p>';
-  h += '</div></div>';
-  }
-
-  if (_st === 'contacts') {
-
-  h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> Contacts Module</span></div><div class="card-body">';
-  h += '<div class="checkbox-row"><input type="checkbox" id="set_contacts_enabled"' + (contactsEnabled() ? ' checked' : '') + '><label for="set_contacts_enabled">Enable Contacts</label></div>';
-  h += '<p class="sub-text" style="margin-top:0.25rem;margin-bottom:0.75rem">When disabled, the Contacts section is hidden from navigation and no contact request prompts appear in workflows. Disable this if you manage inbound contact enquiries through your own external CRM or helpdesk.</p>';
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves every module toggle on this tab, not just this one.</div>';
-  h += '<button class="btn btn-primary" onclick="saveFeatureSettings()">Save Contacts Module Setting</button>';
-  h += '</div></div>';
-
-  h += '<div class="card"><div class="card-header"><span class="card-title">Related Settings</span></div><div class="card-body">';
-  h += '<p class="sub-text">Your website\'s contact form, and who is told of a new enquiry, are configured in the <strong style="color:var(--accent);cursor:pointer" onclick="S.settingsTab=\'integrations\';render()">Integrations tab</strong>, under Contact Form Integration.</p>';
-  h += '</div></div>';
-  }
-
   if (_st === 'dashboard') {
-
-  h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg> Dashboard Module</span></div><div class="card-body">';
-  h += '<div class="checkbox-row"><input type="checkbox" id="set_dashboard_enabled"' + (dashboardEnabled() ? ' checked' : '') + '><label for="set_dashboard_enabled">Enable Dashboard</label></div>';
-  h += '<p class="sub-text" style="margin-top:0.25rem;margin-bottom:1rem">When disabled, the dashboard page is hidden from navigation and users land on Assessments (or the first accessible page) on login. Disable this if your team prefers to work directly in module pages rather than seeing an overview.</p>';
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves every module toggle on this tab, not just this one.</div>';
-  h += '<button class="btn btn-primary" onclick="saveFeatureSettings()">Save Dashboard Settings</button>';
-  h += '</div></div>';
 
   if (!S._dashEd) {
     var _seedRole = 'admin';
     S._dashEd = { role: _seedRole, layout: _dashEdLoadLayoutForRole(_seedRole), dirty: false };
   }
   h += _renderDashboardEditor();
-  }
-
-  if (_st === 'calendar') {
-
-  h += '<div class="card mb-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Sales Calendar Module</span></div><div class="card-body">';
-
-  h += '<div class="checkbox-row"><input type="checkbox" id="set_meet_calendar_enabled"' + (meetCalendarEnabled() ? ' checked' : '') + '><label for="set_meet_calendar_enabled">Enable the Sales Calendar</label></div>';
-  h += '<p class="sub-text" style="margin-top:0.25rem;margin-bottom:1rem">The meetings booked with clients and prospects, on a calendar, for sales and admins. When disabled, it is hidden from navigation. Disable this if you keep client meetings in your own calendar.</p>';
-
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves every module toggle on this tab, not just this one.</div>';
-  h += '<button class="btn btn-primary" onclick="saveFeatureSettings()">Save Sales Calendar Setting</button>';
-  h += '</div></div>';
   }
 
   if (_st === 'attestation') {
@@ -41655,23 +42036,21 @@ function renderSettings__portal() {
 
   if (_st === 'checklists') {
 
-  var _crbEnabled = checklistsEnabled();
   h += '<div class="card mt-4"><div class="card-header"><span class="card-title"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="14" height="17" rx="2"/><path d="M7 9l2 2 4-4"/><path d="M7 15h6"/></svg> Checklists &amp; Runbooks</span></div><div class="card-body">';
   h += '<p style="color:var(--gray);margin-bottom:1rem;font-size:0.85rem">Optional structured guidance for testers. Checklists track tickable test items; runbooks document step-by-step procedures with commands. Attach one or more to each phase of an assessment to guide your team.</p>';
 
-  h += '<div style="margin-bottom:1.5rem;padding:0.85rem 1rem;background:var(--bg);border:1px solid var(--border);border-radius:8px">';
-  h += '<label style="display:flex;align-items:flex-start;gap:0.6rem;cursor:pointer">';
-  h += '<input type="checkbox" id="set_enable_checklists_runbooks"' + (_crbEnabled ? ' checked' : '') + ' style="accent-color:var(--accent);margin-top:2px" onchange="saveChecklistFeatureToggle(this.checked)">';
-  h += '<span><strong style="font-size:0.9rem">Enable Checklists &amp; Runbooks</strong>';
-  h += '<div style="font-size:0.78rem;color:var(--gray);margin-top:2px">When off, the per-phase checklist dropdowns and tester panels are hidden everywhere. Templates remain saved.</div>';
-  h += '</span></label></div>';
-
-  if (_crbEnabled) {
-
-    h += _crbShelvesHtml();
-  } else {
-    h += '<button class="btn btn-primary" onclick="saveChecklistFeatureToggle(true)">Enable to start using checklists &amp; runbooks</button>';
+  var _crbEnabled = checklistsEnabled();
+  if (!_setTabOn('modules')) {
+    h += '<div style="margin-bottom:1.5rem;padding:0.85rem 1rem;background:var(--bg);border:1px solid var(--border);border-radius:8px">';
+    h += '<label style="display:flex;align-items:flex-start;gap:0.6rem;cursor:pointer">';
+    h += '<input type="checkbox" id="set_enable_checklists_runbooks"' + (_crbEnabled ? ' checked' : '') + ' style="accent-color:var(--accent);margin-top:2px" onchange="saveChecklistFeatureToggle(this.checked)">';
+    h += '<span><strong style="font-size:0.9rem">Enable Checklists &amp; Runbooks</strong>';
+    h += '<div style="font-size:0.78rem;color:var(--gray);margin-top:2px">When off, the per-phase checklist dropdowns and tester panels are hidden everywhere. Templates remain saved.</div>';
+    h += '</span></label></div>';
   }
+
+  if (_crbEnabled) h += _crbShelvesHtml();
+  else h += '<button class="btn btn-primary" onclick="saveChecklistFeatureToggle(true)">Enable to start using checklists &amp; runbooks</button>';
 
   h += '</div></div>';
   }
@@ -42256,9 +42635,6 @@ function renderSettings__portal() {
 
     h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + IC.shield
       + ' Scans</span></div><div class="card-body">';
-    h += '<div class="checkbox-row"><input type="checkbox" id="set_scanning_enabled"'
-      + (scanningEnabled() ? ' checked' : '')
-      + '><label for="set_scanning_enabled">Use vulnerability scanning (the Scans area)</label></div>';
 
     h += _scanProvidersHtml();
 
@@ -42551,15 +42927,9 @@ function renderSettings__portal() {
     h += '</div>';
     h += '<button class="btn btn-primary" onclick="saveSelfScanSettings()">Save schedules and pricing</button>';
     h += '</div></div>';
-    h += '<p class="sub-text" style="margin-top:0.25rem">Results come from a file your own scanner produced. '
-      + 'Open an engagement, find the vulnerability scanning section, and import the export. Findings are created '
-      + 'there and deduplicated against anything already on that engagement. '
-      + '<strong>Pental does not run scans and holds no scanner credentials.</strong></p>';
-    h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves every module toggle on this tab, not just this one.</div>';
-    h += '<button class="btn btn-primary" onclick="saveFeatureSettings()">Save module setting</button>';
     h += '</div></div>';
 
-    h += '<div class="card mb-4"><div class="card-header"><span class="card-title">Lowest severity to keep</span></div><div class="card-body">';
+    h += '<div class="card mb-4"><div class="card-header"><span class="card-title">Imported results</span></div><div class="card-body">';
     h += '<div class="form-group"><label>Lowest severity to keep</label>';
     h += '<select class="form-input" id="set_scan_min_severity">';
     [['info','Keep everything, including informational'],['low','Discard informational'],
@@ -43521,6 +43891,7 @@ function renderSettings__portal() {
   }
 
   }
+  if (!S._embedSettings) h += '</div></div>';
 
   return h;
 }
@@ -46380,6 +46751,84 @@ async function _ensurePdfTemplates() {
     S.data.settings.pdf_templates = {};
   }
 }
+var _RT_BRAND_KEYS = ['logo_url', 'accent_color', 'company_name', 'company_email', 'company_phone', 'company_address', 'company_website', 'company_number'];
+function _rtBrand(tid) {
+  if (!tid || tid === '*') return null;
+  var t = _rtById(tid);
+  var b = t && t.brand;
+  return (b && typeof b === 'object') ? b : null;
+}
+function _rtBranded(tid, s) {
+  var b = _rtBrand(tid);
+  if (!b) return s;
+  var out = Object.assign({}, s || {});
+  var any = false;
+  _RT_BRAND_KEYS.forEach(function (k) {
+    var v = b[k];
+    if (typeof v === 'string' && v.trim()) { out[k] = v.trim(); any = true; }
+  });
+
+  if (typeof b.logo_url === 'string' && b.logo_url.trim()) out.logo_url_light = b.logo_url.trim();
+  return any ? out : s;
+}
+var _RT_SEV_KEYS = ['critical', 'high', 'medium', 'low', 'info'];
+function _rtSev(tid) {
+  if (tid === undefined) tid = _rtActiveId();
+  if (!tid || tid === '*') return null;
+  var t = _rtById(tid);
+  var v = t && t.severity;
+  return (v && typeof v === 'object') ? v : null;
+}
+function _rtSevKey(v) {
+  var k = String(v == null ? '' : v).trim().toLowerCase();
+  if (k === 'informational' || k === 'information' || k === 'none') k = 'info';
+  return _RT_SEV_KEYS.indexOf(k) >= 0 ? k : '';
+}
+function _rtSevNameOf(v) {
+  var k = _rtSevKey(v);
+  if (!k) return '';
+  var sv = _rtSev();
+  var n = sv && sv.names && typeof sv.names === 'object' ? sv.names[k] : '';
+  return (typeof n === 'string' && n.trim()) ? n.trim().slice(0, 40) : '';
+}
+function _rtSevLevels() {
+  var sv = _rtSev();
+  var l = sv && Array.isArray(sv.levels) ? sv.levels.filter(function (k) { return _RT_SEV_KEYS.indexOf(k) >= 0; }) : [];
+  return l.length ? _RT_SEV_KEYS.filter(function (k) { return l.indexOf(k) >= 0; }) : _RT_SEV_KEYS.slice();
+}
+var _FF_DOC_KEYS = [
+  ['cvss', ['cvss', 'cvss_score', 'cvss_vector', 'has_cvss']],
+  ['cwe', ['cwe', 'has_cwe']],
+  ['attack', ['attack', 'has_attack']],
+  ['category', ['category', '_category_raw', 'has_category']],
+  ['description', ['description', 'has_description']],
+  ['remediation', ['remediation', 'has_remediation']],
+  ['evidence', ['evidence', 'evidence_content', 'has_evidence']],
+  ['affected_assets', ['affected_hosts', 'hosts_list', 'has_affected_hosts']],
+  ['references', ['references', 'refs_list', 'references_list', 'has_references']],
+  ['status', ['status']],
+];
+function _rtSevScaleKeys(findings) {
+  var l = _rtSevLevels();
+  (findings || []).forEach(function (f) { var k = _rtSevKey(f && f.severity); if (k && l.indexOf(k) < 0) l.push(k); });
+  return _RT_SEV_KEYS.filter(function (k) { return l.indexOf(k) >= 0; });
+}
+function _rtSevKeyOfName(word) {
+  var w = String(word == null ? '' : word).trim().toLowerCase();
+  if (!w) return '';
+  for (var i = 0; i < _RT_SEV_KEYS.length; i++) {
+    var n = _rtSevNameOf(_RT_SEV_KEYS[i]);
+    if (n && n.toLowerCase() === w) return _RT_SEV_KEYS[i];
+  }
+  return '';
+}
+function _sevName(v) {
+  var n = _rtSevNameOf(v);
+  if (n) return n;
+  var k = _rtSevKey(v) || String(v == null ? '' : v).toLowerCase();
+  return k ? k.charAt(0).toUpperCase() + k.slice(1) : '';
+}
+window._sevName = _sevName;
 function getTemplate(type) {
   var base = JSON.parse(JSON.stringify(defaultTemplates[type] || {}));
   var saved = _getSavedTemplateConfig(type);
@@ -46392,6 +46841,10 @@ function getTemplate(type) {
     });
   }
 
+  var _rtB = (type === 'report' || type === 'attestation' || type === 'loa' || type === 'assessment') ? _rtBrand(_rtActiveId()) : null;
+  var _rtAcc = _rtB && typeof _rtB.accent_color === 'string' && /^#[0-9a-f]{6}$/i.test(_rtB.accent_color.trim()) ? _rtB.accent_color.trim() : '';
+  if (_rtAcc) { base.accent_color = _rtAcc; base.header_color = _rtAcc; base.cover_classification_color = _rtAcc; base.link_color = _rtAcc; }
+
   var _pdfDefault = (S.data && S.data.settings && S.data.settings.accent_color) ? S.data.settings.accent_color : '#991b1b';
   if (!base.accent_color) base.accent_color = _pdfDefault;
   if (!base.header_color) base.header_color = base.accent_color;
@@ -46400,6 +46853,12 @@ function getTemplate(type) {
   if (!base.header_text_color) base.header_text_color = '#ffffff';
 
   var dashSev = _sevColors();
+
+  var _rtSv = (type === 'report' || type === 'attestation' || type === 'loa' || type === 'assessment') ? _rtSev() : null;
+  if (_rtSv && _rtSv.colors && typeof _rtSv.colors === 'object') {
+    dashSev = Object.assign({}, dashSev);
+    _RT_SEV_KEYS.forEach(function (k) { var c = _rtSv.colors[k]; if (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c.trim())) dashSev[k] = c.trim(); });
+  }
   base.severity_colors = {
     critical: dashSev.critical || SEV_DEFAULTS.critical,
     high: dashSev.high || SEV_DEFAULTS.high,
@@ -46715,6 +47174,8 @@ function renderTemplateEditorModal() {
 
   var h = '<div class="modal-header" style="padding-bottom:0">';
   h += '<div style="flex:1;min-width:0"><h2 class="modal-title" style="margin-bottom:0.4rem">' + IC.edit + ' Template Editor</h2>';
+
+  h += '<p class="hint" style="margin:-0.15rem 0 0.5rem">The design of Pental’s own PDF. A Word template of yours keeps its own design, and takes from here only what it has a placeholder for, such as a heading’s {heading_scope}.</p>';
 
   h += '<div style="display:flex;flex-wrap:wrap;gap:0;border-bottom:2px solid var(--border);margin:0 -1rem;padding:0 1rem">';
 
@@ -47956,6 +48417,7 @@ function _coSaveAsNew() {
   return _mSaveRun(function () { return saveFinding(null, aid, { asNew: m.id }); });
 }
 function renderModal() {
+  if (!_rtLayMemo && _rtList().length) return _rtDrawing(renderModal);
   var m = S.modal;
 
   if (!m.type) return '';
@@ -47986,6 +48448,7 @@ function renderModal() {
     case 'kb-link': return renderKbLinkModal();
 
     case 'finding': return '<div class="modal-overlay"><div class="modal-content modal-xl">' + renderFindingModal() + '</div></div>';
+    case 'rt-switch': return '<div class="modal-overlay"><div class="modal-content">' + renderRtSwitchModal() + '</div></div>';
     case 'kb': return '<div class="modal-overlay"><div class="modal-content modal-xl">' + renderKBModal() + '</div></div>';
     case 'checklistEditor': return '<div class="modal-overlay"><div class="modal-content modal-xl">' + renderChecklistEditorModal() + '</div></div>';
     case 'crbTransfer': return '<div class="modal-overlay"><div class="modal-content modal-lg">' + renderChecklistTransferModal() + '</div></div>';
@@ -49846,6 +50309,54 @@ function renderClientModal() {
 function _clDeleteBtn(id) {
   return '<button class="btn btn-ghost btn-sm" data-mleft onclick="deleteClient(\'' + id + '\')" style="color:var(--red-text)" title="Delete client and all associated data">' + IC.trash + ' Delete</button>';
 }
+function _acreateSecsHtml(a) {
+  var h = '';
+  _smOrder().forEach(function(_k) {
+    if (!_smInCreate(_k) || !_smEnabled(_k)) return;
+    var _staged = _smIsStaged(_k);
+
+    var _cvHtml = '';
+    if (!_staged && _smHasClient(_k)) {
+
+      var _acvKey = _smVisKey(_k);
+      var _avis = a ? getSectionVis(a) : null;
+      var _acvOn = (_avis && typeof _avis === 'object' && Object.prototype.hasOwnProperty.call(_avis, _acvKey))
+        ? !!_avis[_acvKey] : _smClientDefault(_acvKey);
+      _cvHtml = '<label class="tpl-toggle" style="margin:0" title="Visible to the client"><input type="checkbox" class="acreate-cv" data-key="' + esc(_k) + '" data-was="' + (_acvOn ? '1' : '0') + '"' + (_acvOn ? ' checked' : '') + '><span class="tpl-toggle-track"></span><span style="font-size:0.68rem;color:var(--gray);white-space:nowrap">Client Visible</span></label>';
+    }
+    h += '<div class="proposal-section"><div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.4rem"><h4 style="margin:0">' + esc(_smLabel(_k)) + '</h4>' + _cvHtml + '</div>';
+    if (_k === 'files') {
+      h += '<input type="file" multiple id="acreate_files" class="form-input" style="font-size:0.85rem">';
+      h += '<p class="hint" style="font-size:0.72rem;margin-top:0.3rem">Selected files are attached once the assessment is created.</p>';
+    } else if (_k === 'comments') {
+      h += '<textarea id="acreate_comment" class="form-textarea" rows="3" style="font-size:0.85rem" placeholder="Add an opening comment"></textarea>';
+      h += '<p class="hint" style="font-size:0.72rem;margin-top:0.3rem">Posted as the first comment once the assessment is created.</p>';
+    } else {
+      var _d = _smDefByKey(_k);
+      var _isCustom = !_d;
+      var _edId, _val;
+      if (_isCustom) {
+        var _vals = _smParseVals(a);
+        _val = _rewriteStorageSrc(_vals[_k] || '');
+        _edId = 'acreate_custom_' + _k;
+      } else {
+        _val = _rewriteStorageSrc(a ? (a[_d.col] || '') : '');
+        _edId = (_k === 'notes') ? 'aNotes' : 'acreate_' + _d.col;
+      }
+
+      var _acs = _isCustom ? _smCustomById(_k) : null;
+      if (_acs && _cffType(_acs) !== 'html') {
+        h += '<div class="acreate-plain" data-key="' + esc(_k) + '">' + _fsControlHtml(_acs, _smPlain(_val), _edId) + '</div>';
+      } else {
+        h += buildEditorToolbar(_edId);
+
+        h += '<div class="rich-editor acreate-rich" id="' + _edId + '" data-key="' + esc(_k) + '" contenteditable="true" data-placeholder="' + esc(_smLabel(_k)) + '">' + sanitizeHtml(_val) + '</div>';
+      }
+    }
+    h += '</div>';
+  });
+  return h;
+}
 function renderAssessmentModal() {
   var m = S.modal;
   var a = m.id ? (S.data.assessments || []).find(function(x) { return x.id === m.id; }) : null;
@@ -49897,52 +50408,15 @@ function renderAssessmentModal() {
   h += '</div></div>';
   h += '</div>';
 
+  if (!a) {
+    if (typeof m.rt !== 'string') m.rt = '';
+    var _rtPk = _rtPickerHtml('aRt', m.rt, "S.modal.rt=this.value;_rtSwapSections('acreate_secs',this.value,function(){return _acreateSecsHtml(null);})");
+    if (_rtPk) h += '<div class="proposal-section"><h4>Report</h4><div class="form-group" style="margin-bottom:0">' + _rtPk
+      + '<p class="hint" style="margin-top:0.35rem">The Word file its report is made with, and the finding fields and assessment sections it shows. It can be changed on the engagement later.</p></div></div>';
+  }
   var _notesContent = _rewriteStorageSrc(a ? (a.notes || '') : '');
 
-  _smOrder().forEach(function(_k) {
-    if (!_smInCreate(_k) || !_smEnabled(_k)) return;
-    var _staged = _smIsStaged(_k);
-
-    var _cvHtml = '';
-    if (!_staged && _smHasClient(_k)) {
-
-      var _acvKey = _smVisKey(_k);
-      var _avis = a ? getSectionVis(a) : null;
-      var _acvOn = (_avis && typeof _avis === 'object' && Object.prototype.hasOwnProperty.call(_avis, _acvKey))
-        ? !!_avis[_acvKey] : _smClientDefault(_acvKey);
-      _cvHtml = '<label class="tpl-toggle" style="margin:0" title="Visible to the client"><input type="checkbox" class="acreate-cv" data-key="' + esc(_k) + '" data-was="' + (_acvOn ? '1' : '0') + '"' + (_acvOn ? ' checked' : '') + '><span class="tpl-toggle-track"></span><span style="font-size:0.68rem;color:var(--gray);white-space:nowrap">Client Visible</span></label>';
-    }
-    h += '<div class="proposal-section"><div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.4rem"><h4 style="margin:0">' + esc(_smLabel(_k)) + '</h4>' + _cvHtml + '</div>';
-    if (_k === 'files') {
-      h += '<input type="file" multiple id="acreate_files" class="form-input" style="font-size:0.85rem">';
-      h += '<p class="hint" style="font-size:0.72rem;margin-top:0.3rem">Selected files are attached once the assessment is created.</p>';
-    } else if (_k === 'comments') {
-      h += '<textarea id="acreate_comment" class="form-textarea" rows="3" style="font-size:0.85rem" placeholder="Add an opening comment"></textarea>';
-      h += '<p class="hint" style="font-size:0.72rem;margin-top:0.3rem">Posted as the first comment once the assessment is created.</p>';
-    } else {
-      var _d = _smDefByKey(_k);
-      var _isCustom = !_d;
-      var _edId, _val;
-      if (_isCustom) {
-        var _vals = _smParseVals(a);
-        _val = _rewriteStorageSrc(_vals[_k] || '');
-        _edId = 'acreate_custom_' + _k;
-      } else {
-        _val = _rewriteStorageSrc(a ? (a[_d.col] || '') : '');
-        _edId = (_k === 'notes') ? 'aNotes' : 'acreate_' + _d.col;
-      }
-
-      var _acs = _isCustom ? _smCustomById(_k) : null;
-      if (_acs && _cffType(_acs) !== 'html') {
-        h += '<div class="acreate-plain" data-key="' + esc(_k) + '">' + _fsControlHtml(_acs, _smPlain(_val), _edId) + '</div>';
-      } else {
-        h += buildEditorToolbar(_edId);
-
-        h += '<div class="rich-editor acreate-rich" id="' + _edId + '" data-key="' + esc(_k) + '" contenteditable="true" data-placeholder="' + esc(_smLabel(_k)) + '">' + sanitizeHtml(_val) + '</div>';
-      }
-    }
-    h += '</div>';
-  });
+  h += '<div id="acreate_secs">' + _acreateSecsHtml(a) + '</div>';
 
   _initProposalPhases(a);
   h += '<div class="proposal-section"><h4>Phases</h4>';
@@ -50164,6 +50638,10 @@ async function saveAssessment() {
 
     var _teamEl = document.getElementById('aTeam');
     if (_teamEl) data.contractor_team_id = _teamEl.value || null;
+
+    if (!isEdit && _rtHasDb() && !(typeof isContractor === 'function' && isContractor())) {
+      data.report_template = (typeof m.rt === 'string' && m.rt && _rtById(m.rt)) ? m.rt : null;
+    }
     Object.keys(_createSections).forEach(function(col) { data[col] = _createSections[col]; });
     if (Object.keys(_createCustom).length) {
       var _existingSS = {};
@@ -50236,6 +50714,7 @@ async function saveAssessment() {
           var minData = { client_id: clientId, name: name, type: ptype, status: status, start_date: startDate, end_date: endDate };
           if (leadId) minData.lead_id = leadId;
           if (data.job_code) minData.job_code = data.job_code;
+          if (data.report_template) minData.report_template = data.report_template;
           result = await supabaseClient.from('assessments').insert(minData).select();
           if (!result.error && result.data && result.data[0]) {
             var newId = result.data[0].id;
@@ -50648,7 +51127,7 @@ function _aiFindingLines(list, budget, opts) {
   var room = Math.max(0, Math.min(opts.cap || 2400, Math.floor(budget / Math.max(1, sorted.length))));
   var out = '', left = 0;
   sorted.forEach(function (f) {
-    var line = '- ' + String(f.title || 'Untitled').slice(0, 160) + ' [' + String(f.severity || 'info').toUpperCase() + ']';
+    var line = '- ' + String(f.title || 'Untitled').slice(0, 160) + ' [' + _rtIn(f, function () { return _sevName(f.severity || 'info'); }).toUpperCase() + ']';
     if (f.cvss && Number(f.cvss) > 0) line += ' CVSS ' + f.cvss;
     if (f.category) line += '; category: ' + String(f.category).slice(0, 60);
     var cwe = String(f.cwe || '').trim();
@@ -51357,7 +51836,2135 @@ function _atMove(btn, dir) {
   }
 }
 window._atMove = _atMove;
-function _ffCfg() {
+var _rtListMemo = { src: null, arr: null, n: -1, list: [] };
+function _rtStore() {
+  var s = (S.data && S.data.settings) || {};
+  var v = s.report_templates;
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = null; } }
+  return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+}
+function _rtList() {
+  var s = (S.data && S.data.settings) || {};
+  var src = s.report_templates;
+  var arr = (src && typeof src === 'object') ? src.list : null;
+  if (src === _rtListMemo.src && arr === _rtListMemo.arr && (arr ? arr.length : -1) === _rtListMemo.n && typeof src !== 'string') return _rtListMemo.list;
+  var l = _rtStore().list;
+  var out = Array.isArray(l) ? l.filter(function (t) {
+    return t && typeof t === 'object' && typeof t.id === 'string' && /^rt_[a-z0-9]{4,}$/.test(t.id) && typeof t.name === 'string' && t.name.trim();
+  }) : [];
+  _rtListMemo = { src: src, arr: arr, n: arr ? arr.length : -1, list: out };
+  return out;
+}
+function _rtById(id) {
+  if (!id || typeof id !== 'string') return null;
+
+  if (typeof _rtDraftView !== 'undefined' && _rtDraftView && _rtDraftView.id === id) return _rtDraftView;
+  var l = _rtList();
+  for (var i = 0; i < l.length; i++) if (l[i].id === id) return l[i];
+  return null;
+}
+function _rtIdOf(rec) {
+  var id = rec && rec.report_template;
+  return (id && typeof id === 'string' && _rtById(id)) ? id : '';
+}
+function _rtName(id) {
+  var t = _rtById(id);
+  if (t) return t.name.trim();
+
+  var m = _rdMainOf('');
+  return (m && String(m.name || '').trim()) || 'Default';
+}
+function _rtHasDb() {
+  var s = (S.data && S.data.settings) || {};
+  return Object.prototype.hasOwnProperty.call(s, 'report_templates');
+}
+var _rtAssMemo = { arr: null, map: null };
+function _rtAssessment(id) {
+  if (!id || typeof id !== 'string') return null;
+  if (S.currentAssessment && S.currentAssessment.id === id) return S.currentAssessment;
+  var arr = (S.data && S.data.assessments) || [];
+  if (_rtAssMemo.arr !== arr || !_rtAssMemo.map || _rtAssMemo.n !== arr.length) {
+    var m = {};
+    for (var i = 0; i < arr.length; i++) if (arr[i] && arr[i].id) m[arr[i].id] = arr[i];
+    _rtAssMemo = { arr: arr, map: m, n: arr.length };
+  }
+  return _rtAssMemo.map[id] || null;
+}
+function _rtFindingAid(id) {
+  if (!id || typeof id !== 'string') return '';
+  if (S.currentFinding && S.currentFinding.id === id) return S.currentFinding.assessment_id || '';
+  var l = (S.data && S.data.findings) || [];
+  for (var i = 0; i < l.length; i++) if (l[i] && l[i].id === id) return l[i].assessment_id || '';
+  return '';
+}
+function _rtResolve(x) {
+  if (x === '*') return '*';
+  if (x == null || x === '') return '';
+  if (typeof x === 'object') {
+    if (Object.prototype.hasOwnProperty.call(x, 'report_template')) return _rtIdOf(x);
+    if (x.assessment_id) return _rtIdOf(_rtAssessment(x.assessment_id));
+    return '';
+  }
+  if (typeof x === 'string') {
+    if (x.indexOf('rt_') === 0) return _rtById(x) ? x : '';
+    var a = _rtAssessment(x);
+    if (a) return _rtIdOf(a);
+    var fa = _rtFindingAid(x);
+    return fa ? _rtIdOf(_rtAssessment(fa)) : '';
+  }
+  return '';
+}
+var _rtStack = [];
+function _rtWith(x, fn) {
+  _rtStack.push(_rtResolve(x));
+  try { return fn(); } finally { _rtStack.pop(); }
+}
+window._rtWith = _rtWith;
+function _rtIsIn(x) { return _rtStack.length > 0 && _rtStack[_rtStack.length - 1] === _rtResolve(x); }
+function _rtNeeds(x) { return _rtList().length > 0 && !_rtIsIn(x); }
+function _rtIn(x, fn) { return _rtNeeds(x) ? _rtWith(x, fn) : fn(); }
+function _rtUsesWord(a, slot) {
+  try { return !!_rtWith(a, function () { return _getDocxTemplateMeta(slot); }); } catch (e) { return false; }
+}
+function _rtModalTarget() {
+  var m = S.modal;
+  if (!m || typeof m !== 'object') return null;
+  if (typeof m.rt === 'string') return _rtById(m.rt) ? m.rt : '';
+  if (m.__rtFor === m.id + '|' + m.extra) return m.__rt;
+  var out = null;
+  if (m.type === 'kb') out = '*';
+  else {
+    [m.extra, m.id].some(function (v) {
+      if (!v || typeof v !== 'string') return false;
+      var a = _rtAssessment(v);
+      if (a) { out = _rtIdOf(a); return true; }
+      var fa = _rtFindingAid(v);
+      if (fa) { out = _rtIdOf(_rtAssessment(fa)); return true; }
+      if (m.type === 'proposal') {
+        var pr = (S.data.proposals || []).find(function (x) { return x && x.id === v; });
+        if (pr) { out = _rtIdOf(pr); return true; }
+      }
+      return false;
+    });
+  }
+  try { m.__rt = out; m.__rtFor = m.id + '|' + m.extra; } catch (e) {}
+  return out;
+}
+function _rtWorkFor() {
+  if (S.page === 'report-builder' && typeof S._rbForRt === 'string') return _rtById(S._rbForRt) ? S._rbForRt : '';
+  return null;
+}
+function _rtMadeFor() {
+  var w = _rtActiveId();
+  return (w && w !== '*' && _rtById(w)) ? w : '';
+}
+async function _rtSwitchOn(tid, kind, ids) {
+  if (!tid || !ids || !ids.length) return true;
+  return _rtPut(function (v) {
+    var t = v.list.find(function (x) { return x && x.id === tid; });
+    if (!t) return false;
+    var o = t[kind] || (t[kind] = {});
+    var c = o.custom || (o.custom = {});
+    ids.forEach(function (id) {
+      c[id] = kind === 'findings' ? { enabled: true, required: false, label: '' } : { enabled: true, in_report: true, label: '' };
+      var key = kind === 'findings' ? 'custom_' + id : id;
+      if (Array.isArray(o.order) && o.order.length && o.order.indexOf(key) < 0) o.order.push(key);
+    });
+  });
+}
+function _rtPageAid() {
+  try {
+    if (S.page === 'assessment-detail' && S.currentAssessment) return S.currentAssessment.id;
+    if (S.page === 'qa-review' && S.qaAssessmentId) return S.qaAssessmentId;
+    if (S.page === 'finding-detail' && S.currentFinding) return S.currentFinding.assessment_id || '';
+    if (S.page === 'library') return '*';
+  } catch (e) {}
+  return '';
+}
+function _rtActiveId() {
+  if (_rtStack.length) return _rtStack[_rtStack.length - 1];
+  if (!_rtList().length) return '';
+
+  var w = _rtWorkFor();
+  if (w != null) return w;
+  var t = _rtModalTarget();
+  if (t != null) return t;
+  var p = _rtPageAid();
+  if (p === '*') return '*';
+  return p ? _rtIdOf(_rtAssessment(p)) : '';
+}
+function _rtPageDraw() {
+  if (!_rtList().length) return renderPage();
+  if (S.page === 'report-builder') return _rtDrawing(renderPage);
+  return _rtDrawing(function () { return _rtWith(_rtPageAid(), renderPage); });
+}
+var _rtLayMemo = null;
+function _rtDrawing(fn) {
+  if (_rtLayMemo) return fn();
+  _rtLayMemo = {};
+  try { return fn(); } finally { _rtLayMemo = null; }
+}
+function _rtLaid(kind, base, keys) {
+  var tid = _rtActiveId();
+  if (!tid || !_rtLayMemo) return _rtLay(base(), tid, kind, keys);
+  var k = kind + '\u0001' + tid + ((typeof _rtDraftView !== 'undefined' && _rtDraftView && _rtDraftView.id === tid) ? '\u0001draft' : '');
+  return _rtLayMemo[k] || (_rtLayMemo[k] = _rtLay(base(), tid, kind, keys));
+}
+function _rtLay(base, tid, kind, keys) {
+  var tpls;
+  if (!tid) {
+
+    var dv = (typeof _rtDraftView !== 'undefined' && _rtDraftView && _rtDraftView.__def) ? _rtDraftView : null;
+    if (!dv) return base;
+    tpls = [dv];
+  } else tpls = tid === '*' ? _rtList() : [_rtById(tid)].filter(Boolean);
+  if (!tpls.length) return base;
+  var out = {};
+  Object.keys(base).forEach(function (k) { out[k] = base[k]; });
+  var lay = function (t) { var o = t && t[kind]; return (o && typeof o === 'object') ? o : {}; };
+  var fields = {};
+  Object.keys(base.fields || {}).forEach(function (k) { fields[k] = Object.assign({}, base.fields[k]); });
+  var custom = (base.custom || []).map(function (c) { return Object.assign({}, c); });
+
+  if (kind === 'findings' && tid !== '*') {
+    Object.keys(fields).forEach(function (k) { delete fields[k].in_report; });
+    custom.forEach(function (c) { delete c.in_report; });
+  }
+  if (tid === '*') {
+
+    tpls.forEach(function (t) {
+      var o = lay(t);
+      Object.keys(o.fields || {}).forEach(function (k) {
+        var f = o.fields[k];
+        if (f && f.enabled === true) {
+          if (!fields[k]) fields[k] = {};
+          if (fields[k].enabled === false) fields[k].enabled = true;
+        }
+      });
+      custom.forEach(function (c) {
+        var f = (o.custom || {})[c.id];
+        if (f && f.enabled === true) c.enabled = true;
+      });
+    });
+    out.fields = fields; out.custom = custom;
+    return out;
+  }
+  var o = lay(tpls[0]);
+  Object.keys(o.fields || {}).forEach(function (k) {
+    var f = o.fields[k];
+    if (!f || typeof f !== 'object') return;
+    var e = fields[k] || {};
+    keys.forEach(function (p) { if (Object.prototype.hasOwnProperty.call(f, p)) e[p] = f[p]; });
+
+    if (Object.prototype.hasOwnProperty.call(f, 'label') && !String(f.label || '').trim()) delete e.label;
+    fields[k] = e;
+  });
+  custom = custom.map(function (c) {
+    var f = (o.custom || {})[c.id];
+    if (!f || typeof f !== 'object') { c.enabled = false; return c; }
+    keys.forEach(function (p) { if (Object.prototype.hasOwnProperty.call(f, p) && p !== 'label') c[p] = f[p]; });
+    if (typeof f.label === 'string' && f.label.trim()) c.label = f.label.trim();
+    c.enabled = f.enabled !== false;
+    return c;
+  });
+  out.fields = fields;
+  out.custom = custom;
+  if (Array.isArray(o.order) && o.order.length) out.order = o.order.filter(function (k) { return typeof k === 'string'; });
+
+  if (kind === 'findings') out.v = Math.max(typeof base.v === 'number' ? base.v : 0, 2);
+  return out;
+}
+var _RT_TABS = [['fields', 'Finding fields'], ['sections', 'Sections'], ['document', 'Document'], ['severity', 'Severity'], ['branding', 'Branding']];
+function _rtNewId() {
+  var s = '';
+  var abc = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  try {
+    var b = new Uint8Array(10); crypto.getRandomValues(b);
+    for (var i = 0; i < b.length; i++) s += abc[b[i] % abc.length];
+  } catch (e) { s = Math.random().toString(36).slice(2, 12); }
+  return 'rt_' + s;
+}
+function _rtCopy(v) { return JSON.parse(JSON.stringify(v == null ? null : v)); }
+function _rtSnapshotDefault() { return _rtSnapshotOf(''); }
+function _rtSnapshotOf(x) {
+  return _rtWith(x || '', function () {
+    var f = { fields: {}, custom: {}, order: _ffOrder().slice() };
+    ['title', 'severity'].forEach(function (k) { f.fields[k] = { label: (_ffLabel(k) !== _ffLabelDefault(k)) ? _ffLabel(k) : '' }; });
+    _ffDefs().forEach(function (d) {
+      f.fields[d.key] = { enabled: _ffEnabled(d.key), required: _ffRequired(d.key), label: (_ffLabel(d.key) !== _ffLabelDefault(d.key)) ? _ffLabel(d.key) : '' };
+      if (!_ffInReport(d.key)) f.fields[d.key].in_report = false;
+    });
+    _ffCustomAll().forEach(function (c) {
+      f.custom[c.id] = { enabled: c.enabled !== false, required: _ffCustomRequired(c), label: '' };
+      if (c.in_report === false) f.custom[c.id].in_report = false;
+    });
+    var sct = { fields: {}, custom: {}, order: _smOrder().slice() };
+    _smDefs().forEach(function (d) {
+      if (d.doc) return;
+      sct.fields[d.key] = { enabled: _smEnabled(d.key), in_report: _smInReport(d.key), label: (_smLabel(d.key) !== _smLabelDefault(d.key)) ? _smLabel(d.key) : '' };
+    });
+    _smCustom().forEach(function (c) { sct.custom[c.id] = { enabled: c.enabled !== false, in_report: _smInReport(c.id), label: '' }; });
+    return { findings: f, sections: sct };
+  });
+}
+function _rtUses(id) {
+  var a = (S.data.assessments || []).filter(function (x) { return x && x.report_template === id; }).length;
+  var p = (S.data.proposals || []).filter(function (x) { return x && x.report_template === id; }).length;
+  return { a: a, p: p };
+}
+function _rtUsesText(u) {
+  var parts = [];
+  if (u.a) parts.push(u.a + ' engagement' + (u.a === 1 ? '' : 's'));
+  if (u.p) parts.push(u.p + ' proposal' + (u.p === 1 ? '' : 's'));
+  return parts.length ? parts.join(' and ') : 'Not used yet';
+}
+function _rtDocText(tid, type) {
+  type = type || 'report';
+  return _rtWith(tid || '', function () {
+    var m = _getDocxTemplateMeta(type);
+    return m ? (m.name || 'Word template') : 'Pental’s own PDF';
+  });
+}
+async function _rtPut(fn) {
+  if (!_rtHasDb()) { toast('Your database needs its latest update before report templates can be saved', 'error'); return false; }
+  var r = await _setPutIn('report_templates', function (v) {
+    if (!Array.isArray(v.list)) v.list = [];
+    v.v = 1;
+    return fn(v);
+  });
+  if (!r || !r.ok) { _settingsSaveFailed((r && r.err && r.err.message) || 'report_templates'); return false; }
+  return true;
+}
+function _rtDefaultDocOf(key) {
+  var pt = (S.data.settings && S.data.settings.pdf_templates) || _pdfTplCache || {};
+  return (pt && pt['docx_default_' + key]) || '';
+}
+function _rtAskDefault(key, fileId, tplName) {
+  if (!fileId || fileId === 'builtin' || fileId !== _rtDefaultDocOf(key)) return Promise.resolve('none');
+  var f = _listDocxTemplates(key).filter(function (x) { return x.id === fileId; })[0];
+  var what = key === 'loa' ? 'letters of attestation' : 'reports';
+  return new Promise(function (resolve) {
+    showConfirm('<b>' + esc((f && f.name) || 'This Word file') + '</b> is the Word file the Default makes its ' + what + ' with. '
+      + 'Keep it the Default’s as well, or make it <b>' + esc(tplName || 'this template') + '</b>’s alone? '
+      + 'Made the template’s alone, engagements on the Default are made with your next Word file, or Pental’s own PDF where there is none.',
+      'The Default’s Word file', function () { resolve('mine'); }, function () { resolve(null); },
+      { confirmText: 'This template’s alone', altText: 'The Default’s too', onAlt: function () { resolve('both'); }, cancelText: 'Cancel', variant: 'warn' });
+  });
+}
+async function _rtLetDefaultGo(key) {
+  try {
+    await _ensurePdfTemplates();
+    var pt = S.data.settings && S.data.settings.pdf_templates;
+    if (!pt || typeof pt !== 'object' || !pt['docx_default_' + key]) return true;
+    delete pt['docx_default_' + key];
+    await _persistPdfTemplates();
+    return true;
+  } catch (e) { try { console.warn('[report templates] the Default could not let its Word file go', e); } catch (e2) {} return false; }
+}
+var _RT_DEF = 'default';
+function _rtDefaultDraft() {
+
+  var keep = _rtDraftView, snap;
+  _rtDraftView = null;
+  try { snap = _rtSnapshotOf(''); } finally { _rtDraftView = keep; }
+  return { id: '', __def: true, name: _rtName(''), findings: snap.findings, sections: snap.sections };
+}
+function _rtDraft() {
+  var d = S._rtDraft;
+  if (S._rtOpen === _RT_DEF) {
+    if (!d || !d.__def) { d = _rtDefaultDraft(); S._rtDraft = d; }
+    return d;
+  }
+  if (!d || d.id !== S._rtOpen) {
+    var t = _rtById(S._rtOpen);
+    d = t ? _rtCopy(t) : null;
+    S._rtDraft = d;
+  }
+  return d;
+}
+function _rtDirty() {
+  var d = S._rtDraft;
+  if (!d) return false;
+  if (d.__def) { try { return JSON.stringify(_coCanon(d)) !== JSON.stringify(_coCanon(_rtDefaultDraft())); } catch (e) { return true; } }
+  var t = _rtById(d.id);
+  try { return JSON.stringify(_coCanon(d)) !== JSON.stringify(_coCanon(t || {})); } catch (e) { return true; }
+}
+function _rtOpenTpl(id, tab) {
+  if (S._rtOpen && S._rtOpen !== id && _rtDirty()) {
+    confirmAsync('Your changes to ' + _rtName(S._rtOpen) + ' are not saved.', { title: 'Leave without saving?', confirmText: 'Leave without saving', variant: 'warn' }).then(function (ok) {
+      if (!ok) return;
+      S._rtDraft = null; S._rtOpen = id || null; S._rtTab = tab || 'fields'; render();
+    });
+    return;
+  }
+  S._rtOpen = (S._rtOpen === id && !tab) ? null : (id || null);
+  S._rtTab = tab || S._rtTab || 'fields';
+  S._rtDraft = null;
+  render();
+}
+window._rtOpenTpl = _rtOpenTpl;
+function _rtTabTo(tab) { S._rtTab = tab; render(); }
+window._rtTabTo = _rtTabTo;
+async function _rtNew() {
+  if (!_rtHasDb()) { toast('Your database needs its latest update before report templates can be added', 'error'); return; }
+  var name = await promptAsync('For example, Acme partner report, or Cloud review.', { title: 'Name the report', value: '', confirmText: 'Add report' });
+  name = String(name == null ? '' : name).replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!name) return;
+  if (_rdNameTaken(name)) { toast('There is already a report called ' + name, 'error'); return; }
+  var snap = _rtSnapshotDefault();
+  var t = { id: _rtNewId(), name: name, findings: snap.findings, sections: snap.sections, docs: {}, severity: {}, brand: {} };
+  if (!(await _rtPut(function (v) { v.list.push(t); }))) return;
+  S._rtOpen = t.id; S._rtTab = 'fields'; S._rtDraft = null;
+  toast(name + ' added', 'success');
+  render();
+}
+window._rtNew = _rtNew;
+async function _rtTokensOfWord(type, docId) {
+  try {
+    await _ensurePdfTemplates();
+    var buf = await _fetchDocxTemplate(type, docId);
+    if (!buf) return null;
+    return await _rtTokensOfBuf(buf);
+  } catch (e) { console.warn('[report templates] could not read the Word file', e); return null; }
+}
+async function _rtTokensOfBuf(buf) {
+  try {
+    await _loadDocxLibs();
+    var zip = new PizZip(buf);
+    var text = '';
+    Object.keys(zip.files).forEach(function (n) {
+      if (!/^word\/(document|header\d*|footer\d*)\.xml$/.test(n)) return;
+      try { text += ' ' + zip.file(n).asText().replace(/<[^>]+>/g, ''); } catch (e) {}
+    });
+    var out = {};
+
+    text.replace(/[\{⟦]\s*[#^\/@]?\s*([A-Za-z_][A-Za-z0-9_]*)\s*[\}⟧(]/g, function (m, k) { out[k] = true; return m; });
+    return out;
+  } catch (e) { console.warn('[report templates] could not read the Word file', e); return null; }
+}
+function _rtFollowTokens(t, used) {
+  t.findings = (t.findings && typeof t.findings === 'object') ? t.findings : {};
+  t.sections = (t.sections && typeof t.sections === 'object') ? t.sections : {};
+  ['findings', 'sections'].forEach(function (k) {
+    if (!t[k].fields || typeof t[k].fields !== 'object') t[k].fields = {};
+    if (!t[k].custom || typeof t[k].custom !== 'object' || Array.isArray(t[k].custom)) t[k].custom = {};
+  });
+  var p = _rtApplyTokens(t, used || {});
+  return { anyField: p.fields, anySection: p.sections };
+}
+function _rdFitOf(used, tid) {
+  tid = tid || '';
+  var snap = _rtSnapshotOf(tid);
+  var t = { findings: _rtCopy(snap.findings), sections: _rtCopy(snap.sections) };
+  var any = _rtWith(tid, function () { return _rtFollowTokens(t, used); });
+  var out = { t: t, fieldsOn: [], fieldsOff: [], sectionsOn: [], sectionsOff: [], fieldsIn: [], sectionsIn: [], anyField: any.anyField, anySection: any.anySection };
+  var en = function (o, k) { return !!((o || {})[k] || {}).enabled; };
+
+  var inr = function (o, k) { return ((o || {})[k] || {}).in_report !== false; };
+  var side = function (was, now, item, on, off, wasO, nowO, ins) {
+    if (was !== now) (now ? on : off).push(item);
+    else if (now && ins && !inr(wasO, item.key) && inr(nowO, item.key)) ins.push(item);
+  };
+  _rtWith(tid, function () {
+    _ffDefs().forEach(function (d) {
+      if (d.key !== 'status') side(en(snap.findings.fields, d.key), en(t.findings.fields, d.key), { key: d.key, label: _ffLabel(d.key) }, out.fieldsOn, out.fieldsOff, snap.findings.fields, t.findings.fields, out.fieldsIn);
+    });
+    _ffCustomAll().forEach(function (c) {
+      side(en(snap.findings.custom, c.id), en(t.findings.custom, c.id), { key: c.id, custom: true, label: c.label || 'Custom field' }, out.fieldsOn, out.fieldsOff, snap.findings.custom, t.findings.custom, out.fieldsIn);
+    });
+    _smDefs().forEach(function (d) {
+      if (!d.doc && _rtSecFollows(d.key)) side(en(snap.sections.fields, d.key), en(t.sections.fields, d.key), { key: d.key, label: _smLabel(d.key) }, out.sectionsOn, out.sectionsOff, snap.sections.fields, t.sections.fields, out.sectionsIn);
+    });
+    _smCustom().forEach(function (c) {
+      side(en(snap.sections.custom, c.id), en(t.sections.custom, c.id), { key: c.id, custom: true, label: c.label || 'Custom section' }, out.sectionsOn, out.sectionsOff, snap.sections.custom, t.sections.custom, out.sectionsIn);
+    });
+  });
+  out.differs = !!(out.fieldsOn.length || out.fieldsOff.length || out.sectionsOn.length || out.sectionsOff.length || out.fieldsIn.length || out.sectionsIn.length);
+  return out;
+}
+function _rdFitWords(x) {
+  var names = function (l) {
+    var n = l.map(function (i) { return i.label; });
+    return n.length > 4 ? n.slice(0, 3).join(', ') + ' and ' + (n.length - 3) + ' more' : _genList(n);
+  };
+  var on = x.fieldsOn.concat(x.sectionsOn), off = x.fieldsOff.concat(x.sectionsOff), p = [];
+  var ins = (x.fieldsIn || []).concat(x.sectionsIn || []);
+  if (off.length) p.push(names(off) + ' off');
+  if (on.length) p.push(names(on) + ' on');
+  if (ins.length) p.push(names(ins) + ' in the report');
+  return p.join(', ');
+}
+function _rdFitWhat(f, s) { return f && s ? 'finding fields and assessment sections' : (f ? 'finding fields' : 'assessment sections'); }
+function _rdFlip(list, ons, v, isSection, out, ins) {
+  list.forEach(function (i) {
+    var on = ons.indexOf(i) >= 0, e, had = true;
+    if (i.custom) e = (Array.isArray(v.custom) ? v.custom : []).filter(function (z) { return z && z.id === i.key; })[0];
+    else {
+      if (!v.fields || typeof v.fields !== 'object') v.fields = {};
+      had = !!v.fields[i.key];
+      e = v.fields[i.key] || (v.fields[i.key] = {});
+    }
+    if (!e) return;
+    out.push({ key: i.key, custom: !!i.custom, had: had, enabled: e.enabled, required: e.required, in_report: e.in_report });
+
+    if (ins && ins.indexOf(i) >= 0) { _rdIn(e, isSection); return; }
+    e.enabled = on;
+    if (!on && !isSection) e.required = false;
+    if (on) _rdIn(e, isSection);
+  });
+}
+function _rdIn(e, isSection) {
+  if (isSection) { if (e.in_report === false) e.in_report = true; }
+  else if (e.in_report === false) delete e.in_report;
+}
+function _rdUnflip(v, list) {
+  list.forEach(function (r) {
+    var e = r.custom ? (Array.isArray(v.custom) ? v.custom : []).filter(function (z) { return z && z.id === r.key; })[0] : (v.fields && v.fields[r.key]);
+    if (!e) return;
+    if (r.enabled === undefined) delete e.enabled; else e.enabled = r.enabled;
+    if (r.required === undefined) delete e.required; else e.required = r.required;
+    if (r.in_report === undefined) delete e.in_report; else e.in_report = r.in_report;
+
+    if (r.had === false && !r.custom && !Object.keys(e).length) delete v.fields[r.key];
+  });
+}
+async function _rdSetDefault(x) {
+  var rec = { finding_fields: [], summary_fields: [] };
+  var fl = x.fieldsOn.concat(x.fieldsOff, x.fieldsIn || []), sl = x.sectionsOn.concat(x.sectionsOff, x.sectionsIn || []);
+  if (fl.length) {
+    var r1 = await _setPutIn('finding_fields', function (v) { rec.finding_fields = []; _rdFlip(fl, x.fieldsOn, v, false, rec.finding_fields, x.fieldsIn); });
+    if (!r1 || !r1.ok) { _settingsSaveFailed('finding_fields'); return null; }
+  }
+  if (sl.length) {
+    var r2 = await _setPutIn('summary_fields', function (v) { rec.summary_fields = []; _rdFlip(sl, x.sectionsOn, v, true, rec.summary_fields, x.sectionsIn); });
+
+    if (!r2 || !r2.ok) { _settingsSaveFailed('summary_fields'); if (!rec.finding_fields.length) return null; rec.summary_fields = []; rec.noSections = true; }
+  }
+  return rec;
+}
+async function _rdSetTemplate(tid, x) {
+  var rec = { findings: [], sections: [] };
+  var put = function (t, out) {
+    ['findings', 'sections'].forEach(function (k) {
+      t[k] = (t[k] && typeof t[k] === 'object') ? t[k] : {};
+      if (!t[k].fields || typeof t[k].fields !== 'object') t[k].fields = {};
+      if (!t[k].custom || typeof t[k].custom !== 'object' || Array.isArray(t[k].custom)) t[k].custom = {};
+    });
+    var one = function (list, ons, k, isSection, ins) {
+      list.forEach(function (i) {
+        var bag = i.custom ? t[k].custom : t[k].fields;
+        var had = !!bag[i.key];
+        var e = bag[i.key] || (bag[i.key] = {});
+        if (out) out[k].push({ key: i.key, custom: !!i.custom, had: had, enabled: e.enabled, required: e.required, in_report: e.in_report });
+        if (ins && ins.indexOf(i) >= 0) { _rdIn(e, isSection); return; }
+        e.enabled = ons.indexOf(i) >= 0;
+        if (!e.enabled && !isSection) e.required = false;
+        if (e.enabled) _rdIn(e, isSection);
+      });
+    };
+    one(x.fieldsOn.concat(x.fieldsOff, x.fieldsIn || []), x.fieldsOn, 'findings', false, x.fieldsIn);
+    one(x.sectionsOn.concat(x.sectionsOff, x.sectionsIn || []), x.sectionsOn, 'sections', true, x.sectionsIn);
+  };
+  var ok = await _rtPut(function (v) {
+    var t0 = v.list.filter(function (z) { return z && z.id === tid; })[0];
+    if (!t0) return false;
+    rec = { findings: [], sections: [] };
+    put(t0, rec);
+  });
+  if (!ok) return null;
+  if (S._rtDraft && S._rtDraft.id === tid) put(S._rtDraft, null);
+  return rec;
+}
+async function _rdUndo(rec, prev, tid) {
+  _showLoading();
+  try {
+    if (tid) {
+      var back = function (t) {
+        ['findings', 'sections'].forEach(function (k) {
+          (rec[k] || []).forEach(function (r) {
+            var bag = t[k] && (r.custom ? t[k].custom : t[k].fields);
+            var e = bag && bag[r.key];
+            if (!e) return;
+            if (r.enabled === undefined) delete e.enabled; else e.enabled = r.enabled;
+            if (r.required === undefined) delete e.required; else e.required = r.required;
+            if (r.in_report === undefined) delete e.in_report; else e.in_report = r.in_report;
+            if (r.had === false && !Object.keys(e).length) delete bag[r.key];
+          });
+        });
+      };
+      if (!(await _rtPut(function (v) { var t0 = v.list.filter(function (z) { return z && z.id === tid; })[0]; if (!t0) return false; back(t0); }))) return;
+      if (S._rtDraft && S._rtDraft.id === tid) back(S._rtDraft);
+    } else {
+      var cols = ['finding_fields', 'summary_fields'];
+      for (var i = 0; i < cols.length; i++) {
+        if (!rec[cols[i]].length) continue;
+        var r = await _setPutIn(cols[i], (function (l) { return function (v) { _rdUnflip(v, l); }; })(rec[cols[i]]));
+        if (!r || !r.ok) { _settingsSaveFailed(cols[i]); return; }
+      }
+    }
+    if (prev && _rdFileById(prev)) {
+      try {
+        if (!tid) await _setDefaultDocxTemplate('report', prev);
+        else if (await _rtPut(function (v) { var t0 = v.list.filter(function (z) { return z && z.id === tid; })[0]; if (!t0) return false; t0.docs = (t0.docs && typeof t0.docs === 'object') ? t0.docs : {}; t0.docs.report = prev; })) {
+          if (S._rtDraft && S._rtDraft.id === tid) { S._rtDraft.docs = S._rtDraft.docs || {}; S._rtDraft.docs.report = prev; }
+        }
+      } catch (e) { console.warn('[report] its Word file could not be put back', e); }
+    }
+  } finally { _hideLoading(); }
+  toast('Put back as they were', 'success');
+  render();
+}
+async function _rdFollow(tid, x, lead, prev) {
+  var f = x.fieldsOn.length + x.fieldsOff.length + (x.fieldsIn || []).length > 0, s = x.sectionsOn.length + x.sectionsOff.length + (x.sectionsIn || []).length > 0;
+  if (!f && !s) {
+    toast(lead + ((x.anyField || x.anySection) ? '. It prints the ' + _rdFitWhat(x.anyField, x.anySection) + (tid ? ' its engagements show' : ' you have on') : ''), 'success');
+    return true;
+  }
+  var rec;
+  _showLoading();
+  try { rec = tid ? await _rdSetTemplate(tid, x) : await _rdSetDefault(x); } finally { _hideLoading(); }
+  if (!rec) return true;
+  if (rec.noSections) { s = false; x = Object.assign({}, x, { sectionsOn: [], sectionsOff: [], sectionsIn: [] }); }
+  toast(lead + '. ' + (tid ? 'Its engagements’ ' : 'Your ') + _rdFitWhat(f, s) + ' now match it: ' + _rdFitWords(x) + '. Click here to undo.', 'success', 12000, function () { _rdUndo(rec, prev, tid); });
+  render();
+  return true;
+}
+function _rdFollowDefault(x, lead, prev) { return _rdFollow('', x, lead, prev); }
+async function _rdFollowFile(fileId, prev, lead, tid) {
+  if (!canManage() || !fileId) return false;
+  var used = await _rtTokensOfWord('report', fileId);
+  if (!used) return false;
+  var x = _rdFitOf(used, tid || '');
+  if (!x.differs) return false;
+  var f = _rdFileById(fileId);
+  return _rdFollow(tid || '', x, lead || (((f && f.name) || 'It') + ' is ' + (tid ? _rtName(tid) + '’s Word file' : 'the default') + ' now'), prev);
+}
+function _rdFileById(id) {
+  if (!id) return null;
+  return _listDocxTemplates('report').filter(function (t) { return t.id === id; })[0] || null;
+}
+function _rdMainOf(tid) {
+  if (!tid) return _rdFileById(_rtWith('', function () { return _getDefaultDocxTemplateId('report'); }));
+  var t = _rtById(tid);
+  var d = t && t.docs && typeof t.docs === 'object' ? t.docs.report : '';
+  if (!d || d === 'builtin' || d === _rtDefaultDocOf('report')) return null;
+  return _rdFileById(d);
+}
+function _rdMains() {
+  var m = {}, d = _rdMainOf('');
+  if (d) m[d.id] = true;
+  _rtList().forEach(function (t) { var x = _rdMainOf(t.id); if (x) m[x.id] = true; });
+  return m;
+}
+function _rdVersionsOf(tid) {
+  var main = _rdMainOf(tid), mains = _rdMains();
+  return _listDocxTemplates('report').filter(function (f) {
+    if (mains[f.id] || (main && f.id === main.id)) return false;
+    return tid ? f.of === tid : !f.of;
+  });
+}
+function _rdDefaultFiles() { return _rtWith('', function () { return _rtDocxOffered('report', _listDocxTemplates('report')); }); }
+function _rdSharedMain(fileId, tid) {
+  if (!fileId) return false;
+  var d = _rdMainOf('');
+  if (d && d.id === fileId && tid) return true;
+  return _rtList().some(function (t) { return t.id !== tid && t.docs && t.docs.report === fileId; });
+}
+async function _rdClaim(ids, tid) {
+  if (!ids.length || !tid) return true;
+  await _ensurePdfTemplates();
+  var arr = ((S.data.settings || {}).pdf_templates || {}).docx_templates_report;
+  if (!Array.isArray(arr)) return false;
+  var n = 0;
+  arr.forEach(function (x) { if (x && ids.indexOf(x.id) >= 0 && x.of !== tid) { x.of = tid; n++; } });
+  if (!n) return true;
+  return (await _persistPdfTemplates()) !== false;
+}
+function _rdNameTaken(n, except) {
+  var x = String(n || '').trim().toLowerCase();
+  if (!x || x === 'default') return true;
+  if (except !== '' && _rdMainOf('') && _rtName('').trim().toLowerCase() === x) return true;
+  return _rtList().some(function (t) { return t.id !== except && t.name.trim().toLowerCase() === x; });
+}
+function _rdFreeName(name) {
+  var base = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Word template';
+  var nm = base, k = 2;
+  while (_rdNameTaken(nm)) nm = base.slice(0, 76) + ' ' + (k++);
+  return nm;
+}
+function _rdUploadPlan(h, was) {
+  h = h || {};
+  var p = { h: h, was: was || null, hadMain: !!_rdMainOf(''), of: '', tid: '', opts: {}, report: '' };
+  if (was) {
+
+    p.opts.rev = Date.now().toString(36);
+    p.opts.noDefault = true;
+    var own = _rtList().filter(function (t) { return t.docs && t.docs.report === was.id; })[0];
+    p.report = was.of || (own && !(_rdMainOf('') && _rdMainOf('').id === was.id) ? own.id : '');
+    return p;
+  }
+  if (h.version !== undefined) { p.of = h.version || ''; p.report = p.of; p.opts.noDefault = true; return p; }
+  if (h.own) { p.of = h.own; p.report = h.own; p.opts.noDefault = true; return p; }
+  if (!p.hadMain) return p;
+  p.opts.noDefault = true;
+  if (_rtSettingsOn() && _rtHasDb() && canManage()) { p.tid = _rtNewId(); p.of = p.tid; p.report = p.tid; }
+  return p;
+}
+function _rdOwnerOf(fileId) {
+  var m = _rdMainOf('');
+  if (m && m.id === fileId) return '';
+  var t = _rtList().filter(function (x) { var mm = _rdMainOf(x.id); return mm && mm.id === fileId; })[0];
+  return t ? t.id : null;
+}
+function _rdSetsText(tid, short) {
+  return _rtWith(tid || '', function () {
+    var nf = 2;
+    _ffDefs().forEach(function (d) { if (d.key !== 'status' && _ffEnabled(d.key)) nf++; });
+    nf += _ffCustomEnabled().length;
+
+    var ns = _smDefs().filter(function (d) { return !d.doc && !_RT_SEC_NEVER[d.key] && _smKeyOn(d.key) && _smEnabled(d.key); }).length
+      + _smCustom().filter(function (c) { return c.enabled !== false; }).length;
+    return nf + (short ? ' field' : ' finding field') + (nf === 1 ? '' : 's') + ' · ' + ns + (short ? ' section' : ' assessment section') + (ns === 1 ? '' : 's');
+  });
+}
+async function _rdAfterUpload(x) {
+  if (!canManage() || !x || !x.id) return false;
+  var h = x.h || {};
+  if (h.version !== undefined && !x.was) {
+    toast(x.name + ' added to ' + _rtName(h.version || '') + '’s download menu', 'success');
+    return true;
+  }
+  var used = await _rtTokensOfBuf(x.buf);
+
+  if (x.was) {
+    var owner = _rdOwnerOf(x.id);
+    if (owner === null || !used) { toast(x.name + ' replaced', 'success'); return true; }
+    return _rdFollow(owner, _rdFitOf(used, owner), x.name + ' replaced');
+  }
+
+  if (h.own) {
+    var tid = h.own;
+    if (!(await _rtPut(function (v) { var t0 = v.list.filter(function (z) { return z && z.id === tid; })[0]; if (!t0) return false; t0.docs = (t0.docs && typeof t0.docs === 'object') ? t0.docs : {}; t0.docs.report = x.id; }))) {
+      toast(x.name + ' is one of ' + _rtName(tid) + '’s versions: it could not be made its Word file. Its star makes it that.', 'warning', 10000);
+      render();
+      return true;
+    }
+    if (S._rtDraft && S._rtDraft.id === tid) { S._rtDraft.docs = S._rtDraft.docs || {}; S._rtDraft.docs.report = x.id; }
+    if (!used) { toast(x.name + ' is ' + _rtName(tid) + '’s Word file now', 'success'); render(); return true; }
+    return _rdFollow(tid, _rdFitOf(used, tid), x.name + ' is ' + _rtName(tid) + '’s Word file now');
+  }
+
+  if (x.tid) return _rdMakeTemplate(x.id, x.name, used, x.tid);
+  if (!used) return false;
+
+  var main = _rdMainOf('');
+  if (!x.hadMain && main && main.id === x.id) return _rdFollowDefault(_rdFitOf(used), x.name + ' uploaded');
+  toast(x.name + ' added to ' + _rtName('') + '’s download menu', 'success');
+  return true;
+}
+async function _rdMakeTemplate(fileId, name, used, tid) {
+  var snap = _rtSnapshotDefault();
+  var t = { id: tid || _rtNewId(), name: _rdFreeName(name), findings: snap.findings, sections: snap.sections, docs: { report: fileId }, severity: {}, brand: {} };
+  var any = _rtWith('', function () { return _rtFollowTokens(t, used || {}); });
+  var made = false;
+  _showLoading();
+  try {
+    made = await _rtPut(function (v) { v.list.push(t); });
+    if (!made) {
+      try { await _deleteDocxTemplate('report', fileId); } catch (e) { console.warn('[report] the file of a report not made stays, in nobody’s menu', e); }
+    }
+  } finally { _hideLoading(); }
+  if (!made) {
+    toast((name || 'It') + ' could not be made a report, so it was not kept. Upload it again.', 'error', 10000);
+    render();
+    return true;
+  }
+  S._rdLit = t.id;
+  toast(t.name + ' added. Pick it when you create an engagement' + ((any.anyField || any.anySection) ? ': it shows the ' + _rdFitWhat(any.anyField, any.anySection) + ' it prints' : ''), 'success');
+  render();
+  setTimeout(function () { var el = document.getElementById('rp_base_' + t.id); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 60);
+  setTimeout(function () { if (S._rdLit === t.id) { S._rdLit = null; var el = document.getElementById('rp_base_' + t.id); if (el) el.classList.remove('is-new'); } }, 2600);
+  return true;
+}
+async function _rdMakeMain(tid, fileId) {
+  if (!tid) return setDefaultDocxTemplate('report', fileId);
+  var t = _rtById(tid), f = _rdFileById(fileId), old = _rdMainOf(tid);
+  if (!t || !f) return;
+  _showLoading();
+  try {
+
+    var claim = [fileId].concat(old && !_rdSharedMain(old.id, tid) ? [old.id] : []);
+    if (!(await _rdClaim(claim, tid))) { _settingsSaveFailed('pdf_templates'); return; }
+
+    if (!(await _rtPut(function (v) { var t0 = v.list.filter(function (z) { return z && z.id === tid; })[0]; if (!t0) return false; t0.docs = (t0.docs && typeof t0.docs === 'object') ? t0.docs : {}; t0.docs.report = fileId; }))) return;
+    if (S._rtDraft && S._rtDraft.id === tid) { S._rtDraft.docs = S._rtDraft.docs || {}; S._rtDraft.docs.report = fileId; }
+  } catch (e) {
+    toast(f.name + ' could not be made the main Word file: ' + (e && e.message ? e.message : 'try again'), 'error');
+    return;
+  } finally { _hideLoading(); }
+  var said = false, lead = f.name + ' is ' + t.name.trim() + '’s main Word file now';
+  try { said = await _rdFollowFile(fileId, old ? old.id : '', lead, tid); } catch (e) { console.warn('[report] could not read what it prints', e); }
+  if (!said) toast(lead, 'success');
+  render();
+}
+window._rdMakeMain = _rdMakeMain;
+async function _rdRename(tid) {
+  var t = tid ? _rtById(tid) : null;
+  var m = _rdMainOf(tid || '');
+  if (tid ? !t : !m) return;
+  var cur = tid ? t.name.trim() : String(m.name || m.filename || '').trim();
+  var next = await promptAsync('', { title: 'Rename this report', value: cur, confirmText: 'Rename' });
+  if (next === null) return;
+  next = String(next).replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!next || next === cur) return;
+  if (_rdNameTaken(next, tid || '')) { toast('There is already a report called ' + next, 'error'); return; }
+  _showLoading();
+  try {
+    if (!tid) { if ((await _renameDocxTemplate('report', m.id, next)) !== false) toast('Renamed', 'success'); return; }
+    if (!(await _rtPut(function (v) { var t0 = v.list.filter(function (z) { return z && z.id === tid; })[0]; if (!t0) return false; t0.name = next; }))) return;
+    if (S._rtDraft && S._rtDraft.id === tid) S._rtDraft.name = next;
+
+    var kept = false;
+    if (m && !_rdSharedMain(m.id, tid)) { try { kept = (await _renameDocxTemplate('report', m.id, next)) === false; } catch (e) { kept = true; } }
+    toast(kept ? 'Renamed. Its Word file keeps its name' : 'Renamed', kept ? 'warning' : 'success');
+  } catch (e) {
+    toast('It could not be renamed: ' + (e && e.message ? e.message : 'try again'), 'error');
+  } finally { _hideLoading(); render(); }
+}
+window._rdRename = _rdRename;
+async function _rdDeleteFile(fileId) {
+  var f = _rdFileById(fileId);
+  if (!f) return;
+  var name = f.name || f.filename || 'this Word template';
+  var owner = _rdOwnerOf(fileId);
+  var msg;
+  if (owner === '') {
+    var next = _rdVersionsOf('')[0];
+    msg = name + ' is the Word file ' + _rdUsesWord('') + ' made with. ' + (next ? next.name + ', its first version, takes its place.' : 'They are made with Pental’s own PDF until you upload another.');
+  } else {
+    msg = name + ' leaves ' + _rtName(f.of || '') + '’s download menu.';
+  }
+  if (!(await confirmAsync(msg, { title: 'Delete ' + name + '?', confirmText: 'Delete', variant: 'danger' }))) return;
+  var done = false;
+  _showLoading();
+  try { done = (await _deleteDocxTemplate('report', fileId)) !== false; }
+  catch (e) { toast('Delete failed: ' + (e && e.message ? e.message : 'try again'), 'error'); }
+  finally { _hideLoading(); }
+  if (!done) { render(); return; }
+
+  var now = owner === '' ? _rdMainOf('') : null, said = false;
+  if (now) { try { said = await _rdFollowFile(now.id, '', name + ' deleted. ' + (now.name || 'Its first version') + ' is the default now'); } catch (e) { console.warn('[report] could not read what it prints', e); } }
+  if (!said) toast(name + ' deleted' + (now ? '. ' + (now.name || 'Its first version') + ' is the default now' : ''), 'success');
+  render();
+}
+window._rdDeleteFile = _rdDeleteFile;
+function _rdUsesWord(tid) {
+  var n = tid ? _rtUses(tid).a : (S.data.assessments || []).filter(function (x) { return x && !_rtIdOf(x); }).length;
+  return n ? n + ' engagement' + (n === 1 ? ' is' : 's are') : 'its engagements are';
+}
+function _rdReportHtml(dt) {
+  var key = 'report';
+  var list = _listDocxTemplates(key);
+  var mgr = canManage();
+  var canTpl = _rtSettingsOn() && _rtHasDb();
+  var tpls = (_rtSettingsOn() && _rtHasDb()) ? _rtList() : [];
+  var dMain = _rdMainOf('');
+  var n = (dMain || tpls.length ? 1 : 0) + tpls.length;
+  var h = '<div class="doc-item doc-report" id="set_doc_' + key + '"><div class="doc-row"><div class="doc-what">'
+    + '<span class="doc-name">' + esc(dt.label) + '</span>';
+  h += n ? '<span class="doc-chip is-word">' + n + ' report' + (n === 1 ? '' : 's') + '</span>' : '<span class="doc-chip">Built-in PDF</span>';
+  h += '<div class="doc-desc">' + esc(dt.desc) + '</div></div><div class="doc-acts">';
+  var builtIn = !dMain || tpls.some(function (t) { return t.docs && t.docs.report === 'builtin'; });
+  if (builtIn) h += '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + dt.editorKey + '\')" title="The design of Pental’s own PDF, where this document is made with it: its sections, finding fields, colours and labels. A Word template of yours has its own.">' + IC.edit + ' Customise</button>';
+  h += '<button class="btn btn-ghost btn-sm" onclick="showDocxVariableRef(\'' + key + '\')" title="Every placeholder a Word template for it can hold, and a draft with them all">Placeholders</button>';
+  if (list.length) h += '<button class="btn btn-ghost btn-sm" onclick="showStyleMapping(\'' + key + '\')" title="The styles used for code, headings, captions and lists">Styles</button>';
+  h += '</div></div>';
+  var auto = _docxAutoPdfOn(key);
+  if (list.length) {
+    h += '<label class="doc-auto"><input type="checkbox"' + (auto ? ' checked' : '') + ' onchange="_setDocxAutoPdf(\'' + key + '\', this.checked, this)"><span>'
+      + '<strong>Make the PDF automatically</strong><small>Each time it is made, or an edited copy is uploaded, its PDF is made in your browser and kept as its final PDF, unless you upload one yourself.</small></span></label>';
+  }
+  h += '<div class="rp-body">';
+
+  h += '<div class="rp-list">';
+  h += _rdBaseHtml('', dMain, auto, mgr, canTpl);
+  tpls.forEach(function (t) { h += _rdBaseHtml(t.id, _rdMainOf(t.id), auto, mgr, canTpl); });
+  h += '</div>';
+  if (mgr) h += _rdAddHtml(!!dMain, canTpl);
+  if (!_rtHasDb() && dMain && _rtSettingsOn()) h += '<div class="alert alert-warning rp-db">Another report of its own needs your database’s latest update. Behind a Pental gateway it takes it by itself within a day; on Supabase, run the setup again.</div>';
+  return h + '</div></div>';
+}
+var _RD_ROLE = {
+  create: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+  form: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/></svg>'
+};
+var _RD_DOC = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>';
+function _rdConvHtml(fileId, isMain) {
+  var cv = _docxConvFor('report', fileId);
+  if (isMain && cv === 'none') cv = 'internal';
+  var box = function (on, dis, mode, label, title) {
+    return '<label class="doc-conv' + (dis ? ' is-off' : '') + '" title="' + esc(title) + '"><input type="checkbox"' + (on ? ' checked' : '') + (dis ? ' disabled' : '')
+      + ' onchange="_setDocxConv(\'report\',\'' + esc(fileId) + '\',\'' + mode + '\')">' + esc(label) + '</label>';
+  };
+  return '<div class="doc-convs">'
+    + box(cv !== 'none', isMain, cv === 'both' ? 'both' : (cv === 'none' ? 'internal' : 'none'), 'Convert for us',
+      isMain ? 'Its main Word file is always converted for you: its PDF is what the ' + esc(_afmBtnName('report')) + ' downloads.' : 'Show its PDF in your own download menu.')
+    + box(cv === 'both', false, cv === 'both' ? 'internal' : 'both', 'Convert for the client', 'Also show its PDF in the client’s download menu.')
+    + (cv === 'none' ? '<span class="doc-conv-none">not converted</span>' : '') + '</div>';
+}
+function _rdBaseHtml(tid, main, auto, mgr, canTpl) {
+  var t = tid ? _rtById(tid) : null;
+  var open = tid ? S._rtOpen === tid : S._rtOpen === _RT_DEF;
+  var name = tid ? t.name.trim() : _rtName('');
+  var vers = _rdVersionsOf(tid);
+  var uses = tid ? _rtUses(tid) : { a: (S.data.assessments || []).filter(function (x) { return x && !_rtIdOf(x); }).length, p: 0 };
+  var idTxt = esc(tid);
+  var h = '<div class="rp-base' + (open ? ' is-open' : '') + (S._rdLit === tid && tid ? ' is-new' : '') + '" id="rp_base_' + (tid ? idTxt : 'default') + '">';
+  h += '<div class="rp-head"><span class="rp-icon' + (tid ? '' : ' is-default') + '" aria-hidden="true">' + _RD_DOC + '</span><div class="rp-main">';
+  h += '<div class="rp-title"><span class="rp-name">' + esc(name) + '</span>' + (tid ? '' : '<span class="doc-default">Default</span>') + '</div>';
+  var bits = [];
+  if (main) {
+    var fileTxt = _rdSameName(main.name || '', main.filename) ? '' : (main.filename || '');
+    if (fileTxt) bits.push(fileTxt);
+    if (_rdSize(main.size)) bits.push(_rdSize(main.size));
+  } else {
+    bits.push(tid ? 'Made with ' + _rtDocText(tid, 'report') : 'Pental’s own PDF');
+  }
+  bits.push(_rtUsesText(uses));
+  h += '<div class="rp-meta">' + esc(bits.join(' · ')) + '</div>';
+
+  h += '<div class="rp-roles">'
+    + '<span class="afm-dest rp-role" title="' + (tid ? 'Offered when an engagement is created, and on the engagement to move it to' : 'An engagement is created on it unless another report is picked') + '">' + _RD_ROLE.create + (tid ? 'Offered when an engagement is created' : 'Engagements are created on it') + '</span>'
+    + '<span class="afm-dest rp-role" title="The finding fields and assessment sections its engagements show: ' + esc(_rdSetsText(tid)) + '">' + _RD_ROLE.form + 'Sets the assessment area and finding form: ' + esc(_rdSetsText(tid, true)) + '</span>'
+    + (main ? _afmDestHtml(true, 'report', false, _rdBtnName()) : '') + '</div>';
+  if (auto && main) h += _rdConvHtml(main.id, true);
+  h += '</div><div class="rp-acts">';
+  if (mgr) {
+
+    h += '<button class="btn btn-ghost btn-sm rp-edit" onclick="_rtOpenTpl(\'' + (tid ? idTxt : _RT_DEF) + '\')" aria-expanded="' + open + '">' + (open ? 'Close' : 'Edit') + '</button>';
+  }
+  h += '<span class="rp-icons">';
+  if (main) {
+    if (mgr) h += '<button class="btn btn-ghost btn-sm" onclick="uploadDocxTemplate(\'report\', undefined, { replace: \'' + esc(main.id) + '\' })" title="Replace it with a new copy of the file" aria-label="Replace ' + esc(name) + '’s Word file">' + IC.refresh + '</button>';
+    h += '<button class="btn btn-ghost btn-sm" onclick="downloadCustomDocxTemplate(\'report\',\'' + esc(main.id) + '\')" title="Download it" aria-label="Download ' + esc(name) + '">' + IC.dl + '</button>';
+  }
+  if (mgr && (main || tid)) h += '<button class="btn btn-ghost btn-sm" onclick="_rdRename(\'' + idTxt + '\')" title="Rename it" aria-label="Rename ' + esc(name) + '">' + IC.edit + '</button>';
+  if (mgr && tid) h += '<button class="btn btn-ghost btn-sm doc-del" onclick="_rtDelete(\'' + idTxt + '\')" title="Delete it" aria-label="Delete ' + esc(name) + '">' + IC.trash + '</button>';
+  else if (mgr && main) h += '<button class="btn btn-ghost btn-sm doc-del" onclick="_rdDeleteFile(\'' + esc(main.id) + '\')" title="Delete it" aria-label="Delete ' + esc(name) + '">' + IC.trash + '</button>';
+  h += '</span></div></div>';
+
+  if ((main || vers.length) && (vers.length || mgr)) {
+    h += '<div class="rp-vers">' + (vers.length ? '<div class="rp-vers-head">' + _afmDestHtml(false, 'report', false, _rdBtnName()) + '<span>Its versions, beside the ' + esc(_rdBtnName()) + ' on its engagements</span></div>' : '');
+    vers.forEach(function (v) {
+      var vn = v.name || v.filename || 'Word template';
+      var vf = _rdSameName(vn, v.filename) ? '' : (v.filename || '');
+      var vm = [vf, _rdSize(v.size)].filter(Boolean).join(' · ');
+      h += '<div class="rp-ver"><span class="rp-ver-icon" aria-hidden="true">' + _RD_DOC + '</span><div class="rp-ver-main"><div class="rp-ver-name">' + esc(vn)
+        + (vm ? '<span class="rp-ver-meta">' + esc(vm) + '</span>' : '') + '</div>';
+      if (auto) h += _rdConvHtml(v.id, false);
+      h += '</div><span class="rp-icons">';
+      if (mgr) h += '<button class="btn btn-ghost btn-sm" onclick="_rdMakeMain(\'' + idTxt + '\',\'' + esc(v.id) + '\')" title="Make it the one on the ' + esc(_rdBtnName()) + '" aria-label="Make ' + esc(vn) + ' the main Word file">' + IC.star + '</button>'
+        + '<button class="btn btn-ghost btn-sm" onclick="uploadDocxTemplate(\'report\', undefined, { replace: \'' + esc(v.id) + '\' })" title="Replace it with a new copy of the file" aria-label="Replace ' + esc(vn) + '">' + IC.refresh + '</button>';
+      h += '<button class="btn btn-ghost btn-sm" onclick="downloadCustomDocxTemplate(\'report\',\'' + esc(v.id) + '\')" title="Download it" aria-label="Download ' + esc(vn) + '">' + IC.dl + '</button>';
+      if (mgr) h += '<button class="btn btn-ghost btn-sm" onclick="renameDocxTemplate(\'report\',\'' + esc(v.id) + '\')" title="Rename it" aria-label="Rename ' + esc(vn) + '">' + IC.edit + '</button>'
+        + '<button class="btn btn-ghost btn-sm doc-del" onclick="_rdDeleteFile(\'' + esc(v.id) + '\')" title="Delete it" aria-label="Delete ' + esc(vn) + '">' + IC.trash + '</button>';
+      h += '</span></div>';
+    });
+    if (mgr && main) h += '<button class="rp-ver-add" onclick="uploadDocxTemplate(\'report\', undefined, { version: \'' + idTxt + '\' })">' + IC.plus + '<span>Add a version</span><small>Another Word file of it, such as a retest or a summary. It goes in the dropdown beside the ' + esc(_rdBtnName()) + '.</small></button>';
+    else if (mgr && tid) h += '<button class="rp-ver-add" onclick="uploadDocxTemplate(\'report\', undefined, { own: \'' + idTxt + '\' })">' + IC.upload + '<span>Upload its Word file</span><small>It goes on the ' + esc(_rdBtnName()) + ' of its engagements, and sets their assessment and finding fields to the ones it prints.</small></button>';
+    h += '</div>';
+  } else if (tid && mgr && !main) {
+    h += '<div class="rp-vers"><button class="rp-ver-add" onclick="uploadDocxTemplate(\'report\', undefined, { own: \'' + idTxt + '\' })">' + IC.upload + '<span>Upload its Word file</span><small>It goes on the ' + esc(_rdBtnName()) + ' of its engagements, and sets their assessment and finding fields to the ones it prints.</small></button></div>';
+  }
+  if (open) h += _rtEditorHtml(tid);
+  return h + '</div>';
+}
+function _rdAddHtml(hasMain, canTpl) {
+  var btn = _rdBtnName();
+  var title = !hasMain ? 'Upload your report' : (canTpl ? 'Upload another report' : 'Add a Word file to your report');
+  var sub = !hasMain ? 'The Word template of the report you send. It goes on the ' + btn + ', and your engagements show the finding fields and assessment sections it prints.'
+    : (canTpl ? 'A partner’s report, or another kind of work. It is offered when an engagement is created, goes on that engagement’s ' + btn + ', and sets its assessment and finding fields to the ones it prints.'
+      : 'It goes in the dropdown beside the ' + btn + '.');
+  var how = (!hasMain || canTpl) ? 'undefined' : '{ version: \'\' }';
+  var go = 'uploadDocxTemplate(\'report\', undefined, ' + how + ')';
+  var h = '<div class="rp-add" onclick="if(!event.target.closest(\'button\'))' + go + '" ondragover="_rdDrag(event,true)" ondragleave="_rdDrag(event,false)" ondrop="_rdDrop(event,' + how + ')">'
+    + '<span class="rp-add-icon" aria-hidden="true">' + IC.upload + '</span>'
+    + '<span class="rp-add-text"><strong>' + esc(title) + '</strong><small>' + esc(sub) + '</small></span>'
+    + '<span class="rp-add-btns"><button class="btn btn-secondary btn-sm" onclick="' + go + '">Choose a .docx</button>';
+  if (canTpl) h += '<button class="btn btn-ghost btn-sm rp-add-more" onclick="_rtNew()" title="Your Default copied, made with its Word file or Pental’s own PDF">Or one without a Word file</button>';
+  return h + '</span><span class="rp-add-drop" aria-hidden="true">Drop it here</span></div>';
+}
+function _rdDrag(ev, on) {
+  try { ev.preventDefault(); var z = ev.currentTarget; if (z) z.classList.toggle('is-over', !!on); } catch (e) {}
+}
+window._rdDrag = _rdDrag;
+function _rdDrop(ev, how) {
+  try {
+    ev.preventDefault();
+    var z = ev.currentTarget; if (z) z.classList.remove('is-over');
+    var f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+    if (f) _docxUploadFile('report', f, undefined, how);
+  } catch (e) { console.warn('[report] drop', e); }
+}
+window._rdDrop = _rdDrop;
+function _rtDocPick(key, v) {
+  _rtSet('docs.' + key, v, true);
+}
+window._rtDocPick = _rtDocPick;
+function _rtMoveKind(tid, key) {
+  return _rtWith(tid, function () {
+    if (key === 'description' || key === 'remediation') return 'rich';
+    if (key.indexOf('custom_') !== 0) return '';
+    var c = _ffCustomAll().filter(function (x) { return x.id === key.slice(7); })[0];
+    if (!c) return '';
+    var ty = _cffType(c);
+    return ty === 'html' ? 'rich' : (ty === 'text' || ty === 'textarea') ? 'text' : '';
+  });
+}
+function _rtSectionKind(key) {
+  if (key === 'scope') return 'text';
+  var d = _smDefByKey(key);
+  if (d) return (!d.doc && !!_docxTokenForSection(key)) ? 'rich' : '';
+  var c = _smCustomById(key);
+  if (!c) return '';
+  var ty = _cffType(c);
+  return ty === 'html' ? 'rich' : (ty === 'text' || ty === 'textarea') ? 'text' : '';
+}
+function _rtFieldVal(f, key) {
+  var v;
+  if (key.indexOf('custom_') === 0) v = (_ffParseCustomVals(f) || {})[key.slice(7)];
+  else { var d = _ffDefs().filter(function (x) { return x.key === key; })[0]; v = d ? f[d.col] : f[key]; }
+  return String(v == null ? '' : v);
+}
+function _rtBlocksOf(v) {
+  var s = String(v == null ? '' : v).trim();
+  if (s.charAt(0) !== '[') return null;
+  try { var p = JSON.parse(s); return Array.isArray(p) ? p : null; } catch (e) { return null; }
+}
+function _rtTextHtml(s) {
+  return String(s == null ? '' : s).replace(/\r\n?/g, '\n').split(/\n{2,}/).map(function (p) {
+    return p.trim() ? '<p>' + esc(p).replace(/\n/g, '<br>') + '</p>' : '';
+  }).join('');
+}
+function _rtAsHtml(v, kind) {
+  var s = String(v == null ? '' : v);
+  if (kind !== 'rich') return _rtTextHtml(s);
+  var b = _rtBlocksOf(s);
+  if (b) return b.map(function (x) {
+    if (!x) return '';
+    var c = String(x.content == null ? '' : x.content);
+    if (x.type === 'html') return c;
+    if (x.type === 'code') return '<pre><code>' + esc(c) + '</code></pre>';
+    if (x.type === 'image') return x.data ? '<p><img src="' + esc(String(x.data)) + '"></p>' + (x.caption ? '<p>' + esc(String(x.caption)) + '</p>' : '') : '';
+    return _rtTextHtml(c);
+  }).join('');
+  return /<[a-z][^>]*>/i.test(s) ? s : _rtTextHtml(s);
+}
+function _rtHasWords(v, kind) {
+  var s = String(v == null ? '' : v);
+  if (kind === 'text') return !!s.trim();
+  if (_rtBlocksOf(s)) s = _rtAsHtml(s, 'rich');
+  return !!s.replace(/<(?!img)[^>]*>/gi, '').replace(/&nbsp;/g, ' ').trim() || /<img\b/i.test(s);
+}
+function _rtJoin(dst, src, label, kind) {
+  var add = _rtAsHtml(src, kind);
+  var had = _rtHasWords(dst);
+  var head = had ? '<p><strong>' + esc(label) + '</strong></p>' : '';
+  var b = _rtBlocksOf(dst);
+  if (b) return JSON.stringify(b.concat([{ type: 'html', content: head + add }]));
+  return (had ? _rtAsHtml(dst, 'rich') : '') + head + add;
+}
+function _rtMoveSet(kind, key, to) {
+  var m = S.modal;
+  if (!m || m.type !== 'rt-switch') return;
+  m.moves = m.moves || { f: {}, s: {} };
+  if (to) m.moves[kind][key] = to; else delete m.moves[kind][key];
+}
+window._rtMoveSet = _rtMoveSet;
+function _rtSectionMoves(row, ms, SA) {
+  var patch = {}, sv = null;
+  var get = function (k) {
+    var d = _smDefByKey(k);
+    if (d) return Object.prototype.hasOwnProperty.call(patch, d.col) ? String(patch[d.col]) : String(row[d.col] == null ? '' : row[d.col]);
+    var c = sv || _smParseVals(row) || {};
+    return String(c[k] == null ? '' : c[k]);
+  };
+  var put = function (k, v) { var d = _smDefByKey(k); if (d) patch[d.col] = v; else { sv = sv || _coCopy(_smParseVals(row) || {}); sv[k] = v; } };
+  Object.keys(ms || {}).forEach(function (src) {
+    var to = ms[src], kind = _rtSectionKind(src), w = get(src);
+    if (!to || !kind || _rtSectionKind(to) !== 'rich' || !_rtHasWords(w, kind)) return;
+    put(to, _rtJoin(get(to), w, (SA[src] || {}).label || 'Section', kind));
+    put(src, '');
+  });
+  if (sv) patch.summary_sections = sv;
+  return patch;
+}
+async function _rtMoveFindings(a, mf, A, from) {
+  var fm = Object.keys(mf || {}).filter(function (k) { return !!mf[k] && !!_rtMoveKind(from, k); });
+  if (!fm.length) return 0;
+  var fs = (S.data.findings || []).filter(function (f) { return f && f.assessment_id === a.id; });
+  var left = 0;
+  for (var i = 0; i < fs.length; i++) {
+    if (!fm.some(function (src) { return _rtHasWords(_rtFieldVal(fs[i], src), _rtMoveKind(from, src)); })) continue;
+    var r = null;
+    try {
+      r = await _coUpdate('findings', fs[i].id, function (row) {
+        var patch = {}, cv = null;
+        var col = function (k) { var d = _ffDefs().filter(function (x) { return x.key === k; })[0]; return d ? d.col : k; };
+        var get = function (k) {
+          if (k.indexOf('custom_') === 0) { var c = cv || _ffParseCustomVals(row) || {}; return String(c[k.slice(7)] == null ? '' : c[k.slice(7)]); }
+          return Object.prototype.hasOwnProperty.call(patch, col(k)) ? String(patch[col(k)]) : _rtFieldVal(row, k);
+        };
+        var put = function (k, v) {
+          if (k.indexOf('custom_') === 0) { cv = cv || _coCopy(_ffParseCustomVals(row) || {}); cv[k.slice(7)] = v; }
+          else patch[col(k)] = v;
+        };
+        fm.forEach(function (src) {
+          var sv = get(src), kind = _rtMoveKind(from, src);
+          if (!_rtHasWords(sv, kind)) return;
+          put(mf[src], _rtJoin(get(mf[src]), sv, (A[src] || {}).label || 'Field', kind));
+          put(src, '');
+        });
+        if (cv) patch.custom_fields = cv;
+        return { patch: patch };
+      });
+    } catch (e) { console.warn('[report] a finding’s words were not moved', e); }
+    if (!r || !r.ok) left++;
+  }
+  return left;
+}
+var _RT_SEC_KEYS = {
+  executive_summary: ['executive_summary', 'has_executive_summary', 'show_executive_summary', 'execSummaryNotesStyled'],
+  scope: ['scope', 'scope_items', 'has_scope', 'scope_count', 'scope_phases', 'has_scope_phases'],
+  caveats: ['caveats', 'has_caveats', 'show_caveats'],
+  retest_summary: ['retest_summary', 'has_retest_summary', 'show_retest_summary'],
+  notes: ['notes', 'has_notes'],
+
+  artifacts: ['artifacts_text', 'has_artifacts', 'show_artifacts', 'heading_artifacts', 'intro_artifacts_text'],
+  severity: ['critical_count', 'high_count', 'medium_count', 'low_count', 'info_count', 'total_findings', 'open_count', 'remediated_count',
+    'accepted_count', 'part_remediated_count', 'show_severity_boxes', 'show_findings_summary', 'heading_findings_summary', 'intro_findings_summary_text',
+    'show_radar_chart', 'radar_chart_image'],
+  findings: ['findings', 'critical_findings', 'high_findings', 'medium_findings', 'low_findings', 'info_findings', 'phases_data',
+    'show_findings', 'show_findings_table', 'heading_findings'],
+
+  evidence: []
+};
+var _RT_SEC_NEVER = { documents: true, scan_import: true, timeline: true, credentials: true, files: true, comments: true };
+var _RT_SEC_KEEP = { findings: true };
+function _rtSecFollows(key) {
+  return !_RT_SEC_NEVER[key] && !_RT_SEC_KEEP[key] && Object.prototype.hasOwnProperty.call(_RT_SEC_KEYS, key);
+}
+var _RT_SEC_PUT_IN = { retest_summary: true, notes: true };
+function _rtPrintKeys(kind, custom, key) {
+  var tokOf = function (tok) { var k = String(tok || '').replace(/[{}]/g, ''); return k ? [k] : []; };
+  if (kind === 'findings') {
+    if (custom) return ['custom_' + key, 'has_custom_' + key];
+    var fk = _FF_DOC_KEYS.filter(function (e) { return e[0] === key; })[0];
+    return fk ? fk[1] : tokOf(_docxTokenForField(key));
+  }
+  if (custom) return ['custom_summary_' + key];
+  return _RT_SEC_KEYS[key] || tokOf(_docxTokenForSection(key));
+}
+function _rtPrints(kind, custom, key, used) {
+  if (kind === 'sections' && (custom || _RT_SEC_PUT_IN[key])) return true;
+  if (kind === 'sections' && _RT_SEC_NEVER[key]) return false;
+  return _rtPrintKeys(kind, custom, key).some(function (k) { return !!(used || {})[k]; });
+}
+function _rtAnyPrinted(used) {
+  used = used || {};
+  var any = function (keys) { return keys.some(function (k) { return !!used[k]; }); };
+  return {
+    fields: _ffDefs().some(function (d) { return d.key !== 'status' && any(_rtPrintKeys('findings', false, d.key)); })
+      || _ffCustomAll().some(function (c) { return any(_rtPrintKeys('findings', true, c.id)); }),
+    sections: _smDefs().some(function (d) { return !d.doc && _rtSecFollows(d.key) && any(_rtPrintKeys('sections', false, d.key)); })
+      || _smCustom().some(function (c) { return any(_rtPrintKeys('sections', true, c.id)); })
+  };
+}
+function _rtApplyTokens(t, used) {
+  used = used || {};
+  var any = function (keys) { return keys.some(function (k) { return !!used[k]; }); };
+  var fKeys = function (key) { return _rtPrintKeys('findings', false, key); };
+  var sKeys = function (key) { return _rtPrintKeys('sections', false, key); };
+  var cfKeys = function (id) { return _rtPrintKeys('findings', true, id); };
+  var csKeys = function (id) { return _rtPrintKeys('sections', true, id); };
+  var defs = _ffDefs().filter(function (d) { return d.key !== 'status'; });
+  var secs = _smDefs().filter(function (d) { return !d.doc && _rtSecFollows(d.key); });
+  var _ap = _rtAnyPrinted(used);
+  var pf = _ap.fields, ps = _ap.sections;
+
+  var kept = function (x) { return !!x && x.enabled === true && x.in_report === false; };
+  if (pf) {
+    defs.forEach(function (d) {
+      var on = any(fKeys(d.key));
+      var f = t.findings.fields[d.key] || (t.findings.fields[d.key] = {});
+      if (!on && kept(f)) return;
+      f.enabled = on;
+      if (!on) f.required = false;
+
+      if (on && f.in_report === false) delete f.in_report;
+    });
+    _ffCustomAll().forEach(function (c) {
+      var f = t.findings.custom[c.id] || (t.findings.custom[c.id] = { label: '' });
+      if (!any(cfKeys(c.id)) && kept(f)) return;
+      f.enabled = any(cfKeys(c.id));
+      if (!f.enabled) f.required = false;
+      if (f.enabled && f.in_report === false) delete f.in_report;
+    });
+  }
+  if (ps) {
+    secs.forEach(function (d) {
+      var on = any(sKeys(d.key));
+      if (!on && _RT_SEC_PUT_IN[d.key]) return;
+      var s = t.sections.fields[d.key] || (t.sections.fields[d.key] = {});
+      if (!on && kept(s)) return;
+      s.enabled = on;
+      if (on && s.in_report === false) s.in_report = true;
+    });
+    _smCustom().forEach(function (c) {
+      if (!any(csKeys(c.id))) return;
+      var s = t.sections.custom[c.id] || (t.sections.custom[c.id] = { label: '' });
+      s.enabled = true;
+      if (s.in_report === false) s.in_report = true;
+    });
+  }
+  return { fields: pf, sections: ps };
+}
+async function _rtDelete(id) {
+  var t = _rtById(id);
+  if (!t) return;
+  var u = _rtUses(id);
+
+  var own = _rdMainOf(id), vers = _rdVersionsOf(id);
+  if (own && _rdSharedMain(own.id, id)) own = null;
+  var files = (own ? [own] : []).concat(vers);
+  var msg = t.name + ((u.a || u.p) ? ': ' + _rtUsesText(u) + ' use it, and go back to ' + _rtName('') + '.' : ' is not used by any engagement or proposal.')
+    + (own ? ' Its Word file' + (vers.length ? ' and its ' + vers.length + ' version' + (vers.length === 1 ? '' : 's') + ' are' : ' is') + ' deleted with it.'
+      : (vers.length ? ' Its ' + (vers.length === 1 ? 'version is' : vers.length + ' versions are') + ' deleted with it.' : ''));
+  if (!(await confirmAsync(msg, { title: 'Delete ' + t.name + '?', confirmText: 'Delete report', variant: 'danger' }))) return;
+  _showLoading();
+  try {
+
+    if (!(await _rdClaim(files.map(function (f) { return f.id; }), id))) { _settingsSaveFailed('pdf_templates'); return; }
+
+    var r1 = await supabaseClient.from('assessments').update({ report_template: null }).eq('report_template', id).select('id');
+    if (r1.error) { _settingsSaveFailed(r1.error.message); return; }
+    var r2 = await supabaseClient.from('proposals').update({ report_template: null }).eq('report_template', id).select('id');
+    if (r2.error) { _settingsSaveFailed(r2.error.message); return; }
+    (S.data.assessments || []).forEach(function (a) { if (a.report_template === id) a.report_template = null; });
+    (S.data.proposals || []).forEach(function (p) { if (p.report_template === id) p.report_template = null; });
+    if (!(await _rtPut(function (v) { v.list = v.list.filter(function (x) { return x && x.id !== id; }); }))) return;
+    if (S._rtOpen === id) { S._rtOpen = null; S._rtDraft = null; }
+    var kept = 0;
+    for (var _fi = 0; _fi < files.length; _fi++) {
+      try { if ((await _deleteDocxTemplate('report', files[_fi].id)) === false) kept++; } catch (e) { kept++; console.warn('[report] a Word file stays', e); }
+    }
+    toast(t.name + ' deleted' + (kept ? '. ' + kept + ' of its Word files could not be, and ' + (kept === 1 ? 'is' : 'are') + ' in no menu' : ''), kept ? 'warning' : 'success');
+  } finally { _hideLoading(); }
+  render();
+}
+window._rtDelete = _rtDelete;
+async function _rtSaveDraft() {
+  var d = _rtDraft();
+  if (!d) return;
+  if (d.__def) return _rtSaveDefault(d);
+  var name = String(d.name || '').replace(/\s+/g, ' ').trim();
+  if (!name) { toast('Give the report a name', 'error'); return; }
+  if (_rdNameTaken(name, d.id)) { toast('There is already a report called ' + name, 'error'); return; }
+  d.name = name.slice(0, 80);
+
+  var _was = _rtList().filter(function (x) { return x.id === d.id; })[0] || {};
+  var _letGo = [];
+  var _keys = ['report', 'loa'];
+  for (var _ki = 0; _ki < _keys.length; _ki++) {
+    var _nv = d.docs && d.docs[_keys[_ki]], _ov = _was.docs && _was.docs[_keys[_ki]];
+    if (!_nv || _nv === _ov) continue;
+    var _ans = await _rtAskDefault(_keys[_ki], _nv, d.name);
+    if (_ans === null) return;
+    if (_ans === 'mine') _letGo.push(_keys[_ki]);
+  }
+  _rtKeepUnprinted(d);
+  _showLoading();
+  try {
+    var ok = await _rtPut(function (v) {
+      var i = v.list.findIndex(function (x) { return x && x.id === d.id; });
+      if (i < 0) return false;
+      v.list[i] = _rtCopy(d);
+    });
+    if (!ok) return;
+    for (var _li = 0; _li < _letGo.length; _li++) await _rtLetDefaultGo(_letGo[_li]);
+    S._rtDraft = null;
+    toast('Settings saved', 'success');
+  } finally { _hideLoading(); }
+  render();
+}
+window._rtSaveDraft = _rtSaveDraft;
+async function _rtSaveDefault(d) {
+
+  if (typeof _setIsDirty === 'function' && _setIsDirty()) { toast('Save or discard the other changes on this page first, then save the Default.', 'error'); return; }
+  _rtKeepUnprinted(d);
+  var f = d.findings || {}, sc = d.sections || {};
+  var ff = f.fields || {}, fc = f.custom || {}, sf = sc.fields || {}, scs = sc.custom || {};
+  var name = function (x) { return String((x && x.label) || '').replace(/\s+/g, ' ').trim().slice(0, 80); };
+  var lab = function (e, x) { var v = name(x); if (v) e.label = v; else delete e.label; };
+  _showLoading();
+  try {
+    var r1 = await _setPutIn('finding_fields', function (v) {
+      if (!v.fields || typeof v.fields !== 'object') v.fields = {};
+      if (!Array.isArray(v.custom)) v.custom = [];
+      ['title', 'severity'].forEach(function (k) {
+        if (!ff[k]) return;
+        var e = v.fields[k] || (v.fields[k] = {});
+        lab(e, ff[k]);
+        if (!Object.keys(e).length) delete v.fields[k];
+      });
+      _ffDefs().forEach(function (x) {
+        var o = ff[x.key];
+        if (!o) return;
+        var e = v.fields[x.key] || (v.fields[x.key] = {});
+        if (typeof o.enabled === 'boolean') e.enabled = o.enabled;
+        if (x.key !== 'status' && typeof o.required === 'boolean') e.required = o.required;
+        if (o.in_report === false) e.in_report = false; else delete e.in_report;
+        lab(e, o);
+      });
+      v.custom.forEach(function (c) {
+        var o = c && fc[c.id];
+        if (!o) return;
+        if (typeof o.enabled === 'boolean') c.enabled = o.enabled;
+        if (typeof o.required === 'boolean') c.required = o.required;
+        if (o.in_report === false) c.in_report = false; else delete c.in_report;
+        if (name(o)) c.label = name(o);
+      });
+      if (Array.isArray(f.order) && f.order.length) v.order = f.order.filter(function (k) { return typeof k === 'string'; });
+
+      v.v = Math.max(typeof v.v === 'number' ? v.v : 0, 2);
+    });
+    if (!r1 || !r1.ok) { _settingsSaveFailed('finding_fields'); return; }
+    var r2 = await _setPutIn('summary_fields', function (v) {
+      if (!v.fields || typeof v.fields !== 'object') v.fields = {};
+      if (!Array.isArray(v.custom)) v.custom = [];
+      _smDefs().forEach(function (x) {
+        var o = sf[x.key];
+        if (x.doc || !o) return;
+        var e = v.fields[x.key] || (v.fields[x.key] = {});
+        if (typeof o.enabled === 'boolean') e.enabled = o.enabled;
+        if (typeof o.in_report === 'boolean') e.in_report = o.in_report;
+        lab(e, o);
+      });
+      v.custom.forEach(function (c) {
+        var o = c && scs[c.id];
+        if (!o) return;
+        if (typeof o.enabled === 'boolean') c.enabled = o.enabled;
+        if (typeof o.in_report === 'boolean') c.in_report = o.in_report;
+        if (name(o)) c.label = name(o);
+      });
+      if (Array.isArray(sc.order) && sc.order.length) {
+
+        var isDoc = function (k) { var x = _smDefByKey(k); return !!(x && x.doc); };
+        var docs = (Array.isArray(v.order) ? v.order : []).filter(isDoc);
+        var ord = sc.order.filter(function (k) { return typeof k === 'string' && !isDoc(k); });
+        var at = ord.indexOf('documents');
+        v.order = at < 0 ? ord.concat(docs) : ord.slice(0, at + 1).concat(docs, ord.slice(at + 1));
+      }
+    });
+    if (!r2 || !r2.ok) { _settingsSaveFailed('summary_fields'); return; }
+    S._rtDraft = null;
+    toast('Settings saved', 'success');
+  } finally { _hideLoading(); }
+  render();
+}
+function _rtKeepUnprinted(d) {
+  var used = _rdPrintsNow(d.id);
+  if (!used || !_rtAnyPrinted(used).fields) return;
+  var o = d.findings || (d.findings = {});
+  var fs = o.fields || (o.fields = {}), cs = o.custom || (o.custom = {});
+  _rtDraftView = d;
+  try {
+    _rtWith(d.id, function () {
+      _ffDefs().forEach(function (x) {
+        if (x.key === 'status' || !_ffEnabled(x.key) || _rtPrints('findings', false, x.key, used)) return;
+        (fs[x.key] || (fs[x.key] = {})).in_report = false;
+      });
+      _ffCustomAll().forEach(function (c) {
+        if (!cs[c.id] || cs[c.id].enabled !== true || _rtPrints('findings', true, c.id, used)) return;
+        cs[c.id].in_report = false;
+      });
+    });
+  } finally { _rtDraftView = null; }
+}
+function _rtDiscard() { S._rtDraft = null; render(); }
+window._rtDiscard = _rtDiscard;
+var _rdTokMemo = {};
+function _rdTokKey(file) { return file.id + '|' + (file.updated_at || file.uploaded_at || file.created_at || '') + '|' + (file.size || file.file_size || ''); }
+function _rdTokensOf(file) {
+  if (!file || !file.id) return Promise.resolve(null);
+  var k = _rdTokKey(file);
+  if (!_rdTokMemo[k]) {
+    _rdTokMemo[k] = _rtTokensOfWord('report', file.id).then(function (u) { if (!u) delete _rdTokMemo[k]; return u; });
+  }
+  return _rdTokMemo[k];
+}
+var _rdTokDone = {};
+function _rdPrintsNow(tid) {
+  var main = _rdMainOf(tid || '');
+  if (!main) return false;
+  var k = _rdTokKey(main);
+  if (Object.prototype.hasOwnProperty.call(_rdTokDone, k)) return _rdTokDone[k];
+  if (!_rdTokDone['?' + k]) {
+    _rdTokDone['?' + k] = true;
+    _rdTokensOf(main).then(function (u) {
+
+      if (!u) { delete _rdTokDone['?' + k]; return; }
+      _rdTokDone[k] = u;
+      try { if (S.page === 'settings' && (S._rtOpen || S.settingsTab === 'findings' || S.settingsTab === 'assessments')) render(); } catch (e) {}
+    });
+  }
+  return null;
+}
+function _rtIrCell(kind, custom, key, on, path, checked) {
+  if (kind === 'sections' && !custom && _RT_SEC_NEVER[key]) return '<span class="g-c g-na rt-ir-na" title="No report prints this part of an engagement">Never printed</span>';
+  var u = _rtIrUsed;
+
+  if (u && u.any[kind === 'findings' ? 'fields' : 'sections'] && !_rtPrints(kind, custom, key, u.used)) return '<span class="g-c g-na rt-ir-na" title="Its Word file has no placeholder for it, so it is not printed' + '' + '">Not in its Word file</span>';
+  return '<label class="g-c"><input type="checkbox"' + (checked ? ' checked' : '') + (on ? '' : ' disabled') + ' onchange="_rtSet(\'' + path + '.in_report\', this.checked, true)"> In report</label>';
+}
+var _rtIrUsed = null;
+function _rtNameOf(kind, custom, key) {
+  if (kind === 'findings') return custom ? ((_ffCustomAll().filter(function (c) { return c.id === key; })[0] || {}).label || 'The field') : _ffLabel(key);
+  return _smLabel(key) || 'The section';
+}
+async function _rtTickOn(path, on) {
+  _rtSet(path + '.enabled', on, true);
+  var d = _rtDraft();
+  if (!on || !d) return;
+  var p = String(path).split('.');
+  var main = _rdMainOf(d.id);
+  if (!main) return;
+  var used = await _rdTokensOf(main);
+  var d2 = _rtDraft();
+  if (!used || !d2 || d2.id !== d.id) return;
+  var custom = p[1] === 'custom';
+  if (_rtPrints(p[0], custom, p[2], used)) return;
+  _rtSet(path + '.in_report', false, true);
+  var nm = _rtWith(d.id, function () { return _rtNameOf(p[0], custom, p[2]); });
+  toast(nm + ' is on for ' + (d.name || 'this report') + '’s engagements and is not printed: its Word file has no place for it. ' + _rtSaveWord(d), 'info', 9000);
+}
+window._rtTickOn = _rtTickOn;
+function _rtSet(path, value, redraw) {
+  var d = _rtDraft();
+  if (!d) return;
+  var parts = String(path).split('.');
+  var o = d;
+  for (var i = 0; i < parts.length - 1; i++) {
+    if (!o[parts[i]] || typeof o[parts[i]] !== 'object') o[parts[i]] = {};
+    o = o[parts[i]];
+  }
+  o[parts[parts.length - 1]] = value;
+  if (redraw) render();
+}
+window._rtSet = _rtSet;
+function _rtMove(kind, key, dir) {
+  var d = _rtDraft();
+  if (!d) return;
+  var o = d[kind] || (d[kind] = {});
+  var all = _rtWith(d.id, function () {
+    return kind === 'findings' ? _ffOrder() : _smOrder().filter(function (k) { var x = _smDefByKey(k); return !(x && x.doc); });
+  });
+  var order = Array.isArray(o.order) && o.order.length ? o.order.filter(function (k) { return all.indexOf(k) >= 0; }) : all.slice();
+  all.forEach(function (k) { if (order.indexOf(k) < 0) order.push(k); });
+  var i = order.indexOf(key), j = i + dir;
+  if (i < 0 || j < 0 || j >= order.length) return;
+  var t = order[i]; order[i] = order[j]; order[j] = t;
+  o.order = order;
+  render();
+}
+window._rtMove = _rtMove;
+var _rtDraftView = null;
+function _rtEditorHtml(id, only) {
+  var d = _rtDraft();
+  if (!d) return '';
+  _rtDraftView = d;
+  var _irU = _rdPrintsNow(d.id);
+  _rtIrUsed = _irU ? { used: _irU, any: _rtAnyPrinted(_irU) } : null;
+  try {
+
+    var tabs = d.__def ? _RT_TABS.filter(function (tb) { return tb[0] === 'fields' || tb[0] === 'sections' || tb[0] === 'document'; }) : _RT_TABS;
+
+    if (only) tabs = tabs.filter(function (tb) { return tb[0] === only; });
+    var tab = only || S._rtTab || 'fields';
+    if (!tabs.some(function (tb) { return tb[0] === tab; })) tab = 'fields';
+
+    var h = '<div class="rt-editor' + (d.__def ? ' rt-ed-def' : '') + '" data-nodirty>';
+    if (!d.__def && !only) h += '<div class="form-group" style="max-width:420px"><label class="form-label" for="rt_name">Name</label>'
+      + '<input class="form-input" id="rt_name" value="' + esc(d.name) + '" maxlength="80" oninput="_rtSet(\'name\', this.value)">'
+
+      + '<p class="hint rt-id" style="margin-top:0.35rem">Its id, for the API: <code>' + esc(d.id) + '</code></p></div>';
+    if (!only) {
+      h += '<div class="qa-tabs rt-tabs" role="tablist">';
+      tabs.forEach(function (tb) {
+        h += '<button class="qa-tab' + (tab === tb[0] ? ' active' : '') + '" role="tab" aria-selected="' + (tab === tb[0]) + '" onclick="_rtTabTo(\'' + tb[0] + '\')">' + esc(tb[1]) + '</button>';
+      });
+      h += '</div>';
+    }
+    h += _rtWith(d.id, function () {
+      if (tab === 'sections') return _rtSectionsHtml(d);
+      if (tab === 'document') return _rtDocumentHtml(d);
+      if (tab === 'severity') return _rtSeverityHtml(d);
+      if (tab === 'branding') return _rtBrandingHtml(d);
+      return _rtFieldsHtml(d);
+    });
+    h += '<div class="rt-save"><button class="btn btn-primary" onclick="_rtSaveDraft()">' + (d.__def ? 'Save the Default' : 'Save template') + '</button>'
+      + '<button class="btn btn-ghost" onclick="_rtDiscard()">Discard changes</button></div>';
+    h += '</div>';
+    return h;
+  } finally { _rtDraftView = null; _rtIrUsed = null; }
+}
+function _rtFitLineHtml(d, tab) {
+  if (!_rtIrUsed) return '';
+  var x = _rdFitOf(_rtIrUsed.used, d.id);
+  if (!x.differs) return '';
+  var y = tab === 'sections' ? { fieldsOn: x.sectionsOn, fieldsOff: x.sectionsOff, sectionsOn: x.fieldsOn, sectionsOff: x.fieldsOff } : x;
+  return '<div class="rt-fit" role="note"><span>To match its Word file: <b>' + esc(_rdFitWords(y)) + '</b>.</span>'
+    + '<button class="btn btn-secondary btn-sm" onclick="_rtMatchFile()">Match it</button></div>';
+}
+function _rtSaveWord(d) { return d && d.__def ? 'Save the Default to keep it.' : 'Save the template to keep it.'; }
+function _rtStripHtml(tab) {
+  if (!canManage()) return '';
+  var reps = [{ id: _RT_DEF, name: _rtName(''), def: true }];
+  if (_rtSettingsOn() && _rtHasDb()) _rtList().forEach(function (t) { reps.push({ id: t.id, name: t.name.trim() }); });
+  var h = '<div class="rt-strip" id="rt_strip_' + tab + '"><p class="rt-strip-t">'
+    + (tab === 'sections' ? 'Which sections a report uses, in what order, and whether each is printed, is that report’s own:'
+      : 'Which fields a report uses, in what order, which are required and whether each is printed, is that report’s own:')
+    + '</p><div class="rt-strip-btns" role="group" aria-label="Your reports">';
+  reps.forEach(function (r) {
+    var open = S._rtOpen === r.id;
+    h += '<button class="btn btn-' + (open ? 'secondary' : 'ghost') + ' btn-sm rt-strip-btn" aria-expanded="' + open + '" onclick="_rtOpenTpl(\'' + esc(r.id) + '\'' + (open ? '' : ', \'' + tab + '\'') + ')">'
+      + esc(r.name) + (r.def && r.name !== 'Default' ? ' <span class="doc-default">Default</span>' : '') + '</button>';
+  });
+  h += '</div>';
+  var cur = reps.filter(function (r) { return r.id === S._rtOpen; })[0];
+  if (cur) h += '<div class="rt-strip-ed">' + _rtEditorHtml(cur.def ? '' : cur.id, tab === 'sections' ? 'sections' : 'fields') + '</div>';
+  return h + '</div>';
+}
+function _rtUsedBy(kind, key) {
+  var on = function () {
+    if (kind === 'findings') {
+      if (String(key).indexOf('custom_') === 0) {
+        var id = String(key).slice(7);
+        return _ffCustomAll().some(function (c) { return c.id === id && c.enabled !== false; });
+      }
+      return _ffEnabled(key);
+    }
+    return _smEnabled(key);
+  };
+  var out = [];
+  if (_rtWith('', on)) out.push(_rtName(''));
+  if (_rtSettingsOn() && _rtHasDb()) _rtList().forEach(function (t) { if (_rtWith(t.id, on)) out.push(t.name.trim()); });
+  return out;
+}
+function _rtUsedByHtml(kind, key) {
+  var n = _rtUsedBy(kind, key);
+  return '<span class="g-c g-used' + (n.length ? '' : ' g-na') + '" data-lb="Used by: " title="' + esc(n.length ? 'On for ' + _genList(n) : 'On for no report: open one above to switch it on') + '">'
+    + esc(n.length ? n.join(', ') : 'No report') + '</span>';
+}
+function _ffReqAlertHtml() {
+  var req = 1, tot = 1;
+  try {
+    _ffDefs().forEach(function (x) { if (!_ffEnabled(x.key)) return; tot++; if (_ffRequired(x.key)) req++; });
+    _ffCustomEnabled().forEach(function (cf) { tot++; if (_ffCustomRequired(cf)) req++; });
+  } catch (e) {}
+  return '<div class="alert ' + (req > 1 ? 'alert-info' : 'alert-warning') + ' rt-req" style="margin:0 0 0.6rem;font-size:0.8rem">'
+    + (req > 1 ? '<strong>' + req + ' of its ' + tot + ' fields are required.</strong> A finding missing any of them is shown as a draft, and Save as final and close asks for it before letting the finding through.'
+      : '<strong>Only the title is required.</strong> Nothing else being required means <strong>no finding is shown as a draft for something missing</strong> and Save as final and close never asks for anything. Tick Required on the fields a report should not go out without.')
+    + '</div>';
+}
+function _rtMatchFile() {
+  var d = _rtDraft();
+  if (!d) return;
+  var used = _rdPrintsNow(d.id);
+  if (!used) return;
+  _rtDraftView = d;
+  var x;
+  try { x = _rdFitOf(used, d.id); } finally { _rtDraftView = null; }
+  if (!x || !x.differs) return;
+  var put = function (list, ons, k, isSection, ins) {
+    var o = d[k] || (d[k] = {});
+    list.forEach(function (i) {
+      var bag = i.custom ? (o.custom || (o.custom = {})) : (o.fields || (o.fields = {}));
+      var e = bag[i.key] || (bag[i.key] = {});
+      if (ins.indexOf(i) >= 0) { _rdIn(e, isSection); return; }
+      e.enabled = ons.indexOf(i) >= 0;
+      if (!e.enabled && !isSection) e.required = false;
+      if (e.enabled) _rdIn(e, isSection);
+    });
+  };
+  put(x.fieldsOn.concat(x.fieldsOff, x.fieldsIn), x.fieldsOn, 'findings', false, x.fieldsIn);
+  put(x.sectionsOn.concat(x.sectionsOff, x.sectionsIn), x.sectionsOn, 'sections', true, x.sectionsIn);
+  toast(_rdFitWords(x) + '. ' + _rtSaveWord(d), 'info', 7000);
+  render();
+}
+window._rtMatchFile = _rtMatchFile;
+function _rtArrows(kind, key, first, last) {
+  return '<span class="g-ord rt-ord">'
+    + '<button class="btn-icon" title="Move up" aria-label="Move up"' + (first ? ' disabled' : '') + ' onclick="_rtMove(\'' + kind + '\',\'' + esc(key) + '\',-1)">&#9650;</button>'
+    + '<button class="btn-icon" title="Move down" aria-label="Move down"' + (last ? ' disabled' : '') + ' onclick="_rtMove(\'' + kind + '\',\'' + esc(key) + '\',1)">&#9660;</button></span>';
+}
+var _RT_TYPE_WORD = { html: 'Rich text', textarea: 'Long text', text: 'Text', short: 'Short text', number: 'Number', date: 'Date', select: 'Choice', multi: 'Choices', url: 'Link' };
+function _rtFieldsHtml(d) {
+  var h = '<p class="hint" style="margin:0.6rem 0 0.7rem">The fields an engagement on this report has on its findings, in this order and under these names. '
+    + 'A name left empty is the field’s own. What a field is (its type, choices and AI prompt) is shared by every report: change it under Settings, Finding Fields. '
+
+    + '<b>In report</b> says whether the field is printed in the report, as well as kept on the finding.</p>';
+  h += _rtFitLineHtml(d, 'fields');
+  h += _ffReqAlertHtml();
+  h += '<div class="sg-wrap rt-grid"><div class="sg-row rt-frow rt-f6 sg-head"><span>Order</span><span>Name in this report</span><span>On</span><span>Required</span><span>In report</span><span>Field</span></div>';
+  ['title', 'severity'].forEach(function (k) {
+    var o = ((d.findings || {}).fields || {})[k] || {};
+    h += '<div class="sg-row rt-frow rt-f6"><span class="g-ord"></span>'
+      + '<span class="g-lab"><input class="form-input" value="' + esc(o.label || '') + '" placeholder="' + esc(_ffLabelDefault(k)) + '" oninput="_rtSet(\'findings.fields.' + k + '.label\', this.value)" aria-label="Name of ' + esc(_ffLabelDefault(k)) + '"></span>'
+      + '<span class="g-c g-na">Always</span><span class="g-c g-na">' + (k === 'title' ? 'Always' : 'n/a') + '</span><span class="g-c g-na">Always</span>'
+      + '<span class="rt-kind">' + esc(_ffLabelDefault(k)) + '</span></div>';
+  });
+  var order = _ffOrder();
+  order.forEach(function (key, i) {
+    var e = _ffOrderEntry(key);
+    if (!e) return;
+    var first = i === 0, last = i === order.length - 1;
+    if (e.kind === 'custom') {
+      var c = e.def;
+      var co = (((d.findings || {}).custom || {})[c.id]) || {};
+      var cat = (_rtWith('', function () { return (_ffCustomAll().find(function (x) { return x.id === c.id; }) || {}).label; })) || c.label || 'Custom field';
+      var on = co.enabled === true;
+      h += '<div class="sg-row rt-frow rt-f6' + (on ? '' : ' rt-off') + '">' + _rtArrows('findings', key, first, last)
+        + '<span class="g-lab"><input class="form-input" value="' + esc(co.label || '') + '" placeholder="' + esc(cat) + '" oninput="_rtSet(\'findings.custom.' + c.id + '.label\', this.value)" aria-label="Name of ' + esc(cat) + '"></span>'
+        + '<label class="g-c"><input type="checkbox"' + (on ? ' checked' : '') + ' onchange="_rtTickOn(\'findings.custom.' + c.id + '\', this.checked)"> On</label>'
+        + '<label class="g-c"><input type="checkbox"' + (co.required ? ' checked' : '') + (on ? '' : ' disabled') + ' onchange="_rtSet(\'findings.custom.' + c.id + '.required\', this.checked)"> Required</label>'
+        + _rtIrCell('findings', true, c.id, on, 'findings.custom.' + c.id, co.in_report !== false)
+        + '<span class="rt-kind">' + esc(cat) + ' <em>' + esc(_RT_TYPE_WORD[_cffType(c)] || 'Field') + '</em></span></div>';
+      return;
+    }
+    var dd = e.def;
+    var fo = (((d.findings || {}).fields || {})[dd.key]) || {};
+    var en = _ffEnabled(dd.key);
+    h += '<div class="sg-row rt-frow rt-f6' + (en ? '' : ' rt-off') + '">' + _rtArrows('findings', key, first, last)
+      + '<span class="g-lab"><input class="form-input" value="' + esc(fo.label || '') + '" placeholder="' + esc(_ffLabelDefault(dd.key)) + '" oninput="_rtSet(\'findings.fields.' + dd.key + '.label\', this.value)" aria-label="Name of ' + esc(_ffLabelDefault(dd.key)) + '"></span>'
+      + '<label class="g-c"><input type="checkbox"' + (en ? ' checked' : '') + ' onchange="_rtTickOn(\'findings.fields.' + dd.key + '\', this.checked)"> On</label>'
+      + (dd.key === 'status' ? '<span class="g-c g-na">n/a</span>'
+        : '<label class="g-c"><input type="checkbox"' + (_ffRequired(dd.key) ? ' checked' : '') + (en ? '' : ' disabled') + ' onchange="_rtSet(\'findings.fields.' + dd.key + '.required\', this.checked)"> Required</label>')
+      + _rtIrCell('findings', false, dd.key, en, 'findings.fields.' + dd.key, _ffInReport(dd.key))
+      + '<span class="rt-kind">' + esc(_ffLabelDefault(dd.key)) + '</span></div>';
+  });
+  h += '</div>';
+  h += '<div class="rt-add"><input class="form-input" id="rt_newfield" placeholder="A field of its own, e.g. Business Impact" maxlength="60">'
+    + '<select class="form-select" id="rt_newtype" aria-label="Kind of field">'
+    + [['html', 'Rich text'], ['textarea', 'Long text'], ['text', 'Text'], ['select', 'Choice'], ['number', 'Number'], ['date', 'Date'], ['url', 'Link']].map(function (o) { return '<option value="' + o[0] + '">' + o[1] + '</option>'; }).join('')
+    + '</select><input class="form-input" id="rt_newopts" placeholder="Choices, comma separated (for Choice)">'
+    + '<button class="btn btn-secondary btn-sm" onclick="_rtAddField()">Add field</button></div>';
+  return h;
+}
+function _rtSectionsHtml(d) {
+  var h = '<p class="hint" style="margin:0.6rem 0 0.7rem">The sections an engagement on this report has, in this order and under these names. '
+    + '<b>In report</b> says whether the section is printed in the report as well as kept on the engagement. Its working areas, such as Credentials and Files, are never printed.</p>';
+  h += _rtFitLineHtml(d, 'sections');
+  h += '<div class="sg-wrap rt-grid"><div class="sg-row rt-frow sg-head"><span>Order</span><span>Name in this report</span><span>On</span><span>In report</span><span>Section</span></div>';
+  var order = _smOrder().filter(function (k) { var x = _smDefByKey(k); return !(x && x.doc) && (!x || _smKeyOn(x.key)); });
+  order.forEach(function (key, i) {
+    var first = i === 0, last = i === order.length - 1;
+    var cs = _smCustomById(key);
+    var isC = !!cs;
+    var o = isC ? ((((d.sections || {}).custom || {})[key]) || {}) : ((((d.sections || {}).fields || {})[key]) || {});
+    var own = isC ? ((_rtWith('', function () { var x = _smCustomById(key); return x && x.label; })) || cs.label || 'Section') : _smLabelDefault(key);
+    var en = _smEnabled(key), ir = _smInReport(key);
+    var path = isC ? 'sections.custom.' + key : 'sections.fields.' + key;
+    h += '<div class="sg-row rt-frow' + (en ? '' : ' rt-off') + '">' + _rtArrows('sections', key, first, last)
+      + '<span class="g-lab"><input class="form-input" value="' + esc(o.label || '') + '" placeholder="' + esc(own) + '" oninput="_rtSet(\'' + path + '.label\', this.value)" aria-label="Name of ' + esc(own) + '"></span>'
+      + '<label class="g-c"><input type="checkbox"' + (en ? ' checked' : '') + ' onchange="_rtTickOn(\'' + path + '\', this.checked)"> On</label>'
+      + _rtIrCell('sections', isC, key, en, path, ir)
+      + '<span class="rt-kind">' + esc(own) + (isC ? ' <em>Your own</em>' : '') + '</span></div>';
+  });
+  h += '</div>';
+  h += '<div class="rt-add"><input class="form-input" id="rt_newsection" placeholder="A section of its own, e.g. Attack Narrative" maxlength="60">'
+    + '<button class="btn btn-secondary btn-sm" onclick="_rtAddSection()">Add section</button></div>';
+  return h;
+}
+function _rtDocumentHtml(d) {
+
+  var h = '<p class="hint" style="margin:0.6rem 0 0.7rem">The document an engagement on this report is made with.</p>';
+  if (d.__def) {
+
+    var dm = _rdMainOf('');
+    h += '<div class="form-group" style="max-width:560px"><span class="form-label">Report</span><p class="rt-doc-own">' + _RD_DOC + '<span>'
+      + (dm ? 'Made with <b>' + esc(dm.name || dm.filename || 'its Word file') + '</b>. Replace it, or add versions for its download menu, on its card above.'
+        : 'Made with Pental’s own PDF. To make it with a Word file of yours, upload it under the reports above.') + '</span></p></div>';
+    h += '<p class="hint">Its severity colours and its branding are your firm’s own: <a href="#" onclick="event.preventDefault();_setGoTab(\'branding\')">Branding</a> and <a href="#" onclick="event.preventDefault();_setGoTab(\'company\')">Company Details</a>.</p>';
+    h += '<div class="rt-doc-acts"><button class="btn btn-secondary btn-sm" onclick="_rtOpenBuilder(\'\')">Build a Word template for it with the Document Builder</button>'
+      + '<button class="btn btn-ghost btn-sm" onclick="downloadDraftDocxTemplate(\'report\')" title="A Word file with its fields and sections as placeholders, under its names, to build its layout on">Draft with its placeholders</button></div>';
+    return h;
+  }
+  var docs = d.docs || {};
+  var own = _rdMainOf(d.id);
+  if (own) {
+    h += '<div class="form-group" style="max-width:560px"><span class="form-label">Report</span><p class="rt-doc-own">' + _RD_DOC + '<span>Made with <b>' + esc(own.name || own.filename || 'its Word file') + '</b>. Replace it, or add versions for its download menu, on its card above.</span></p></div>';
+  } else {
+    var cur = docs.report || '';
+    h += '<div class="form-group" style="max-width:520px"><label class="form-label" for="rt_doc_report">Report</label><select class="form-select" id="rt_doc_report" onchange="_rtDocPick(\'report\', this.value)">'
+      + '<option value=""' + (cur !== 'builtin' ? ' selected' : '') + '>As the Default (' + esc(_rtDocText('', 'report')) + ')</option>'
+      + '<option value="builtin"' + (cur === 'builtin' ? ' selected' : '') + '>Pental’s own PDF</option></select>'
+      + '<p class="hint" style="margin-top:0.4rem">To make it with a Word file of its own, use <b>Upload its Word file</b> on its card.</p></div>';
+  }
+  if (typeof _attestationOn === 'function' && _attestationOn()) {
+    var list = _listDocxTemplates('loa');
+    var cl = docs.loa || '';
+    var o = '<div class="form-group" style="max-width:520px"><label class="form-label" for="rt_doc_loa">Attestation</label><select class="form-select" id="rt_doc_loa" onchange="_rtDocPick(\'loa\', this.value)">';
+    o += '<option value=""' + (!cl ? ' selected' : '') + '>As the Default (' + esc(_rtDocText('', 'loa')) + ')</option>';
+    o += '<option value="builtin"' + (cl === 'builtin' ? ' selected' : '') + '>Pental’s own PDF</option>';
+    list.forEach(function (t) {
+
+      var by = _rtList().filter(function (x) { return x.id !== d.id && x.docs && x.docs.loa === t.id; })[0];
+      o += '<option value="' + esc(t.id) + '"' + (cl === t.id ? ' selected' : '') + '>' + esc(t.name || 'Word template') + (by ? ' (' + esc(by.name) + '’s too)' : '') + '</option>';
+    });
+    h += o + '</select></div>';
+  }
+  h += '<div class="rt-doc-acts"><button class="btn btn-secondary btn-sm" onclick="_rtOpenBuilder(\'' + esc(d.id) + '\')">Build a Word template for it with the Document Builder</button>'
+    + '<button class="btn btn-ghost btn-sm" onclick="downloadDraftDocxTemplate(\'report\', \'' + esc(d.id) + '\')" title="A Word file with this report\'s fields and sections as placeholders, under its names, to build its layout on">Draft with its placeholders</button></div>';
+  return h;
+}
+var _RT_SEV_WORD = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', info: 'Info' };
+function _rtSeverityHtml(d) {
+  var sv = d.severity || {};
+  var names = sv.names || {}, colors = sv.colors || {};
+  var levels = Array.isArray(sv.levels) && sv.levels.length ? sv.levels : _RT_SEV_KEYS.slice();
+  var firm = _sevColors();
+  var h = '<p class="hint" style="margin:0.6rem 0 0.7rem">What this template calls each level, which it offers on a finding, and their colours in its reports. '
+    + 'Counts, charts and filters work on the same five levels whatever they are called. A name left empty is the usual one.</p>';
+  h += '<div class="sg-wrap rt-grid"><div class="sg-row rt-srow sg-head"><span>Level</span><span>Name in this template</span><span>Offered</span><span>Colour in its reports</span></div>';
+  _RT_SEV_KEYS.forEach(function (k) {
+    var col = colors[k] || '';
+    h += '<div class="sg-row rt-srow"><span class="rt-kind"><span class="rt-swatch" style="background:' + esc(col || firm[k] || SEV_DEFAULTS[k]) + '"></span>' + _RT_SEV_WORD[k] + '</span>'
+      + '<span class="g-lab"><input class="form-input" value="' + esc(names[k] || '') + '" placeholder="' + _RT_SEV_WORD[k] + '" maxlength="40" oninput="_rtSet(\'severity.names.' + k + '\', this.value)" aria-label="Name of ' + _RT_SEV_WORD[k] + '"></span>'
+      + '<label class="g-c"><input type="checkbox"' + (levels.indexOf(k) >= 0 ? ' checked' : '') + ' onchange="_rtSevLevel(\'' + k + '\', this.checked)"> Offered</label>'
+      + '<span class="rt-colour"><input type="color" value="' + esc(col || firm[k] || SEV_DEFAULTS[k]) + '" onchange="_rtSet(\'severity.colors.' + k + '\', this.value, true)" aria-label="Colour of ' + _RT_SEV_WORD[k] + '">'
+      + (col ? '<button class="btn btn-ghost btn-sm" onclick="_rtSet(\'severity.colors.' + k + '\', \'\', true)">Your usual</button>' : '<span class="rt-usual">Your usual</span>') + '</span></div>';
+  });
+  h += '</div>';
+  h += '<div class="form-group" style="max-width:320px;margin-top:0.9rem"><label class="form-label" for="rt_cvss">CVSS</label><select class="form-select" id="rt_cvss" onchange="_rtSet(\'severity.cvss\', this.value)">'
+    + '<option value=""' + (!sv.cvss ? ' selected' : '') + '>As the Default (' + esc(((S.data.settings || {}).cvss_version === '4.0') ? 'CVSS 4.0' : 'CVSS 3.1') + ')</option>'
+    + '<option value="3.1"' + (sv.cvss === '3.1' ? ' selected' : '') + '>CVSS 3.1</option><option value="4.0"' + (sv.cvss === '4.0' ? ' selected' : '') + '>CVSS 4.0</option></select></div>';
+  return h;
+}
+function _rtSevLevel(k, on) {
+  var d = _rtDraft();
+  if (!d) return;
+  var sv = d.severity || (d.severity = {});
+  var l = Array.isArray(sv.levels) && sv.levels.length ? sv.levels.slice() : _RT_SEV_KEYS.slice();
+  if (on && l.indexOf(k) < 0) l.push(k);
+  if (!on) l = l.filter(function (x) { return x !== k; });
+  if (!l.length) { toast('A template offers at least one level', 'error'); render(); return; }
+  sv.levels = _RT_SEV_KEYS.filter(function (x) { return l.indexOf(x) >= 0; });
+  if (sv.levels.length === _RT_SEV_KEYS.length) delete sv.levels;
+}
+window._rtSevLevel = _rtSevLevel;
+var _RT_BRAND_WORD = [['company_name', 'Company name'], ['company_email', 'Email'], ['company_phone', 'Phone'], ['company_website', 'Website'], ['company_number', 'Company number'], ['company_address', 'Address']];
+function _rtBrandUse(d) {
+  var out = { pdf: [], files: [] };
+  var main = _rdMainOf(d.id);
+  if (main) out.files.push({ what: 'report', file: main, used: _rdPrintsNow(d.id) });
+  else out.pdf.push('report');
+  var on = false;
+  try { on = typeof _attestationOn === 'function' && _attestationOn(); } catch (e) { on = false; }
+  if (on) {
+    var lm = null;
+    try { lm = _getDocxTemplateMeta('loa'); } catch (e) { lm = null; }
+    if (lm && lm.id) out.files.push({ what: 'letter of attestation', file: lm, used: _rdDocPrintsNow('loa', lm) });
+    else out.pdf.push('letter of attestation');
+  }
+  return out;
+}
+function _rdDocPrintsNow(type, file) {
+  if (!file || !file.id) return null;
+  var k = type + '|' + _rdTokKey(file);
+  if (Object.prototype.hasOwnProperty.call(_rdTokDone, k)) return _rdTokDone[k];
+  if (!_rdTokDone['?' + k]) {
+    _rdTokDone['?' + k] = true;
+    _rtTokensOfWord(type, file.id).then(function (u) {
+      if (!u) { delete _rdTokDone['?' + k]; return; }
+      _rdTokDone[k] = u;
+      try { if (S.page === 'settings' && S._rtOpen) render(); } catch (e) {}
+    });
+  }
+  return null;
+}
+function _rtBrandingHtml(d) {
+  var b = d.brand || {};
+  var s = S.data.settings || {};
+  var u = _rtBrandUse(d);
+  var reading = u.files.some(function (x) { return x.used == null; });
+  var prints = function (k) { return u.pdf.length > 0 || reading || u.files.some(function (x) { return x.used && x.used[k]; }); };
+  var logo = u.pdf.length > 0;
+  var colour = logo || prints('accent_color');
+  var shown = _RT_BRAND_WORD.filter(function (f) { return prints(f[0]) || String(b[f[0]] || '').trim(); });
+  var h = '<p class="hint" style="margin:0.6rem 0 0.7rem">Who its documents say they are from. Empty is your own; a partner’s report carries the partner’s. ';
+  if (u.files.length) {
+    var said = [];
+    if (!reading) _RT_BRAND_WORD.concat([['accent_color', '']]).forEach(function (f) { if (u.files.some(function (x) { return x.used && x.used[f[0]]; })) said.push('{' + f[0] + '}'); });
+    h += 'Its Word ' + (u.files.length > 1 ? 'files carry' : 'file carries') + ' its own logo and colours'
+      + (reading ? '.' : (said.length ? ', and ' + (u.files.length > 1 ? 'print' : 'prints') + ' ' + _genList(said) + ' from here.' : ', and ' + (u.files.length > 1 ? 'have' : 'has') + ' no placeholder for anything here.'));
+  }
+  if (u.pdf.length) h += (u.files.length ? ' ' : '') + 'Its ' + _genList(u.pdf) + (u.pdf.length > 1 ? ' are' : ' is') + ' made with Pental’s own PDF, which prints the logo, colour, name and details below.';
+  h += '</p>';
+  if (!logo && !colour && !shown.length) {
+    h += '<p class="rt-doc-own">' + _RD_DOC + '<span>Nothing here would be printed. To fill its Word file’s name and details from here, put {company_name}, {company_email} and the rest in it (Placeholders, on the report’s row).</span></p>';
+    return h;
+  }
+  h += '<div class="rt-brand">';
+  if (logo) {
+    h += '<div class="rt-logo">' + (b.logo_url ? '<img src="' + esc(b.logo_url) + '" alt="This template’s logo">' : '<span class="rt-usual">Your own logo</span>') + '</div>';
+    h += '<div class="rt-logo-acts"><label class="btn btn-secondary btn-sm" style="cursor:pointer">' + (b.logo_url ? 'Change logo' : 'Add a logo')
+      + '<input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden onchange="_rtLogo(event)"></label>'
+      + (b.logo_url ? '<button class="btn btn-ghost btn-sm" onclick="_rtSet(\'brand.logo_url\', \'\', true)">Use your own</button>' : '') + '</div>';
+  }
+  if (colour) h += '<div class="form-group" style="max-width:260px"><label class="form-label" for="rt_accent">Colour</label><div class="rt-colour"><input type="color" id="rt_accent" value="' + esc(b.accent_color || s.accent_color || '#991b1b') + '" onchange="_rtSet(\'brand.accent_color\', this.value, true)">'
+    + (b.accent_color ? '<button class="btn btn-ghost btn-sm" onclick="_rtSet(\'brand.accent_color\', \'\', true)">Your usual</button>' : '<span class="rt-usual">Your usual</span>') + '</div></div>';
+  h += '<div class="rt-brand-grid">';
+  shown.forEach(function (f) {
+    var multi = f[0] === 'company_address';
+    h += '<div class="form-group"><label class="form-label" for="rt_b_' + f[0] + '">' + esc(f[1]) + '</label>'
+      + (multi ? '<textarea class="form-textarea" rows="2" id="rt_b_' + f[0] + '" placeholder="' + esc(s[f[0]] || '') + '" oninput="_rtSet(\'brand.' + f[0] + '\', this.value)">' + esc(b[f[0]] || '') + '</textarea>'
+        : '<input class="form-input" id="rt_b_' + f[0] + '" value="' + esc(b[f[0]] || '') + '" placeholder="' + esc(s[f[0]] || '') + '" oninput="_rtSet(\'brand.' + f[0] + '\', this.value)">')
+      + '</div>';
+  });
+  h += '</div></div>';
+  return h;
+}
+function _rtLogo(e) {
+  var file = e.target.files && e.target.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) { toast('Logo must be under 2 MB', 'error'); return; }
+  if (!/^image\/(png|jpeg|svg\+xml|webp)$/.test(file.type)) { toast('PNG, JPG, SVG or WebP only', 'error'); return; }
+  var reader = new FileReader();
+  reader.onload = function (ev) {
+    var src = ev.target.result;
+    if (file.type === 'image/svg+xml') {
+      if (src.length > 400000) { toast('That logo is too large: use a smaller image', 'error'); return; }
+      _rtSet('brand.logo_url', src, true);
+      return;
+    }
+    var img = new Image();
+    img.onload = function () {
+      var w = img.naturalWidth || img.width, hh = img.naturalHeight || img.height;
+      if (!w || !hh) { toast('That image could not be read', 'error'); return; }
+      var r = Math.min(1, 800 / Math.max(w, hh));
+      var c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(w * r)); c.height = Math.max(1, Math.round(hh * r));
+      var g = c.getContext('2d');
+      g.drawImage(img, 0, 0, c.width, c.height);
+      var out = c.toDataURL('image/png');
+      if (out.length > 400000) {
+
+        var c2 = document.createElement('canvas'); c2.width = c.width; c2.height = c.height;
+        var g2 = c2.getContext('2d'); g2.fillStyle = '#ffffff'; g2.fillRect(0, 0, c2.width, c2.height); g2.drawImage(c, 0, 0);
+        out = c2.toDataURL('image/jpeg', 0.86);
+      }
+      if (out.length > 400000) { toast('That logo is too large: use a smaller image', 'error'); return; }
+      _rtSet('brand.logo_url', out, true);
+    };
+    img.onerror = function () { toast('That image could not be read', 'error'); };
+    img.src = src;
+  };
+  reader.readAsDataURL(file);
+}
+window._rtLogo = _rtLogo;
+async function _rtAddField() {
+  var d = _rtDraft();
+  if (!d) return;
+  var nameEl = document.getElementById('rt_newfield'), typeEl = document.getElementById('rt_newtype'), optEl = document.getElementById('rt_newopts');
+  var label = String((nameEl && nameEl.value) || '').replace(/\s+/g, ' ').trim();
+  if (!label) { toast('Name the field', 'error'); if (nameEl) nameEl.focus(); return; }
+  var type = (typeEl && typeEl.value) || 'html';
+  var opts = String((optEl && optEl.value) || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+  if (type === 'select' && !opts.length) { toast('Give "' + label + '" its choices, comma separated', 'error'); if (optEl) optEl.focus(); return; }
+  var taken = _rtWith('*', function () {
+    return ['title', 'severity'].concat(_ffDefs().map(function (x) { return x.key; })).map(function (k) { return _ffLabel(k).toLowerCase(); })
+      .concat(_ffCustomAll().map(function (c) { return String(c.label || '').toLowerCase(); }));
+  });
+  if (taken.indexOf(label.toLowerCase()) >= 0) { toast('There is already a field called ' + label + ': switch it on here instead', 'error'); return; }
+  var id = 'cf_' + _rtNewId().slice(3, 9);
+  _showLoading();
+  try {
+    var r = await _setPutIn('finding_fields', function (v) {
+      if (!Array.isArray(v.custom)) v.custom = [];
+      var def = { id: id, label: label, type: type, enabled: false, required: false, reusable: false, ai_prompt: '' };
+      if (type === 'select') def.options = opts.join(', ');
+      v.custom.push(def);
+      if (Array.isArray(v.order) && v.order.length) v.order.push('custom_' + id);
+    });
+    if (!r || !r.ok) { _settingsSaveFailed('finding_fields'); return; }
+    var c = d.findings.custom || (d.findings.custom = {});
+    c[id] = { enabled: true, required: false, label: '' };
+
+    var _noPlace = !!_rdMainOf(d.id);
+    if (_noPlace) c[id].in_report = false;
+    if (Array.isArray(d.findings.order) && d.findings.order.length) d.findings.order.push('custom_' + id);
+    toast(label + ' added. ' + (_noPlace ? 'It is printed once its Word file has {custom_' + id + '}. ' : '') + _rtSaveWord(d), 'success', _noPlace ? 9000 : undefined);
+  } finally { _hideLoading(); }
+  render();
+}
+window._rtAddField = _rtAddField;
+async function _rtAddSection() {
+  var d = _rtDraft();
+  if (!d) return;
+  var nameEl = document.getElementById('rt_newsection');
+  var label = String((nameEl && nameEl.value) || '').replace(/\s+/g, ' ').trim();
+  if (!label) { toast('Name the section', 'error'); if (nameEl) nameEl.focus(); return; }
+  var taken = _rtWith('*', function () { return _smOrder().map(function (k) { return String(_smLabel(k) || '').toLowerCase(); }); });
+  if (taken.indexOf(label.toLowerCase()) >= 0) { toast('There is already a section called ' + label + ': switch it on here instead', 'error'); return; }
+  var id = 'cs_' + _rtNewId().slice(3, 9);
+  _showLoading();
+  try {
+    var r = await _setPutIn('summary_fields', function (v) {
+      if (!Array.isArray(v.custom)) v.custom = [];
+      v.custom.push({ id: id, label: label, enabled: false, in_report: true, client_default: false });
+      if (Array.isArray(v.order) && v.order.length) v.order.push(id);
+    });
+    if (!r || !r.ok) { _settingsSaveFailed('summary_fields'); return; }
+    var c = d.sections.custom || (d.sections.custom = {});
+    c[id] = { enabled: true, in_report: true, label: '' };
+    if (Array.isArray(d.sections.order) && d.sections.order.length) d.sections.order.push(id);
+    toast(label + ' added. ' + _rtSaveWord(d), 'success');
+  } finally { _hideLoading(); }
+  render();
+}
+window._rtAddSection = _rtAddSection;
+function _rtOpenBuilder(tid) {
+  if (tid && !_rtById(tid)) return;
+  if (_rtDirty()) { toast('Save or discard this template\u2019s changes first', 'info'); return; }
+  nav('report-builder').then(function () { S._rbForRt = tid || null; render(); });
+}
+window._rtOpenBuilder = _rtOpenBuilder;
+function _rtChipHtml(a) {
+  if (!a || !_rtHasDb() || !_rtList().length) return '';
+  if (S.profile && S.profile.role === 'client') return '';
+  var name = _rtName(_rtIdOf(a));
+  var mine = canEdit() && !(typeof isContractor === 'function' && isContractor());
+  if (!mine) return '<span class="rt-chip rt-chip-ro" title="The report this engagement uses">' + IC.doc + ' ' + esc(name) + '</span>';
+  return '<button class="rt-chip" onclick="_rtSwitchOpen(\'' + esc(a.id) + '\')" title="The report this engagement uses: its Word file, finding fields and sections. Change it">'
+    + IC.doc + ' ' + esc(name) + ' <span class="rt-chip-caret">&#9662;</span></button>';
+}
+function _rtPickerHtml(id, cur, onchange) {
+  if (!_rtHasDb() || !_rtList().length) return '';
+  if (typeof isContractor === 'function' && isContractor()) return '';
+  var o = '<select class="form-select" id="' + id + '" onchange="' + onchange + '">';
+
+  o += '<option value=""' + (!cur ? ' selected' : '') + '>' + esc(_rtName('')) + '</option>';
+  _rtList().forEach(function (t) { o += '<option value="' + esc(t.id) + '"' + (cur === t.id ? ' selected' : '') + '>' + esc(t.name) + '</option>'; });
+  return o + '</select>';
+}
+function _rtFieldView(tid) {
+  return _rtWith(tid, function () {
+    var out = {};
+    ['title', 'severity'].forEach(function (k) { out[k] = { on: true, label: _ffLabel(k), req: k === 'title' }; });
+    _ffDefs().forEach(function (d) { out[d.key] = { on: _ffEnabled(d.key), label: _ffLabel(d.key), req: _ffRequired(d.key) }; });
+    _ffCustomAll().forEach(function (c) {
+      var on = _ffCustomEnabled().some(function (x) { return x.id === c.id; });
+      var cur = _ffCustom().find(function (x) { return x.id === c.id; }) || c;
+      out['custom_' + c.id] = { on: on, label: cur.label || c.label || 'Custom field', req: on && _ffCustomRequired(cur) };
+    });
+    return out;
+  });
+}
+function _rtSectionView(tid) {
+  return _rtWith(tid, function () {
+    var out = {};
+    _smOrder().forEach(function (k) {
+      var d = _smDefByKey(k);
+      if (d && (d.doc || !_smKeyOn(d.key))) return;
+      out[k] = { on: _smEnabled(k), label: _smLabel(k) };
+    });
+    return out;
+  });
+}
+function _rtDiff(a, to) {
+  var from = _rtIdOf(a);
+  var fs = (S.data.findings || []).filter(function (f) { return f && f.assessment_id === a.id; });
+  var A = _rtFieldView(from), B = _rtFieldView(to);
+  var out = { hidden: [], shown: [], renamed: [], missing: [], secHidden: [], secShown: [], secRenamed: [], doc: null, sev: [] };
+  Object.keys(B).forEach(function (k) {
+    var x = A[k] || { on: false }, y = B[k];
+    if (x.on && !y.on) {
+      var n = fs.filter(function (f) { return _rtFindingHas(f, k); }).length;
+      out.hidden.push({ key: k, label: x.label, n: n });
+    } else if (!x.on && y.on) out.shown.push({ label: y.label });
+    else if (x.on && y.on && x.label !== y.label) out.renamed.push({ from: x.label, to: y.label });
+  });
+
+  var missOf = function (tid, f) {
+    return _rtWith(tid, function () {
+      var m = [];
+      try { m = _findingMissingOnRecord(f, tid) || []; } catch (e) { m = []; }
+      return m.map(function (x) { return { key: (x && x.key) || String(x), label: (x && (x.label || x.key)) || String(x) }; });
+    });
+  };
+  var per = {}, order = [];
+  fs.forEach(function (f) {
+    var now = {};
+    missOf(from, f).forEach(function (x) { now[x.key] = true; });
+    missOf(to, f).forEach(function (x) {
+      if (now[x.key]) return;
+      if (!per[x.key]) { per[x.key] = { label: x.label, n: 0 }; order.push(x.key); }
+      per[x.key].n++;
+    });
+  });
+  order.forEach(function (k) { out.missing.push(per[k]); });
+  var SA = _rtSectionView(from), SB = _rtSectionView(to);
+  Object.keys(SB).forEach(function (k) {
+    var x = SA[k] || { on: false }, y = SB[k];
+    if (x.on && !y.on) out.secHidden.push({ key: k, label: x.label, has: _rtSectionHas(a, k) });
+    else if (!x.on && y.on) out.secShown.push({ label: y.label });
+    else if (x.on && y.on && x.label !== y.label) out.secRenamed.push({ from: x.label, to: y.label });
+  });
+  var d1 = _rtDocText(from, 'report'), d2 = _rtDocText(to, 'report');
+  if (d1 !== d2) out.doc = { from: d1, to: d2 };
+  var used = {};
+  fs.forEach(function (f) { var k = _rtSevKey(f.severity); if (k) used[k] = true; });
+  _RT_SEV_KEYS.forEach(function (k) {
+    if (!used[k]) return;
+    var n1 = _rtWith(from, function () { return _sevName(k); }), n2 = _rtWith(to, function () { return _sevName(k); });
+    if (n1 !== n2) out.sev.push({ from: n1, to: n2 });
+  });
+  return out;
+}
+function _rtFindingHas(f, key) {
+  var v;
+  if (key.indexOf('custom_') === 0) {
+    var cv = (typeof _ffParseCustomVals === 'function') ? _ffParseCustomVals(f) : {};
+    v = cv ? cv[key.slice(7)] : '';
+  } else {
+    var d = _ffDefs().find(function (x) { return x.key === key; });
+    v = d ? f[d.col] : f[key];
+  }
+  if (Array.isArray(v)) return v.length > 0;
+
+  if (key.indexOf('custom_') === 0 && _rtMoveKind('', key) === 'text') return !!String(v == null ? '' : v).trim();
+  return _rtHasWords(v);
+}
+function _rtSectionHas(a, key) {
+  var d = _smDefByKey(key);
+  var v = d ? a[d.col] : (_smParseVals(a) || {})[key];
+  return _rtHasWords(v, _rtSectionKind(key) === 'text' ? 'text' : '');
+}
+function _rtDiffHtml(a, to) {
+  if (_rtIdOf(a) === (to || '')) return '<p class="hint">This engagement already uses it.</p>';
+  var df = _rtDiff(a, to || '');
+  var li = function (s) { return '<li>' + s + '</li>'; };
+  var h = '';
+  var block = function (title, items) { if (!items.length) return; h += '<div class="rt-diff-block"><div class="rt-diff-title">' + esc(title) + '</div><ul>' + items.join('') + '</ul></div>'; };
+
+  var from = _rtIdOf(a), B = _rtFieldView(to || ''), SB = _rtSectionView(to || '');
+
+  var m = (S.modal && S.modal.type === 'rt-switch') ? S.modal : null;
+  if (m && (m.movesFor !== (to || '') || !m.moves)) { m.moves = { f: {}, s: {} }; m.movesFor = to || ''; }
+  var chosen = m ? m.moves : { f: {}, s: {} };
+  var pick = function (kind, x, opts) {
+    if (!opts.length) return '';
+    var cur = chosen[kind][x.key] || '';
+    return ' <select class="form-select rt-move" aria-label="Where ' + esc(x.label) + ' goes" onchange="_rtMoveSet(\'' + kind + '\',\'' + esc(x.key) + '\',this.value)">'
+      + '<option value=""' + (cur ? '' : ' selected') + '>kept aside, and back if it moves back</option>'
+      + opts.map(function (o) { return '<option value="' + esc(o.key) + '"' + (cur === o.key ? ' selected' : '') + '>added to ' + esc(o.label) + '</option>'; }).join('') + '</select>';
+  };
+  var fTo = Object.keys(B).filter(function (k) { return B[k].on && _rtMoveKind(to || '', k) === 'rich'; }).map(function (k) { return { key: k, label: B[k].label }; });
+  var sTo = Object.keys(SB).filter(function (k) { return SB[k].on && _rtSectionKind(k) === 'rich'; }).map(function (k) { return { key: k, label: SB[k].label }; });
+  block('Finding fields put away', df.hidden.map(function (x) {
+    if (!x.n) return li('<b>' + esc(x.label) + '</b>');
+    var can = !!_rtMoveKind(from, x.key);
+    return li('<b>' + esc(x.label) + '</b>, written on ' + x.n + ' finding' + (x.n === 1 ? '' : 's') + (can && fTo.length ? ':' + pick('f', x, fTo) : ': kept, and back if the engagement moves back'));
+  }));
+  block('Finding fields added', df.shown.map(function (x) { return li('<b>' + esc(x.label) + '</b>'); }));
+  block('Finding fields renamed', df.renamed.map(function (x) { return li(esc(x.from) + ' becomes <b>' + esc(x.to) + '</b>'); }));
+  block('Required and still empty', df.missing.map(function (x) { return li('<b>' + esc(x.label) + '</b> on ' + x.n + ' finding' + (x.n === 1 ? ', which shows as a draft' : 's, which show as drafts') + ' until it is filled'); }));
+  block('Sections put away', df.secHidden.map(function (x) {
+    if (!x.has) return li('<b>' + esc(x.label) + '</b>');
+    return li('<b>' + esc(x.label) + '</b>, written' + (_rtSectionKind(x.key) && sTo.length ? ':' + pick('s', x, sTo) : ': its words are kept, and back if the engagement moves back'));
+  }));
+  block('Sections added', df.secShown.map(function (x) { return li('<b>' + esc(x.label) + '</b>'); }));
+  block('Sections renamed', df.secRenamed.map(function (x) { return li(esc(x.from) + ' becomes <b>' + esc(x.to) + '</b>'); }));
+  if (df.doc) block('The report', [li('Made with <b>' + esc(df.doc.to) + '</b> instead of ' + esc(df.doc.from))]);
+  block('Severity', df.sev.map(function (x) { return li(esc(x.from) + ' is called <b>' + esc(x.to) + '</b>'); }));
+  if (!h) h = '<p class="hint">Nothing on this engagement looks different on it.</p>';
+  return h;
+}
+function _rtSwitchOpen(aid) {
+  var a = _rtAssessment(aid);
+  if (!a) return;
+  S.modal = { type: 'rt-switch', id: aid, pick: _rtIdOf(a) };
+  render();
+}
+window._rtSwitchOpen = _rtSwitchOpen;
+function renderRtSwitchModal() {
+  var m = S.modal;
+  var a = _rtAssessment(m.id);
+  if (!a) return '<div class="modal-body">This engagement is not here any more.</div>';
+  var h = '<div class="modal-header"><h2 class="modal-title">Report</h2><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
+  h += '<div class="modal-body">';
+  h += '<p class="hint" style="margin-bottom:0.8rem;line-height:1.55">Which report ' + esc(a.name || 'this engagement') + ' uses: the Word file its report is made with, its finding fields and assessment sections, its severity names and its branding. Nothing written is lost by moving: what the new one does not show can be added to something it does, or kept aside.</p>';
+  h += '<div class="form-group"><label class="form-label" for="rtSwPick">Report</label>' + _rtPickerHtml('rtSwPick', m.pick || '', 'S.modal.pick=this.value;document.getElementById(\'rtSwDiff\').innerHTML=_rtDiffHtml(_rtAssessment(S.modal.id),this.value)') + '</div>';
+  h += '<div id="rtSwDiff" class="rt-diff">' + _rtDiffHtml(a, m.pick || '') + '</div>';
+  h += '</div>';
+  h += '<div class="modal-footer"><button class="btn btn-secondary" onclick="closeM()">Cancel</button><button class="btn btn-primary" onclick="_rtSwitchSave()">Use this report</button></div>';
+  return h;
+}
+async function _rtSwitchSave() {
+  var m = S.modal;
+  if (!m || m.type !== 'rt-switch') return;
+  var a = _rtAssessment(m.id);
+  if (!a) return;
+  var to = m.pick || null;
+  if ((_rtIdOf(a) || null) === to) { closeM(); return; }
+  var mv = m.moves || { f: {}, s: {} };
+  var from = _rtIdOf(a), A = _rtFieldView(from), SA = _rtSectionView(from);
+  var left = 0;
+  _showLoading();
+  try {
+
+    var r = await _coUpdate('assessments', a.id, function (row) {
+      return { patch: Object.assign({ report_template: to }, _rtSectionMoves(row, mv.s, SA)) };
+    });
+    if (!r || !r.ok) {
+      toast('The engagement could not be moved to ' + _rtName(to || '') + ', so nothing on it has changed. Try again.', 'error');
+      return;
+    }
+    a.report_template = to;
+    if (S.currentAssessment && S.currentAssessment.id === a.id) S.currentAssessment.report_template = to;
+    left = await _rtMoveFindings(a, mv.f, A, from);
+    try { await addTimelineEvent(a.id, 'Report: ' + _rtName(to || '')); } catch (e) {}
+    closeM();
+    var now = (a.name ? a.name + ' now uses ' : 'Now on ') + _rtName(to || '');
+    if (left) toast(now + '. What was written could not be moved on ' + left + ' finding' + (left === 1 ? '' : 's') + ': it is kept aside there, and back if the engagement moves back.', 'warning', 12000);
+    else toast(now, 'success');
+  } finally { _hideLoading(); }
+  render();
+}
+window._rtSwitchSave = _rtSwitchSave;
+function _rtSwapSections(boxId, tid, drawFn) {
+  var box = document.getElementById(boxId);
+  if (!box) return;
+  var keep = {};
+  box.querySelectorAll('[data-key]').forEach(function (el) {
+    var k = el.getAttribute('data-key');
+    if (el.classList.contains('acreate-rich') || el.classList.contains('pcreate-rich')) keep[k] = { html: el.innerHTML };
+    else if (el.classList.contains('acreate-plain') || el.classList.contains('pcreate-plain')) {
+      var c = el.querySelector('input,textarea,select'); if (c) keep[k] = { val: c.value };
+    } else if (el.classList.contains('acreate-cv') || el.classList.contains('pcreate-cv')) keep['cv:' + k] = { on: el.checked };
+  });
+  box.innerHTML = _rtWith(tid, drawFn);
+  box.querySelectorAll('[data-key]').forEach(function (el) {
+    var k = el.getAttribute('data-key');
+    if ((el.classList.contains('acreate-rich') || el.classList.contains('pcreate-rich')) && keep[k] && keep[k].html != null) el.innerHTML = keep[k].html;
+    else if ((el.classList.contains('acreate-plain') || el.classList.contains('pcreate-plain')) && keep[k] && keep[k].val != null) {
+      var c = el.querySelector('input,textarea,select'); if (c) c.value = keep[k].val;
+    } else if ((el.classList.contains('acreate-cv') || el.classList.contains('pcreate-cv')) && keep['cv:' + k]) el.checked = keep['cv:' + k].on;
+  });
+}
+function _ffCfg() { return _rtLaid('findings', _ffCfgBase, ['enabled', 'label', 'required', 'in_report']); }
+function _ffCfgBase() {
   var s = S.data.settings || {};
   var c = s.finding_fields;
   if (!c || typeof c !== 'object') c = {};
@@ -51462,6 +54069,22 @@ function _ffReusable(key) {
   var d = _ffDefs().find(function(x) { return x.key === key; });
   return d ? d.reuse : false;
 }
+function _ffInReport(key) {
+  key = _ffKey(key);
+  if (key === 'title' || key === 'severity') return true;
+  var cfg = _ffCfg();
+  if (String(key).indexOf('custom_') === 0) {
+    var id = String(key).slice(7);
+    var cf = (cfg.custom || []).filter(function (c) { return c && c.id === id; })[0];
+    return !(cf && cf.in_report === false);
+  }
+  var c = cfg.fields[key];
+  return !(c && c.in_report === false);
+}
+window._ffInReport = _ffInReport;
+function _ffClientSees(key) {
+  return !(S.profile && S.profile.role === 'client') || _ffInReport(key);
+}
 function _ffCustom() {
   return _ffCfg().custom.filter(function(f) { return f && f.id && f.label; });
 }
@@ -51546,8 +54169,11 @@ function _findingMissingOnForm() {
   });
   return out;
 }
-function _findingMissingOnRecord(f) {
+function _findingMissingOnRecord(f, tid) {
   if (!f) return [];
+
+  var _rtX = tid === undefined ? f : tid;
+  if (_rtNeeds(_rtX)) return _rtWith(_rtX, function () { return _findingMissingOnRecord(f, tid); });
   var out = [];
   if (!String(f.title || '').trim()) out.push({ key: 'title', label: _ffLabel('title') });
   _ffDefs().forEach(function(d) {
@@ -52087,35 +54713,171 @@ function _testingIpsCardHtml() {
   return h;
 }
 window._testingIpsCardHtml = _testingIpsCardHtml;
-function _datesCardHtml() {
+function _rdSettingsHtml() {
   var s = (S.data && S.data.settings) || {};
-  var h = '';
+  return _rdDocsCardHtml() + _rdEveryHtml(s);
+}
+window._rdSettingsHtml = _rdSettingsHtml;
+function _rtSettingsOn() {
+  try { return !!(_findingsAreaOn() && assessmentsEnabled()); } catch (e) { return false; }
+}
+window._rtSettingsOn = _rtSettingsOn;
+var _RD_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+function _rdDocsCardHtml() {
+  var h = '<div class="card mt-4" id="set_docs_card"><div class="card-header"><span class="card-title">' + _RD_ICON + ' Documents</span>'
+    + '<span class="rt-head-acts"><button class="btn btn-primary btn-sm" onclick="nav(\'report-builder\')">' + IC.edit + ' Open the Document Builder</button></span></div><div class="card-body">';
+  h += '<p class="set-p">Each document is made as the built-in PDF, in your branding, until you give it a Word template of your own. '
+    + 'The Document Builder turns a document you already send into one. To write one yourself, a document’s Placeholders lists everything you can place in it.</p>';
+  h += '<div class="doc-list">';
 
-  h += '<div class="card mt-4" id="set_dates_card"><div class="card-header"><span class="card-title">Dates</span></div><div class="card-body">';
+  _docTemplateTypes().concat(_fxSlotTypes()).forEach(function (dt) { h += _rdRowHtml(dt); });
+  h += '</div></div></div>';
+  return h;
+}
+function _rdSameName(name, file) {
+  var n = function (x) { return String(x || '').toLowerCase().replace(/\.docx?$/, '').replace(/[\s_\-]+/g, ' ').trim(); };
+  return !!file && n(name) === n(file);
+}
+function _rdSize(b) {
+  if (!b) return '';
+  return b < 1024 * 1024 ? Math.max(1, Math.round(b / 1024)) + ' KB' : (b / 1048576).toFixed(1).replace(/\.0$/, '') + ' MB';
+}
+function _rdRowHtml(dt) {
 
-  h += '<div class="form-group" style="margin-bottom:0"><label class="form-label" for="set_date_format">How dates are written in documents</label>';
-  h += '<select class="form-select" id="set_date_format" style="max-width:340px">';
-  var _dfNow = new Date();
+  if (dt.key === 'report' && !dt.exportOnly && !S._embedSettings) return _rdReportHtml(dt);
+  var key = dt.key, fx = !!dt.exportOnly;
 
-  var _dfEg = new Date(2026, 7, 3);
-  [['short', fmtDate(_dfEg, 'short') + ' (default)'], ['dmy', fmtDate(_dfEg, 'dmy')],
-   ['iso', '2026-08-03 (the same everywhere)'],
-   ['long', fmtDate(_dfEg, 'long')]].forEach(function (o) {
-    h += '<option value="' + o[0] + '"' + (((s.date_format || 'short') === o[0]) ? ' selected' : '') + '>'
-      + esc(o[1]) + '</option>';
+  var list = (key === 'report' && !fx) ? _rdDefaultFiles() : _listDocxTemplates(key);
+  var defaultId = _getDefaultDocxTemplateId(key);
+  var word = !!defaultId;
+  var h = '<div class="doc-item" id="set_doc_' + esc(key) + '"><div class="doc-row"><div class="doc-what">'
+    + '<span class="doc-name">' + esc(dt.label) + '</span>';
+  h += word ? '<span class="doc-chip is-word">' + (list.length > 1 ? list.length + ' Word templates' : 'Your Word template') + '</span>'
+    : '<span class="doc-chip"' + (fx ? ' title="Laid out as your report prints its findings, in its PDF styles"' : '') + '>Built-in PDF</span>';
+  h += '<div class="doc-desc">' + esc(dt.desc) + '</div></div><div class="doc-acts">';
+
+  var builtIn = !word || ((key === 'report' || key === 'loa') && _rtList().some(function (t) { return t.docs && t.docs[key] === 'builtin'; }));
+  if (!fx && builtIn) h += '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + dt.editorKey + '\')" title="The design of Pental’s own PDF, where this document is made with it: its sections, finding fields, colours and labels. A Word template of yours has its own.">' + IC.edit + ' Customise</button>';
+  h += '<button class="btn btn-ghost btn-sm" onclick="showDocxVariableRef(\'' + key + '\')" title="Every placeholder a Word template for it can hold, and a draft with them all">Placeholders</button>';
+  if (list.length) h += '<button class="btn btn-ghost btn-sm" onclick="showStyleMapping(\'' + key + '\')" title="The styles used for code, headings, captions and lists">Styles</button>';
+  h += '<button class="btn btn-secondary btn-sm" onclick="uploadDocxTemplate(\'' + key + '\')">' + IC.upload + ' ' + (list.length ? 'Add a Word template' : 'Upload a Word template') + '</button>';
+  h += '</div></div>';
+  if (!list.length) return h + '</div>';
+
+  var auto = _docxAutoPdfOn(key);
+  h += '<div class="doc-tpls">';
+  h += '<label class="doc-auto"><input type="checkbox"' + (auto ? ' checked' : '') + ' onchange="_setDocxAutoPdf(\'' + key + '\', this.checked, this)"><span>';
+  if (fx) {
+    h += '<strong>Export findings as a PDF made from it</strong><small>Off, they export as the Word file, for you to finish in Word.'
+      + (!auto && _ffExportClientsDoc() ? ' Your clients export findings only as a PDF, so they cannot while this is off.' : '') + '</small>';
+  } else {
+    h += '<strong>Make the PDF automatically</strong><small>Each time it is made, or an edited copy is uploaded, its PDF is made in your browser and kept as its final PDF, unless you upload one yourself.</small>';
+  }
+  h += '</span></label>';
+  list.forEach(function (t, idx) {
+    var isDefault = t.id === defaultId;
+    var name = t.name || t.filename || ('Template ' + (idx + 1));
+
+    var rtOwn = _rtList().filter(function (x) { return x.docs && x.docs[_docxKeyOf(key)] === t.id; })[0];
+    var rtAlone = !!rtOwn && t.id !== _rtDefaultDocOf(_docxKeyOf(key));
+    var defTitle = rtAlone ? rtOwn.name + '’s own, chosen on its Document tab' : (isDefault ? 'The default' : 'Make it the default');
+    h += '<div class="doc-tpl">';
+    h += '<button class="doc-def' + (isDefault ? ' is-on' : '') + '"' + (rtAlone ? ' disabled' : '') + ' onclick="setDefaultDocxTemplate(\'' + key + '\',\'' + esc(t.id) + '\')" title="' + esc(defTitle) + '" aria-label="' + esc(defTitle) + '" aria-pressed="' + isDefault + '">'
+      + '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/>' + (isDefault ? '<circle cx="12" cy="12" r="5" fill="currentColor"/>' : '') + '</svg></button>';
+    h += '<div class="doc-tpl-main"><div class="doc-tpl-name"><span>' + esc(name) + '</span>';
+    if (isDefault) h += '<span class="doc-default">Default</span>';
+    if (rtOwn) h += rtAlone ? '<span class="rt-meta" title="Reports on this template are made with it; other engagements are not offered it">' + esc(rtOwn.name) + '’s</span>'
+      : '<span class="rt-meta" title="The Default and this template are both made with it">' + esc(rtOwn.name) + '’s too</span>';
+
+    var fileTxt = _rdSameName(name, t.filename) ? '' : (t.filename || 'template.docx');
+    var sizeTxt = _rdSize(t.size);
+    h += '<span class="doc-tpl-file">' + esc(fileTxt + (fileTxt && sizeTxt ? ' · ' : '') + sizeTxt) + '</span></div>';
+
+    if (auto) {
+      var cv = _docxConvFor(key, t.id);
+      var box = function (on, dis, mode, label, title) {
+        return '<label class="doc-conv' + (dis ? ' is-off' : '') + '" title="' + esc(title) + '"><input type="checkbox"' + (on ? ' checked' : '') + (dis ? ' disabled' : '')
+          + ' onchange="_setDocxConv(\'' + key + '\',\'' + esc(t.id) + '\',\'' + mode + '\')">' + esc(label) + '</label>';
+      };
+      h += '<div class="doc-convs">';
+      h += box(cv !== 'none', isDefault, cv === 'both' ? 'both' : (cv === 'none' ? 'internal' : 'none'), 'Convert to PDF',
+        isDefault ? 'The default is always converted for you: it is what the download button makes.' : 'Show this template’s PDF in your own download menu.');
+      if (cv === 'none') h += '<span class="doc-conv-none">not converted</span>';
+      h += '</div>';
+    }
+    h += '</div><div class="doc-tpl-acts">'
+      + '<button class="btn btn-ghost btn-sm" onclick="downloadCustomDocxTemplate(\'' + key + '\',\'' + esc(t.id) + '\')" title="Download it" aria-label="Download ' + esc(name) + '">' + IC.dl + '</button>'
+      + '<button class="btn btn-ghost btn-sm" onclick="renameDocxTemplate(\'' + key + '\',\'' + esc(t.id) + '\')" title="Rename it" aria-label="Rename ' + esc(name) + '">' + IC.edit + '</button>'
+      + '<button class="btn btn-ghost btn-sm doc-del" onclick="deleteDocxTemplate(\'' + key + '\',\'' + esc(t.id) + '\')" title="Delete it" aria-label="Delete ' + esc(name) + '">' + IC.trash + '</button>'
+      + '</div></div>';
   });
-  h += '</select>';
-
-  h += '<p class="set-p" style="margin:0.4rem 0 0">Today would read <strong>'
-    + esc(fmtDate(_dfNow, s.date_format || 'short')) + '</strong>. This changes new documents only; '
-    + 'one already produced keeps the dates it was written with.</p>';
-  h += '</div>';
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the date style above.</div>';
-  h += '<button class="btn btn-primary" onclick="saveSettings()">Save Dates</button>';
   h += '</div></div>';
   return h;
 }
-window._datesCardHtml = _datesCardHtml;
+function _pdfOwnDocs() {
+  var out = [];
+  var rts = (_rtSettingsOn() && _rtHasDb()) ? _rtList() : [];
+  _docTemplateTypes().concat(_fxSlotTypes()).forEach(function (dt) {
+    var k = dt.key, pdf;
+    try {
+      if (k === 'report' && !dt.exportOnly) pdf = !_rdMainOf('') || rts.some(function (t) { return !_rtWith(t.id, function () { return _getDocxTemplateMeta('report'); }); });
+      else if (k === 'loa') pdf = !_getDefaultDocxTemplateId('loa') || rts.some(function (t) { return t.docs && t.docs.loa === 'builtin'; });
+      else pdf = !_getDefaultDocxTemplateId(k);
+    } catch (e) { pdf = true; }
+    if (pdf) out.push(dt.label);
+  });
+  return out;
+}
+function _pdfOnlyNote() {
+  var d = _pdfOwnDocs();
+  return d.length ? 'Pental’s own PDF makes your ' + _genList(d.map(function (x) { return x.toLowerCase(); })) + ' now; a Word template of yours has its own.'
+    : 'Not used now: every document is made with a Word template of yours, which has its own.';
+}
+function _rdEveryHtml(s) {
+  var fm = ((s.pdf_templates || {}).footer_mode === 'logo') ? 'logo' : 'company_name';
+  var df = s.date_format || 'short';
+  var h = '<div class="card mt-4" id="set_every_doc"><div class="card-header"><span class="card-title">On every document</span></div><div class="card-body"><div class="doc-every">';
+  var _po = _pdfOnlyNote();
+  h += '<div class="form-group"><label class="form-label" for="set_footer_mode">Footer, left side <span class="doc-chip pdf-only" title="' + esc(_po) + '">Built-in PDF only</span></label>'
+    + '<select class="form-select" id="set_footer_mode" onchange="saveFooterMode(this.value)">'
+    + '<option value="company_name"' + (fm === 'company_name' ? ' selected' : '') + '>Company name</option>'
+    + '<option value="logo"' + (fm === 'logo' ? ' selected' : '') + '>Logo</option></select>'
+    + '<p class="set-p">At the foot of each page of Pental’s own PDF. ' + esc(_po) + '</p></div>';
+
+  h += _logoVariantPicker('pdf_logo_variant', 'Logo', 'On Pental’s own PDF, a white page: with a white main logo, the light-mode one is usually right. ' + esc(_po), true, 'Built-in PDF only');
+
+  h += '<div class="form-group" id="set_dates_card"><label class="form-label" for="set_date_format">Dates</label><select class="form-select" id="set_date_format" onchange="saveDateFormat(this.value)">';
+  var eg = new Date(2026, 7, 3);
+  [['short', fmtDate(eg, 'short') + ' (default)'], ['dmy', fmtDate(eg, 'dmy')], ['iso', '2026-08-03 (the same everywhere)'], ['long', fmtDate(eg, 'long')]].forEach(function (o) {
+    h += '<option value="' + o[0] + '"' + (df === o[0] ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+  });
+  h += '</select><p class="set-p">Today reads <strong>' + esc(fmtDate(new Date(), df)) + '</strong>. A document already made keeps its dates.</p></div>';
+  h += '</div><p class="hint" style="margin:0">Each of these saves as you change it.</p></div></div>';
+  return h;
+}
+async function saveFooterMode(v) {
+  v = v === 'logo' ? 'logo' : 'company_name';
+  try {
+    await _ensurePdfTemplates();
+    await _tplPut(function (t) { if (t.footer_mode === v) return false; t.footer_mode = v; });
+    toast('Settings saved', 'success');
+  } catch (e) { _settingsSaveFailed((e && e.message) || e); }
+  render();
+}
+window.saveFooterMode = saveFooterMode;
+async function saveDateFormat(v) {
+  if (['short', 'dmy', 'iso', 'long'].indexOf(v) < 0) return;
+  try {
+    var existing = S.data.settings;
+    if (!existing || !existing.id) { var _sid = await _ensureSettingsId(); if (!_sid) { _settingsSaveFailed(); return; } existing = S.data.settings; }
+    var res = await _setPut({ date_format: v }, existing.id, 'date_format');
+    if (res.error) throw res.error;
+    S.data.settings.date_format = v;
+    toast('Settings saved', 'success');
+  } catch (err) { _settingsSaveFailed((err && err.message) || err); }
+  render();
+}
+window.saveDateFormat = saveDateFormat;
 function _smKeyOn(key) {
   switch (key) {
     case 'doc_proposal': return proposalsEnabled();
@@ -52138,13 +54900,14 @@ function _smDocChildrenHtml() {
   docs.forEach(function(d) {
     var en = _smEnabled(d.key);
     h += '<div data-sm-key="' + esc(d.key) + '" data-sm-kind="doc" class="sg-row sg-sm sg-box">';
-    h += many ? _sgOrderCell(_smLabel(d.key), '_smDocMove') : '<span class="g-ord"></span>';
     h += '<input type="hidden" id="sm_icon_' + d.key + '" value="' + esc(_smIcon(d.key)) + '">';
     h += '<button type="button" class="g-ico" id="sm_iconbtn_' + d.key + '" onclick="_smOpenIconPicker(\'' + d.key + '\')" title="Choose an icon" style="width:44px;height:30px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:6px;background:transparent;cursor:pointer;color:var(--accent)">' + _smIconHtml(d.key) + '</button>';
-    h += '<span class="g-lab"><input type="text" class="form-input" id="sm_label_' + d.key + '" value="' + esc(_smLabel(d.key)) + '" placeholder="' + esc(d.label) + '" title="Default: ' + esc(d.label) + '" aria-label="The document’s name" oninput="_smBuiltinEdit(\'' + d.key + '\',\'label\',this.value)" style="height:30px;font-size:0.85rem;font-weight:600;padding:0.25rem 0.5rem"></span>';
+
+    h += '<span class="g-lab">' + (many ? _sgOrderCell(_smLabel(d.key), '_smDocMove') : '') + '<input type="text" class="form-input" id="sm_label_' + d.key + '" value="' + esc(_smLabel(d.key)) + '" placeholder="' + esc(d.label) + '" title="Default: ' + esc(d.label) + '" aria-label="The document’s name" oninput="_smBuiltinEdit(\'' + d.key + '\',\'label\',this.value)" style="height:30px;font-size:0.85rem;font-weight:600;padding:0.25rem 0.5rem"></span>';
     h += '<span class="sg-ctl">';
-    h += '<label class="g-c g-mid" data-la="Show" title="Show this document on the assessment"><input type="checkbox" id="sm_en_' + d.key + '"' + (en ? ' checked' : '') + ' onchange="_smBuiltinEdit(\'' + d.key + '\',\'enabled\',this.checked)"></label>';
-    h += '<span></span><span></span><span></span>' + _tokSlot('');
+    h += '<span></span><span></span>';
+    h += '<label class="g-c sm-doc-on" data-lb="" title="This document’s card on every engagement that shows Documents"><input type="checkbox" id="sm_en_' + d.key + '"' + (en ? ' checked' : '') + ' onchange="_smBuiltinEdit(\'' + d.key + '\',\'enabled\',this.checked)"> On engagements</label>';
+    h += _tokSlot('');
     h += '</span><span class="g-x"></span>';
     h += '</div>';
   });
@@ -52157,12 +54920,11 @@ function _smTitleRowHtml() {
   };
   var h = '<div id="smTitlePrompt" class="sm-fixed">';
   h += '<div class="sg-row sg-sm sg-box" data-sm-fixed="assessment_title">';
-  h += '<span class="g-ord sm-fixed-ord" title="Always first" aria-label="Always first">' + IC.lock + '</span>';
-  h += '<span class="g-ico"></span>';
+  h += '<span class="g-ico sm-fixed-ord" title="Always first" aria-label="Always first">' + IC.lock + '</span>';
   h += '<span class="g-lab"><span class="sm-fixed-name">Assessment Title</span>'
     + '<span class="sm-fixed-note">Always first. Generate writes it with AI to the prompt below, from the client and the phases; without AI, from the phases.</span></span>';
-  h += '<span class="sg-ctl">' + fixed('Show', 'Every assessment has its title') + fixed('Report', 'In every report')
-    + fixed('Client', 'Seen by the client') + fixed('On new', 'Asked for on the new assessment form')
+  h += '<span class="sg-ctl">' + fixed('Client', 'Seen by the client') + fixed('On new', 'Asked for on the new assessment form')
+    + '<span class="g-c g-na g-used" data-lb="Used by: ">Every report</span>'
     + _tokSlot(_docxTokenHtml('{assessment_name}', 'DOCX placeholder for the title')) + '</span>';
   h += '<span class="g-x"></span>';
   h += '</div>';
@@ -52195,7 +54957,8 @@ function _smInCreate(key) {
 function _smDefByKey(key) {
   return _smDefs().find(function(d) { return d.key === key; }) || null;
 }
-function _smCfg() {
+function _smCfg() { return _rtLaid('sections', _smCfgBase, ['enabled', 'label', 'in_report']); }
+function _smCfgBase() {
   var s = S.data.settings || {};
   var c = s.summary_fields;
   if (!c || typeof c !== 'object') c = {};
@@ -52445,8 +55208,11 @@ function renderFindingModal() {
   if (!fi || !fi.severity) {
     _svCell += '<option value=""' + ((!fi || !fi.severity) ? ' selected' : '') + '>Not set</option>';
   }
+
+  var _rtLv = _rtSevLevels();
   ['critical','high','medium','low','info'].forEach(function(s) {
-    _svCell += '<option value="' + s + '"' + (fi && fi.severity === s ? ' selected' : '') + '>' + s.charAt(0).toUpperCase() + s.slice(1) + '</option>';
+    if (_rtLv.indexOf(s) < 0 && !(fi && fi.severity === s)) return;
+    _svCell += '<option value="' + s + '"' + (fi && fi.severity === s ? ' selected' : '') + '>' + esc(_sevName(s)) + '</option>';
   });
   _svCell += '</select></div>';
   _clsCells.push(_svCell);
@@ -53378,6 +56144,15 @@ function updateSeverityFromCVSS(cvss) {
 
   var sel = document.getElementById('mSv') || document.getElementById('kb_severity');
   if (sel) {
+
+    if (has && sel.options && ![].some.call(sel.options, function (o) { return o.value === severity; })) {
+      var _sevOrd = ['critical', 'high', 'medium', 'low', 'info'], _sevAt = null;
+      [].forEach.call(sel.options, function (o) { if (!_sevAt && _sevOrd.indexOf(o.value) > _sevOrd.indexOf(severity)) _sevAt = o; });
+      var _sevOpt = document.createElement('option');
+      _sevOpt.value = severity;
+      _sevOpt.textContent = _sevName(severity);
+      sel.insertBefore(_sevOpt, _sevAt);
+    }
     if (has) sel.value = severity;
 
     _sevLockToCvss(sel, has);
@@ -57253,6 +60028,16 @@ function _syncPlainOf(v) {
 }
 function _syncSev(v) {
   var s = _syncPlainOf(v).trim().toLowerCase();
+
+  try {
+    var _rsv = _rtSev();
+    if (_rsv && _rsv.names && typeof _rsv.names === 'object') {
+      for (var _ri = 0; _ri < _RT_SEV_KEYS.length; _ri++) {
+        var _rn = _rsv.names[_RT_SEV_KEYS[_ri]];
+        if (typeof _rn === 'string' && _rn.trim() && _rn.trim().toLowerCase() === s) return _RT_SEV_KEYS[_ri];
+      }
+    }
+  } catch (e) {}
   if (s === 'informational' || s === 'information' || s === 'none') s = 'info';
   return _SYNC_SEVERITIES.indexOf(s) >= 0 ? s : '';
 }
@@ -58031,7 +60816,7 @@ async function _syncApply(assessmentId, accepted, zip) {
     }
     _secLeft.forEach(function (x) {
       x.it._left = true;
-      _syncLeft.push({ what: x.it.label || (typeof _smLabel === 'function' ? _smLabel(x.it.col || x.it.id) : 'A section') });
+      _syncLeft.push({ what: x.it.label || (typeof _smLabel === 'function' ? _rtWith(assessmentId, function () { return _smLabel(x.it.col || x.it.id); }) : 'A section') });
     });
     applied += _secKept;
   }
@@ -58100,9 +60885,12 @@ function _syncCommentsHtml(plan) {
       + esc(c.text.length > 240 ? c.text.slice(0, 240) + '...' : c.text) + '</span>';
   };
   var h = '<div style="margin-top:0.9rem;border-top:1px solid var(--border);padding-top:0.7rem">';
+
+  var _qaOn = typeof qaEnabled !== 'function' || qaEnabled();
   if (fresh.length) {
     h += '<div style="font-size:0.8rem;font-weight:600;margin-bottom:0.4rem">' + fresh.length + ' comment' + (fresh.length === 1 ? '' : 's') + ' in the document</div>';
-    h += '<p style="font-size:0.78rem;color:var(--gray);margin:0 0 0.5rem">These are not part of the report. Ticked ones are added to the Comments of this engagement, each saying who wrote it and where, so the review is not lost when the document is.</p>';
+    if (_qaOn) h += '<p style="font-size:0.78rem;color:var(--gray);margin:0 0 0.5rem">These are not part of the report. Ticked ones are added to the Comments of this engagement, each saying who wrote it and where, so the review is not lost when the document is.</p>';
+    else h += '<p style="font-size:0.78rem;color:var(--gray);margin:0 0 0.5rem">These are not part of the report. Ticked ones are added to the Comments of this engagement, each saying who wrote it and where, so the review is not lost when the document is.</p>';
     fresh.forEach(function (i) {
       h += '<label class="sync-row" style="display:flex;gap:0.5rem;align-items:flex-start;padding:0.35rem 0">';
       h += '<input type="checkbox" class="sync-cmt" data-i="' + i + '" checked style="margin-top:0.2rem">';
@@ -58119,7 +60907,7 @@ function _syncCommentsHtml(plan) {
   }
   if (known) {
     h += '<p style="font-size:0.78rem;color:var(--gray);margin:' + (fresh.length || done.length ? '0.5rem' : '0') + ' 0 0">' + known + ' comment' + (known === 1 ? '' : 's')
-      + ' in the document ' + (known === 1 ? 'is' : 'are') + ' already in the Comments, so ' + (known === 1 ? 'it is' : 'they are') + ' not added again.</p>';
+      + ' in the document ' + (known === 1 ? 'is' : 'are') + (_qaOn ? ' already in the Comments, so ' : ' already in the Comments, so ') + (known === 1 ? 'it is' : 'they are') + ' not added again.</p>';
   }
   return h + '</div>';
 }
@@ -58300,6 +61088,8 @@ function renderSyncReviewModal() {
         : (it.changes || []).map(function (c) { return c.label + (c.clears ? ' (emptied)' : '') + (c.settles ? ' (' + _syncSettlesNote(c) + ')' : ''); }).join(', ');
     var _isClear = it.kind === 'section' ? !!it.clears
       : (it.kind === 'finding' && (it.changes || []).length && (it.changes || []).every(function (c) { return c.clears; }));
+
+    var _trkQa = !!it.tracked && (typeof qaEnabled !== 'function' || qaEnabled());
     var r = '<div class="sync-row" data-idx="' + i + '" style="border:1px solid ' + (_isClear ? 'rgba(234,179,8,0.5)' : 'var(--border)') + ';border-radius:6px;padding:0.45rem 0.6rem;margin-bottom:0.35rem;background:var(--bg)">';
     r += '<label style="display:flex;align-items:flex-start;gap:0.5rem;cursor:pointer">';
 
@@ -58309,12 +61099,12 @@ function renderSyncReviewModal() {
         + '<option value="delete">Delete it</option></select>';
     } else {
 
-      r += '<input type="checkbox" class="sync-on"' + (it.kind === 'addPhase' ? '' : ' checked') + ' style="margin-top:0.2rem">';
+      r += '<input type="checkbox" class="sync-on"' + (it.kind === 'addPhase' || _trkQa ? '' : ' checked') + ' style="margin-top:0.2rem">';
     }
     r += '<span style="flex:1"><span style="font-size:0.85rem;font-weight:600">' + what + '</span>'
        + (it.tracked ? '<span class="sync-tracked-badge">Tracked change' + (it.trackedBy ? ' by ' + esc(it.trackedBy) : '') + '</span>' : '')
        + '<span style="display:block;font-size:0.72rem;color:var(--gray);margin-top:0.1rem">'
-       + (it.tracked ? 'Suggested with Track Changes on. Ticked, it is accepted; unticked, it is left out.' : esc(detail))
+       + (it.tracked ? (_trkQa ? 'Suggested with Track Changes on. Ticked, it is accepted; unticked, it is left out.' : 'Suggested with Track Changes on. Ticked, it is accepted; unticked, it is left out.') : esc(detail))
        + '</span></span></label>';
     r += '<a href="#" style="font-size:0.7rem;color:var(--accent);text-decoration:none;display:inline-block;margin-top:0.25rem;margin-left:1.55rem" onclick="event.preventDefault();var b=document.getElementById(\'' + pid + '\');b.style.display=b.style.display===\'none\'?\'block\':\'none\'">See what it will say</a>';
 
@@ -58425,7 +61215,8 @@ async function _syncReplaceOnly() {
     refreshAndStay();
   } catch (e) {
     try { console.error('[sync] could not store the edited report', e); } catch (e2) {}
-    toast('Could not store that file. See the console for details', 'error');
+
+    toast('Could not store that file: ' + _friendlyErrorText(String((e && e.message) || e)), 'error');
   } finally { _hideLoading(); }
 }
 window._syncReplaceOnly = _syncReplaceOnly;
@@ -58458,16 +61249,22 @@ async function _syncConfirm() {
   });
 
   var _suggested = [];
+  var _toQa = typeof qaEnabled !== 'function' || qaEnabled();
   document.querySelectorAll('.sync-row').forEach(function (row) {
     var it = plan.items[parseInt(row.getAttribute('data-idx'), 10)];
-    if (!it || !it.tracked) return;
+    if (!_toQa || !it || !it.tracked) return;
     var on = row.querySelector('.sync-on');
     if (on && !on.checked) _suggested.push(it);
   });
 
   var _cmtsAccepted = _syncTickedComments(plan);
   var _resolveIds = _syncTickedResolutions(plan);
-  if (!accepted.length && !_cmtsAccepted.length && !_resolveIds.length) { toast('Nothing selected', 'error'); return; }
+  if (!accepted.length && !_cmtsAccepted.length && !_resolveIds.length) {
+
+    var _keepEl = document.getElementById('sync_replace_docx');
+    if (_keepEl && _keepEl.checked) return _syncReplaceOnly();
+    toast('Nothing selected', 'error'); return;
+  }
   var _replaceEl = document.getElementById('sync_replace_docx');
   var _replace = _replaceEl ? !!_replaceEl.checked : false;
   _showLoading();
@@ -58475,7 +61272,11 @@ async function _syncConfirm() {
     var n = accepted.length ? await _syncApply(plan.assessmentId, accepted, plan.zip) : 0;
 
     if (_replace) {
-      try { await _syncStoreEditedDocx(plan); } catch (e) { try { console.error('[sync] could not store the edited report', e); } catch (e2) {} }
+      try { await _syncStoreEditedDocx(plan); } catch (e) {
+        try { console.error('[sync] could not store the edited report', e); } catch (e2) {}
+
+        toast(plan.fileName + ' was not kept as the report: ' + _friendlyErrorText(String((e && e.message) || e)), 'error', 12000);
+      }
     }
     await _syncBringComments(plan, _cmtsAccepted, _resolveIds);
 
@@ -58531,6 +61332,13 @@ function _pntlInlineText(inner) {
     .replace(/&apos;/g, "'").replace(/&amp;/g, '&')
     .replace(/\s+/g, ' ')
     .trim();
+}
+function _pntlRegionSays(inner) {
+  return !!_pntlInlineText(inner) || /<w:(drawing|pict)\b/.test(String(inner || ''));
+}
+function _pntlHtmlSays(html) {
+  var s = String(html == null ? '' : html);
+  return /<img\b/i.test(s) || !!s.replace(/<[^>]*>/g, '').replace(/&nbsp;|&#160;/g, ' ').trim();
 }
 function _pntlInlineReplacement(inner, text) {
 
@@ -58829,11 +61637,26 @@ function _pntlRefreshFromPortal(zip, a) {
   var considerInline = function(name, value, label) {
     if (!name || !(name in spans)) return;
     var inner = regions[name];
+
+    var _tSp = null;
+    if (/_title$/.test(name) && _pntlRegionIsRich(inner)) {
+      var _tEnd = docXml.indexOf('</w:p>', spans[name].start);
+      var _tSeg = _tEnd > -1 ? docXml.slice(spans[name].start, _tEnd) : '';
+      if (_tEnd >= spans[name].end && !/<w:p[ >]/.test(_tSeg)) { inner = _tSeg; _tSp = { start: spans[name].start, end: _tEnd }; }
+    }
     out.checked++;
     if (_pntlRegionIsRich(inner)) { out.skipped++; return; }
     var want = String(value == null ? '' : value).trim();
+
+    if (!want && !_pntlInlineText(inner)) return;
     if (!want) { out.skipped++; return; }
     if (_pntlInlineText(inner) === want) return;
+    if (_tSp) {
+      var inPlace = _pntlTextInPlace(inner, want);
+      if (!inPlace) { out.skipped++; return; }
+      edits.push({ start: _tSp.start, end: _tSp.end, xml: inPlace, label: label });
+      return;
+    }
     var _inlineXml = _pntlInlineReplacement(inner, want);
     if (!_inlineXml) { out.skipped++; return; }
     edits.push({ start: spans[name].start, end: spans[name].end,
@@ -58844,6 +61667,8 @@ function _pntlRefreshFromPortal(zip, a) {
     if (!name || !(name in spans)) return;
     var inner = regions[name];
     out.checked++;
+
+    if (!_pntlRegionIsRich(inner) && !_pntlRegionSays(inner) && !_pntlHtmlSays(portalHtml)) return;
     if (!_pntlRegionIsRich(inner)) { out.skipped++; return; }
     var _docImgs = [];
     var docSide = docHtml(inner, _docImgs);
@@ -58951,12 +61776,15 @@ function _pntlRefreshFromPortal(zip, a) {
     if (!nm || !(nm in spans)) return;
     var inner = regions[nm];
     out.checked++;
-    if (!_pntlRegionIsRich(inner)) { out.skipped++; return; }
     var blocks = [];
     try {
       blocks = _evBlocks(f.evidence);
     } catch (e) { blocks = []; }
-    if (!Array.isArray(blocks) || !blocks.length) { out.skipped++; return; }
+
+    var _evNone = !Array.isArray(blocks) || !blocks.length;
+    if (_evNone && !_pntlRegionSays(inner)) return;
+    if (!_pntlRegionIsRich(inner)) { out.skipped++; return; }
+    if (_evNone) { out.skipped++; return; }
 
     var _evImgs = [], docSide = null;
     try {
@@ -59076,6 +61904,11 @@ async function _syncStoreEditedDocx(plan) {
   };
   var res = await supabaseClient.from('assessments').update(patch).eq('id', plan.assessmentId).select();
   if (res.error) throw res.error;
+
+  if (!res.data || !res.data.length) {
+    try { await supabaseClient.storage.from('assessment-files').remove([path]); } catch (e) {}
+    throw new Error('the engagement could not be changed. Reload the page and try again.');
+  }
   var idx = (S.data.assessments || []).findIndex(function(x) { return x.id === plan.assessmentId; });
   if (idx >= 0) Object.assign(S.data.assessments[idx], patch);
   if (S.currentAssessment && S.currentAssessment.id === plan.assessmentId) Object.assign(S.currentAssessment, patch);
@@ -59104,7 +61937,7 @@ async function downloadEditedReport(assessmentId, quiet) {
       var zip = new window.PizZip(await blob.arrayBuffer());
       var _repaired = _pntlRepairDoc(zip).repaired;
       var _rfGuard = _pntlSafeEdit(zip, 'bringing the document up to date', function () {
-        refreshed = _pntlRefreshFromPortal(zip, a);
+        refreshed = _rtWith(a, function () { return _pntlRefreshFromPortal(zip, a); });
       });
       if (!_rfGuard.ok) refreshed = null;
 
@@ -59128,7 +61961,9 @@ async function downloadEditedReport(assessmentId, quiet) {
       try { console.error('[sync] could not refresh the uploaded report', e); } catch (e2) {}
       refreshed = null;
     }
-    _qaMarkupToast(_mkRes, _mk ? ((_mk.changes || []).length + (_mk.comments || []).length) : 0);
+
+    _qaMarkupToast(_mkRes, (typeof qaEnabled === 'function' && !qaEnabled()) ? undefined
+      : (_mk ? ((_mk.changes || []).length + (_mk.comments || []).length) : 0));
 
     if (refreshed && refreshed.refused && refreshed.refused.length) {
       toast(refreshed.refused.length + ' field' + (refreshed.refused.length === 1 ? '' : 's')
@@ -59163,6 +61998,8 @@ async function clearEditedReport(assessmentId) {
     var patch = { edited_docx_path: null, edited_docx_name: null, edited_docx_at: null, edited_docx_by: null };
     var res = await supabaseClient.from('assessments').update(patch).eq('id', assessmentId).select();
     if (res.error) throw res.error;
+
+    if (!res.data || !res.data.length) throw new Error('refused');
     var idx = (S.data.assessments || []).findIndex(function(x) { return x.id === assessmentId; });
     if (idx >= 0) Object.assign(S.data.assessments[idx], patch);
     if (S.currentAssessment && S.currentAssessment.id === assessmentId) Object.assign(S.currentAssessment, patch);
@@ -59170,7 +62007,7 @@ async function clearEditedReport(assessmentId) {
     render();
   } catch (e) {
     try { console.error('[sync] could not clear the uploaded report', e); } catch (e2) {}
-    toast('Could not switch back to a generated report', 'error');
+    toast('Could not switch back to a generated report. Reload the page and try again.', 'error');
   } finally { _hideLoading(); }
 }
 window.clearEditedReport = clearEditedReport;
@@ -59341,7 +62178,7 @@ async function syncUploadEdited(assessmentId, inputEl) {
     stage = 'finding the markers';
     var raw = _pntlRegions(docXml);
 
-    raw = _pntlHealRegions(docXml, raw, styleOf);
+    raw = _rtWith(assessmentId, function () { return _pntlHealRegions(docXml, raw, styleOf); });
     var names = Object.keys(raw);
     console.log('[sync] ' + names.length + ' marked regions found');
     if (!names.length) {
@@ -59379,7 +62216,7 @@ async function syncUploadEdited(assessmentId, inputEl) {
     if (!a) throw new Error('Assessment not found');
 
     stage = 'working out what changed';
-    var plan = _syncBuildProposals(regions, a, function (nm) { return imgByRegion[nm] || []; });
+    var plan = _rtWith(a, function () { return _syncBuildProposals(regions, a, function (nm) { return imgByRegion[nm] || []; }); });
     plan.items = _syncSplitTracked(plan.items, regions, assessmentId);
 
     var _known = _syncMatchPending(plan.items, assessmentId);
@@ -59438,7 +62275,7 @@ async function uploadAssessmentFile(assessmentId, inputEl) {
       }).select().single();
       if (dbError) throw dbError;
 
-      S.data.files.unshift(record);
+      _assFileListAdd(record);
       toast(file.name + ' uploaded', 'success');
     } catch (e) {
       toast('Upload failed: ' + (e.message || e), 'error');
@@ -59468,9 +62305,17 @@ async function deleteAssessmentFile(fileId) {
   if (!f) return;
   confirmDialog('Delete File', 'Delete "' + esc(f.file_name) + '"? This cannot be undone.', async function() {
     try {
-      await supabaseClient.storage.from('assessment-files').remove([f.storage_path]);
-      var { error } = await supabaseClient.from('assessment_files').delete().eq('id', fileId);
-      if (error) throw error;
+
+      var del = await supabaseClient.from('assessment_files').delete().eq('id', fileId).select('id');
+      if (del.error) throw del.error;
+      if (!del.data || !del.data.length) {
+        try { if (typeof _mfaFreshnessGuard === 'function') _mfaFreshnessGuard('write-refused'); } catch (eG) {}
+        throw new Error('it could not be deleted. Reload the page and try again.');
+      }
+      try {
+        var rm = await supabaseClient.storage.from('assessment-files').remove([f.storage_path]);
+        if (rm.error || !rm.data || !rm.data.length) console.warn('[files] ' + (f.file_name || 'a file') + ' was left in storage');
+      } catch (eS) {  }
       S.data.files = S.data.files.filter(function(x) { return x.id !== fileId; });
       toast('File deleted', 'success');
       render();
@@ -60988,6 +63833,8 @@ async function importKBEntry(id) {
 }
 function _libEntryFromFinding(f) {
 
+  if (f && _rtNeeds(f)) return _rtWith(f, function () { return _libEntryFromFinding(f); });
+
   var data = { title: f.title, severity: f.severity };
 
   if (_ffReusable('cvss')) { data.cvss = (typeof f.cvss === 'number' ? f.cvss : 0); data.cvss_vector = f.cvss_vector || ''; }
@@ -62306,21 +65153,14 @@ async function saveFeatureSettings() {
   var conEl = document.getElementById('set_contractors_enabled');
   var qaEl = document.getElementById('set_qa_enabled');
   var scanEl = document.getElementById('set_scanning_enabled');
-  var data = {
 
-    proposals_enabled: propEl ? !!propEl.checked : _modOn('proposals_enabled'),
-    invoices_enabled: invEl ? !!invEl.checked : _modOn('invoices_enabled'),
-    feedback_enabled: fbEl ? !!fbEl.checked : _modOn('feedback_enabled'),
-    qa_enabled: qaEl ? !!qaEl.checked : _modOn('qa_enabled'),
-    meet_calendar_enabled: mcalEl ? !!mcalEl.checked : _modOn('meet_calendar_enabled'),
-    meetings_enabled: mtgEl ? !!mtgEl.checked : _modOn('meetings_enabled'),
-    contacts_enabled: ctsEl ? !!ctsEl.checked : _modOn('contacts_enabled'),
-    dashboard_enabled: dashEl ? !!dashEl.checked : _modOn('dashboard_enabled'),
-    contractors_enabled: conEl ? !!conEl.checked : _modOn('contractors_enabled'),
-    scanning_enabled: scanEl ? !!scanEl.checked : _modOn('scanning_enabled'),
+  var _modEls = { proposals_enabled: propEl, invoices_enabled: invEl, feedback_enabled: fbEl, qa_enabled: qaEl, meet_calendar_enabled: mcalEl,
+    meetings_enabled: mtgEl, contacts_enabled: ctsEl, dashboard_enabled: dashEl, contractors_enabled: conEl, scanning_enabled: scanEl };
+  var data = {
     feedback_mode: (document.getElementById('set_feedback_mode_google') || {}).checked ? 'google_review' : (document.getElementById('set_feedback_mode_google_first') || {}).checked ? 'google_first' : ((document.getElementById('set_feedback_mode_internal') || {}).checked ? 'internal' : (s.feedback_mode || 'internal')),
     google_review_url: (document.getElementById('set_google_review_url') || {}).value || s.google_review_url || ''
   };
+  Object.keys(_modEls).forEach(function (k) { if (_modEls[k]) data[k] = !!_modEls[k].checked; });
 
   {
     var _gEl = document.getElementById('set_google_review_url');
@@ -62370,7 +65210,7 @@ async function saveFeatureSettings() {
           delete retryData.contractors_enabled;
           res = await _setPut(retryData, existing.id);
 
-          ['proposals_enabled','invoices_enabled','feedback_enabled','meet_calendar_enabled','meetings_enabled','contacts_enabled','dashboard_enabled','contractors_enabled'].forEach(async function(col) {
+          ['proposals_enabled','invoices_enabled','feedback_enabled','meet_calendar_enabled','meetings_enabled','contacts_enabled','dashboard_enabled','contractors_enabled'].filter(function (col) { return col in data; }).forEach(async function(col) {
             var patch = {}; patch[col] = data[col];
             try { await _setPut(patch, existing.id); } catch(e) {}
           });
@@ -62382,13 +65222,7 @@ async function saveFeatureSettings() {
       if (res.error) { _settingsSaveFailed(res.error.message); return; }
       if (res.data && res.data[0]) S.data.settings = res.data[0];
     }
-    S.data.settings.proposals_enabled = data.proposals_enabled;
-    S.data.settings.invoices_enabled = data.invoices_enabled;
-    S.data.settings.feedback_enabled = data.feedback_enabled;
-    S.data.settings.meet_calendar_enabled = data.meet_calendar_enabled;
-    S.data.settings.meetings_enabled = data.meetings_enabled;
-    S.data.settings.contacts_enabled = data.contacts_enabled;
-    S.data.settings.contractors_enabled = data.contractors_enabled;
+    Object.keys(_modEls).forEach(function (k) { if (k in data) S.data.settings[k] = data[k]; });
     S.data.settings.feedback_mode = data.feedback_mode;
     S.data.settings.google_review_url = data.google_review_url;
 
@@ -63510,16 +66344,14 @@ function _cffRowHtml(f) {
 
   var h = '<div data-cff data-cff-id="' + esc(id) + '" data-ff-key="custom_' + esc(id) + '" class="sg-box" data-after="' + esc(Array.isArray(f.after) ? JSON.stringify(f.after) : '') + '">';
   h += '<div class="sg-row sg-ff">';
-  h += _ffArrows('custom_' + id);
   h += '<span class="g-lab"><input type="text" class="form-input cff-label" id="cff_label_' + esc(id) + '" value="' + esc(label) + '" data-was="' + esc(label) + '" oninput="_cffLabelTyped(this)" placeholder="Field name" aria-label="Field name" style="height:30px;font-size:0.85rem;padding:0.25rem 0.5rem">';
   h += '<select class="form-input cff-type" title="How this field appears on the finding form" aria-label="Style" onchange="_cffTypeChanged(this)" style="flex:0 0 140px;width:140px;height:30px;font-size:0.78rem;padding:0.1rem 0.3rem">';
   _CFF_TYPES.forEach(function (t) { h += '<option value="' + t.v + '"' + (t.v === type ? ' selected' : '') + ' title="' + esc(t.hint || '') + '">' + esc(t.label) + '</option>'; });
   h += '</select></span>';
   h += '<span class="sg-ctl">';
-  h += '<label class="g-c"><input type="checkbox" class="cff-en"' + (en ? ' checked' : '') + '> Show</label>';
-  h += '<label class="g-c" title="Marked with an asterisk on the finding form, and Save as final and close refuses until it is filled. Save as draft and close keeps a half-finished finding."><input type="checkbox" class="cff-rq"' + (rq ? ' checked' : '') + '> Required</label>';
   h += libraryEnabled() ? '<label class="g-c"><input type="checkbox" class="cff-re"' + (re ? ' checked' : '') + '> Reuse</label>'
     : '<input type="checkbox" class="cff-re"' + (re ? ' checked' : '') + ' hidden>';
+  h += _rtUsedByHtml('findings', 'custom_' + id);
   h += _tokSlot(_docxTokenHtml('{custom_' + id + '}', 'DOCX placeholder for this custom field, use inside the findings loop'));
   h += '</span>';
   h += '<span class="g-x"><button class="btn btn-ghost btn-sm" onclick="_cffRemove(this)" style="color:var(--red-text);padding:0.1rem 0.3rem;font-size:0.7rem" title="Remove this field" aria-label="Remove ' + esc(label || 'this field') + '">&times;</button></span>';
@@ -63845,6 +66677,8 @@ function _setSaveFnFor(el) {
     var btns = c.querySelectorAll('button.btn-primary');
     for (var i = 0; i < btns.length; i++) {
       if (!/^\s*Save\b/.test(btns[i].textContent || '')) continue;
+
+      if (btns[i].closest && btns[i].closest('[data-nodirty]')) continue;
       var m = /^\s*([A-Za-z_$][\w$]*)\(\)\s*;?\s*$/.exec(btns[i].getAttribute('onclick') || '');
       if (m && typeof window[m[1]] === 'function') return m[1];
     }
@@ -63940,6 +66774,7 @@ async function _setSaveDirty() {
 }
 function _setDiscard(quiet) {
   _setDiscardAt = Date.now();
+  S._rtDraft = null;
   try { _lfLetGoWhere(function (m) { return m.surface === 'settings'; }); } catch (e) {}
   if (_dashEdWaiting()) S._dashEd = { role: S._dashEd.role, layout: _dashEdLoadLayoutForRole(S._dashEd.role), dirty: false };
   if (_setBase && S.data.settings) {
@@ -64079,16 +66914,6 @@ function _wizKeepAfter(k) {
 })();
 Object.assign(window, { _setDiscard: _setDiscard, _setSaveDirty: _setSaveDirty, _setGoTab: _setGoTab,
   _setLeaveAsk: _setLeaveAsk, _setMarkDirty: _setMarkDirty, _setIsDirty: _setIsDirty });
-function _ffArrows(key) {
-  var e = _ffOrderEntry(key);
-  var lab = e ? (e.kind === 'custom' ? (e.def.label || 'the new field') : _ffLabel(key)) : key;
-  return _sgOrderCell(lab, '_ffMove');
-}
-function _ffMove(btn, dir) {
-  var row = btn.closest('[data-ff-key]');
-  if (row && _sgShift(row, dir)) _sgMoved(row, btn);
-}
-window._ffMove = _ffMove;
 function _ffDomOrder() {
   return Array.prototype.map.call(document.querySelectorAll('.sg-wrap-ff > [data-ff-key]'), function (el) {
     return el.getAttribute('data-ff-key');
@@ -64108,12 +66933,10 @@ function _ffRetestPromptsHtml(lib) {
       + '<p style="font-size:0.68rem;color:var(--gray);margin-top:3px">' + esc(note) + '</p>' + _aiContractNote(contract);
   };
   var h = '<div class="sg-box ff-retest-prompts"><div class="sg-row sg-ff">';
-  h += '<span class="g-ord"></span>';
   h += '<span class="g-lab"><span class="ff-fixed-lab">' + esc(_ffLabel('retest_results')) + '</span></span>';
   h += '<span class="sg-ctl">';
-  h += '<span class="g-c g-na" data-lb="Show: " title="On the finding once a retest is asked for">On retest</span>';
-  h += '<span class="g-c g-na" data-lb="Required: ">n/a</span>';
   if (lib) h += '<span class="g-c g-na" data-lb="Reuse: " title="Engagement-specific, never saved to the Library">Never</span>';
+  h += '<span class="g-c g-na g-used" data-lb="Used by: " title="On a finding once a retest is asked for">Every report, on a retest</span>';
   h += _tokSlot('');
   h += '</span><span class="g-x"></span></div>';
   h += _ffPromptDisclosure(_stdFieldIsCustom('retest_explain'), row('retest_explain', 'How AI explains the screenshots, code and output in a retest\u2019s results. The finding, what its test found, its remediation, any earlier retests and the retest\u2019s own words are added to it.',
@@ -64159,12 +66982,14 @@ function _ffCaptureEdits() {
     var en  = document.getElementById('ff_en_' + d.key);
     var req = document.getElementById('ff_req_' + d.key);
     var re  = document.getElementById('ff_re_' + d.key);
+    var ir  = document.getElementById('ff_ir_' + d.key);
     if (!lab && !en) return;
     if (!c.fields[d.key]) c.fields[d.key] = {};
     if (lab) c.fields[d.key].label = lab.value.trim();
     if (en) c.fields[d.key].enabled = !!en.checked;
     if (req) c.fields[d.key].required = !!req.checked;
     if (re) c.fields[d.key].reusable = !!re.checked;
+    if (ir) { if (ir.checked) delete c.fields[d.key].in_report; else c.fields[d.key].in_report = false; }
   });
   {
     Array.from(document.querySelectorAll('[data-cff]')).forEach(function(row) {
@@ -64177,12 +67002,14 @@ function _ffCaptureEdits() {
 
       var rq = row.querySelector('.cff-rq');
       var re = row.querySelector('.cff-re');
+      var ir = row.querySelector('.cff-ir');
       var pr = row.querySelector('.cff-prompt');
       var ty = row.querySelector('.cff-type');
       if (lab) ex.label = lab.value.trim();
       if (en) ex.enabled = !!en.checked;
       if (rq) ex.required = !!rq.checked;
       if (re) ex.reusable = !!re.checked;
+      if (ir) { if (ir.checked) delete ex.in_report; else ex.in_report = false; }
       if (pr) ex.ai_prompt = pr.value;
       if (ty) ex.type = ty.value;
       var op = row.querySelector('.cff-options');
@@ -64241,6 +67068,8 @@ function _addCustomFindingField(label) {
   var c = _ffMutCfg();
   var id = 'cf' + Math.random().toString(36).slice(2, 8);
   var f = { id: id, label: '', enabled: true, type: 'html' };
+
+  if (_rdMainOf('')) f.in_report = false;
   c.custom.push(f);
 
   var rows = document.querySelectorAll('.sg-wrap-ff > [data-ff-key]');
@@ -64275,7 +67104,8 @@ function _setSavedCopy(key) {
 }
 async function _ffCreateSaved(label, prompt) {
   var id = 'cf' + Math.random().toString(36).slice(2, 8);
-  var f = { id: id, label: label, enabled: true, type: 'html', reusable: false, required: false };
+  var _rtFor = _rtMadeFor();
+  var f = { id: id, label: label, enabled: !_rtFor, type: 'html', reusable: false, required: false };
   if (prompt) f.ai_prompt = prompt;
   var w = _setSavedCopy('finding_fields');
   w.custom.push(f);
@@ -64285,11 +67115,13 @@ async function _ffCreateSaved(label, prompt) {
   if (!c.custom.some(function (x) { return x.id === id; })) c.custom.push(JSON.parse(JSON.stringify(f)));
   c.order = _ffOrder();
   if (_setBase) _setBase.finding_fields = w;
+  if (_rtFor) await _rtSwitchOn(_rtFor, 'findings', [id]);
   return { id: id, token: '{custom_' + id + '}' };
 }
 async function _smCreateSaved(label, prompt) {
   var id = 'cs_' + Math.random().toString(36).slice(2, 8);
-  var f = { id: id, label: label, enabled: true, in_report: true, client_default: false, icon: '' };
+  var _rtFor = _rtMadeFor();
+  var f = { id: id, label: label, enabled: !_rtFor, in_report: true, client_default: false, icon: '' };
   if (prompt) f.ai_prompt = prompt;
   var w = _setSavedCopy('summary_fields');
   w.custom.push(f);
@@ -64299,6 +67131,7 @@ async function _smCreateSaved(label, prompt) {
   if (!c.custom.some(function (x) { return x.id === id; })) c.custom.push(JSON.parse(JSON.stringify(f)));
   if (c.order.length && c.order.indexOf(id) === -1) c.order.push(id);
   if (_setBase) _setBase.summary_fields = w;
+  if (_rtFor) await _rtSwitchOn(_rtFor, 'sections', [id]);
   return { id: id, token: '{custom_summary_' + id + '}' };
 }
 async function _settingsWriteBlob(write) {
@@ -64311,13 +67144,6 @@ async function _settingsWriteBlob(write) {
   if (!res || !res.data || !res.data.length) throw new Error('the settings row could not be written');
   if (!sid && res.data[0] && S.data.settings) S.data.settings.id = res.data[0].id;
   return true;
-}
-function _smArrows(label) {
-  return _sgOrderCell(label || 'this section', '_smMove');
-}
-function _smMove(btn, dir) {
-  var row = btn.closest('[data-sm-key]');
-  if (row && row.parentNode && row.parentNode.id === 'smList' && _sgShift(row, dir)) _sgMoved(row, btn);
 }
 function _smDomOrder() {
   var list = document.getElementById('smList');
@@ -64360,14 +67186,12 @@ function _smBuiltinRowHtml(d) {
   var en = _smEnabled(d.key);
 
   var h = '<div data-sm-key="' + esc(d.key) + '" data-sm-kind="builtin" class="sg-row sg-sm sg-box">';
-  h += _smArrows(_smLabel(d.key));
 
   if (d.structural || d.key === 'documents') {
     h += '<span class="g-ico"></span>';
     h += '<span class="g-lab" style="font-size:0.85rem;font-weight:600;color:var(--' + (d.structural ? 'gray' : 'text') + ')">' + esc(d.label) + '</span>';
     h += '<span class="sg-ctl">';
-    h += '<label class="g-c g-mid" data-la="Show" title="Show this area"><input type="checkbox" id="sm_en_' + d.key + '"' + (en ? ' checked' : '') + ' onchange="_smBuiltinEdit(\'' + d.key + '\',\'enabled\',this.checked)"></label>';
-    h += '<span></span><span></span><span></span>' + _tokSlot('');
+    h += '<span></span><span></span>' + _rtUsedByHtml('sections', d.key) + _tokSlot('');
     h += '</span><span class="g-x"></span>';
     h += '</div>';
     return h;
@@ -64376,8 +67200,6 @@ function _smBuiltinRowHtml(d) {
   h += '<button type="button" class="g-ico" id="sm_iconbtn_' + d.key + '" onclick="_smOpenIconPicker(\'' + d.key + '\')" title="Choose an icon" style="width:44px;height:30px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:6px;background:transparent;cursor:pointer;color:var(--accent)">' + _smIconHtml(d.key) + '</button>';
   h += '<span class="g-lab"><input type="text" class="form-input" id="sm_label_' + d.key + '" value="' + esc(_smLabel(d.key)) + '" placeholder="' + esc(d.label) + '" title="Default: ' + esc(d.label) + '" oninput="_smBuiltinEdit(\'' + d.key + '\',\'label\',this.value)" style="height:30px;font-size:0.85rem;font-weight:600;padding:0.25rem 0.5rem"></span>';
   h += '<span class="sg-ctl">';
-  h += '<label class="g-c g-mid" data-la="Show" title="Enable this section"><input type="checkbox" id="sm_en_' + d.key + '"' + (en ? ' checked' : '') + ' onchange="_smBuiltinEdit(\'' + d.key + '\',\'enabled\',this.checked)"></label>';
-  h += '<label class="g-c g-mid" data-la="Report" title="Include this section in the report"><input type="checkbox" id="sm_rep_' + d.key + '"' + (_smInReport(d.key) ? ' checked' : '') + ' onchange="_smBuiltinEdit(\'' + d.key + '\',\'in_report\',this.checked)"></label>';
   if (_smHasClient(d.key)) {
     var _smVk = _smVisKey(d.key);
     h += '<label class="g-c g-mid" data-la="Client" title="Visible to the client by default. Off means the whole section is internal only until revealed on an assessment."><input type="checkbox" id="sm_cli_' + d.key + '"' + (_smClientDefault(_smVk) ? ' checked' : '') + ' onchange="_smBuiltinEdit(\'' + _smVk + '\',\'client_default\',this.checked)"></label>';
@@ -64389,7 +67211,9 @@ function _smBuiltinRowHtml(d) {
   } else {
     h += '<span></span>';
   }
-  h += _tokSlot(_docxTokenHtml(_docxTokenForSection(d.key), 'DOCX placeholder for this section'));
+  h += _rtUsedByHtml('sections', d.key);
+
+  h += _tokSlot(_docxTokenHtml(_docxTokenForSection(d.key) || (d.key === 'artifacts' ? '{artifacts_text}' : ''), 'DOCX placeholder for this section'));
   h += '</span>';
 
   h += '<span class="g-x"></span>';
@@ -64414,15 +67238,13 @@ function _smRowHtml(f) {
   var en = f.enabled !== false;
 
   var h = '<div data-sm-key="' + esc(id) + '" data-sm-kind="custom" data-sm-id="' + esc(id) + '" class="sg-row sg-sm sg-box">';
-  h += _smArrows(label || 'the new section');
   h += '<input type="hidden" class="sm-icon" id="sm_icon_' + id + '" value="' + esc(f.icon || '') + '">';
   h += '<button type="button" class="g-ico" id="sm_iconbtn_' + id + '" onclick="_smOpenIconPicker(\'' + id + '\')" title="Choose an icon" style="width:44px;height:30px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:6px;background:transparent;cursor:pointer;color:var(--accent)">' + _smIconHtml(id) + '</button>';
   h += '<span class="g-lab"><input type="text" class="form-input sm-label" id="sm_clabel_' + esc(id) + '" value="' + esc(label) + '" placeholder="Section heading" aria-label="Section heading" oninput="_smCustomEdit(\'' + id + '\',\'label\',this.value)" style="height:30px;font-size:0.85rem;padding:0.25rem 0.5rem"></span>';
   h += '<span class="sg-ctl">';
-  h += '<label class="g-c g-mid" data-la="Show" title="Enable this section"><input type="checkbox" class="sm-en"' + (en ? ' checked' : '') + ' onchange="_smCustomEdit(\'' + id + '\',\'enabled\',this.checked)"></label>';
-  h += '<label class="g-c g-mid" data-la="Report" title="Include this section in the report"><input type="checkbox" class="sm-rep"' + (f.in_report !== false ? ' checked' : '') + ' onchange="_smCustomEdit(\'' + id + '\',\'in_report\',this.checked)"></label>';
   h += '<label class="g-c g-mid" data-la="Client" title="Visible to the client by default. Off means the whole section is internal only until revealed on an assessment."><input type="checkbox" class="sm-cli"' + (f.client_default === true ? ' checked' : '') + ' onchange="_smCustomEdit(\'' + id + '\',\'client_default\',this.checked)"></label>';
   h += '<label class="g-c g-mid" data-la="On new" title="Show this as a field when creating a new assessment or proposal"><input type="checkbox" class="sm-new"' + (f.in_create === true ? ' checked' : '') + ' onchange="_smCustomEdit(\'' + id + '\',\'in_create\',this.checked)"></label>';
+  h += _rtUsedByHtml('sections', id);
   h += _tokSlot(_docxTokenHtml('{custom_summary_' + id + '}', 'DOCX placeholder for this custom section'));
   h += '</span>';
   h += '<span class="g-x"><button class="btn btn-ghost btn-sm" onclick="_smCustomDelete(\'' + id + '\')" style="color:var(--red-text);padding:0.1rem 0.3rem;font-size:0.7rem" title="Remove this section" aria-label="Remove ' + esc(label || 'this section') + '">&times;</button></span>';
@@ -64566,19 +67388,22 @@ async function saveSummaryFieldsConfig() {
 
       var enEl = document.getElementById('sm_en_' + d.key);
 
-      if (!enEl && !_smKeyOn(d.key)) { if (_smCfg().fields[d.key]) fields[d.key] = _smCfg().fields[d.key]; return; }
-      var entry = { enabled: enEl ? !!enEl.checked : d.def };
+      if (!enEl && !_smKeyOn(d.key)) { if (_smCfgBase().fields[d.key]) fields[d.key] = _smCfgBase().fields[d.key]; return; }
+
+      var _sWas = _smCfgBase().fields[d.key] || {};
+      var entry = { enabled: enEl ? !!enEl.checked : (typeof _sWas.enabled === 'boolean' ? _sWas.enabled : d.def) };
       var lblEl = document.getElementById('sm_label_' + d.key);
       if (lblEl) { var lv = (lblEl.value || '').trim(); if (lv && lv !== d.label) entry.label = lv; }
       var iv = _smIcon(d.key);
       if (iv) entry.icon = iv;
       var repEl = document.getElementById('sm_rep_' + d.key);
-      entry.in_report = repEl ? !!repEl.checked : true;
+      if (repEl) entry.in_report = !!repEl.checked;
+      else if (typeof _sWas.in_report === 'boolean') entry.in_report = _sWas.in_report;
       var cliEl = document.getElementById('sm_cli_' + d.key);
 
       var _smVk2 = _smVisKey(d.key);
       if (_smVk2 !== d.key) {
-        var _smPrevVk = _smCfg().fields[_smVk2];
+        var _smPrevVk = _smCfgBase().fields[_smVk2];
         if (cliEl) fields[_smVk2] = Object.assign({}, _smPrevVk || {}, { client_default: !!cliEl.checked });
         else if (_smPrevVk) fields[_smVk2] = _smPrevVk;
       } else entry.client_default = cliEl ? !!cliEl.checked : false;
@@ -64621,8 +67446,8 @@ async function saveSummaryFieldsConfig() {
             Object.keys(_smCols).length ? { colors: _smCols } : {}, {
             id: id,
             label: label,
-            enabled: enEl ? !!enEl.checked : true,
-            in_report: repEl2 ? !!repEl2.checked : true,
+            enabled: enEl ? !!enEl.checked : _smWas.enabled !== false,
+            in_report: repEl2 ? !!repEl2.checked : _smWas.in_report !== false,
             client_default: cliEl2 ? !!cliEl2.checked : false,
             in_create: newEl2 ? !!newEl2.checked : false,
 
@@ -64784,16 +67609,21 @@ async function saveFindingFieldsConfig() {
   try {
     var fields = {};
     _ffDefs().forEach(function(d) {
+
+      var _fWas = _ffCfgBase().fields[d.key] || {};
       var enEl = document.getElementById('ff_en_' + d.key);
-      var entry = { enabled: enEl ? !!enEl.checked : d.def };
+      var entry = { enabled: enEl ? !!enEl.checked : (typeof _fWas.enabled === 'boolean' ? _fWas.enabled : d.def) };
 
       var rqEl = document.getElementById('ff_req_' + d.key);
       if (rqEl) entry.required = !!rqEl.checked;
-      else if (d.key !== 'status') entry.required = _ffRequired(d.key);
+      else if (d.key !== 'status') entry.required = (typeof _fWas.required === 'boolean') ? _fWas.required : _ffRequired(d.key);
       if (d.reuseLock === 'off') entry.reusable = false;
       else { var reEl = document.getElementById('ff_re_' + d.key); entry.reusable = reEl ? !!reEl.checked : d.reuse; }
       var lblEl = document.getElementById('ff_label_' + d.key);
       if (lblEl) { var lv = (lblEl.value || '').trim(); if (lv && lv !== d.label) entry.label = lv; }
+
+      var irEl = document.getElementById('ff_ir_' + d.key);
+      if (irEl ? !irEl.checked : !_ffInReport(d.key)) entry.in_report = false;
       fields[d.key] = entry;
     });
 
@@ -64837,7 +67667,13 @@ async function saveFindingFieldsConfig() {
           if (!a) return undefined;
           try { var arr = JSON.parse(a); return Array.isArray(arr) ? arr.filter(function (k) { return typeof k === 'string'; }) : undefined; } catch (e) { return undefined; }
         })();
-        var _cfEntry = Object.assign(_cfRest, { id: id, label: label, type: type, enabled: enEl ? !!enEl.checked : true, required: rqEl ? !!rqEl.checked : false, reusable: reEl ? !!reEl.checked : false, options: (function() { var oe = row.querySelector('.cff-options'); return oe ? (oe.value || '').trim() : ''; })() });
+        var _cfEntry = Object.assign(_cfRest, { id: id, label: label, type: type, enabled: enEl ? !!enEl.checked : _cfWas.enabled !== false, reusable: reEl ? !!reEl.checked : false, options: (function() { var oe = row.querySelector('.cff-options'); return oe ? (oe.value || '').trim() : ''; })() });
+
+        if (rqEl) _cfEntry.required = !!rqEl.checked;
+        else if (typeof _cfWas.required === 'boolean') _cfEntry.required = _cfWas.required;
+
+        var irEl = row.querySelector('.cff-ir');
+        if (irEl) { if (irEl.checked) delete _cfEntry.in_report; else _cfEntry.in_report = false; }
         if (Object.keys(_cfCols).length) _cfEntry.colors = _cfCols;
         if (_cfAfter) _cfEntry.after = _cfAfter;
         custom.push(Object.assign(_cfEntry, { ai_prompt: (function() {
@@ -65241,17 +68077,20 @@ async function removeFavicon() {
   } catch(err) { toast('Failed to remove favicon: ' + (err.message || err), 'error'); console.error('Favicon remove error:', err);
   } finally { _hideLoading(); }
 }
-function _logoVariantPicker(id, label, hint) {
+function _logoVariantPicker(id, label, hint, bare, chip) {
   var s = S.data.settings || {};
   if (!s.logo_url_light) return '';
   var cur = s[id] === 'light' ? 'light' : 'primary';
+  var sel = '<select class="form-select" id="' + id + '" onchange="saveLogoVariant(\'' + id + '\', this.value)"' + (bare ? '' : ' style="max-width:250px"') + '>'
+    + '<option value="primary"' + (cur === 'primary' ? ' selected' : '') + '>Main logo</option>'
+    + '<option value="light"' + (cur === 'light' ? ' selected' : '') + '>Light-mode logo</option></select>';
+
+  if (bare) return '<div class="form-group"><label class="form-label" for="' + id + '">' + label + (chip ? ' <span class="doc-chip pdf-only">' + esc(chip) + '</span>' : '') + '</label>' + sel + '<p class="set-p">' + hint + '</p></div>';
   var o = '<div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">';
-  o += '<label class="form-label" style="font-weight:700;font-size:0.85rem;margin-bottom:0.35rem">' + label + '</label>';
-  o += '<select class="form-select" id="' + id + '" onchange="saveLogoVariant(\'' + id + '\', this.value)" style="max-width:250px">';
-  o += '<option value="primary"' + (cur === 'primary' ? ' selected' : '') + '>Main logo</option>';
-  o += '<option value="light"' + (cur === 'light' ? ' selected' : '') + '>Light-mode logo</option>';
-  o += '</select>';
-  o += '<p class="sub-text" style="margin-top:0.25rem;font-size:0.78rem">' + hint + ' <span style="color:var(--green)">Saved as soon as you change it.</span></p>';
+  o += '<label class="form-label" for="' + id + '" style="font-weight:700;font-size:0.85rem;margin-bottom:0.35rem">' + label + '</label>';
+  o += sel;
+
+  o += '<p class="set-p" style="margin:0.3rem 0 0">' + hint + ' <span style="color:var(--green)">Saved as soon as you change it.</span></p>';
   o += '</div>';
   return o;
 }
@@ -65704,14 +68543,6 @@ async function saveBranding() {
         }).catch(function() {});
       }
     } catch(e) {}
-
-    var _fmEl = document.getElementById('set_footer_mode');
-    if (_fmEl) {
-      await _ensurePdfTemplates();
-
-      var _fmV = _fmEl.value;
-      await _tplPut(function (t) { if (t.footer_mode === _fmV) return false; t.footer_mode = _fmV; });
-    }
 
     _themeTabOriginal = null;
     applyBranding();
@@ -66291,6 +69122,69 @@ var EmailKit = (function () {
         + '<p>{{summary}}</p>\n'
         + '<a class="button" href="{{action_url}}">Review sessions</a>\n'
         + '<p class="small">If this was not you, change your password and review your sign-in methods straight away.</p>' },
+
+    { key: 'credentials_elsewhere', group: 'team', label: 'Credentials sent another way', cta: 'Open the engagement', module: 'assessments_enabled', hidden: true,
+      description: 'Sent to the lead tester and QA reviewer when a client says the credentials were given another way.',
+      vars: ['assessment_name', 'client_name', 'start_date', 'action_url'],
+      subject: 'Credentials for {{assessment_name}} were sent another way',
+      body: '<h1>Credentials sent another way</h1>\n'
+        + '<p><strong>{{client_name}}</strong> says the credentials for <strong>{{assessment_name}}</strong> were given to you outside the portal, so it has stopped asking them for them.</p>\n'
+        + '<table class="details"><tr><th>Testing starts</th><td>{{start_date}}</td></tr></table>\n'
+        + '<p>If nothing has reached you, contact them directly.</p>\n'
+        + '<a class="button" href="{{action_url}}">Open the engagement</a>' },
+    { key: 'user_created', group: 'security', label: 'New user added', cta: 'Review users', hidden: true,
+      description: 'Sent to an administrator when a user is added to the portal.',
+      vars: ['email', 'name', 'role', 'action_url'],
+      subject: 'New user added to your portal',
+      note: 'This is an automated security notice.',
+      body: '<h1>New user added</h1>\n'
+        + '<p>A new user has been added to your portal.</p>\n'
+        + '<table class="details"><tr><th>Email</th><td>{{email}}</td></tr><tr><th>Name</th><td>{{name}}</td></tr><tr><th>Role</th><td>{{role}}</td></tr></table>\n'
+        + '<a class="button" href="{{action_url}}">Review users</a>\n'
+        + '<p class="small">If you did not expect this, review your users under Settings &rarr; Users.</p>' },
+    { key: 'role_changed', group: 'security', label: 'Role changed', cta: 'Review users', hidden: true,
+      description: 'Sent to an administrator when someone\'s role changes.',
+      vars: ['email', 'old_role', 'new_role', 'action_url'],
+      subject: 'Role changed for {{email}}',
+      note: 'This is an automated security notice.',
+      body: '<h1>Role changed</h1>\n'
+        + '<p>A user\'s role has been changed.</p>\n'
+        + '<table class="details"><tr><th>User</th><td>{{email}}</td></tr><tr><th>Previous role</th><td>{{old_role}}</td></tr><tr><th>New role</th><td>{{new_role}}</td></tr></table>\n'
+        + '<a class="button" href="{{action_url}}">Review users</a>\n'
+        + '<p class="small">If you did not expect this change, review the user\'s permissions straight away.</p>' },
+    { key: 'mfa_removed', group: 'security', label: 'Authenticator removed', hidden: true,
+      description: 'Sent when the authenticator app on an account is removed.',
+      vars: ['email'],
+      subject: 'Authenticator removed from your account',
+      note: 'This is an automated security notice.',
+      body: '<h1>Authenticator removed</h1>\n'
+        + '<p>The authenticator app for <strong>{{email}}</strong> has been removed.</p>\n'
+        + '<p>The next sign-in will ask for a new one to be set up. If this was not requested, contact your administrator.</p>' },
+    { key: 'mfa_changed', group: 'security', label: 'Authenticator set up', cta: 'Review sessions', hidden: true,
+      description: 'Sent when an authenticator app is set up or replaced on an account.',
+      vars: ['email', 'change', 'action_url'],
+      subject: 'Authenticator {{change}} on your account',
+      note: 'This is an automated security notice.',
+      body: '<h1>Authenticator {{change}}</h1>\n'
+        + '<p>The authenticator app for <strong>{{email}}</strong> has been {{change}}.</p>\n'
+        + '<a class="button" href="{{action_url}}">Review sessions</a>\n'
+        + '<p class="small">If this was not you, sign your other sessions out under Settings &rarr; Security and contact your administrator.</p>' },
+    { key: 'account_email_changed', group: 'security', label: 'Sign-in email changed', hidden: true,
+      description: 'Sent to the old address when an administrator changes someone\'s sign-in email.',
+      vars: ['who', 'old_email', 'new_email'],
+      subject: 'Your sign-in email address was changed',
+      note: 'This is an automated security notice.',
+      body: '<h1>Your sign-in email changed</h1>\n'
+        + '<p>{{who}} changed the sign-in email address on your account from {{old_email}} to <strong>{{new_email}}</strong>.</p>\n'
+        + '<p>Sign-in codes will now be sent to the new address. <strong>If you did not expect this, contact them straight away</strong>, because whoever holds that address can now sign in as you.</p>' },
+    { key: 'account_email_set', group: 'security', label: 'New sign-in email', hidden: true,
+      description: 'Sent to the new address when an administrator changes someone\'s sign-in email.',
+      vars: ['who', 'old_email'],
+      subject: 'You now sign in with this email address',
+      note: 'This is an automated security notice.',
+      body: '<h1>Your new sign-in email</h1>\n'
+        + '<p>{{who}} set this address as the sign-in email for your account (previously {{old_email}}).</p>\n'
+        + '<p>Sign-in codes will be sent here from now on.</p>' },
   ];
 
   var GROUPS = [
@@ -66607,6 +69501,158 @@ var EmailKit = (function () {
     };
   }
 
+  var PENTAL_WITHHELD = { critical_finding: ['finding_title', 'cvss'], comment_new: ['snippet'], comment_reply: ['snippet'],
+    meeting_invitation: ['notes'], meeting_updated: ['notes'] };
+
+  var PENTAL_MADE = { action_url: 1, setup_link: 1, portal_url: 1, magic_link: 1, meeting_link: 1, company_name: 1,
+    join_block: 1, notes_block: 1, deal_info: 1 };
+  var MEETING_HOST = /^https:\/\/([a-z0-9-]+\.)*teams\.(microsoft\.com|live\.com|microsoft\.us)\/[^\s"'<>\\]*$/i;
+  var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  function one(v, n) {
+    var s = String(v == null ? '' : v)
+      .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]+/g, ' ')
+      .replace(/\s{2,}/g, ' ').trim();
+    return s.length > n ? s.slice(0, n).trim() : s;
+  }
+
+  function originOf(u) {
+    var m = /^(https:\/\/[a-z0-9.-]+(?::\d{1,5})?)(?:[\/?#]|$)/i.exec(String(u || '').trim());
+    return m ? m[1].toLowerCase() : '';
+  }
+
+  function inPortal(u, portal) {
+    var s = String(u || '').trim();
+    if (!portal || !s || /[\s"'<>\\]/.test(s)) return '';
+    if (s.slice(0, portal.length).toLowerCase() !== portal) return '';
+    var rest = s.slice(portal.length);
+    return (rest === '' || /^[\/?#]/.test(rest)) ? s : '';
+  }
+
+  function dealInfo(ds) {
+    if (!ds || typeof ds !== 'object') return '';
+    if (ds.type === 'multi_year') {
+      var y = parseInt(ds.years, 10);
+      return '<p>Structure: ' + (y >= 2 && y <= 10 ? y : 2) + '-year engagement.</p>';
+    }
+    if (ds.type === 'subscription') {
+      var f = { annual: 'Annual', biannual: 'Twice-yearly', quarterly: 'Quarterly' }[ds.frequency] || 'Annual';
+      return '<p>Structure: ' + f + ' subscription, billed annually.</p>';
+    }
+    return '';
+  }
+
+  function payment(p, portal, invoiceId) {
+    if (!p || typeof p !== 'object') return '';
+    var b = p.bank && typeof p.bank === 'object' ? p.bank : {};
+    var v = function (k) { return one(b[k], 60); };
+    var amount = one(p.amount, 40);
+    var bankReady = !!(v('account_name') && ((v('sort_code') && v('account_number')) || v('iban')));
+    var card = p.card === true && !!portal && UUID_RE.test(String(invoiceId || ''));
+    if (!bankReady && !card) return '';
+    var h = '<h2>How to pay</h2>';
+    if (card) {
+      h += '<a class="button" href="' + esc(portal + '/?pay=' + String(invoiceId).toLowerCase()) + '">Pay ' + (amount ? esc(amount) + ' ' : '') + 'online</a>';
+      h += '<p class="small">Secure card payment by Stripe. Visa, Mastercard and American Express are accepted.</p>';
+    }
+    if (bankReady) {
+      h += '<p>' + (card ? 'Or pay by bank transfer:' : 'Pay by bank transfer:') + '</p><table class="details">';
+      [['Account name', 'account_name'], ['Bank', 'bank'], ['Sort code', 'sort_code'], ['Account number', 'account_number'],
+        ['IBAN', 'iban'], ['BIC / SWIFT', 'bic']].forEach(function (r) {
+        var x = v(r[1]);
+        if (x) h += '<tr><th>' + r[0] + '</th><td>' + esc(x) + '</td></tr>';
+      });
+      h += '<tr><th>Reference</th><td>' + esc(one(p.reference, 60) || 'N/A') + '</td></tr>';
+      if (amount) h += '<tr><th>Amount</th><td>' + esc(amount) + '</td></tr>';
+      h += '</table><p class="small">Please quote the reference so we can match your payment to this invoice.</p>';
+    }
+    return h;
+  }
+
+  function pentalCalendar(c) {
+    var s = String(c || '');
+    if (!/^BEGIN:VCALENDAR\r\n/.test(s)) return '';
+    var out = [];
+    s.replace(/\r\n[ \t]/g, '').split('\r\n').forEach(function (l) {
+      if (!l) return;
+      var name = l.split(/[;:]/)[0].toUpperCase();
+      if (/^(DESCRIPTION|X-ALT-DESC|ATTACH|URL|COMMENT|CONTACT|RELATED-TO|IMAGE|CONFERENCE)$/.test(name)) return;
+      if (/^X-/.test(name) && name !== 'X-MICROSOFT-SKYPETEAMSMEETINGURL') return;
+      var val = l.slice(l.indexOf(':') + 1);
+      if (/:\/\/|www\./i.test(val) && !((name === 'LOCATION' || name === 'X-MICROSOFT-SKYPETEAMSMEETINGURL') && MEETING_HOST.test(val))) return;
+      out.push(l);
+    });
+    var ics = out.map(function (line) {
+      var parts = [], cur = '', n = 0;
+      Array.from(line).forEach(function (ch) {
+        var cp = ch.codePointAt(0), b = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+        if (n + b > 75) { parts.push(cur); cur = ' '; n = 1; }
+        cur += ch; n += b;
+      });
+      parts.push(cur);
+      return parts.join('\r\n');
+    }).join('\r\n') + '\r\n';
+    return /\r\nMETHOD:(REQUEST|CANCEL)\r\n/.test(ics) && ics.indexOf('\r\nBEGIN:VEVENT\r\n') >= 0 && /\r\nEND:VCALENDAR\r\n$/.test(ics) ? ics : '';
+  }
+
+  function forPental(key, o) {
+    o = o || {};
+    var t = BY_KEY[key];
+    var portal = originOf(o.portalUrl);
+    if (!t || !portal) return null;
+    var s = o.settings || {};
+    var brand = brandFrom({ company_name: one(s.company_name, 80) || one(o.companyName, 80), accent_color: s.accent_color, email_font: s.email_font });
+    brand.logo = '';
+    var given = o.vars && typeof o.vars === 'object' ? o.vars : {};
+    var hold = {};
+    (PENTAL_WITHHELD[key] || []).forEach(function (k) { hold[k] = true; });
+    var text = {};
+    t.vars.forEach(function (k) { if (!PENTAL_MADE[k] && !hold[k]) text[k] = one(given[k], 160); });
+    text.company_name = brand.name;
+
+    if (key === 'mfa_changed') text.change = text.change === 'updated' ? 'updated' : 'enabled';
+    if (key === 'session_revoked') {
+      var n = parseInt(given.count, 10);
+      text.count = String(n > 0 && n < 10000 ? n : 1);
+      text.summary = n > 1 ? text.count + ' sessions on your account were signed out.' : 'A session on your account was signed out.';
+    }
+    var html = {};
+    Object.keys(text).forEach(function (k) { html[k] = esc(text[k]); });
+    if (t.vars.indexOf('setup_link') >= 0) {
+      var setup = inPortal(given.setup_link, portal);
+      if (!setup) return null;
+      html.setup_link = esc(setup);
+    }
+    var meet = MEETING_HOST.test(String(given.meeting_link || '').trim()) ? String(given.meeting_link).trim() : '';
+    if (t.vars.indexOf('join_block') >= 0) {
+      html.join_block = meet
+        ? '<a class="button" href="' + esc(meet) + '">Join the Microsoft Teams meeting</a>\n<p class="small">Or open this link: <a href="' + esc(meet) + '">' + esc(meet) + '</a></p>'
+        : '<p class="small">The Microsoft Teams link will be sent to you before the meeting.</p>';
+    }
+    if (t.vars.indexOf('notes_block') >= 0) html.notes_block = '';
+    if (t.vars.indexOf('deal_info') >= 0) html.deal_info = dealInfo(o.deal);
+    var action = inPortal(o.actionUrl, portal) || portal;
+    Object.assign(html, { accent_color: brand.accent, logo_url: '', logo: '', action_url: esc(action), portal_url: esc(portal), magic_link: esc(portal) });
+
+    var body = t.body;
+    Object.keys(hold).forEach(function (k) {
+      body = body.replace(new RegExp('<tr><th>[^<]*</th><td>\\{\\{' + k + '\\}\\}</td></tr>', 'g'), '')
+        .replace(new RegExp(':</p>\\n<blockquote>\\{\\{' + k + '\\}\\}</blockquote>', 'g'), '.</p>')
+        .replace(new RegExp('<blockquote>\\{\\{' + k + '\\}\\}</blockquote>\\n?', 'g'), '');
+    });
+    var after = (key === 'invoice_sent' || key === 'invoice_reminder') ? payment(o.payment, portal, o.invoiceId) : '';
+
+    var filled = fill(body, html).replace(/<tr><th>[^<]*<\/th><td>\s*<\/td><\/tr>/g, '').replace(/<table class="details">\s*<\/table>\n?/g, '');
+    var styled = style(filled + (after ? '\n' + after : ''), brand);
+    var subject = one(fillText(t.subject, text), 200);
+    return {
+      subject: subject,
+      html: shell({ brand: brand, subject: subject, preheader: preheaderOf(styled), body: styled,
+        signature: '', portalUrl: portal, note: t.note ? fill(t.note, text) : '' }),
+      pental: true,
+    };
+  }
+
   function sampleVars(s) {
     s = s || {};
     var cur = s.currency_symbol || '£';
@@ -66628,6 +69674,9 @@ var EmailKit = (function () {
       when: 'Mon 9 Mar 2026, 14:32 GMT', count: '3', summary: '3 other sessions on your account were signed out.',
       credential_label: 'VPN access (Office VPN)', found: '14 findings (2 high, 7 medium, 5 low)',
       was: 'Monday 2 March 2026 at 14:00',
+
+      name: 'Sam Patel', role: 'standard', old_role: 'standard', new_role: 'senior', change: 'enabled',
+      who: 'An administrator', old_email: 'old.address@example.com', new_email: 'user@example.com',
     };
   }
   function sampleBlocks(meetingLink) {
@@ -66645,6 +69694,9 @@ var EmailKit = (function () {
     brandFrom: brandFrom, render: render, wrap: wrap, frame: frame, style: style, sanitize: sanitize,
     fill: fill, fillText: fillText, esc: esc, isDocument: isDocument,
     sampleVars: sampleVars, sampleBlocks: sampleBlocks, luminance: luminance,
+
+    forPental: forPental, pentalCalendar: pentalCalendar, originOf: originOf, inPortal: inPortal,
+    PENTAL_WITHHELD: PENTAL_WITHHELD,
   };
 }());
 var AiKit = (function () {
@@ -67158,9 +70210,17 @@ async function _tplPentalCheck() {
   if (stale) render();
 }
 var _MAIL_DETAIL = { critical_finding: ['finding_title', 'cvss'], comment_new: ['snippet'], comment_reply: ['snippet'] };
+var _MAIL_NAMED_SINCE = 2025110801;
 function _emailTemplatePreview(key, body, subject) {
   var t = EmailKit.byKey(key);
   var origin = window.location.origin;
+
+  if (body == null && subject == null && _tplPental()) {
+    var sv = _emailTemplateSampleVars();
+    var pv = EmailKit.forPental(key, { settings: S.data.settings || {}, vars: Object.assign({}, sv, { setup_link: origin + '/?pw_token=example' }),
+      deal: { type: 'subscription', frequency: 'annual' }, portalUrl: origin });
+    if (pv) return { subject: pv.subject, html: pv.html, custom: false };
+  }
   return EmailKit.render(key, {
     settings: S.data.settings || {},
     vars: _emailTemplateSampleVars(), blocks: EmailKit.sampleBlocks(),
@@ -67241,11 +70301,13 @@ async function sendTestTemplate(key) {
     var res = await tenantFetch('/api/auth-code', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + _tok },
-      body: JSON.stringify({ action: 'send_test_template', to: toEmail, subject: '[Test] ' + r.subject, html: r.html })
+
+      body: JSON.stringify({ action: 'send_test_template', to: toEmail, subject: '[Test] ' + r.subject, html: r.html, template: key })
     });
     var d = {};
     try { d = await res.json(); } catch (e) {}
-    if (res.ok && d.success) toast('Test "' + tpl.label + '" sent to ' + toEmail, 'success');
+    if (res.ok && d.success && d.pental_wording) toast('Test "' + tpl.label + '" sent to ' + toEmail + ' in Pental\'s standard wording, as your email goes through Pental\'s servers. Your own wording is sent once your mailbox or mail server is connected at pental.io/manage.', 'success');
+    else if (res.ok && d.success) toast('Test "' + tpl.label + '" sent to ' + toEmail, 'success');
     else toast(d.error || 'The test email could not be sent', 'error');
   } catch (e) { toast('Error: ' + e.message, 'error'); }
 }
@@ -67483,10 +70545,12 @@ function _mailKey() {
   window.crypto.getRandomValues(a);
   return Array.prototype.map.call(a, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
 }
-async function _mailLocal(to, subject, html, type, relatedId, fromName, replyTo, forPental, calendar) {
+async function _mailLocal(to, subject, html, type, relatedId, fromName, replyTo, forPental, calendar, named) {
   var key = _mailKey();
   var args = { p_to: to, p_subject: subject, p_body: html, p_type: type,
     p_related_id: _uuidOrNull(relatedId), p_from_name: fromName || null, p_reply_to: replyTo || null, p_key: key };
+
+  if (named && named.template) { args.p_template = named.template; args.p_template_data = named.template_data || {}; }
   if (forPental && forPental.subject && forPental.html) { args.p_fallback_subject = forPental.subject; args.p_fallback_body = forPental.html; }
 
   if (calendar) args.p_calendar = calendar;
@@ -67545,7 +70609,8 @@ function _mailFollow(id) {
 function _mailRouteText(cap) {
   if (!cap || cap.unknown) return 'Where your email is sent from could not be checked just now.';
   if (cap.enabled === false) return 'Email notifications are switched off, so the portal sends none.';
-  var after = ' An email your side cannot send after all goes through Pental\'s servers instead, with a critical finding\'s title and score and a comment\'s words left out.';
+
+  var after = ' An email your side cannot send after all goes through Pental\'s servers instead, in Pental\'s standard wording, without a critical finding\'s title and score or a comment\'s words.';
   var renews = ' Pental\'s servers only renew the mailbox\'s sending key, which can send mail and cannot read it.';
 
   if (cap.locked) {
@@ -67571,7 +70636,7 @@ function _mailRouteText(cap) {
     }
     return 'The email this portal writes is sent by your own database, through your connected mailbox.' + renews + after;
   }
-  var tail = ' A critical finding\'s title and score, and a comment\'s words, are left out of what Pental is handed: the email links to them in the portal.';
+  var tail = ' Pental\'s servers write each email in Pental\'s standard wording, not your templates, and leave out a critical finding\'s title and score and a comment\'s words: the email links to them in the portal.';
   if (cap.blocked) return String(cap.blocked) + ' Meanwhile email is sent through Pental\'s servers.' + tail;
   if (cap.failing) return 'Your database could not get through to your mailbox\'s mail service when it last tried, so email is sent through Pental\'s servers until it can (it tries again with the next email).' + tail;
   if (cap.transport === 'none') return 'Email is sent through Pental\'s servers, because no mailbox of your own is connected.' + tail + ' Connect a Microsoft 365, Google or Zoho mailbox at pental.io/manage to send all of it from your own side.';
@@ -67596,7 +70661,7 @@ async function _mailRouteNote() {
   var el = document.getElementById('mail_route_note');
   if (el) el.textContent = _mailRouteText(cap);
 }
-async function queueEmail(toEmail, subject, body, notificationType, relatedId, sender, forPental, calendar) {
+async function queueEmail(toEmail, subject, body, notificationType, relatedId, sender, forPental, calendar, named) {
 
   if (S.profile && S.profile.role === 'client') return 'skipped';
   var s = S.data.settings || {};
@@ -67646,7 +70711,10 @@ async function queueEmail(toEmail, subject, body, notificationType, relatedId, s
   }
 
   var _type = notificationType || 'general';
-  var _local = await _mailLocal(toEmail, subject, body, _type, relatedId, _fromName, _replyTo, _MAIL_DETAIL[_type] ? forPental : null, _cal);
+  var _named = (named && named.template && EmailKit.byKey(named.template)) ? { template: named.template, template_data: named.data || {} } : null;
+
+  var _keeps = _named && (await _dbSchemaVersion()) >= _MAIL_NAMED_SINCE;
+  var _local = await _mailLocal(toEmail, subject, body, _type, relatedId, _fromName, _replyTo, _MAIL_DETAIL[_type] ? forPental : null, _cal, _keeps ? _named : null);
   if (_local === 'sent' || _local === 'off' || _local === 'refused') return _local;
 
   if (_local === 'held') {
@@ -67655,7 +70723,7 @@ async function queueEmail(toEmail, subject, body, notificationType, relatedId, s
         to_email: toEmail, subject: subject, body: body,
         notification_type: _type, related_id: _uuidOrNull(relatedId), status: 'pending',
         from_name: _fromName, from_email: _fromEmail
-      }, _cal ? { calendar: _cal } : {}));
+      }, _cal ? { calendar: _cal } : {}, _keeps ? _named : {}));
       if (_held && _held.error) { console.warn('[queueEmail] the email could not be kept for your own side to send: ' + _errMsg(_held.error)); return 'failed'; }
     } catch (e) { console.warn('[queueEmail] the email could not be kept for your own side to send: ' + (e && e.message)); return 'failed'; }
     return 'queued';
@@ -67683,7 +70751,7 @@ async function queueEmail(toEmail, subject, body, notificationType, relatedId, s
           related_id: relatedId || null,
           from_name: _fromName, from_email: _fromEmail,
           reply_to: _replyTo
-        }, _cal ? { calendar: _cal } : {}))
+        }, _cal ? { calendar: _cal } : {}, _named || {}))
       });
       if (apiRes.ok) return 'pental';
 
@@ -67704,7 +70772,7 @@ async function queueEmail(toEmail, subject, body, notificationType, relatedId, s
       notification_type: notificationType || 'general',
       related_id: relatedId || null, status: 'pending',
       from_name: _fromName, from_email: _fromEmail
-    }, _cal ? { calendar: _cal } : {}));
+    }, _cal ? { calendar: _cal } : {}, _keeps ? _named : {}));
     if (_fb && _fb.error) return 'failed';
   } catch(e) { return 'failed'; }
   return 'queued';
@@ -67739,14 +70807,14 @@ async function notifyTestStarted(assessment) {
     assessment_name: assessment.name || '', type: _displayType(assessment) || 'Security assessment',
     start_date: fmtDate(assessment.start_date), end_date: fmtDate(assessment.end_date)
   }, { signer: lead });
-  await queueEmail(_ce, m.subject, m.html, 'test_started', assessment.id, _senderFrom(lead));
+  await queueEmail(_ce, m.subject, m.html, 'test_started', assessment.id, _senderFrom(lead), null, null, m.named);
 }
 async function notifyTestEnded(assessment) {
   var client = (S.data.clients || []).find(function(c) { return c.id === assessment.client_id; });
   var _ce = _getClientEmail(client); if (!_ce) return;
   var lead = _getLeadTester(assessment);
   var m = _kitMail('test_ended', { assessment_name: assessment.name || '' }, { signer: lead });
-  await queueEmail(_ce, m.subject, m.html, 'test_ended', assessment.id, _senderFrom(lead));
+  await queueEmail(_ce, m.subject, m.html, 'test_ended', assessment.id, _senderFrom(lead), null, null, m.named);
 }
 async function notifyCriticalFinding(assessment, finding) {
   var client = (S.data.clients || []).find(function(c) { return c.id === assessment.client_id; });
@@ -67756,7 +70824,7 @@ async function notifyCriticalFinding(assessment, finding) {
     severity: _severityWord(finding.severity), assessment_name: assessment.name || '',
     finding_title: finding.title || '', cvss: finding.cvss == null ? '' : String(finding.cvss)
   }, { signer: lead });
-  await queueEmail(_ce, m.subject, m.html, 'critical_finding', finding.id, _senderFrom(lead), m.pental);
+  await queueEmail(_ce, m.subject, m.html, 'critical_finding', finding.id, _senderFrom(lead), m.pental, null, m.named);
 }
 async function notifyTesterAssigned(assessment, testerProfile) {
   if (!testerProfile || !testerProfile.email) return;
@@ -67767,7 +70835,7 @@ async function notifyTesterAssigned(assessment, testerProfile) {
     start_date: fmtDate(assessment.start_date), end_date: fmtDate(assessment.end_date),
     dates: _emailDates(assessment.start_date, assessment.end_date)
   });
-  await queueEmail(testerProfile.email, m.subject, m.html, 'tester_assigned', assessment.id);
+  await queueEmail(testerProfile.email, m.subject, m.html, 'tester_assigned', assessment.id, null, null, null, m.named);
 }
 async function generateExecSummary(assessmentId) {
 
@@ -68827,7 +71895,7 @@ async function submitCredentials(assessmentId) {
           assessment_name: a.name || '', client_name: (client && client.name) || 'The client',
           credential_label: 'credentials', start_date: fmtDate(a.start_date)
         });
-        await queueEmail(tester.email, m.subject, m.html, 'credentials_submitted', assessmentId);
+        await queueEmail(tester.email, m.subject, m.html, 'credentials_submitted', assessmentId, null, null, null, m.named);
       }
     }
 
@@ -70213,15 +73281,18 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
 
   if (_fxDoc) {
     await _ensurePdfTemplates();
-    if (_fxTemplateOn()) { if (!_returnDoc) await _pdfOnlyRun(_fxDocx, [assessmentId, _fxIds, { phase: (_fxOpt && _fxOpt.phase) || '' }]); return null; }
+
+    if (_fxTemplateOn()) { if (!_returnDoc) await exportFindingsDoc(assessmentId, _fxIds, null, { phase: (_fxOpt && _fxOpt.phase) || '' }); return null; }
   } else if (await _builtInRefused(_pdfType, assessmentId, _returnDoc)) return null;
   if (!_returnDoc) _showLoading();
+  var _rtT = '', _rtOn = false;
   try {
   await _ensurePdfTemplates();
   var a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; });
 
   if (!a) a = _scanRunAsAssessment(assessmentId);
   if (!a) { toast('Assessment not found', 'error'); return; }
+  _rtT = _rtResolve(a);
 
   var findings = _fxDoc ? _fxFindings(assessmentId, _fxIds).list : _docFindings(assessmentId, _pdfType);
   if (_fxDoc && !findings.length) { toast('There are no findings here to export yet', 'info'); return null; }
@@ -70231,7 +73302,7 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
   var _pdfFigNum = 0;
   function _figCaption(caption) { if (!caption) return ''; return _figDash(caption).replace(/\{\{fig\}\}/g, function() { _pdfFigNum++; return 'Figure ' + _pdfFigNum; }); }
 
-  var tpl = getTemplate(_fxDoc ? 'report' : _pdfType);
+  var tpl = _rtWith(_rtT, function () { return getTemplate(_fxDoc ? 'report' : _pdfType); });
 
   var jsPDF = window.jspdf.jsPDF;
   var doc = new jsPDF();
@@ -70295,9 +73366,11 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
     return cut.replace(/[\s,.;:-]+$/, '') + '\u2026';
   }
 
-  var companyName = (S.data.settings && S.data.settings.company_name) ? S.data.settings.company_name : '';
+  var companyName = String(_rtBranded(_rtT, S.data.settings || {}).company_name || '');
 
-  var settings = await _prepareSettingsForPdf(S.data.settings || {});
+  var settings = await _prepareSettingsForPdf(_rtBranded(_rtT, S.data.settings || {}));
+
+  _rtStack.push(_rtT); _rtOn = true;
 
   function addWatermark() {
     if (!tpl.watermark_text) return;
@@ -71279,6 +74352,8 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
 
   function _renderSevBoxes() {
     if (tpl.show_severity_boxes === false) return;
+
+    if (typeof _smInReport === 'function' && !_smInReport('severity')) return;
     var boxW = 30, boxH = 24, boxGap = 6;
     ['critical', 'high', 'medium', 'low', 'info'].forEach(function(sev, i) {
       var col = sevColors[sev];
@@ -71583,7 +74658,8 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
       var w = _vrWants(k);
       if (w !== null) return w;
       return tpl['show_' + (tplKey || k)] !== false
-        && (typeof _ffEnabled !== 'function' || _ffEnabled(tplKey || k));
+        && (typeof _ffEnabled !== 'function' || _ffEnabled(tplKey || k))
+        && (typeof _ffInReport !== 'function' || _ffInReport(tplKey || k));
     };
     var _metaCells = [];
     if (_metaOn('severity')) {
@@ -71639,6 +74715,7 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
       ordered.forEach(function (cf) {
         if (!_cffIsCompact(cf)) return;
         if (tpl['show_custom_' + cf.id] === false) return;
+        if (typeof _ffInReport === 'function' && !_ffInReport('custom_' + cf.id)) return;
         var v = vals[cf.id];
         if (!_cfHasContent(v)) return;
         var t = ((typeof _fsText === 'function') ? _fsText(cf, v, { report: true }) : String(v).replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
@@ -71871,6 +74948,8 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
     var _vrMap = { asset: 'affected_hosts', refs: 'references', first_seen: 'created', last_seen: 'scan_last_seen' };
     _fnOrder.forEach(function(fk) {
       if (!_fnR[fk]) return;
+
+      if (!_vrPick && typeof _ffInReport === 'function' && !_ffInReport(fk)) return;
       if (_vrPick) {
         var wanted = _vrPick.some(function (k) { return (_vrMap[k] || k) === fk; });
         if (!wanted) return;
@@ -72045,6 +75124,8 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
     {sev: 'Info', cvss: '0.0', desc: tpl.sev_desc_info || 'Informational findings, no direct security impact.'}
   ];
 
+  var _rtScale = _rtSevScaleKeys(findings);
+  sevDefs = sevDefs.filter(function (s) { return _rtScale.indexOf(s.sev.toLowerCase()) >= 0; });
   sevDefs.forEach(function(s) {
     checkPage(22);
     var col = sevColors[s.sev.toLowerCase()] || gray;
@@ -72273,7 +75354,7 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
   }
   doc.save(_saveFilename.replace(/[^a-zA-Z0-9 \-]/g, '') + '.pdf');
   toast('Report downloaded', 'success');
-} finally { if (!_returnDoc) _hideLoading(); }
+} finally { if (_rtOn) _rtStack.pop(); if (!_returnDoc) _hideLoading(); }
 }
 function getTesterEmail(id) {
   if (!id) return '';
@@ -72797,6 +75878,7 @@ async function downloadAllPDFs(type) {
     async function _issuedOrOwn(slot, id, own, fallbackName) {
       var bytes = null, name = '';
       try {
+
         if (_uploadedPdfs[slot + '_' + id] !== false && await hasFinalPdf(slot, id)) {
           var dl = await supabaseClient.storage.from('assessment-files').download(_finalPdfPath(slot, id));
           if (dl && !dl.error && dl.data) {
@@ -72808,7 +75890,7 @@ async function downloadAllPDFs(type) {
         }
       } catch (eI) { bytes = null; }
       if (!bytes) {
-        if (_getDocxTemplateMeta(slot)) { notIssued++; return null; }
+        if (_rtWith(id, function () { return _getDocxTemplateMeta(slot); })) { notIssued++; return null; }
         var d = await own();
         bytes = d ? d.output('arraybuffer') : null;
       }
@@ -74427,6 +77509,8 @@ function _fixReferencesRow(zip) {
 }
 function _chartLabelToCount(label, data){
   var l=String(label||'').toLowerCase().trim();
+
+  var _rk=_rtSevKeyOfName(l); if(_rk) return data[_rk+'_count'];
   if(/^crit/.test(l)) return data.critical_count;
   if(/^(high|serious|severe)/.test(l)) return data.high_count;
   if(/^(med|moderate)/.test(l)) return data.medium_count;
@@ -74555,17 +77639,17 @@ var _DOCX_VAR_NEEDS = {
   assessment_type: 'The assessment type, set on the assessment.',
   status: 'The assessment\'s status.',
   test_days: 'The number of test days on the assessment.',
-  classification: 'The classification text in the PDF & DOCX template settings.',
-  cover_subtitle: 'The cover subtitle in the PDF & DOCX template settings.',
-  intro_scope_text: 'The Scope intro in the PDF & DOCX template settings.',
-  intro_exec_summary_text: 'The Executive Summary intro in the PDF & DOCX template settings.',
-  intro_findings_summary_text: 'The Findings Summary intro in the PDF & DOCX template settings.',
-  intro_artifacts_text: 'The Artifacts intro in the PDF & DOCX template settings.',
-  methodology_text: 'The Methodology appendix in the PDF & DOCX template settings.',
-  methodology_links: 'The Methodology links appendix in the PDF & DOCX template settings.',
-  testing_conditions_text: 'The Terms & Conditions appendix in the PDF & DOCX template settings. The token name is historical; the setting it reads is "T&C".',
-  qa_text: 'The QA appendix in the PDF & DOCX template settings.',
-  dos_text: 'The Denial of Service appendix in the PDF & DOCX template settings.',
+  classification: 'The classification text in the built-in PDF\u2019s settings (Documents, Customise).',
+  cover_subtitle: 'The cover subtitle in the built-in PDF\u2019s settings (Documents, Customise).',
+  intro_scope_text: 'The Scope intro in the built-in PDF\u2019s settings (Documents, Customise).',
+  intro_exec_summary_text: 'The Executive Summary intro in the built-in PDF\u2019s settings (Documents, Customise).',
+  intro_findings_summary_text: 'The Findings Summary intro in the built-in PDF\u2019s settings (Documents, Customise).',
+  intro_artifacts_text: 'The Artifacts intro in the built-in PDF\u2019s settings (Documents, Customise).',
+  methodology_text: 'The Methodology appendix in the built-in PDF\u2019s settings (Documents, Customise).',
+  methodology_links: 'The Methodology links appendix in the built-in PDF\u2019s settings (Documents, Customise).',
+  testing_conditions_text: 'The Terms & Conditions appendix in the built-in PDF\u2019s settings (Documents, Customise). The token name is historical; the setting it reads is "T&C".',
+  qa_text: 'The QA appendix in the built-in PDF\u2019s settings (Documents, Customise).',
+  dos_text: 'The Denial of Service appendix in the built-in PDF\u2019s settings (Documents, Customise).',
 
   title: 'The finding\'s title.',
   category: 'The finding\'s category, blank until one is set.',
@@ -74603,6 +77687,10 @@ function _xmlSafeDeep(v, _seen) {
 }
 window._xmlSafeDeep = _xmlSafeDeep;
 async function _fillTemplateAndDownload(templateBuf, data, filename, _docType, _ctx) {
+
+  var _rtF = (_ctx && _ctx.id && (_docType === 'report' || _docType === 'attestation')) ? _rtResolve(_ctx.id) : null;
+  if (_rtF !== null) _rtStack.push(_rtF);
+  try {
   _docxRecordVars(_docType || (window._docxCurrentType || 'report'), data);
   var zip = new PizZip(templateBuf);
   _scanTemplateStyles(zip);
@@ -74736,6 +77824,8 @@ async function _fillTemplateAndDownload(templateBuf, data, filename, _docType, _
     link.click();
     URL.revokeObjectURL(url);
   }
+
+  } finally { if (_rtF !== null) _rtStack.pop(); }
 
   if (_pdfBytes) await _docxAutoPdf(_pdfBytes, filename, _docType, _ctx,
     _pdfOnly ? { download: !window._docxPdfQuiet, quiet: !!window._docxPdfQuiet } : null);
@@ -76715,7 +79805,6 @@ function _loxFontsReady(ms) {
 function _loxBase() {
   try {
     var t = (S.data.settings || {}).pdf_templates || {};
-    if (t.lox_off) return '';
     return String(t.lox_base || _LOX_CDN);
   } catch (e) { return _LOX_CDN; }
 }
@@ -77216,8 +80305,31 @@ function _docxConvFor(docType, templateId) {
   if (templateId === _getDefaultDocxTemplateId(docType) && v === 'none') return 'internal';
   return (v === 'both' || v === 'none' || v === 'internal') ? v : 'both';
 }
+function _rtDocxOffered(type, list) {
+  list = Array.isArray(list) ? list : [];
+  var key = _docxKeyOf(type);
+  var tid = _rtActiveId();
+  var did = _rtDefaultDocOf(key);
+  var rep = key === 'report';
+  if (tid && tid !== '*') {
+    var mine = _rtDocChoice(type);
+    if (mine === null) return [];
+
+    if (mine && (!rep || mine !== did)) {
+      var hit = list.filter(function (t) { return t.id === mine; });
+      if (hit.length) return rep ? hit.concat(list.filter(function (t) { return t.of === tid && t.id !== mine && !_rtList().some(function (x) { return x.id !== tid && x.docs && x.docs.report === t.id; }); })) : hit;
+    }
+  }
+
+  var claimed = {};
+  _rtList().forEach(function (t) {
+    var d = t.docs && typeof t.docs === 'object' ? t.docs[key] : '';
+    if (d && d !== 'builtin' && t.id !== tid && d !== did) claimed[d] = true;
+  });
+  return list.filter(function (t) { return !claimed[t.id] && !(rep && t.of && t.of !== tid); });
+}
 function _docxTemplatesFor(docType, isClient) {
-  return _listDocxTemplates(docType).filter(function (t) {
+  return _rtDocxOffered(docType, _listDocxTemplates(docType)).filter(function (t) {
     var v = _docxConvFor(docType, t.id);
     return isClient ? v === 'both' : v !== 'none';
   });
@@ -77250,7 +80362,10 @@ async function _setDocxAutoPdf(key, on, el) {
   if (on) s.pdf_templates['docx_auto_pdf_' + key] = true; else delete s.pdf_templates['docx_auto_pdf_' + key];
   try {
     if ((await _persistPdfTemplates()) === false) { render(); return; }
-    toast(on ? 'The PDF will be produced with every download of this document and kept as its final PDF.'
+
+    if (key === 'findings') toast(on ? 'Findings now export as a PDF made from your Findings export template.'
+      : 'Findings now export as your Findings export template, a Word file.', 'success');
+    else toast(on ? 'The PDF will be produced with every download of this document and kept as its final PDF.'
       : 'The PDF is no longer produced automatically for this document.', 'success');
   } catch (e) {
     toast('That setting could not be saved: ' + ((e && e.message) || e), 'error');
@@ -77301,9 +80416,14 @@ function _pdfSrcStamp(type, id) {
   }
 
   try {
-    var meta = _getDocxTemplateMeta(type === 'loa' ? 'attestation' : type);
+    var meta = _rtWith(id, function () { return _getDocxTemplateMeta(type === 'loa' ? 'attestation' : type); });
     if (meta) parts.push(String(meta.id || '') + ':' + String(meta.updated_at || ''));
   } catch (e) {}
+
+  if (type === 'report' || type === 'loa') {
+    var _rtS = _rtResolve(id);
+    if (_rtS) { try { parts.push('rt:' + _rtS + ':' + _pmHash(JSON.stringify(_rtById(_rtS)))); } catch (e) {} }
+  }
   return parts.join('|');
 }
 var _pdfRunQueue = Promise.resolve();
@@ -77422,9 +80542,7 @@ async function _docxAutoPdf(bytes, filename, docType, ctx, mode) {
       }
     }
 
-    if (!res) throw new Error('no PDF engine could convert this document. '
-      + (_loxOn() ? 'The LibreOffice engine did not answer; the console has the reason.'
-        : 'PDFs made in the browser are switched off under Settings \u203a Document Templates.'));
+    if (!res) throw new Error('no PDF engine could convert this document. The LibreOffice engine did not answer; the console has the reason.');
 
     if (mode.download) _pdxDownloadBlob(res.blob, pdfName);
     var stored = false, keptTheirs = false;
@@ -77654,34 +80772,49 @@ function _listDocxTemplates(type) {
   }
   return [];
 }
+function _rtDocChoice(type) {
+  var tid = _rtActiveId();
+  if (!tid || tid === '*') return undefined;
+  var t = _rtById(tid);
+  var d = t && t.docs && typeof t.docs === 'object' ? t.docs[_docxKeyOf(type)] : undefined;
+  if (d === 'builtin') return null;
+  if (d && typeof d === 'string') return d;
+  return undefined;
+}
 function _getDefaultDocxTemplateId(type) {
+  var _rc = _rtDocChoice(type);
+  if (_rc === null) return null;
+  if (_rc && _listDocxTemplates(type).some(function (t) { return t.id === _rc; })) return _rc;
   var s = S.data && S.data.settings;
   var tpls = (s && s.pdf_templates) || _pdfTplCache || null;
   if (!tpls) return null;
   var did = tpls['docx_default_' + type];
+
+  var list = _rtDocxOffered(type, _listDocxTemplates(type));
   if (did) {
 
-    var all = _listDocxTemplates(type);
-    if (all.some(function(t){ return t.id === did; })) return did;
+    if (list.some(function(t){ return t.id === did; })) return did;
   }
 
-  var list = _listDocxTemplates(type);
   return list.length ? list[0].id : null;
 }
 function _getDocxTemplateMeta(type, templateId) {
   var list = _listDocxTemplates(type);
   if (!list.length) return null;
+
+  if (!templateId && _rtDocChoice(type) === null) return null;
   if (templateId) {
     var hit = list.filter(function(t){ return t.id === templateId; })[0];
     return hit || null;
   }
 
   var did = _getDefaultDocxTemplateId(type);
-  if (!did) return list[0];
+  if (!did) return null;
   var d = list.filter(function(t){ return t.id === did; })[0];
   return d || list[0];
 }
-async function _saveDocxTemplateData(type, meta) {
+async function _saveDocxTemplateData(type, meta, opts) {
+  var _o = opts || {};
   await _ensurePdfTemplates();
   var s = S.data.settings;
   if (!s || !s.id) {
@@ -77695,7 +80828,7 @@ async function _saveDocxTemplateData(type, meta) {
     }
 
     if (meta.data && !meta.storage_path) {
-      var path = _buildTemplateStoragePath(type, meta.id);
+      var path = _buildTemplateStoragePath(type, meta.id + (_o.rev ? '-' + _o.rev : ''));
       try {
         var binary = atob(meta.data);
         var bytes = new Uint8Array(binary.length);
@@ -77744,7 +80877,7 @@ async function _saveDocxTemplateData(type, meta) {
     if (idx >= 0) arr[idx] = meta;
     else arr.push(meta);
 
-    if (!s.pdf_templates['docx_default_' + type]) {
+    if (!_o.noDefault && !s.pdf_templates['docx_default_' + type]) {
       s.pdf_templates['docx_default_' + type] = meta.id;
     }
   }
@@ -77782,6 +80915,11 @@ async function _deleteDocxTemplate(type, templateId) {
 
   if (s.pdf_templates['docx_default_' + type] === templateId) {
     var remaining = s.pdf_templates['docx_templates_' + type];
+    if (type === 'report') {
+      var _own = {};
+      _rtList().forEach(function (t) { var d = t.docs && t.docs.report; if (d && d !== 'builtin') _own[d] = true; });
+      remaining = remaining.filter(function (t) { return !_own[t.id] && !t.of; });
+    }
     if (remaining.length) s.pdf_templates['docx_default_' + type] = remaining[0].id;
     else delete s.pdf_templates['docx_default_' + type];
   }
@@ -77860,12 +80998,15 @@ function _tplUsesPath(set, path) {
 }
 var _docxPickerSeq = 0;
 function _renderDocxDownloadButton(type, recordId, downloadFn, opts) {
+
+  if ((type === 'report' || type === 'loa') && recordId && _rtNeeds(recordId)) return _rtWith(recordId, function () { return _renderDocxDownloadButton(type, recordId, downloadFn, opts); });
   opts = opts || {};
 
-  var list = (opts.noTemplates || opts.builtIn) ? []
+  var list = Array.isArray(opts.templates) ? opts.templates
+    : (opts.noTemplates || opts.builtIn) ? []
     : _docxAutoPdfOn(type)
     ? _docxTemplatesFor(type, opts.audience === 'client')
-    : _listDocxTemplates(type);
+    : _rtDocxOffered(type, _listDocxTemplates(type));
   var label = opts.label || 'DOCX';
 
   var sizeCls = (opts.cls === undefined || opts.cls === null) ? 'btn-sm' : opts.cls;
@@ -77887,15 +81028,17 @@ function _renderDocxDownloadButton(type, recordId, downloadFn, opts) {
     return '';
   }
 
-  var defaultId = _getDefaultDocxTemplateId(type);
+  var defaultId = Array.isArray(opts.templates) ? ((opts.templates[0] || {}).id || '') : _getDefaultDocxTemplateId(type);
   var others = list.filter(function (t) { return t.id !== defaultId; });
+
+  var mainAttr = (opts.mainId ? ' id="' + opts.mainId + '"' : '') + (opts.title ? ' title="' + esc(opts.title) + '"' : '');
 
   var footer = opts.footer || '';
 
   extras = extras.filter(function (x) { return !x.isMain; });
 
   if (!others.length && !extras.length && !footer) {
-    return '<button class="' + cls + '" onclick="' + mainCall + '"' + warm + (style ? ' style="' + style + '"' : '') + '>' + IC.dl + ' ' + esc(label) + '</button>';
+    return '<button class="' + cls + '"' + mainAttr + ' onclick="' + mainCall + '"' + warm + (style ? ' style="' + style + '"' : '') + '>' + IC.dl + ' ' + esc(label) + '</button>';
   }
 
   list = others;
@@ -77907,15 +81050,17 @@ function _renderDocxDownloadButton(type, recordId, downloadFn, opts) {
   var caretSplitStyle = (style ? style + ';' : '') + 'border-top-left-radius:0;border-bottom-left-radius:0;padding-left:0.35rem;padding-right:0.35rem';
   var h = '<span class="docx-dl-split" style="position:relative;display:inline-flex;align-items:stretch">';
 
-  h += '<button class="' + cls + '" onclick="' + mainCall + '"' + warm + ' style="' + mainSplitStyle + '">' + IC.dl + ' ' + esc(label) + '</button>';
+  h += '<button class="' + cls + '"' + mainAttr + ' onclick="' + mainCall + '"' + warm + ' style="' + mainSplitStyle + '">' + IC.dl + ' ' + esc(label) + '</button>';
 
   var _caretTitle = (list.length > 1 && extras.length) ? 'Other templates and options'
     : (extras.length ? 'Other download options' : 'Choose template');
 
   var _nPdf = extras.filter(function (x) { return x && x.id; }).length;
-  if (_nPdf) _caretTitle = _nPdf + ' more PDF' + (_nPdf === 1 ? '' : 's') + (list.length ? ', and other templates' : '');
-  h += '<button id="' + caretId + '" class="' + cls + (_nPdf ? ' dl-caret-n' : '') + '" onclick="_toggleDocxPicker(\'' + pickerId + '\',\'' + caretId + '\',event)" style="' + caretSplitStyle + '" title="' + _caretTitle + '" aria-label="' + _caretTitle + '">';
-  if (_nPdf) h += '<span class="dl-count" aria-hidden="true">+' + _nPdf + '</span>';
+
+  var _nMore = _nPdf + list.length;
+  if (_nMore) _caretTitle = [list.length ? list.length + ' more version' + (list.length === 1 ? '' : 's') : '', _nPdf ? _nPdf + ' more PDF' + (_nPdf === 1 ? '' : 's') : ''].filter(Boolean).join(' and ');
+  h += '<button id="' + caretId + '" class="' + cls + (_nMore ? ' dl-caret-n' : '') + '" onclick="_toggleDocxPicker(\'' + pickerId + '\',\'' + caretId + '\',event)" style="' + caretSplitStyle + '" title="' + _caretTitle + '" aria-label="' + _caretTitle + '">';
+  if (_nMore) h += '<span class="dl-count" aria-hidden="true">+' + _nMore + '</span>';
   h += '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>';
   h += '</button>';
 
@@ -79242,7 +82387,7 @@ function _ftShades(zip) {
   });
 }
 var _FTV_NAME = { pwndoc: 'PwnDoc', ghostwriter: 'Ghostwriter' };
-async function _ftOffer(buf, fileName, type) {
+async function _ftOffer(buf, fileName, type, plan) {
   if (typeof _loadDocxLibs === 'function') await _loadDocxLibs();
   var zip;
   try { zip = new PizZip(buf); } catch (e) { return false; }
@@ -79253,7 +82398,7 @@ async function _ftOffer(buf, fileName, type) {
 
   var errs = null;
   try { errs = typeof _validateDocxTemplate === 'function' ? await _validateDocxTemplate(new PizZip(bytes)) : null; } catch (e) {}
-  S._ftv = { R: R, kind: kind, fileName: String(fileName || 'template.docx'), type: type || 'report', bytes: bytes, errs: errs && errs.length ? errs : null };
+  S._ftv = { R: R, kind: kind, fileName: String(fileName || 'template.docx'), type: type || 'report', bytes: bytes, errs: errs && errs.length ? errs : null, plan: plan || null };
   _ftvShow();
   return true;
 }
@@ -79342,16 +82487,20 @@ async function _ftvSave() {
   var X = S._ftv;
   if (!X || X.saving || X.errs) return;
   X.saving = true;
+  var _after = null;
   _showLoading();
   try {
+
+    var plan = X.type === 'report' ? (X.plan || _rdUploadPlan({}, null)) : null;
+    var toDefault = !plan || plan.report === '';
 
     var make = _ftvMake(X.R);
     if (make.length && typeof _setSavedCopy === 'function' && typeof _settingsWriteBlob === 'function') {
       var put = function (list) {
         make.forEach(function (f) {
           var have = list.filter(function (x) { return x && x.id === f.id; })[0];
-          if (have) have.enabled = true;
-          else list.push({ id: f.id, label: f.label, type: 'html', enabled: true, required: false });
+          if (have) { if (toDefault) have.enabled = true; }
+          else list.push({ id: f.id, label: f.label, type: 'html', enabled: toDefault, required: false });
         });
       };
       var w = _setSavedCopy('finding_fields');
@@ -79365,62 +82514,106 @@ async function _ftvSave() {
     var bin = '', b = X.bytes;
     for (var i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
     var name = X.fileName.replace(/\.docx$/i, '');
-    var ok = await _saveDocxTemplateData(X.type, { name: name, data: btoa(bin), filename: X.fileName, uploaded_at: new Date().toISOString(), size: b.length });
+    var was = plan ? plan.was : null, _oldPath = '';
+    var _meta = { name: name, data: btoa(bin), filename: X.fileName, uploaded_at: new Date().toISOString(), size: b.length };
+    if (was) {
+
+      _meta = Object.assign({}, was, { data: _meta.data, filename: X.fileName, uploaded_at: _meta.uploaded_at, size: b.length });
+      delete _meta.storage_path;
+      _oldPath = was.storage_path || '';
+    } else if (plan && plan.of) _meta.of = plan.of;
+    var ok = await _saveDocxTemplateData(X.type, _meta, plan ? plan.opts : undefined);
     if (ok === false) return;
+    if (_oldPath && !_tplUsesPath((S.data.settings || {}).pdf_templates, _oldPath)) {
+      try { await supabaseClient.storage.from('templates').remove([_oldPath]); } catch (e) { console.warn('[upload] the old copy stays in storage', e); }
+      if (window._docxTplCache) delete window._docxTplCache[_oldPath];
+    }
     S._ftv = null;
     closeM();
     toast('Saved as a report template' + (make.length ? ', and ' + make.length + ' finding field' + (make.length === 1 ? '' : 's') + ' added' : ''), 'success');
     if (S.page === 'settings' && typeof renderSettings === 'function') renderSettings(); else render();
+    if (plan) _after = { buf: b, id: _meta.id, name: _meta.name || name, h: plan.h, was: was, hadMain: plan.hadMain, tid: plan.tid };
   } catch (e) {
     toast('It could not be saved: ' + (e && e.message ? e.message : 'the settings could not be written'), 'error');
   } finally {
     if (S._ftv) S._ftv.saving = false;
     _hideLoading();
   }
+
+  if (_after) { try { await _rdAfterUpload(_after); } catch (e) { console.warn('[upload] could not read what it prints', e); } }
 }
 window._ftvSave = _ftvSave;
-async function uploadDocxTemplate(type, templateName) {
+async function uploadDocxTemplate(type, templateName, how) {
   var input = document.createElement('input');
   input.type = 'file';
   input.accept = '.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-  input.onchange = async function() {
-    var file = input.files[0];
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.docx')) {
-      toast('Please select a .docx file', 'error');
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      toast('File too large (max 5 MB)', 'error');
-      return;
-    }
-    _showLoading();
-    try {
-      var buf = await file.arrayBuffer();
-
-      if (type === 'report' && typeof _ftOffer === 'function' && await _ftOffer(buf, file.name, type)) return;
-      var bytes = new Uint8Array(buf);
-      var binary = '';
-      for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      var b64 = btoa(binary);
-
-      var defaultName = templateName || file.name.replace(/\.docx$/i, '');
-      var _up = await _saveDocxTemplateData(type, {
-        name: defaultName,
-        data: b64,
-        filename: file.name,
-        uploaded_at: new Date().toISOString(),
-        size: file.size
-      });
-      if (_up !== false) toast('Template uploaded for ' + type, 'success');
-      renderSettings();
-    } catch(err) {
-      console.error('DOCX template upload error:', err);
-      toast('Upload failed: ' + err.message, 'error');
-    } finally { _hideLoading(); }
-  };
+  input.onchange = function () { var file = input.files && input.files[0]; if (file) _docxUploadFile(type, file, templateName, how); };
   input.click();
 }
+async function _docxUploadFile(type, file, templateName, how) {
+  if (!file.name.toLowerCase().endsWith('.docx')) {
+    toast('Please select a .docx file', 'error');
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    toast('File too large (max 5 MB)', 'error');
+    return;
+  }
+  var isRep = type === 'report';
+  var h = (how && typeof how === 'object') ? how : {};
+  var was = h.replace ? (_listDocxTemplates(type).filter(function (t) { return t.id === h.replace; })[0] || null) : null;
+  if (h.replace && !was) { toast('That Word template is not there any more', 'error'); return; }
+  _showLoading();
+  var _after = null, _oldPath = '';
+  try {
+    var buf = await file.arrayBuffer();
+
+    var _plan = isRep ? _rdUploadPlan(h, was) : null;
+    if (isRep && typeof _ftOffer === 'function' && await _ftOffer(buf, file.name, type, _plan)) return;
+    var bytes = new Uint8Array(buf);
+    var binary = '';
+    for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    var b64 = btoa(binary);
+
+    var defaultName = templateName || file.name.replace(/\.docx$/i, '');
+    var _meta = {
+      name: defaultName,
+      data: b64,
+      filename: file.name,
+      uploaded_at: new Date().toISOString(),
+      size: file.size
+    };
+    var _opts = _plan ? _plan.opts : {};
+    if (was) {
+
+      _meta = Object.assign({}, was, { data: b64, filename: file.name, uploaded_at: _meta.uploaded_at, size: file.size });
+      delete _meta.storage_path;
+      _oldPath = was.storage_path || '';
+    } else if (_plan && _plan.of) _meta.of = _plan.of;
+    var _up = await _saveDocxTemplateData(type, _meta, _opts);
+    if (_up !== false) {
+      if (isRep) _after = { buf: buf, id: _meta.id, name: _meta.name || defaultName, h: h, was: was, hadMain: _plan.hadMain, tid: _plan.tid };
+
+      else toast((was ? (_meta.name || 'Word template') + ' replaced' : 'Word template uploaded for ' + _rdKeyLabel(type)), 'success');
+
+      if (_oldPath && !_tplUsesPath((S.data.settings || {}).pdf_templates, _oldPath)) {
+        try { await supabaseClient.storage.from('templates').remove([_oldPath]); } catch (e) { console.warn('[upload] the old copy stays in storage', e); }
+        if (window._docxTplCache) delete window._docxTplCache[_oldPath];
+      }
+    }
+    render();
+  } catch(err) {
+    console.error('DOCX template upload error:', err);
+    toast('Upload failed: ' + err.message, 'error');
+  } finally { _hideLoading(); }
+
+  if (_after) {
+    var _said = false;
+    try { _said = await _rdAfterUpload(_after); } catch (e) { console.warn('[upload] could not read what it prints', e); }
+    if (!_said) toast('Word template uploaded for ' + _rdKeyLabel(type), 'success');
+  }
+}
+window._docxUploadFile = _docxUploadFile;
 async function deleteDocxTemplate(type, templateId) {
 
   if (templateId) {
@@ -79459,14 +82652,21 @@ async function deleteDocxTemplate(type, templateId) {
   } finally { _hideLoading(); }
 }
 async function setDefaultDocxTemplate(type, templateId) {
+
+  var ok = false, prev = type === 'report' ? ((_rdMainOf('') || {}).id || '') : '';
   _showLoading();
   try {
-    if ((await _setDefaultDocxTemplate(type, templateId)) !== false) toast('Default template updated', 'success');
+    ok = (await _setDefaultDocxTemplate(type, templateId)) !== false;
     renderSettings();
   } catch(err) {
     console.error('Set default template error:', err);
     toast('Failed: ' + err.message, 'error');
   } finally { _hideLoading(); }
+  if (!ok) return;
+
+  var said = false;
+  if (type === 'report' && templateId !== prev) { try { said = await _rdFollowFile(templateId, prev); } catch (e) { console.warn('[report] could not read what it prints', e); } }
+  if (!said) toast('Default template updated', 'success');
 }
 async function renameDocxTemplate(type, templateId) {
   var list = _listDocxTemplates(type);
@@ -79602,6 +82802,11 @@ function _applySeverityColors(zip) {
   var sevFillKeys = {};
   ['Critical','High','Medium','Low','Info','Informational'].forEach(function(k) {
     sevFillKeys[k] = true; sevFillKeys[k.toUpperCase()] = true; sevFillKeys[k.toLowerCase()] = true;
+  });
+
+  _RT_SEV_KEYS.forEach(function (k) {
+    var n = _rtSevNameOf(k);
+    if (n) [n, n.toUpperCase(), n.toLowerCase()].forEach(function (v) { colorMap[v] = sevHex[k]; sevFillKeys[v] = true; });
   });
 
   var docFile = zip.file('word/document.xml');
@@ -82240,7 +85445,47 @@ window._saveAiTemplateAsDefault = async function() {
       uploaded_at: new Date().toISOString(),
       size: r.size
     };
-    await _saveDocxTemplateData(r.type, newMeta);
+    var _rtHadDef = !!_rtDefaultDocOf(_docxKeyOf(r.type));
+
+    var _rtPrevDef = r.type === 'report' ? ((_rdMainOf('') || {}).id || '') : '';
+
+    var _rtFor = (r.type === 'report' || r.type === 'loa' || r.type === 'attestation') ? _rtMadeFor() : '';
+    var _rtRep = r.type === 'report' && !!_rtFor;
+    if (_rtRep) newMeta.of = _rtFor;
+    await _saveDocxTemplateData(r.type, newMeta, _rtRep ? { noDefault: true } : undefined);
+
+    var _rtUsed = null;
+    if (r.type === 'report') {
+      try {
+        var _rtBin = atob(r.b64), _rtU8 = new Uint8Array(_rtBin.length);
+        for (var _rtBi = 0; _rtBi < _rtBin.length; _rtBi++) _rtU8[_rtBi] = _rtBin.charCodeAt(_rtBi);
+        _rtUsed = await _rtTokensOfBuf(_rtU8.buffer);
+      } catch (e) { console.warn('[AI setup] could not read what it prints', e); }
+    }
+    if (newMeta.id && _rtFor) {
+      var _rtK = _docxKeyOf(r.type), _rtFollowed = false;
+
+      var _rtOld = _rtRep ? _rdMainOf(_rtFor) : null;
+      var _rtOldKept = !!_rtOld && !_rdSharedMain(_rtOld.id, _rtFor);
+      var _rtOk = (!_rtOldKept || (await _rdClaim([_rtOld.id], _rtFor))) && await _rtPut(function (v) {
+        var t0 = v.list.find(function (x) { return x && x.id === _rtFor; });
+        if (!t0) return false;
+        t0.docs = (t0.docs && typeof t0.docs === 'object') ? t0.docs : {};
+        t0.docs[_rtK] = newMeta.id;
+
+        _rtFollowed = false;
+        if (_rtUsed) {
+          var _rtW = JSON.stringify(_coCanon([t0.findings || {}, t0.sections || {}]));
+          _rtWith('', function () { _rtFollowTokens(t0, _rtUsed); });
+          _rtFollowed = _rtW !== JSON.stringify(_coCanon([t0.findings, t0.sections]));
+        }
+      });
+      if (_rtOk && S._rtDraft && S._rtDraft.id === _rtFor) S._rtDraft = null;
+
+      if (_rtOk && !_rtHadDef && _rtDefaultDocOf(_rtK) === newMeta.id) await _rtLetDefaultGo(_rtK);
+      toast(_rtOk ? 'Template saved for ' + _rtName(_rtFor) + (_rtFollowed ? ', with the finding fields and assessment sections it prints' : '') + (_rtOldKept ? '. The Word file it had is one of its versions now' : '')
+        : (_rtRep ? 'Template saved as one of ' + _rtName(_rtFor) + '’s versions: it could not be made its Word file. Its star makes it that.' : 'Template saved, but it could not be linked to ' + _rtName(_rtFor)), _rtOk ? 'success' : 'error');
+    } else {
 
     if (newMeta.id) {
       try {
@@ -82249,7 +85494,13 @@ window._saveAiTemplateAsDefault = async function() {
         console.warn('[AI Setup] Could not mark as default:', e);
       }
     }
-    toast('Template saved as default', 'success');
+
+    var _rtSaid = false;
+    if (_rtUsed && newMeta.id && _rtDefaultDocOf('report') === newMeta.id && newMeta.id !== _rtPrevDef) {
+      try { var _rtX = _rdFitOf(_rtUsed); if (_rtX.differs) _rtSaid = await _rdFollowDefault(_rtX, 'Template saved as default', _rtPrevDef); } catch (e) { console.warn('[AI setup] could not follow it', e); }
+    }
+    if (!_rtSaid) toast('Template saved as default', 'success');
+    }
     window._aiStylesReviewed = false;
     window._aiTemplateResult = null;
     closeM();
@@ -82450,7 +85701,8 @@ function _buildPentalBodyXml(type) {
   };
 
   var tiles = function (counts, compact) {
-    var names = ['Critical', 'High', 'Medium', 'Low', 'Info'];
+
+    var names = ['critical', 'high', 'medium', 'low', 'info'].map(function (k) { return (typeof _sevName === 'function') ? _sevName(k) : k.charAt(0).toUpperCase() + k.slice(1); });
     var w = [1928, 1928, 1928, 1927, 1927];
     var sp = { top: [24, WHITE], left: [24, WHITE], bottom: [24, WHITE], right: [24, WHITE], insideH: [24, WHITE], insideV: [24, WHITE] };
     return Tbl([
@@ -82805,23 +86057,26 @@ function _buildPentalBodyXml(type) {
       s += tag('{^show_finding_ids}') + factBand(_metaCols) + tag('{/show_finding_ids}');
     }
 
+    var _L = function (k, d) { try { return (typeof _ffLabel === 'function' && _ffLabel(k)) || d; } catch (e) { return d; } };
     s += kv([
       ['CVSS vector', mono('{cvss_vector}', { size: 15 }), 'cvss_vector'],
-      ['CWE', '{cwe}', 'show_cwe'],
+      [_L('cwe', 'CWE'), '{cwe}', 'show_cwe'],
+
+      ['{#attack}' + _L('attack', 'MITRE ATT&CK'), '{attack}{/attack}'],
       ['{col_category}', '{category}'],
-      ['{#show_affected_hosts}{#affected_hosts}Affected assets', mono('{affected_hosts}{/affected_hosts}{/show_affected_hosts}', { size: 15 })],
+      ['{#show_affected_hosts}{#affected_hosts}' + _L('affected_assets', 'Affected assets'), mono('{affected_hosts}{/affected_hosts}{/show_affected_hosts}', { size: 15 })],
       ['{#has_phase}Phase', '{phase}{/has_phase}'],
     ].filter(function (r) { return !(scan && /Phase/.test(r[0])); }), { labelWidth: 2300, caps: true });
     s += tag('{#is_critical}');
     s += callout('Immediate action is required: this finding allows an attacker to compromise the system or its data.', { fill: 'FEF2F2', bar: 'DC2626' });
     s += tag('{/is_critical}');
     var text = {
-      description: function () { return tag('{#show_description}') + label('Description') + rich('{description}') + tag('{/show_description}'); },
-      evidence: function () { return tag('{#show_evidence}') + label('Evidence') + rich('{evidence_content}') + tag('{/show_evidence}'); },
-      remediation: function () { return tag('{#show_remediation}') + label('Remediation') + rich('{remediation}') + tag('{/show_remediation}'); },
+      description: function () { return tag('{#show_description}') + label(_L('description', 'Description')) + rich('{description}') + tag('{/show_description}'); },
+      evidence: function () { return tag('{#show_evidence}') + label(_L('evidence', 'Evidence')) + rich('{evidence_content}') + tag('{/show_evidence}'); },
+      remediation: function () { return tag('{#show_remediation}') + label(_L('remediation', 'Remediation')) + rich('{remediation}') + tag('{/show_remediation}'); },
 
       references: function () {
-        return tag('{#show_references}') + tag('{#references}') + label('References')
+        return tag('{#show_references}') + tag('{#references}') + label(_L('references', 'References'))
           + P(R('{references}', { color: ACC, size: 16 }), { after: 140 }) + tag('{/references}') + tag('{/show_references}');
       },
     };
@@ -83628,13 +86883,16 @@ function _draftStyleGuideXml() {
     + '<w:r><w:rPr><w:color w:val="' + MUTED + '"/></w:rPr><w:t xml:space="preserve">[A screenshot appears here, centred]</w:t><w:br/><w:t xml:space="preserve">Figure 1: The caption sits under the picture, in the Figure style</w:t></w:r></w:p>';
   return s;
 }
-async function downloadDraftDocxTemplate(type) {
+async function downloadDraftDocxTemplate(type, rtId) {
   _showLoading();
 
   var _prevStyles = _docxStyles;
+  var _rtDr = false;
   try {
     await _loadDocxLibs();
     await _ensurePdfTemplates();
+
+    if (typeof rtId === 'string' && rtId && _rtById(rtId)) { _rtStack.push(rtId); _rtDr = true; }
     _setDocxTheme(getTemplate(type) || {});
     _docxStyles = { codeBlock: 'CodeBlock', inlineCode: 'InlineCode', caption: 'Caption', listBullet: 'ListBullet', h1: 'Heading1', h2: 'Heading2', h3: 'Heading3', h4: 'Heading4', body: 'Normal', figure: 'Figure' };
 
@@ -83655,14 +86913,14 @@ async function downloadDraftDocxTemplate(type) {
     var url = URL.createObjectURL(blob);
     var link = document.createElement('a');
     link.href = url;
-    link.download = type + '_template.docx';
+    link.download = (_rtDr ? _rtName(rtId).replace(/[^A-Za-z0-9 _-]/g, '').trim() + ' ' : '') + type + '_template.docx';
     link.click();
     URL.revokeObjectURL(url);
     toast('Draft ' + type + ' template downloaded', 'success');
   } catch(err) {
     console.error('Draft DOCX template error:', err);
     toast('Failed to generate draft template: ' + err.message, 'error');
-  } finally { _docxStyles = _prevStyles; _hideLoading(); }
+  } finally { if (_rtDr) _rtStack.pop(); _docxStyles = _prevStyles; _hideLoading(); }
 }
 function _styleCandidatesFromXml(styXml) {
   var out = { paragraph: [], character: [] };
@@ -84273,7 +87531,10 @@ function showDocxVariableRef(type) {
   body += '<strong>How to use:</strong> Open your Word template, type the variable name with curly braces (e.g. <code>{client_name}</code>) where you want the value to appear. Save as .docx and upload to Pental. To repeat content for each finding/scope item/etc., wrap the repeating block with the loop tags. Click any variable above to copy it.';
   body += '</div>';
 
-  S.modal = { type: '_custom', html: '<div class="modal-overlay"><div class="modal-content modal-lg" style="max-width:960px"><div class="modal-header"><span class="modal-title">' + esc(title) + ' <span style="font-size:0.78rem;font-weight:500;color:var(--gray);margin-left:0.5rem">' + totalVars + ' variables</span></span><button class="modal-close" onclick="closeM()" title="Close">&times;</button></div><div class="modal-body">' + body + '</div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM()">Close</button></div></div></div>' };
+  S.modal = { type: '_custom', html: '<div class="modal-overlay"><div class="modal-content modal-lg" style="max-width:960px"><div class="modal-header"><span class="modal-title">' + esc(title) + ' <span style="font-size:0.78rem;font-weight:500;color:var(--gray);margin-left:0.5rem">' + totalVars + ' variables</span></span><button class="modal-close" onclick="closeM()" title="Close">&times;</button></div><div class="modal-body">' + body + '</div><div class="modal-footer">'
+
+    + '<button class="btn btn-secondary" onclick="downloadDraftDocxTemplate(\'' + type + '\')" title="A Word file with every placeholder in place, to build yours on">' + IC.dl + ' Download a draft with them all</button>'
+    + '<button class="btn btn-primary" onclick="closeM()">Close</button></div></div></div>' };
   document.body.style.overflow = 'hidden';
   render();
 }
@@ -84312,7 +87573,7 @@ function _filterDocxVarRef(query) {
   });
 }
 function _buildDocxCommonData() {
-  var s = S.data.settings || {};
+  var s = _rtBranded(_rtActiveId(), S.data.settings || {});
   var today = new Date();
   return {
 
@@ -84370,12 +87631,16 @@ async function buildReportData(assessmentId, docType, _opts) {
   if (_opts && Array.isArray(_opts.findingIds)) findings = findings.filter(function (f) { return _opts.findingIds.indexOf(f.id) >= 0; });
   var client = (S.data.clients || []).find(function(c) { return c.id === a.client_id; }) || {};
 
-  var settings = await _prepareSettingsForPdf(S.data.settings || {});
-  var tpl = getTemplate(_dxType);
+  var _rtT = _rtResolve(a);
+  var settings = await _prepareSettingsForPdf(_rtBranded(_rtT, S.data.settings || {}));
+  var tpl = _rtWith(_rtT, function () { return getTemplate(_dxType); });
   _setDocxTheme(tpl);
 
   _resetRichContent();
   var _imgCache = await prefetchEvidenceImages(findings, a);
+
+  _rtStack.push(_rtT);
+  try {
 
   var leadName = getTesterName(a.lead_id) || 'Tester';
   var leadProfile = (S.data.users || []).find(function(u) { return u.id === a.lead_id; }) || {};
@@ -84465,7 +87730,7 @@ async function buildReportData(assessmentId, docType, _opts) {
       severity: _pntlScalar('f_' + _fk + '_sev', _sevCased(f.severity), _sevRunStyle(f.severity, tpl)),
 
       severity_title: _pntlScalar('f_' + _fk + '_sevt', _sevCased(f.severity, { case: 'title' }), _sevRunStyle(f.severity, tpl)),
-      severity_upper: (f.severity || '').toUpperCase(),
+      severity_upper: _sevCased(f.severity || '', { case: 'upper' }),
       severity_color: (function() {
         var sk = (f.severity || '').toLowerCase();
         var sc = tpl.severity_colors || {};
@@ -84565,6 +87830,8 @@ async function buildReportData(assessmentId, docType, _opts) {
 
     var _fcv = _ffParseCustomVals(f);
     _ffCustomEnabled().forEach(function(cf) {
+
+      if (!_ffInReport('custom_' + cf.id)) { _fdata['custom_' + cf.id] = ''; _fdata['has_custom_' + cf.id] = false; return; }
       var _cv = _fcv[cf.id];
 
       var _cbm = 'f_' + _fk + '_c' + _pntlKey(cf.id).slice(0, 6);
@@ -84605,12 +87872,22 @@ async function buildReportData(assessmentId, docType, _opts) {
     _fdata.retest_part_fixed = f.retest_status === 'part_fixed';
     _fdata.retest_not_fixed = f.retest_status === 'not_fixed';
     _fdata.retest_accepted = f.retest_status === 'accepted';
+
+    _FF_DOC_KEYS.forEach(function (x) {
+
+      if (_ffEnabled(x[0]) && _ffInReport(x[0])) return;
+      x[1].forEach(function (k) {
+        if (!Object.prototype.hasOwnProperty.call(_fdata, k)) return;
+        _fdata[k] = Array.isArray(_fdata[k]) ? [] : (typeof _fdata[k] === 'boolean' ? false : '');
+      });
+    });
     return _fdata;
   });
 
   var _sc = tpl.severity_colors || {};
   var _dsc = _sevColors();
   function _sevScaleEntry(level, key, desc, range) {
+    level = _rtSevNameOf(key) || level;
     var color = (_sc[key] || _dsc[key] || '').replace(/^#/, '');
     var html = color ? '<span style="color:#' + color + '"><strong>' + _xmlEsc(level) + '</strong></span>' : '<strong>' + _xmlEsc(level) + '</strong>';
     return {
@@ -84628,6 +87905,9 @@ async function buildReportData(assessmentId, docType, _opts) {
     _sevScaleEntry('Low', 'low', tpl.sev_desc_low || 'Minor risk with limited impact.', '0.1 - 3.9'),
     _sevScaleEntry('Informational', 'info', tpl.sev_desc_info || 'Best practice recommendation.', '0.0')
   ];
+
+  var _rtScale = _rtSevScaleKeys(findings);
+  sevScale = sevScale.filter(function (e, i) { return _rtScale.indexOf(_RT_SEV_KEYS[i]) >= 0; });
 
   var critFindings = findingsData.filter(function(f) { return f.is_critical; });
   var highFindings = findingsData.filter(function(f) { return f.is_high; });
@@ -84881,19 +88161,19 @@ async function buildReportData(assessmentId, docType, _opts) {
     show_findings: tpl.show_findings !== false,
     show_appendices: tpl.show_appendices !== false,
     show_severity_scale: tpl.show_severity_scale !== false,
-    show_severity_boxes: tpl.show_severity_boxes !== false,
+    show_severity_boxes: tpl.show_severity_boxes !== false && (typeof _smInReport === 'function' ? _smInReport('severity') : true),
     show_findings_table: tpl.show_findings_table !== false,
     show_radar_chart: tpl.show_radar_chart !== false,
     radar_chart_image: _radarHtml ? _richMarker(_radarHtml, _imgCache) : '',
 
-    show_cvss: tpl.show_cvss !== false
+    show_cvss: tpl.show_cvss !== false && _ffEnabled('cvss')
       && (findings || []).some(function (f) { return Number(f && f.cvss) > 0; }),
-    show_cwe: tpl.show_cwe !== false,
-    show_description: tpl.show_description !== false,
-    show_remediation: tpl.show_remediation !== false,
-    show_evidence: tpl.show_evidence !== false,
-    show_references: tpl.show_references !== false,
-    show_affected_hosts: tpl.show_affected_hosts !== false,
+    show_cwe: tpl.show_cwe !== false && _ffEnabled('cwe'),
+    show_description: tpl.show_description !== false && _ffEnabled('description'),
+    show_remediation: tpl.show_remediation !== false && _ffEnabled('remediation'),
+    show_evidence: tpl.show_evidence !== false && _ffEnabled('evidence'),
+    show_references: tpl.show_references !== false && _ffEnabled('references'),
+    show_affected_hosts: tpl.show_affected_hosts !== false && _ffEnabled('affected_assets'),
     show_retest_results: tpl.show_retest_results !== false,
 
     appendix_qa: tpl.appendix_qa !== false,
@@ -84998,6 +88278,7 @@ async function buildReportData(assessmentId, docType, _opts) {
   }
 
   return data;
+  } finally { _rtStack.pop(); }
 }
 async function genReportDOCX(assessmentId, templateId, _docType, _slotId) {
   var _dxType = _docType === 'vuln_report' ? 'vuln_report' : 'report';
@@ -85006,12 +88287,17 @@ async function genReportDOCX(assessmentId, templateId, _docType, _slotId) {
     await _ensurePdfTemplates();
     await _loadDocxLibs();
 
+    if (!templateId && _dxType === 'report') {
+      var _rtM = _rtWith(assessmentId, function () { return _getDocxTemplateMeta('report'); });
+      if (_rtM) templateId = _rtM.id;
+    }
+
     var templateBuf = await _fetchDocxTemplate(_dxType, templateId);
     _docxStyleOverride = (getTemplate(_dxType) || {}).style_map || null;
     if (!templateBuf) {
       toast(_dxType === 'vuln_report'
-        ? 'No vulnerability report template yet. Settings > Document Templates > Open the Document Builder, and choose Vulnerability report.'
-        : 'No custom template uploaded for reports. Go to Settings > Branding > Document Templates to upload one.', 'error');
+        ? 'No vulnerability report template yet. Settings, Documents, Open the Document Builder, and choose Vulnerability report.'
+        : 'No Word template uploaded for reports. Upload one under Settings, Documents.', 'error');
       _hideLoading();
       return;
     }
@@ -85055,9 +88341,10 @@ function _assDocAddTileLate(type, id, el) {
   try {
     var row = el && el.closest ? el.closest('.afm-row') : null;
     if (!row || row.querySelector('label[title="Add another PDF"]')) return;
-    var a = (S.data.assessments || []).find(function (x) { return x.id === id; });
+    var aid = row.getAttribute('data-afm-aid') || id;
+    var a = (S.data.assessments || []).find(function (x) { return x.id === aid; });
     if (!a) return;
-    var html = _assDocAddPdfHtml(a, type === 'loa' ? 'attestation' : 'report', false, false, true);
+    var html = _assDocAddPdfHtml(a, type === 'loa' ? 'attestation' : type, false, false, true, id);
     if (html) row.insertAdjacentHTML('beforeend', html);
   } catch (e) {  }
 }
@@ -85202,16 +88489,19 @@ function _checkAssessmentPdfCache() {
   var _hasReportTpl = false, _hasLoaTpl = false;
   try { _hasReportTpl = !!_getDocxTemplateMeta('report'); } catch(e) {}
   try { _hasLoaTpl = !!_getDocxTemplateMeta('loa'); } catch(e) {}
-  if (!_hasReportTpl && !_hasLoaTpl) return;
+  var _rtEach = _rtList().length > 0;
+  if (!_hasReportTpl && !_hasLoaTpl && !_rtEach) return;
 
   var asms = (S.data.assessments || []);
 
   var unchecked = [];
   asms.forEach(function(a) {
-    if (_hasReportTpl && _finalPdfKnown('report_' + a.id) === undefined) {
+    var _r = _rtEach ? _rtUsesWord(a, 'report') : _hasReportTpl;
+    var _l = _rtEach ? _rtUsesWord(a, 'loa') : _hasLoaTpl;
+    if (_r && _finalPdfKnown('report_' + a.id) === undefined) {
       unchecked.push(['report', a.id]);
     }
-    if (_hasLoaTpl && _finalPdfKnown('loa_' + a.id) === undefined) {
+    if (_l && _finalPdfKnown('loa_' + a.id) === undefined) {
       unchecked.push(['loa', a.id]);
     }
   });
@@ -85314,12 +88604,29 @@ async function downloadFinalPdf(type, id, filename) {
   } finally { _hideLoading(); }
 }
 async function deleteFinalPdf(type, id) {
-  if (!(await confirmAsync('The uploaded PDF will be permanently removed from storage. You can upload a replacement afterwards.', { title: 'Remove uploaded PDF?', confirmText: 'Remove PDF', variant: 'danger' }))) return;
+
+  var _builtIn = _docIsBuiltIn(type, id);
+  if (!(await confirmAsync('The uploaded PDF will be permanently removed from storage.' + (_builtIn ? '' : ' You can upload a replacement afterwards.'), { title: 'Remove uploaded PDF?', confirmText: 'Remove PDF', variant: 'danger' }))) return;
   _showLoading();
   try {
     var path = _finalPdfPath(type, id);
-    await supabaseClient.storage.from('assessment-files').remove([path]);
+
+    var _rm = await supabaseClient.storage.from('assessment-files').remove([path]);
+    if (_rm && _rm.error) throw new Error(_storageErrText(_rm.error, 'removing the PDF'));
+    delete _uploadedPdfs[type + '_' + id];
+    if (_finalPdfListing && _finalPdfListing.keys) delete _finalPdfListing.keys[type + '_' + id];
+    if (await hasFinalPdf(type, id)) {
+      _uploadedPdfs[type + '_' + id] = true;
+      throw new Error('storage kept it: you may not have permission to remove this PDF');
+    }
     _uploadedPdfs[type + '_' + id] = false;
+
+    try {
+      await _setPutIn('final_pdf_names', function (m) {
+        if (!Object.prototype.hasOwnProperty.call(m, type + '_' + id)) return false;
+        delete m[type + '_' + id];
+      });
+    } catch (eN) {  }
     toast('PDF removed', 'success');
     await refreshAndStay();
   } catch(err) {
@@ -85508,7 +88815,8 @@ function renderFinalPdfSection(type, id, label) {
             (function () {
               var _r = _finalPdfRec(type, id);
               var _sz = (_r && _r.size) ? '<div style="font-size:0.66rem;color:var(--gray)">' + esc(_ssFileSize(_r.size)) + '</div>' : '';
-              var _dest = (type === 'report' || type === 'loa') ? '<div style="margin-top:0.3rem">' + _afmDestHtml(true, type) + '</div>' : '';
+
+              var _dest = /^(report|loa|proposal|invoice)$/.test(type) ? '<div style="margin-top:0.3rem">' + _afmDestHtml(true, type) + '</div>' : '';
               return _sz + _dest;
             })() +
           '</div>' +
@@ -85527,7 +88835,7 @@ function renderFinalPdfSection(type, id, label) {
         '<div style="font-size:0.72rem;color:var(--gray);margin-bottom:0.15rem">No final PDF uploaded</div>' +
         '<div style="font-size:0.72rem;color:var(--accent);font-weight:600">Click to upload PDF</div>' +
 
-        ((type === 'report' || type === 'loa') ? '<div style="margin-top:0.4rem">' + _afmDestHtml(true, type, true) + '</div>' : '') +
+        (/^(report|loa|proposal|invoice)$/.test(type) ? '<div style="margin-top:0.4rem">' + _afmDestHtml(true, type, true) + '</div>' : '') +
       '</div>';
   }
 
@@ -85544,7 +88852,7 @@ function renderFinalPdfSection(type, id, label) {
     if (!el) return;
     el.innerHTML = exists ? uploadedHtml() : dropzoneHtml();
 
-    if (exists && (type === 'report' || type === 'loa')) _assDocAddTileLate(type, id, el);
+    if (exists && /^(report|loa|proposal|invoice)$/.test(type)) _assDocAddTileLate(type, id, el);
   });
   return '<div id="' + sectionId + '" style="margin-top:0.5rem">' + dropzoneHtml() + '</div>';
 }
@@ -85603,7 +88911,9 @@ async function downloadReport(id, templateId, forceGenerate, clean) {
     }
   }
   await _ensurePdfTemplates();
-  if (_getDocxTemplateMeta('report', templateId)) {
+
+  var _rtMeta = _rtWith(id, function () { return _getDocxTemplateMeta('report', templateId); });
+  if (_rtMeta) {
 
     if (_isClientNow) {
 
@@ -85634,7 +88944,7 @@ async function downloadReport(id, templateId, forceGenerate, clean) {
       }
     }
 
-    await genReportDOCX(id, templateId);
+    await genReportDOCX(id, templateId || _rtMeta.id);
   }
   else genPDF(id);
 }

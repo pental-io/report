@@ -30,7 +30,6 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 
 
-
 -- ═══════════════════════════════════════════════════════════════════════════
 -- ━━ byo-database.sql ━━
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1595,7 +1594,10 @@ BEGIN
           '<p>If you did not expect this, review your user list in <strong>Settings &rarr; Users</strong>.</p>',
           public._html_esc(NEW.email), public._html_esc(NEW.name), public._html_esc(NEW.role)
         ),
-        NEW.id
+        NEW.id,
+        -- 2006: which notice, and its values, for Pental's servers to write.
+        p_template => 'user_created',
+        p_data => jsonb_build_object('vars', jsonb_build_object('email', COALESCE(NEW.email, ''), 'name', COALESCE(NEW.name, ''), 'role', COALESCE(NEW.role, '')))
       );
     END IF;
   ELSIF TG_OP = 'UPDATE' THEN
@@ -1613,7 +1615,9 @@ BEGIN
           '<p>If this change was not expected, review user permissions immediately.</p>',
           public._html_esc(NEW.email), public._html_esc(OLD.role), public._html_esc(NEW.role)
         ),
-        NEW.id
+        NEW.id,
+        p_template => 'role_changed',
+        p_data => jsonb_build_object('vars', jsonb_build_object('email', COALESCE(NEW.email, ''), 'old_role', COALESCE(OLD.role, ''), 'new_role', COALESCE(NEW.role, '')))
       );
     END IF;
     IF OLD.totp_secret IS NOT NULL AND OLD.totp_secret != '' AND (NEW.totp_secret IS NULL OR NEW.totp_secret = '') THEN
@@ -1626,7 +1630,9 @@ BEGIN
           public._html_esc(NEW.email)
         ),
         NEW.id,
-        NEW.email
+        NEW.email,
+        p_template => 'mfa_removed',
+        p_data => jsonb_build_object('vars', jsonb_build_object('email', COALESCE(NEW.email, '')))
       );
     END IF;
   END IF;
@@ -1851,6 +1857,7 @@ DECLARE
   v_doc_client uuid;
   v_lead_id uuid;
   v_doc_delivered boolean;
+  v_doc_shown boolean;   -- 2000: a proposal or an invoice the client is shown (not a draft)
 BEGIN
   -- BYO is single-tenant, so caller resolution doesn't filter on tenant_id.
   SELECT role, client_id INTO v_role, v_client_id FROM public.profiles WHERE auth_user_id = auth.uid() AND active = true LIMIT 1;
@@ -1890,10 +1897,10 @@ BEGIN
       v_type := left(v_before_dot, length(v_before_dot) - 37);
       BEGIN v_doc_id := v_after_underscore::uuid; EXCEPTION WHEN OTHERS THEN RETURN false; END;
       IF v_type = 'proposal' THEN
-        SELECT client_id INTO v_doc_client FROM public.proposals WHERE id = v_doc_id LIMIT 1;
+        SELECT client_id, (status IS DISTINCT FROM 'draft') INTO v_doc_client, v_doc_shown FROM public.proposals WHERE id = v_doc_id LIMIT 1;
         IF NOT FOUND THEN RETURN false; END IF;
       ELSIF v_type = 'invoice' THEN
-        SELECT client_id INTO v_doc_client FROM public.invoices WHERE id = v_doc_id LIMIT 1;
+        SELECT client_id, (COALESCE(status, 'draft') <> 'draft') INTO v_doc_client, v_doc_shown FROM public.invoices WHERE id = v_doc_id LIMIT 1;
         IF NOT FOUND THEN RETURN false; END IF;
       ELSIF v_type IN ('report', 'attestation', 'loa') THEN
         SELECT client_id, lead_id, (status = 'delivered' OR delivered_at IS NOT NULL)
@@ -1926,8 +1933,14 @@ BEGIN
       -- report taken back, or one still in QA whose PDF was already made, was
       -- one request away from a client who knew where to ask. Proposals and
       -- invoices are the client's as they always were.
+      -- 2000: AND A PROPOSAL'S OR AN INVOICE'S ONCE IT IS NOT A DRAFT. [stated]
+      -- Arian, of a client reading them as soon as they were added, while the
+      -- proposal or invoice was a draft whose card they could not see: "yes fix
+      -- this". The portal shows the client a proposal or an invoice that is not
+      -- a draft, and its PDFs with it.
       IF v_role = 'client' THEN
         IF v_type IN ('report', 'attestation', 'loa') THEN RETURN v_doc_client = v_client_id AND COALESCE(v_doc_delivered, false); END IF;
+        IF v_type IN ('proposal', 'invoice') THEN RETURN v_doc_client = v_client_id AND COALESCE(v_doc_shown, false); END IF;   -- 2000
         RETURN v_doc_client = v_client_id;
       END IF;
       RETURN false;
@@ -1980,7 +1993,8 @@ BEGIN
       RETURN EXISTS (SELECT 1 FROM public.assessment_files f JOIN public.assessments a ON a.id = f.assessment_id
                       WHERE f.storage_path = file_path AND f.assessment_id = v_first_uuid AND f.client_visible = true
                         AND (COALESCE(f.doc_type, '') NOT IN ('report', 'attestation')
-                             OR a.status = 'delivered' OR a.delivered_at IS NOT NULL));
+                             OR a.status = 'delivered' OR a.delivered_at IS NOT NULL)
+                        AND (COALESCE(f.doc_type, '') NOT IN ('proposal', 'invoice') OR public._client_doc_shown(f.assessment_id, f.doc_type)));
     END IF;
     -- A picture: while something they are shown uses it. Nearly every one is
     -- filed under the finding that uses it (`<engagement>/<field>/<finding>/...`),
@@ -2657,7 +2671,7 @@ BEGIN
     -- engagement would put its findings under this one.
     SELECT * INTO v_src FROM public.assessments WHERE id=v_clone AND client_id=v_p.client_id;
     IF FOUND THEN
-      INSERT INTO public.assessments(client_id,name,type,status,start_date,end_date,job_code,test_perspective,credentials_status,lead_id,proposal_id,scanning_enabled,caveats,summary_sections,client_section_visibility) VALUES(v_p.client_id,COALESCE(v_p.title,v_src.name,'Security Assessment'),COALESCE(v_p.type,v_src.type,'Security Assessment'),'draft',COALESCE(p_start_date,v_p.start_date,v_src.start_date),COALESCE(p_end_date,v_p.end_date,v_src.end_date),p_job_code,COALESCE(v_tp,v_src.test_perspective,'unauthenticated'),CASE WHEN COALESCE(v_tp,v_src.test_perspective)='authenticated' THEN 'awaiting' ELSE 'none' END,v_src.lead_id,p_proposal_id,COALESCE(v_p.scanning_enabled,false),COALESCE(v_p.caveats,''),v_secs -> 'sections',(v_secs -> 'vis')::text) RETURNING id INTO v_aid; v_cloned := true;
+      INSERT INTO public.assessments(client_id,name,type,status,start_date,end_date,job_code,test_perspective,credentials_status,lead_id,proposal_id,scanning_enabled,caveats,summary_sections,client_section_visibility,report_template) VALUES(v_p.client_id,COALESCE(v_p.title,v_src.name,'Security Assessment'),COALESCE(v_p.type,v_src.type,'Security Assessment'),'draft',COALESCE(p_start_date,v_p.start_date,v_src.start_date),COALESCE(p_end_date,v_p.end_date,v_src.end_date),p_job_code,COALESCE(v_tp,v_src.test_perspective,'unauthenticated'),CASE WHEN COALESCE(v_tp,v_src.test_perspective)='authenticated' THEN 'awaiting' ELSE 'none' END,v_src.lead_id,p_proposal_id,COALESCE(v_p.scanning_enabled,false),COALESCE(v_p.caveats,''),v_secs -> 'sections',(v_secs -> 'vis')::text,v_p.report_template) RETURNING id INTO v_aid; v_cloned := true;
       FOR v_f IN SELECT * FROM public.findings WHERE assessment_id=v_clone ORDER BY created_at LOOP
         -- 1841: with its CVSS vector (it was left behind, so every finding of a
         -- re-signed engagement printed a score with no vector), its impact and
@@ -2669,9 +2683,9 @@ BEGIN
     END IF;
   END IF;
   IF v_aid IS NULL THEN
-    INSERT INTO public.assessments(client_id,name,type,status,start_date,end_date,job_code,test_perspective,credentials_status,proposal_id,scanning_enabled,phases,notes,lead_id,caveats,summary_sections,client_section_visibility)
+    INSERT INTO public.assessments(client_id,name,type,status,start_date,end_date,job_code,test_perspective,credentials_status,proposal_id,scanning_enabled,phases,notes,lead_id,caveats,summary_sections,client_section_visibility,report_template)
     VALUES(v_p.client_id,COALESCE(NULLIF(v_p.title,''),'Security Assessment')||v_label,COALESCE(v_p.type,'Security Assessment'),'draft',COALESCE(p_start_date,v_p.start_date),COALESCE(p_end_date,v_p.end_date),p_job_code,v_tp,CASE WHEN v_tp='authenticated' THEN 'awaiting' ELSE 'none' END,p_proposal_id,COALESCE(v_p.scanning_enabled,false),
-           CASE WHEN jsonb_typeof(v_p.phases) = 'array' AND jsonb_array_length(v_p.phases) > 0 THEN v_p.phases END,COALESCE(v_p.notes,''),v_lead,COALESCE(v_p.caveats,''),v_secs -> 'sections',(v_secs -> 'vis')::text) RETURNING id INTO v_aid;
+           CASE WHEN jsonb_typeof(v_p.phases) = 'array' AND jsonb_array_length(v_p.phases) > 0 THEN v_p.phases END,COALESCE(v_p.notes,''),v_lead,COALESCE(v_p.caveats,''),v_secs -> 'sections',(v_secs -> 'vis')::text,v_p.report_template) RETURNING id INTO v_aid;
     UPDATE public.proposals SET assessment_id=v_aid WHERE id=p_proposal_id;
     INSERT INTO public.timeline_events(assessment_id,event,user_id,title) VALUES(v_aid,'Contract signed by '||p_signed_by,v_me,'Contract signed');
   END IF;
@@ -2987,9 +3001,12 @@ BEGIN
          AND p.id IS DISTINCT FROM v_pid
          AND COALESCE(p.email, '') <> ''
     LOOP
+      -- 2006: with which email it is and its values, all Pental's servers
+      -- send it from where the firm has no mailbox of its own.
       INSERT INTO public.email_notifications
-        (to_email, subject, body, notification_type, related_id, status)
-      VALUES (v_to, v_subject, v_body, 'credentials_submitted', p_assessment_id, 'pending');
+        (to_email, subject, body, notification_type, related_id, status, template, template_data)
+      VALUES (v_to, v_subject, v_body, 'credentials_submitted', p_assessment_id, 'pending',
+              'credentials_submitted', jsonb_build_object('vars', v_vars - 'company_name'));
     END LOOP;
   EXCEPTION WHEN OTHERS THEN NULL; END;
   RETURN jsonb_build_object('success',true,'count',jsonb_array_length(v_list),'meta',v_meta);
@@ -3105,8 +3122,11 @@ BEGIN
            AND p.id IS DISTINCT FROM v_pid
            AND COALESCE(p.email, '') <> ''
       LOOP
-        INSERT INTO public.email_notifications (to_email, subject, body, notification_type, related_id, status)
-        VALUES (v_to, v_subject, v_body, 'credentials_elsewhere', p_assessment_id, 'pending');
+        -- 2006: and as Pental's servers would write it (the client's note
+        -- is theirs to read in the portal).
+        INSERT INTO public.email_notifications (to_email, subject, body, notification_type, related_id, status, template, template_data)
+        VALUES (v_to, v_subject, v_body, 'credentials_elsewhere', p_assessment_id, 'pending',
+                'credentials_elsewhere', jsonb_build_object('vars', v_vars - 'company_name' - 'note'));
       END LOOP;
     EXCEPTION WHEN OTHERS THEN NULL; END;
   END IF;
@@ -3194,11 +3214,16 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_ca
 -- tenant_id and scope every lookup to that tenant. On BYO tenant_id is
 -- always NULL and the scoping is a no-op.
 -- ────────────────────────────────────────────────────────────────
+-- 2006: and which notice it is, with its values (p_template, p_data), all
+-- Pental's servers send it from where the firm has no mailbox of its own.
+DROP FUNCTION IF EXISTS public._queue_security_notif(text, text, text, uuid, text, text);
 CREATE OR REPLACE FUNCTION public._queue_security_notif(
   p_toggle_key text, p_subject text, p_body text,
   p_profile_id uuid,
   p_to_email text DEFAULT NULL,
-  p_notif_type text DEFAULT 'security_event'
+  p_notif_type text DEFAULT 'security_event',
+  p_template text DEFAULT NULL,
+  p_data jsonb DEFAULT NULL
 ) RETURNS void AS $$
 DECLARE v_enabled boolean; v_email_on boolean; v_from_name text; v_from_email text;
         v_target text;
@@ -3224,10 +3249,11 @@ BEGIN
   IF v_target IS NULL OR v_target = '' THEN RETURN; END IF;
 
   INSERT INTO public.email_notifications
-    (to_email, subject, body, notification_type, from_name, from_email, status, attempts)
+    (to_email, subject, body, notification_type, from_name, from_email, status, attempts, template, template_data)
   VALUES
     (v_target, p_subject, p_body, COALESCE(p_notif_type, 'security_event'),
-     COALESCE(v_from_name, 'Pental'), v_from_email, 'pending', 0);
+     COALESCE(v_from_name, 'Pental'), v_from_email, 'pending', 0,
+     public._mail_named(p_template, p_data) ->> 'template', public._mail_named(p_template, p_data) -> 'data');
 EXCEPTION WHEN OTHERS THEN
   -- Never let notification enqueueing block the calling action
   RAISE WARNING 'Security notification enqueue failed: %', SQLERRM;
@@ -3238,7 +3264,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_ca
 -- publishable key: a way to have the firm's mailbox send anything to anyone
 -- once the outbox runs, which it does now. Only the four functions that call
 -- it (all SECURITY DEFINER, so they run as its owner) need it.
-REVOKE ALL ON FUNCTION public._queue_security_notif(text, text, text, uuid, text, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public._queue_security_notif(text, text, text, uuid, text, text, text, jsonb) FROM PUBLIC, anon, authenticated;
 
 CREATE OR REPLACE FUNCTION public.rpc_save_totp_secret(p_email text, p_totp_secret text, p_secret text) RETURNS boolean AS $$
 DECLARE v_role text; v_caller_email text; v_was_set boolean; v_target_id uuid;
@@ -3273,7 +3299,9 @@ BEGIN
       public._html_esc(lower(p_email)), CASE WHEN v_was_set THEN 'updated' ELSE 'enabled' END
     ),
     v_target_id,
-    lower(p_email)
+    lower(p_email),
+    p_template => 'mfa_changed',   -- 2006
+    p_data => jsonb_build_object('vars', jsonb_build_object('email', lower(p_email), 'change', CASE WHEN v_was_set THEN 'updated' ELSE 'enabled' END))
   );
   RETURN true;
 END;
@@ -3627,7 +3655,9 @@ BEGIN
         public._html_esc(COALESCE(p_reason, 'user'))
       ),
       v_target_profile_id,
-      v_target_email
+      v_target_email,
+      p_template => 'session_revoked',   -- 2006
+      p_data => jsonb_build_object('vars', jsonb_build_object('count', '1'))
     );
     RETURN true;
   END IF;
@@ -5313,6 +5343,31 @@ ALTER TABLE public.email_notifications ADD COLUMN IF NOT EXISTS sent_via text;
 -- drain with that version in place of its own, so no email is lost.
 ALTER TABLE public.email_notifications ADD COLUMN IF NOT EXISTS fallback_subject text;
 ALTER TABLE public.email_notifications ADD COLUMN IF NOT EXISTS fallback_body text;
+-- 2006: WHICH EMAIL IT IS, AND ITS DETAILS. [stated] Arian, "Yes" to Pental's
+-- mailbox sending only the portal's own emails, written by Pental's server in
+-- Pental's words from which email it is and its details, and never a
+-- free-written message or the firm's own wording. A row Pental's servers may
+-- send (sent_via NULL) says which of the portal's emails it is (`template`, a
+-- key of the portal's email kit) and its values (`template_data`: { vars,
+-- deal, payment, action_url }); the drain sends it from those alone, and a
+-- row without them is not sent through Pental. The firm's own mailbox or mail
+-- server sends the row as it is written, as it always has.
+ALTER TABLE public.email_notifications ADD COLUMN IF NOT EXISTS template text;
+ALTER TABLE public.email_notifications ADD COLUMN IF NOT EXISTS template_data jsonb;
+DO $enotif_template$ BEGIN
+  ALTER TABLE public.email_notifications DROP CONSTRAINT IF EXISTS email_notifications_template;
+  ALTER TABLE public.email_notifications ADD CONSTRAINT email_notifications_template CHECK (
+    (template IS NULL OR template ~ '^[a-z][a-z0-9_]{0,59}$')
+    AND (template_data IS NULL OR (jsonb_typeof(template_data) = 'object' AND octet_length(template_data::text) <= 20000))) NOT VALID;
+END $enotif_template$;
+-- The same, for the functions below to take one only as the check takes it.
+CREATE OR REPLACE FUNCTION public._mail_named(p_template text, p_data jsonb) RETURNS jsonb
+LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $mlnamed$
+  SELECT CASE WHEN p_template ~ '^[a-z][a-z0-9_]{0,59}$'
+               AND (p_data IS NULL OR (jsonb_typeof(p_data) = 'object' AND octet_length(p_data::text) <= 20000))
+              THEN jsonb_build_object('template', p_template, 'data', COALESCE(p_data, '{}'::jsonb)) END;
+$mlnamed$;
+REVOKE ALL ON FUNCTION public._mail_named(text, jsonb) FROM PUBLIC, anon, authenticated;
 -- 1844: AN INVITATION'S CALENDAR FILE, ATTACHED BY WHATEVER SENDS IT. The
 -- portal wrote it into the body as an HTML comment for a sender to find, and
 -- no sender ever looked: every invitation went out with no calendar file. It
@@ -5450,6 +5505,7 @@ $obma$;
 -- are dropped, or PostgREST would find two and choose neither.
 DROP FUNCTION IF EXISTS public.rpc_mail_outbox_claim(integer);
 DROP FUNCTION IF EXISTS public.rpc_mail_outbox_result(uuid, boolean, text);
+DROP FUNCTION IF EXISTS public.rpc_mail_outbox_result(uuid, boolean, text, text, jsonb);   -- 2006
 DROP FUNCTION IF EXISTS public.rpc_mail_sender_ready();
 
 -- CLAIM. Incrementing `attempts` IS the claim: there is no 'sending' status and
@@ -5536,7 +5592,8 @@ BEGIN
       FROM picked
      WHERE e.id = picked.id
     RETURNING e.id, e.to_email, e.subject, e.body, e.notification_type,
-              e.related_id, e.from_name, e.attempts, e.calendar
+              e.related_id, e.from_name, e.attempts, e.calendar,
+              e.template, e.template_data   -- 2006
   )
   SELECT COALESCE(jsonb_agg(to_jsonb(c)), '[]'::jsonb) INTO v_rows FROM claimed c;
 
@@ -5547,12 +5604,19 @@ $obclaim$;
 
 -- RESULT. Separate from the claim so a send that never came back leaves the row
 -- retryable rather than marked sent.
+-- 2006: and what Pental's mailbox sent (p_subject, p_body: its own words, in
+-- place of the row's), so the Email Log shows the email that went; and a
+-- refusal that no second go would change (p_final: an email that is not one
+-- of the portal's own) is not sent at once rather than after three goes.
 CREATE OR REPLACE FUNCTION public.rpc_mail_outbox_result(
   p_id uuid,
   p_ok boolean,
   p_error text DEFAULT NULL,
   p_secret text DEFAULT NULL,
-  p_auth jsonb DEFAULT NULL
+  p_auth jsonb DEFAULT NULL,
+  p_subject text DEFAULT NULL,
+  p_body text DEFAULT NULL,
+  p_final boolean DEFAULT false
 )
   RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = public, pg_catalog, pg_temp AS $obres$
@@ -5562,12 +5626,14 @@ BEGIN
   IF v_mode IS DISTINCT FROM 'signed' THEN RAISE EXCEPTION 'Not authorised'; END IF;
   IF p_ok THEN
     UPDATE public.email_notifications
-       SET status = 'sent', sent_at = now(), error_message = NULL
+       SET status = 'sent', sent_at = now(), error_message = NULL,
+           subject = CASE WHEN length(COALESCE(p_subject, '')) BETWEEN 1 AND 2000 THEN p_subject ELSE subject END,
+           body = CASE WHEN length(COALESCE(p_body, '')) BETWEEN 1 AND 3000000 THEN p_body ELSE body END
      WHERE id = p_id AND status = 'pending' AND sent_via IS NULL;
   ELSE
     UPDATE public.email_notifications
        SET error_message = left(COALESCE(p_error, 'send failed'), 500),
-           status = CASE WHEN COALESCE(attempts, 0) >= 3 THEN 'failed' ELSE status END
+           status = CASE WHEN COALESCE(attempts, 0) >= 3 OR COALESCE(p_final, false) THEN 'failed' ELSE status END
      WHERE id = p_id AND status = 'pending' AND sent_via IS NULL;
   END IF;
   RETURN FOUND;
@@ -5605,10 +5671,10 @@ END;
 $obrdy$;
 
 REVOKE ALL ON FUNCTION public.rpc_mail_outbox_claim(integer, text, jsonb) FROM PUBLIC, authenticated;
-REVOKE ALL ON FUNCTION public.rpc_mail_outbox_result(uuid, boolean, text, text, jsonb) FROM PUBLIC, authenticated;
+REVOKE ALL ON FUNCTION public.rpc_mail_outbox_result(uuid, boolean, text, text, jsonb, text, text, boolean) FROM PUBLIC, authenticated;
 REVOKE ALL ON FUNCTION public.rpc_mail_sender_ready(text, jsonb) FROM PUBLIC, authenticated;
 GRANT EXECUTE ON FUNCTION public.rpc_mail_outbox_claim(integer, text, jsonb) TO anon, service_role;
-GRANT EXECUTE ON FUNCTION public.rpc_mail_outbox_result(uuid, boolean, text, text, jsonb) TO anon, service_role;
+GRANT EXECUTE ON FUNCTION public.rpc_mail_outbox_result(uuid, boolean, text, text, jsonb, text, text, boolean) TO anon, service_role;
 GRANT EXECUTE ON FUNCTION public.rpc_mail_sender_ready(text, jsonb) TO anon, service_role;
 
 -- THE EMAIL LOG, WRITTEN BY THE PORTAL'S SENDER (1797).
@@ -5625,6 +5691,9 @@ GRANT EXECUTE ON FUNCTION public.rpc_mail_sender_ready(text, jsonb) TO anon, ser
 -- Pental's signature and nothing else. A sign-in code is never kept, whoever
 -- writes the row: the log is readable by the firm's managers, and a code in it
 -- is a way into somebody else's account.
+-- 2006: and which email it is, with its details (p_template, p_template_data),
+-- which is all the drain sends a row left pending from.
+DROP FUNCTION IF EXISTS public.rpc_mail_log(text, text, text, text, uuid, text, text, text, text, text, jsonb);
 CREATE OR REPLACE FUNCTION public.rpc_mail_log(
   p_to text,
   p_subject text,
@@ -5636,7 +5705,9 @@ CREATE OR REPLACE FUNCTION public.rpc_mail_log(
   p_from_email text DEFAULT NULL,
   p_error text DEFAULT NULL,
   p_secret text DEFAULT NULL,
-  p_auth jsonb DEFAULT NULL
+  p_auth jsonb DEFAULT NULL,
+  p_template text DEFAULT NULL,
+  p_template_data jsonb DEFAULT NULL
 ) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = public, pg_catalog, pg_temp AS $maillog$
 DECLARE
@@ -5645,6 +5716,7 @@ DECLARE
   v_type text := COALESCE(NULLIF(btrim(p_type), ''), 'general');
   v_status text := lower(COALESCE(NULLIF(btrim(p_status), ''), 'sent'));
   v_body text := COALESCE(p_body, '');
+  v_named jsonb := public._mail_named(NULLIF(btrim(COALESCE(p_template, '')), ''), p_template_data);
 BEGIN
   v_mode := public._pental_authorise(p_auth, p_secret, 'rpc_mail_log', true);
   IF v_mode IS DISTINCT FROM 'signed' THEN RAISE EXCEPTION 'Not authorised'; END IF;
@@ -5662,18 +5734,19 @@ BEGIN
   END IF;
   INSERT INTO public.email_notifications
     (to_email, subject, body, notification_type, related_id, status,
-     from_name, from_email, error_message, attempts, sent_at)
+     from_name, from_email, error_message, attempts, sent_at, template, template_data)
   VALUES
     (btrim(p_to), COALESCE(p_subject, ''), v_body, v_type, p_related_id, v_status,
      NULLIF(p_from_name, ''), NULLIF(p_from_email, ''), left(NULLIF(p_error, ''), 500),
      CASE WHEN v_status = 'pending' THEN 0 ELSE 1 END,
-     CASE WHEN v_status = 'sent' THEN now() END)
+     CASE WHEN v_status = 'sent' THEN now() END,
+     v_named ->> 'template', v_named -> 'data')
   RETURNING id INTO v_id;
   RETURN v_id;
 END;
 $maillog$;
-REVOKE ALL ON FUNCTION public.rpc_mail_log(text, text, text, text, uuid, text, text, text, text, text, jsonb) FROM PUBLIC, authenticated;
-GRANT EXECUTE ON FUNCTION public.rpc_mail_log(text, text, text, text, uuid, text, text, text, text, text, jsonb) TO anon, service_role;
+REVOKE ALL ON FUNCTION public.rpc_mail_log(text, text, text, text, uuid, text, text, text, text, text, jsonb, text, jsonb) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.rpc_mail_log(text, text, text, text, uuid, text, text, text, text, text, jsonb, text, jsonb) TO anon, service_role;
 
 -- STAMP THE CUTOFF AND CANCEL THE BACKLOG, EXACTLY ONCE.
 --
@@ -6222,7 +6295,9 @@ BEGIN
       public._html_esc(lower(p_email)), CASE WHEN v_was_set THEN 'updated' ELSE 'enabled' END
     ),
     v_target_id,
-    lower(p_email)
+    lower(p_email),
+    p_template => 'mfa_changed',   -- 2006
+    p_data => jsonb_build_object('vars', jsonb_build_object('email', lower(p_email), 'change', CASE WHEN v_was_set THEN 'updated' ELSE 'enabled' END))
   );
   RETURN true;
 END;
@@ -6558,6 +6633,34 @@ $$;
 REVOKE ALL ON FUNCTION public._afile_client_insert_ok(uuid, text, boolean, boolean, uuid, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public._afile_client_insert_ok(uuid, text, boolean, boolean, uuid, text) TO authenticated, service_role;
 
+-- 2000: A DRAFT'S PDFS ARE NOT THE CLIENT'S YET. [stated] Arian, of a client
+-- reading a proposal's or an invoice's PDFs as soon as they were added, while it
+-- was a draft whose card they could not see: "yes fix this". A PDF filed with
+-- an engagement's proposal or invoice (`doc_type`) is the client's once that
+-- proposal or invoice is one the portal shows them, which is once it is not a
+-- draft, as its final PDF is (`can_access_assessment_file`). The proposal is
+-- the engagement's (`proposal_id`, else one made for it) and the invoice the
+-- engagement's (`assessment_id`, else its proposal's), as the portal finds them
+-- (`_assProposalOf`, `_assInvoiceOf`).
+CREATE OR REPLACE FUNCTION public._client_doc_shown(p_assessment uuid, p_doc text) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = public, pg_catalog, pg_temp AS $cdshown$
+  SELECT CASE p_doc
+    WHEN 'proposal' THEN COALESCE(
+      (SELECT p.status IS DISTINCT FROM 'draft' FROM public.assessments a JOIN public.proposals p ON p.id = a.proposal_id
+        WHERE a.id = p_assessment),
+      (SELECT bool_or(p.status IS DISTINCT FROM 'draft') FROM public.proposals p WHERE p.assessment_id = p_assessment),
+      false)
+    WHEN 'invoice' THEN COALESCE(
+      (SELECT bool_or(COALESCE(i.status, 'draft') <> 'draft') FROM public.invoices i WHERE i.assessment_id = p_assessment),
+      (SELECT bool_or(COALESCE(i.status, 'draft') <> 'draft') FROM public.assessments a JOIN public.invoices i ON i.proposal_id = a.proposal_id
+        WHERE a.id = p_assessment AND a.proposal_id IS NOT NULL),
+      false)
+    ELSE true END
+$cdshown$;
+REVOKE ALL ON FUNCTION public._client_doc_shown(uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._client_doc_shown(uuid, text) TO authenticated, service_role;
+
 -- 1970: the firm's working staff, not Sales or Marketing (is_delivery_staff):
 -- evidence, reports and letters are the findings in another form.
 CREATE POLICY afile_read ON public.assessment_files FOR SELECT TO authenticated
@@ -6573,7 +6676,9 @@ CREATE POLICY afile_read ON public.assessment_files FOR SELECT TO authenticated
           SELECT a.id FROM public.assessments a
            WHERE a.client_id = public.current_user_client_id()
              AND (COALESCE(assessment_files.doc_type, '') NOT IN ('report', 'attestation')
-                  OR a.status = 'delivered' OR a.delivered_at IS NOT NULL)))));
+                  OR a.status = 'delivered' OR a.delivered_at IS NOT NULL)
+             AND (COALESCE(assessment_files.doc_type, '') NOT IN ('proposal', 'invoice')
+                  OR public._client_doc_shown(assessment_files.assessment_id, assessment_files.doc_type))))));
 CREATE POLICY afile_insert ON public.assessment_files FOR INSERT TO authenticated
   WITH CHECK (public.mfa_is_fresh() AND public.can_access_assessment(assessment_id) AND (
     public.can_write()
@@ -6911,6 +7016,9 @@ BEGIN
   IF NOT c.is_contractor THEN RETURN NEW; END IF;
   IF TG_OP = 'INSERT' THEN
     NEW.lead_id := c.me;
+    -- 1999: a contractor's new engagement is on the firm's Default template;
+    -- which template an engagement uses is the firm's to choose.
+    NEW.report_template := NULL;
     IF NEW.client_id IS NULL OR NOT public.can_access_client(NEW.client_id) THEN
       RAISE EXCEPTION 'A contractor makes engagements only for clients they brought' USING ERRCODE = '42501';
     END IF;
@@ -6933,6 +7041,9 @@ BEGIN
   END IF;
   IF NEW.client_id IS DISTINCT FROM OLD.client_id THEN
     RAISE EXCEPTION 'Which client an engagement is for is the firm''s to change' USING ERRCODE = '42501';
+  END IF;
+  IF NEW.report_template IS DISTINCT FROM OLD.report_template THEN   -- 1999
+    RAISE EXCEPTION 'Which report template an engagement uses is the firm''s to change' USING ERRCODE = '42501';
   END IF;
   IF NEW.contractor_team_id IS DISTINCT FROM OLD.contractor_team_id THEN
     RAISE EXCEPTION 'Which team an engagement is with is the firm''s to change' USING ERRCODE = '42501';
@@ -6991,6 +7102,11 @@ DECLARE c record;
 BEGIN
   SELECT * INTO c FROM public._contractor_caller();
   IF NOT c.is_contractor THEN RETURN NEW; END IF;
+  -- 1999: which report template a proposal's engagement uses is the firm's.
+  IF TG_OP = 'INSERT' THEN NEW.report_template := NULL;
+  ELSIF NEW.report_template IS DISTINCT FROM OLD.report_template THEN
+    RAISE EXCEPTION 'Which report template a proposal uses is the firm''s to change' USING ERRCODE = '42501';
+  END IF;
   -- The engagement a proposal is for, and the one signing it copies, are the
   -- contractor's own: pointing a proposal at the firm's other work would copy
   -- that work's findings into a new engagement of theirs when it is signed.
@@ -9287,7 +9403,9 @@ BEGIN
       public._html_esc(lower(p_email)), CASE WHEN v_was_set THEN 'updated' ELSE 'enabled' END
     ),
     v_target_id,
-    lower(p_email)
+    lower(p_email),
+    p_template => 'mfa_changed',   -- 2006
+    p_data => jsonb_build_object('vars', jsonb_build_object('email', lower(p_email), 'change', CASE WHEN v_was_set THEN 'updated' ELSE 'enabled' END))
   );
   EXCEPTION WHEN OTHERS THEN
     RAISE WARNING 'rpc_save_totp_secret: security notification failed (%), continuing', SQLERRM;
@@ -27327,15 +27445,20 @@ BEGIN
     END IF;
     RETURN false;
   END IF;
-  v_detail := public._mail_detail_type(e.notification_type);
-  IF v_detail AND (COALESCE(e.fallback_subject, '') = '' OR COALESCE(e.fallback_body, '') = '') THEN
+  -- 2006: Pental's servers send only the portal's own emails, written by them
+  -- from which email it is and its details: one that does not say so is not
+  -- handed to them (they would not send it), and is said as not sent.
+  IF COALESCE(e.template, '') = '' THEN
     UPDATE public.email_notifications SET status = 'failed', attempts = GREATEST(COALESCE(attempts, 0), j.tries, 1),
-           error_message = left('Not sent: ' || v_why || '. It carries a finding''s or a comment''s detail and the portal gave no version without it, so it was not handed to Pental''s servers.', 500)
+           error_message = left('Not sent: ' || v_why || '. Pental''s servers send only the portal''s own emails, in their own words, and this one does not say which it is, so it was not handed to them.', 500)
      WHERE id = e.id;
     UPDATE public._mail_jobs SET state = 'failed', finished_at = now(), input = NULL,
            outcome = jsonb_build_object('ok', false, 'error', 'Not sent: ' || v_why || '.', 'transport', 'refused') WHERE id = j.id;
     RETURN false;
   END IF;
+  -- (A finding's or a comment's detail Pental's servers leave out themselves
+  -- since 2006, so one is handed over without a version made without it.)
+  v_detail := public._mail_detail_type(e.notification_type);
   UPDATE public.email_notifications
      SET sent_via = NULL,
          subject = COALESCE(NULLIF(fallback_subject, ''), subject),
@@ -28327,14 +28450,20 @@ GRANT EXECUTE ON FUNCTION public.rpc_mail_capability() TO authenticated;
 -- 1844: and an invitation's calendar (p_calendar), which whatever sends the
 -- email attaches. (Each form before this one is dropped, or PostgREST would
 -- find two and choose neither.)
+-- 2006: and which of the portal's emails it is, with its details (p_template,
+-- p_template_data), which is all Pental's servers send it from if this side
+-- hands it to them (_mail_handback).
 DROP FUNCTION IF EXISTS public.rpc_mail_submit(text, text, text, text, uuid, text, text);
 DROP FUNCTION IF EXISTS public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text);
+DROP FUNCTION IF EXISTS public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text, text);
 CREATE OR REPLACE FUNCTION public.rpc_mail_submit(p_to text, p_subject text, p_body text, p_type text DEFAULT 'general',
   p_related_id uuid DEFAULT NULL, p_from_name text DEFAULT NULL, p_reply_to text DEFAULT NULL,
-  p_fallback_subject text DEFAULT NULL, p_fallback_body text DEFAULT NULL, p_key text DEFAULT NULL, p_calendar text DEFAULT NULL) RETURNS jsonb
+  p_fallback_subject text DEFAULT NULL, p_fallback_body text DEFAULT NULL, p_key text DEFAULT NULL, p_calendar text DEFAULT NULL,
+  p_template text DEFAULT NULL, p_template_data jsonb DEFAULT NULL) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $mlsubmit$
 DECLARE v_type text := COALESCE(NULLIF(btrim(COALESCE(p_type, '')), ''), 'general'); v_side text; c jsonb; v_nid uuid; v_job uuid; v_to text := btrim(COALESCE(p_to, ''));
         v_key text := NULLIF(btrim(COALESCE(p_key, '')), ''); j public._mail_jobs; v_locked boolean;
+        v_named jsonb := public._mail_named(NULLIF(btrim(COALESCE(p_template, '')), ''), p_template_data);
 BEGIN
   IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
   IF NOT public.is_staff() THEN
@@ -28390,12 +28519,12 @@ BEGIN
     IF v_side IS NULL AND NOT v_locked THEN RETURN jsonb_build_object('ok', false, 'code', 'unavailable', 'retry', false); END IF;
   END IF;
   IF v_side IS NULL AND NOT v_locked THEN RETURN jsonb_build_object('ok', false, 'code', 'unavailable'); END IF;
-  INSERT INTO public.email_notifications (to_email, subject, body, notification_type, related_id, status, from_name, attempts, sent_via, fallback_subject, fallback_body, error_message, calendar)
+  INSERT INTO public.email_notifications (to_email, subject, body, notification_type, related_id, status, from_name, attempts, sent_via, fallback_subject, fallback_body, error_message, calendar, template, template_data)
   VALUES (v_to, p_subject, p_body, v_type, p_related_id, 'pending', NULLIF(left(COALESCE(p_from_name, ''), 200), ''), 0, 'local',
           CASE WHEN length(COALESCE(p_fallback_subject, '')) BETWEEN 1 AND 2000 THEN p_fallback_subject END,
           CASE WHEN length(COALESCE(p_fallback_body, '')) BETWEEN 1 AND 3000000 THEN p_fallback_body END,
           CASE WHEN v_side IS NULL THEN 'Waiting to be sent from this portal''s own side, which cannot send just now.' END,
-          NULLIF(p_calendar, ''))
+          NULLIF(p_calendar, ''), v_named ->> 'template', v_named -> 'data')
   RETURNING id INTO v_nid;
   INSERT INTO public._mail_jobs (kind, notification_id, asked_by, submit_key, origin, input)
   VALUES ('send', v_nid, auth.uid(), v_key, 'portal', jsonb_build_object('from_name', NULLIF(left(COALESCE(p_from_name, ''), 200), ''),
@@ -28405,8 +28534,8 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'id', v_job, 'notification_id', v_nid, 'sender', v_side)
       || CASE WHEN v_side IS NULL THEN '{"waiting": true}'::jsonb ELSE '{}'::jsonb END;
 END $mlsubmit$;
-REVOKE ALL ON FUNCTION public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text, text) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text, text) TO authenticated;
+REVOKE ALL ON FUNCTION public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text, text, text, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text, text, text, jsonb) TO authenticated;
 
 -- What came of an email the person sent, once, moving this database's mail
 -- on while it is asked: { state: 'pending' }, { state: 'done', ok, error,
@@ -28990,25 +29119,31 @@ REVOKE ALL ON FUNCTION public._scan_push_readers() FROM PUBLIC, anon, authentica
 -- firm's own frame (_mail_framed), as Pental's drain sent it; and once this
 -- side has sent at all (_mail_locked), kept here to send even while it
 -- cannot just now.
-CREATE OR REPLACE FUNCTION public._scan_mail_one(p_to text, p_subject text, p_body text, p_type text, p_related uuid) RETURNS boolean
+-- 2006: and which of the portal's emails it is, with its values (p_template,
+-- p_data), all Pental's servers send it from where the firm has no mailbox of
+-- its own.
+DROP FUNCTION IF EXISTS public._scan_mail_one(text, text, text, text, uuid);
+CREATE OR REPLACE FUNCTION public._scan_mail_one(p_to text, p_subject text, p_body text, p_type text, p_related uuid,
+                                                 p_template text DEFAULT NULL, p_data jsonb DEFAULT NULL) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $smo$
-DECLARE v_side text; v_nid uuid; v_job uuid;
+DECLARE v_side text; v_nid uuid; v_job uuid; v_named jsonb := public._mail_named(p_template, p_data);
 BEGIN
   IF NOT public._mail_addr_ok(btrim(COALESCE(p_to, ''))) THEN RETURN false; END IF;
   v_side := public._mail_side();
   IF v_side IS NOT NULL OR public._mail_locked() THEN
-    INSERT INTO public.email_notifications (to_email, subject, body, notification_type, related_id, status, attempts, sent_via, fallback_subject, fallback_body)
-    VALUES (btrim(p_to), p_subject, public._mail_framed(p_subject, p_body, p_type), p_type, p_related, 'pending', 0, 'local', p_subject, p_body)
+    INSERT INTO public.email_notifications (to_email, subject, body, notification_type, related_id, status, attempts, sent_via, fallback_subject, fallback_body, template, template_data)
+    VALUES (btrim(p_to), p_subject, public._mail_framed(p_subject, p_body, p_type), p_type, p_related, 'pending', 0, 'local', p_subject, p_body,
+            v_named ->> 'template', v_named -> 'data')
     RETURNING id INTO v_nid;
     INSERT INTO public._mail_jobs (kind, notification_id, input) VALUES ('send', v_nid, '{}'::jsonb) RETURNING id INTO v_job;
     IF v_side IS NOT NULL THEN PERFORM public._mail_dispatch(v_job, v_side); END IF;
   ELSE
-    INSERT INTO public.email_notifications (to_email, subject, body, notification_type, related_id, status, attempts)
-    VALUES (btrim(p_to), p_subject, p_body, p_type, p_related, 'pending', 0);
+    INSERT INTO public.email_notifications (to_email, subject, body, notification_type, related_id, status, attempts, template, template_data)
+    VALUES (btrim(p_to), p_subject, p_body, p_type, p_related, 'pending', 0, v_named ->> 'template', v_named -> 'data');
   END IF;
   RETURN true;
 END $smo$;
-REVOKE ALL ON FUNCTION public._scan_mail_one(text, text, text, text, uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public._scan_mail_one(text, text, text, text, uuid, text, jsonb) FROM PUBLIC, anon, authenticated;
 
 -- TWO PROGRAMS HOLD A COLLECTOR'S OLD TOKEN. A collector replaces a token
 -- that came through Pental's servers with one of its own
@@ -29148,8 +29283,21 @@ BEGIN
       v_body := '<h1>Your scan has finished</h1>' || E'\n<p>The vulnerability scan of your approved assets has finished and found ' || v_found || '.</p>';
     END IF;
   END IF;
+  -- 2006: which email, and its values, for Pental's servers to write it.
+  IF v_found IS NULL THEN
+    v_total := COALESCE((v_plan ->> 'total')::integer, 0);
+    SELECT string_agg(((v_plan -> 'counts') ->> s) || ' ' || s, ', ' ORDER BY o) INTO v_parts
+      FROM unnest(ARRAY['critical', 'high', 'medium', 'low', 'info']) WITH ORDINALITY AS u(s, o)
+     WHERE COALESCE(((v_plan -> 'counts') ->> s)::integer, 0) > 0;
+    v_found := CASE WHEN v_total > 0 THEN v_total || ' finding' || CASE WHEN v_total = 1 THEN '' ELSE 's' END
+                                         || CASE WHEN v_parts IS NOT NULL THEN ' (' || v_parts || ')' ELSE '' END
+                    ELSE 'nothing' END;
+  END IF;
   FOR v_to IN SELECT jsonb_array_elements_text(COALESCE(v_plan -> 'to', '[]'::jsonb)) LOOP
-    IF public._scan_mail_one(v_to, v_subject, v_body, 'scan_finished', p_run_id) THEN v_n := v_n + 1; END IF;
+    IF public._scan_mail_one(v_to, v_subject, v_body, 'scan_finished', p_run_id,
+         CASE WHEN v_plan ->> 'audience' = 'firm' THEN 'scan_held' ELSE 'scan_finished' END,
+         jsonb_build_object('vars', jsonb_build_object('client_name', COALESCE(NULLIF(v_plan ->> 'client_name', ''), 'your organisation'), 'found', v_found)))
+    THEN v_n := v_n + 1; END IF;
   END LOOP;
   RETURN v_n;
 EXCEPTION WHEN OTHERS THEN
@@ -33302,14 +33450,16 @@ BEGIN
                     WHEN v_freq = 'quarterly' THEN ' (Q' || (v_fi + 1) || ')' ELSE ' (Period ' || (v_fi + 1) || ')' END;
     -- 1846: with the proposal's own sections and caveats, as the first.
     INSERT INTO public.assessments (client_id, name, type, status, start_date, end_date, proposal_id, job_code, test_perspective,
-                                    credentials_status, phases, notes, scanning_enabled, caveats, summary_sections, client_section_visibility)
+                                    credentials_status, phases, notes, scanning_enabled, caveats, summary_sections, client_section_visibility,
+                                    report_template)
     VALUES (p.client_id, COALESCE(NULLIF(p.title, ''), 'Security Assessment') || v_label, COALESCE(p.type, 'Security Assessment'), 'draft',
             (v_start + make_interval(months => v_months * v_fi))::date, (v_start + make_interval(months => v_months * v_fi))::date + v_span,
             p_proposal, v_fjob, CASE WHEN p.testing_perspective = 'authenticated' THEN 'authenticated' ELSE 'unauthenticated' END,
             CASE WHEN p.testing_perspective = 'authenticated' THEN 'awaiting' ELSE 'none' END, p.phases, COALESCE(p.notes, ''),
             COALESCE(p.scanning_enabled, false), COALESCE(p.caveats, ''),
             public._proposal_engagement_sections(p.summary_sections) -> 'sections',
-            (public._proposal_engagement_sections(p.summary_sections) -> 'vis')::text);
+            (public._proposal_engagement_sections(p.summary_sections) -> 'vis')::text,
+            p.report_template);   -- 1999
     v_aids := v_aids + 1;
   END LOOP;
   IF v_aids > 0 AND p_assessment IS NOT NULL THEN
@@ -44505,122 +44655,6 @@ $engcom$;
 REVOKE ALL ON FUNCTION public.rpc_engagements_commercial() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.rpc_engagements_commercial() TO authenticated, service_role;
 
--- 1958: ROW SECURITY ASKS ONCE PER QUERY, NOT ONCE PER ROW.
---
--- [stated] Arian: "also sometimes the portal lags when too many people use it
--- why? fix it"; asked what it looks like, "Pages slow for everyone".
---
--- Measured on a real PostgreSQL with this file applied and a busy firm's
--- history (300 engagements, 6,000 findings, 12,000 timeline entries): one
--- person signing in took 2.9 seconds, twenty at once 38 seconds each, a client
--- 10.7 seconds. Nearly all of it was the policies above asking the same thing
--- once for every row read: whether this person may see the row's engagement
--- or client (can_access_assessment, can_access_client, can_see_client, a query
--- each), and who the person is and whether their sign-in is fresh
--- (mfa_is_fresh, is_staff, current_user_role and the rest, which PostgreSQL
--- cannot fold into the query, so each ran per row). With a firm reading at
--- once, the database answered one question tens of thousands of times and
--- every page waited for it.
---
--- So each is asked once per query. A function of no arguments that gives one
--- answer for a statement (STABLE) is put in a sub-select, which PostgreSQL
--- works out once; and a read that asked of each row's engagement or client
--- asks once for the set this person may see (the three functions below, the
--- same rule as the ones they stand for) and looks each row up in it. A write
--- names its own row, and keeps the look-up it has. Nothing anybody may see or
--- do changes: verification/test_rls_speed_1958.mjs holds every kind of person,
--- every table and every write to what they were, and measured one person
--- signing in 14 times quicker, twenty at once 7 times, a client 200 times.
---
--- It runs last, over every policy the file has made (one made after it would
--- not be asked once). Run again, it finds nothing left to change. A policy it
--- cannot rewrite keeps what it had, and the setup says so.
-
--- The engagements this person may see: can_access_assessment's rule, as a set.
--- (1970: the firm's working staff, is_delivery_staff, as can_access_assessment.)
-CREATE OR REPLACE FUNCTION public._pental_my_assessments() RETURNS SETOF uuid
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
-  SELECT a.id FROM public.assessments a
-   WHERE (SELECT public.is_delivery_staff())
-      OR ((SELECT public.current_user_role()) = 'contractor'
-          AND (a.lead_id = (SELECT public.current_profile_id())
-               OR (a.contractor_team_id IS NOT NULL AND a.contractor_team_id = (SELECT public.current_contractor_team_id()))))
-      OR ((SELECT public.current_user_role()) = 'client' AND a.client_id = (SELECT public.current_user_client_id()))
-$$;
--- The clients this person may work with: can_access_client's rule, as a set.
-CREATE OR REPLACE FUNCTION public._pental_my_clients() RETURNS SETOF uuid
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
-  SELECT c.id FROM public.clients c
-   WHERE (SELECT public.is_staff())
-      OR ((SELECT public.current_user_role()) = 'contractor' AND c.created_by = (SELECT public.current_profile_id()))
-      OR ((SELECT public.current_user_role()) = 'client' AND c.id = (SELECT public.current_user_client_id()))
-$$;
--- And the clients they may see: can_see_client's (those, and a contractor's
--- engagements' clients).
-CREATE OR REPLACE FUNCTION public._pental_seen_clients() RETURNS SETOF uuid
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
-  SELECT m FROM public._pental_my_clients() m
-  UNION
-  SELECT a.client_id FROM public.assessments a
-   WHERE (SELECT public.current_user_role()) = 'contractor'
-     AND (a.lead_id = (SELECT public.current_profile_id())
-          OR (a.contractor_team_id IS NOT NULL AND a.contractor_team_id = (SELECT public.current_contractor_team_id())))
-$$;
-REVOKE ALL ON FUNCTION public._pental_my_assessments() FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public._pental_my_clients() FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public._pental_seen_clients() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public._pental_my_assessments() TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public._pental_my_clients() TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public._pental_seen_clients() TO authenticated, service_role;
-
-DO $rls_once$
-DECLARE
-  r record; f record; nq text; nw text; tok text; stmt text;
-BEGIN
-  -- Printed with every name in full, so what is written back reads the same
-  -- whatever the search path of whoever runs the file.
-  PERFORM set_config('search_path', 'pg_catalog', true);
-  FOR r IN SELECT pol.polname, pol.polcmd, n.nspname AS sch, c.relname AS tbl,
-                  pg_get_expr(pol.polqual, pol.polrelid) AS q, pg_get_expr(pol.polwithcheck, pol.polrelid) AS w
-             FROM pg_policy pol JOIN pg_class c ON c.oid = pol.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = 'public' LOOP
-    nq := r.q; nw := r.w;
-    -- Reads only: whether this row's engagement or client may be seen.
-    IF nq IS NOT NULL AND r.polcmd IN ('r', '*') THEN
-      nq := regexp_replace(nq, 'public\.can_access_assessment\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_my_assessments() AS _pental_my_assessments))', 'g');
-      nq := regexp_replace(nq, 'public\.can_access_client\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_my_clients() AS _pental_my_clients))', 'g');
-      nq := regexp_replace(nq, 'public\.can_see_client\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_seen_clients() AS _pental_seen_clients))', 'g');
-    END IF;
-    -- Everywhere: who the person is, asked once. A call already asked once is
-    -- set aside first, so nothing is wrapped twice.
-    FOR f IN SELECT DISTINCT p.proname, ns.nspname FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
-              WHERE ns.nspname IN ('public', 'auth') AND p.pronargs = 0 AND p.provolatile IN ('s', 'i')
-                AND p.prokind = 'f' AND NOT p.proretset LOOP
-      tok := f.nspname || '.' || f.proname || '()';
-      IF nq IS NOT NULL AND position(tok IN nq) > 0 THEN
-        nq := replace(nq, 'SELECT ' || tok, chr(1) || f.proname || chr(2));
-        nq := replace(nq, tok, '(SELECT ' || tok || ')');
-        nq := replace(nq, chr(1) || f.proname || chr(2), 'SELECT ' || tok);
-      END IF;
-      IF nw IS NOT NULL AND position(tok IN nw) > 0 THEN
-        nw := replace(nw, 'SELECT ' || tok, chr(1) || f.proname || chr(2));
-        nw := replace(nw, tok, '(SELECT ' || tok || ')');
-        nw := replace(nw, chr(1) || f.proname || chr(2), 'SELECT ' || tok);
-      END IF;
-    END LOOP;
-    IF nq IS DISTINCT FROM r.q OR nw IS DISTINCT FROM r.w THEN
-      stmt := format('ALTER POLICY %I ON %I.%I', r.polname, r.sch, r.tbl);
-      IF nq IS NOT NULL THEN stmt := stmt || ' USING (' || nq || ')'; END IF;
-      IF nw IS NOT NULL THEN stmt := stmt || ' WITH CHECK (' || nw || ')'; END IF;
-      BEGIN
-        EXECUTE stmt;
-      EXCEPTION WHEN OTHERS THEN
-        RAISE WARNING 'Pental setup: the policy % on % could not be made quicker, so it stays as it was (%)', r.polname, r.tbl, SQLERRM;
-      END;
-    END IF;
-  END LOOP;
-END $rls_once$;
--- 1958: END
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 1977: THE PENTAL API, VERSION 1.
@@ -45764,14 +45798,21 @@ END $apiclientupd$;
 -- A new engagement for a client, as the portal's New Assessment makes one:
 -- pending (draft), with the client's next reference, its lead if one is
 -- given, and the two timeline lines the portal writes.
+-- 1999: p_report_template, which of the firm's report templates the
+-- engagement uses (its id, from Settings, Report Templates); left out, or
+-- 'default', the firm's Default. Adding it changed the signature, so the one
+-- before is dropped first (two would make a call ambiguous).
+DROP FUNCTION IF EXISTS public.api_v1_engagement_create(uuid, text, date, date, text, uuid, numeric, text);
 CREATE OR REPLACE FUNCTION public.api_v1_engagement_create(p_client_id uuid, p_name text, p_start_date date, p_end_date date,
                                                           p_type text DEFAULT NULL, p_lead_id uuid DEFAULT NULL,
-                                                          p_test_days numeric DEFAULT NULL, p_scope text DEFAULT NULL)
+                                                          p_test_days numeric DEFAULT NULL, p_scope text DEFAULT NULL,
+                                                          p_report_template text DEFAULT NULL)
 RETURNS TABLE (id uuid, job_code text, name text, status text, created_at timestamptz, row_version bigint)
 LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apiengnew$
 #variable_conflict use_column
 DECLARE c record; v_name text := btrim(regexp_replace(COALESCE(p_name, ''), '\s+', ' ', 'g')); v_lead text; v_code text;
   v_id uuid; v_at timestamptz; v_rv bigint;
+  v_rt text := NULLIF(btrim(COALESCE(p_report_template, '')), '');
 BEGIN
   PERFORM public._api_need_write('engagement_create', p_client_id);
   IF NOT EXISTS (SELECT 1 FROM public.clients cl WHERE cl.id = p_client_id) THEN PERFORM public._api_refuse('not_found', 'No client with that p_client_id that this key can see.'); END IF;
@@ -45783,13 +45824,17 @@ BEGIN
     v_lead := public._api_lead_name(p_lead_id);
     IF v_lead IS NULL THEN PERFORM public._api_refuse('bad_request', 'p_lead_id is an active tester, senior, administrator or contractor.'); END IF;
   END IF;
+  IF v_rt IS NOT NULL AND lower(v_rt) = 'default' THEN v_rt := NULL; END IF;
+  IF v_rt IS NOT NULL AND NOT public._report_template_exists(v_rt) THEN
+    PERFORM public._api_refuse('bad_request', 'p_report_template is the id of one of the firm''s report templates (Settings, Report Templates), or default.');
+  END IF;
   SELECT * INTO c FROM public._api_portal_caller();
   v_code := public._api_next_job_code(p_client_id);
   BEGIN
     INSERT INTO public.assessments (client_id, name, type, status, start_date, end_date, lead_id, test_days, scope, job_code,
-                                    test_perspective, capture_credentials, credentials_status)
+                                    test_perspective, capture_credentials, credentials_status, report_template)
     VALUES (p_client_id, v_name, NULLIF(btrim(COALESCE(p_type, '')), ''), 'draft', p_start_date, p_end_date, p_lead_id,
-            COALESCE(p_test_days, 0), COALESCE(p_scope, ''), v_code, 'unauthenticated', false, 'none')
+            COALESCE(p_test_days, 0), COALESCE(p_scope, ''), v_code, 'unauthenticated', false, 'none', v_rt)
     RETURNING assessments.id, assessments.created_at, assessments.row_version INTO v_id, v_at, v_rv;
   EXCEPTION WHEN insufficient_privilege OR check_violation OR raise_exception THEN
     PERFORM public._api_refuse('not_allowed', SQLERRM);
@@ -45801,17 +45846,22 @@ END $apiengnew$;
 
 -- An engagement's name, type, dates, lead, days and scope: a parameter left
 -- out (null) is left as it is; p_clear_lead takes the lead off.
+-- 1999: p_report_template, as engagement_create's; left out, unchanged.
+DROP FUNCTION IF EXISTS public.api_v1_engagement_update(uuid, bigint, text, text, date, date, uuid, boolean, numeric, text);
 CREATE OR REPLACE FUNCTION public.api_v1_engagement_update(p_engagement_id uuid, p_row_version bigint DEFAULT NULL, p_name text DEFAULT NULL,
                                                           p_type text DEFAULT NULL, p_start_date date DEFAULT NULL, p_end_date date DEFAULT NULL,
                                                           p_lead_id uuid DEFAULT NULL, p_clear_lead boolean DEFAULT false,
-                                                          p_test_days numeric DEFAULT NULL, p_scope text DEFAULT NULL)
+                                                          p_test_days numeric DEFAULT NULL, p_scope text DEFAULT NULL,
+                                                          p_report_template text DEFAULT NULL)
 RETURNS TABLE (id uuid, changed boolean, changed_at timestamptz, row_version bigint)
 LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $apiengupd$
 #variable_conflict use_column
 DECLARE cur record; v_name text; v_lead text; v_new_lead uuid; v_start date; v_end date; v_rv bigint;
+  v_rt_set boolean := p_report_template IS NOT NULL;
+  v_rt text := NULLIF(btrim(COALESCE(p_report_template, '')), '');
 BEGIN
   PERFORM public._api_need_write('engagement_update', p_engagement_id);
-  SELECT a.id, a.row_version, a.updated_at, a.start_date, a.end_date, a.lead_id INTO cur FROM public.assessments a WHERE a.id = p_engagement_id;
+  SELECT a.id, a.row_version, a.updated_at, a.start_date, a.end_date, a.lead_id, a.report_template INTO cur FROM public.assessments a WHERE a.id = p_engagement_id;
   IF cur.id IS NULL THEN PERFORM public._api_refuse('not_found'); END IF;
   IF p_row_version IS NOT NULL AND cur.row_version IS DISTINCT FROM p_row_version THEN PERFORM public._api_refuse('changed'); END IF;
   IF p_name IS NOT NULL THEN
@@ -45822,13 +45872,18 @@ BEGIN
   v_end := COALESCE(p_end_date, cur.end_date);
   IF v_start IS NOT NULL AND v_end IS NOT NULL AND v_end < v_start THEN PERFORM public._api_refuse('bad_request', 'The end date is on or after the start date.'); END IF;
   IF p_test_days IS NOT NULL AND (p_test_days < 0 OR p_test_days > 1000) THEN PERFORM public._api_refuse('bad_request', 'p_test_days is from 0 to 1,000.'); END IF;
+  IF v_rt IS NOT NULL AND lower(v_rt) = 'default' THEN v_rt := NULL; END IF;
+  IF v_rt IS NOT NULL AND NOT public._report_template_exists(v_rt) THEN
+    PERFORM public._api_refuse('bad_request', 'p_report_template is the id of one of the firm''s report templates (Settings, Report Templates), or default.');
+  END IF;
   v_new_lead := CASE WHEN COALESCE(p_clear_lead, false) THEN NULL ELSE COALESCE(p_lead_id, cur.lead_id) END;
   IF p_lead_id IS NOT NULL AND NOT COALESCE(p_clear_lead, false) AND p_lead_id IS DISTINCT FROM cur.lead_id THEN
     v_lead := public._api_lead_name(p_lead_id);
     IF v_lead IS NULL THEN PERFORM public._api_refuse('bad_request', 'p_lead_id is an active tester, senior, administrator or contractor.'); END IF;
   END IF;
   IF v_name IS NULL AND p_type IS NULL AND p_start_date IS NULL AND p_end_date IS NULL AND p_test_days IS NULL AND p_scope IS NULL
-     AND v_new_lead IS NOT DISTINCT FROM cur.lead_id THEN
+     AND v_new_lead IS NOT DISTINCT FROM cur.lead_id
+     AND (NOT v_rt_set OR v_rt IS NOT DISTINCT FROM cur.report_template) THEN
     RETURN QUERY SELECT cur.id, false, COALESCE(to_timestamp(cur.row_version / 1000000.0), cur.updated_at), cur.row_version;
     RETURN;
   END IF;
@@ -45840,6 +45895,7 @@ BEGIN
       lead_id = v_new_lead,
       test_days = COALESCE(p_test_days, a.test_days),
       scope = COALESCE(p_scope, a.scope),
+      report_template = CASE WHEN v_rt_set THEN v_rt ELSE a.report_template END,
       updated_at = now()
      WHERE a.id = p_engagement_id AND a.row_version IS NOT DISTINCT FROM cur.row_version
     RETURNING a.row_version INTO v_rv;
@@ -45896,6 +45952,28 @@ ALTER TABLE public.kb_entries ADD COLUMN IF NOT EXISTS attack text;
 -- the portal shows the client nothing of the results, and a picture in them is
 -- not theirs to fetch (`can_access_assessment_file`, `_client_sees_reference`).
 ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS retest_client_visible boolean DEFAULT true;
+
+-- 1999: REPORT TEMPLATES. A firm keeps report templates beside its Default
+-- (`settings.report_templates`: each one which finding fields and engagement
+-- sections it has, under which names, its document, its severity names and its
+-- branding), and each engagement, and each proposal an engagement is made from,
+-- says which it uses (`report_template`, a template's id; null is the Default).
+-- The settings column is read by every signed-in role, as the field lists are:
+-- a client's and a contractor's pages are laid out by it.
+ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS report_templates jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE public.assessments ADD COLUMN IF NOT EXISTS report_template text;
+ALTER TABLE public.proposals ADD COLUMN IF NOT EXISTS report_template text;
+GRANT SELECT (report_templates) ON public.settings TO authenticated;
+-- Whether the firm has a report template of that id (the API's check).
+CREATE OR REPLACE FUNCTION public._report_template_exists(p_id text) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $rtex$
+  SELECT p_id IS NOT NULL AND EXISTS (
+    SELECT 1 FROM public.settings s,
+           jsonb_array_elements(CASE WHEN jsonb_typeof(s.report_templates -> 'list') = 'array' THEN s.report_templates -> 'list' ELSE '[]'::jsonb END) t
+     WHERE t ->> 'id' = p_id);
+$rtex$;
+REVOKE ALL ON FUNCTION public._report_template_exists(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._report_template_exists(text) TO authenticated, service_role;
 
 -- WHEN A FINDING STOPPED BEING OPEN. The risk register's time to remediate is
 -- the time from a finding being reported to this. Set by the database when the
@@ -46009,14 +46087,134 @@ BEGIN
   END IF;
 END $assets_rt$;
 
+-- 2007: AFTER THE LAST POLICY THE FILE MAKES. The assets table's policies
+-- (1979) came after this block, so they were the only ones still asking
+-- their helpers once a row (test_rls_speed_1958, test_row_scope_1841).
+-- 1958: ROW SECURITY ASKS ONCE PER QUERY, NOT ONCE PER ROW.
+--
+-- [stated] Arian: "also sometimes the portal lags when too many people use it
+-- why? fix it"; asked what it looks like, "Pages slow for everyone".
+--
+-- Measured on a real PostgreSQL with this file applied and a busy firm's
+-- history (300 engagements, 6,000 findings, 12,000 timeline entries): one
+-- person signing in took 2.9 seconds, twenty at once 38 seconds each, a client
+-- 10.7 seconds. Nearly all of it was the policies above asking the same thing
+-- once for every row read: whether this person may see the row's engagement
+-- or client (can_access_assessment, can_access_client, can_see_client, a query
+-- each), and who the person is and whether their sign-in is fresh
+-- (mfa_is_fresh, is_staff, current_user_role and the rest, which PostgreSQL
+-- cannot fold into the query, so each ran per row). With a firm reading at
+-- once, the database answered one question tens of thousands of times and
+-- every page waited for it.
+--
+-- So each is asked once per query. A function of no arguments that gives one
+-- answer for a statement (STABLE) is put in a sub-select, which PostgreSQL
+-- works out once; and a read that asked of each row's engagement or client
+-- asks once for the set this person may see (the three functions below, the
+-- same rule as the ones they stand for) and looks each row up in it. A write
+-- names its own row, and keeps the look-up it has. Nothing anybody may see or
+-- do changes: verification/test_rls_speed_1958.mjs holds every kind of person,
+-- every table and every write to what they were, and measured one person
+-- signing in 14 times quicker, twenty at once 7 times, a client 200 times.
+--
+-- It runs last, over every policy the file has made (one made after it would
+-- not be asked once). Run again, it finds nothing left to change. A policy it
+-- cannot rewrite keeps what it had, and the setup says so.
+
+-- The engagements this person may see: can_access_assessment's rule, as a set.
+-- (1970: the firm's working staff, is_delivery_staff, as can_access_assessment.)
+CREATE OR REPLACE FUNCTION public._pental_my_assessments() RETURNS SETOF uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
+  SELECT a.id FROM public.assessments a
+   WHERE (SELECT public.is_delivery_staff())
+      OR ((SELECT public.current_user_role()) = 'contractor'
+          AND (a.lead_id = (SELECT public.current_profile_id())
+               OR (a.contractor_team_id IS NOT NULL AND a.contractor_team_id = (SELECT public.current_contractor_team_id()))))
+      OR ((SELECT public.current_user_role()) = 'client' AND a.client_id = (SELECT public.current_user_client_id()))
+$$;
+-- The clients this person may work with: can_access_client's rule, as a set.
+CREATE OR REPLACE FUNCTION public._pental_my_clients() RETURNS SETOF uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
+  SELECT c.id FROM public.clients c
+   WHERE (SELECT public.is_staff())
+      OR ((SELECT public.current_user_role()) = 'contractor' AND c.created_by = (SELECT public.current_profile_id()))
+      OR ((SELECT public.current_user_role()) = 'client' AND c.id = (SELECT public.current_user_client_id()))
+$$;
+-- And the clients they may see: can_see_client's (those, and a contractor's
+-- engagements' clients).
+CREATE OR REPLACE FUNCTION public._pental_seen_clients() RETURNS SETOF uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
+  SELECT m FROM public._pental_my_clients() m
+  UNION
+  SELECT a.client_id FROM public.assessments a
+   WHERE (SELECT public.current_user_role()) = 'contractor'
+     AND (a.lead_id = (SELECT public.current_profile_id())
+          OR (a.contractor_team_id IS NOT NULL AND a.contractor_team_id = (SELECT public.current_contractor_team_id())))
+$$;
+REVOKE ALL ON FUNCTION public._pental_my_assessments() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public._pental_my_clients() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public._pental_seen_clients() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._pental_my_assessments() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._pental_my_clients() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._pental_seen_clients() TO authenticated, service_role;
+
+DO $rls_once$
+DECLARE
+  r record; f record; nq text; nw text; tok text; stmt text;
+BEGIN
+  -- Printed with every name in full, so what is written back reads the same
+  -- whatever the search path of whoever runs the file.
+  PERFORM set_config('search_path', 'pg_catalog', true);
+  FOR r IN SELECT pol.polname, pol.polcmd, n.nspname AS sch, c.relname AS tbl,
+                  pg_get_expr(pol.polqual, pol.polrelid) AS q, pg_get_expr(pol.polwithcheck, pol.polrelid) AS w
+             FROM pg_policy pol JOIN pg_class c ON c.oid = pol.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' LOOP
+    nq := r.q; nw := r.w;
+    -- Reads only: whether this row's engagement or client may be seen.
+    IF nq IS NOT NULL AND r.polcmd IN ('r', '*') THEN
+      nq := regexp_replace(nq, 'public\.can_access_assessment\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_my_assessments() AS _pental_my_assessments))', 'g');
+      nq := regexp_replace(nq, 'public\.can_access_client\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_my_clients() AS _pental_my_clients))', 'g');
+      nq := regexp_replace(nq, 'public\.can_see_client\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_seen_clients() AS _pental_seen_clients))', 'g');
+    END IF;
+    -- Everywhere: who the person is, asked once. A call already asked once is
+    -- set aside first, so nothing is wrapped twice.
+    FOR f IN SELECT DISTINCT p.proname, ns.nspname FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+              WHERE ns.nspname IN ('public', 'auth') AND p.pronargs = 0 AND p.provolatile IN ('s', 'i')
+                AND p.prokind = 'f' AND NOT p.proretset LOOP
+      tok := f.nspname || '.' || f.proname || '()';
+      IF nq IS NOT NULL AND position(tok IN nq) > 0 THEN
+        nq := replace(nq, 'SELECT ' || tok, chr(1) || f.proname || chr(2));
+        nq := replace(nq, tok, '(SELECT ' || tok || ')');
+        nq := replace(nq, chr(1) || f.proname || chr(2), 'SELECT ' || tok);
+      END IF;
+      IF nw IS NOT NULL AND position(tok IN nw) > 0 THEN
+        nw := replace(nw, 'SELECT ' || tok, chr(1) || f.proname || chr(2));
+        nw := replace(nw, tok, '(SELECT ' || tok || ')');
+        nw := replace(nw, chr(1) || f.proname || chr(2), 'SELECT ' || tok);
+      END IF;
+    END LOOP;
+    IF nq IS DISTINCT FROM r.q OR nw IS DISTINCT FROM r.w THEN
+      stmt := format('ALTER POLICY %I ON %I.%I', r.polname, r.sch, r.tbl);
+      IF nq IS NOT NULL THEN stmt := stmt || ' USING (' || nq || ')'; END IF;
+      IF nw IS NOT NULL THEN stmt := stmt || ' WITH CHECK (' || nw || ')'; END IF;
+      BEGIN
+        EXECUTE stmt;
+      EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING 'Pental setup: the policy % on % could not be made quicker, so it stays as it was (%)', r.polname, r.tbl, SQLERRM;
+      END;
+    END IF;
+  END LOOP;
+END $rls_once$;
+-- 1958: END
+
 -- 1806: the version stamp below is written by this file and read by anyone,
 -- never written by a session (a signed-in user could otherwise set it, and a
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: 47c9e45ee34d2a63 @ 2025110501
+-- schema-fingerprint: fe81e5cb33651115 @ 2025110802
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025110501, now())
+VALUES (1, 2025110802, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 
