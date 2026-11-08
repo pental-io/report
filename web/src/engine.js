@@ -41634,7 +41634,7 @@ function renderSettings__portal() {
     h += '<label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;margin-top:0.5rem">';
     h += '<input type="checkbox"' + (_jobCodeStyle() === 'random' ? ' checked' : '') + ' onchange="_setJobCodeStyle(this.checked ? \'random\' : \'derived\')">';
     h += '<span>Use a random reference instead of one from the client\u2019s name</span></label>';
-    h += '<p class="hint" style="margin-top:0.3rem">A code travels in filenames. By default it is drawn from the name \u2014 Feral Steel becomes FRSL \u2014 which names the client to anyone who sees it. Applies to clients created from now on; existing references do not change.</p>';
+    h += '<p class="hint" style="margin-top:0.3rem">A code travels in filenames. By default it is drawn from the name (Quillmere Freight becomes QEFT), which names the client to anyone who sees it. Applies to clients created from now on; existing references do not change.</p>';
     h += '</div>';
   }
   h += '</div></div>';
