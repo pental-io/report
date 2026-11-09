@@ -720,6 +720,14 @@ input[type="date"]{font-family:var(--font-mono);font-size:0.85rem}
 .qacl-set-row{display:flex;align-items:center;gap:0.3rem}
 .qacl-set-text{flex:1;min-width:0;height:34px;font-size:0.85rem}
 .qacl-set-x{color:var(--red)}
+/* 2014: the QA checklist, ticked in the box that submits for QA */
+.qasub{text-align:left;max-width:540px;width:100%}
+.qasub-list{list-style:none;margin:0.85rem 0 0;padding:0;display:flex;flex-direction:column;gap:0.4rem;max-height:50vh;overflow-y:auto}
+.qasub-item{display:flex;align-items:flex-start;gap:0.6rem;padding:0.6rem 0.75rem;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-size:0.86rem;line-height:1.45;color:var(--text)}
+.qasub-item input{margin:0.15rem 0 0;width:16px;height:16px;flex-shrink:0;accent-color:var(--accent);cursor:pointer}
+.qasub-item:has(input:checked){border-color:rgba(var(--accent-rgb),0.5)}
+.qasub-item:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.qasub-count{font-size:0.78rem;color:var(--gray);margin-top:0.55rem}
 /* 1957: Explain retest, above a retest's results */
 /* Retest Results in Settings, Findings: the list's last row, its name fixed,
    set where the names in the boxes above sit. */
@@ -4108,6 +4116,8 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
 /* 2007: a document's order beside its name, on one line. */
 .sm-docs .sg-row > .g-lab{flex-wrap:nowrap}
 .sm-docs .g-lab > .g-ord{flex:0 0 auto}
+/* 2014: a card's own Save, which the bar's Save changes presses for it. */
+.set-card-save{display:none!important}
 /* 1819: one bar, at the foot of a Settings page, while a change waits. */
 .set-dirty-bar{position:fixed;left:50%;bottom:22px;z-index:900;display:flex;align-items:center;gap:0.6rem;
   padding:0.55rem 0.6rem 0.55rem 1rem;border-radius:12px;border:1px solid var(--border);background:var(--card);
@@ -4877,6 +4887,56 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
 .ds-li-tx b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ds-path{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:0.7rem}
 .ds-li-when{flex-shrink:0}
+/* 2015: a link to the folder pasted, and what it filled in; a client's
+   credentials, said with who can read them there. */
+.ds-paste{margin:0 0 0.6rem}
+.ds-paste .form-input{border-style:dashed}
+.ds-paste .form-input:focus{border-style:solid}
+.ds-paste-said{display:flex;align-items:flex-start;gap:0.45rem;color:var(--gray);font-size:0.76rem;line-height:1.5;margin-top:0.35rem}
+.ds-paste-said > svg,.ds-paste-said > .ds-spin{flex-shrink:0;margin-top:0.18rem}
+.ds-paste-said b{color:var(--text);font-weight:600}
+.ds-paste-said.is-ok > svg{color:var(--ds-ok)}
+.ds-paste-said.is-warn{color:color-mix(in srgb,var(--ds-warn) 72%,var(--text))}
+.ds-paste-said.is-warn > svg{color:var(--ds-warn)}
+.ds-paste-said.is-busy{color:color-mix(in srgb,var(--ds-busy) 70%,var(--text))}
+@keyframes dsFilled{from{background-color:color-mix(in srgb,var(--accent) 22%,transparent)}to{background-color:transparent}}
+.ds-filled{animation:dsFilled 1.4s ease-out}
+.ds-kind-warn{grid-column:2 / -1;display:flex;align-items:flex-start;gap:0.35rem;font-size:0.74rem;line-height:1.45;color:color-mix(in srgb,var(--ds-warn) 72%,var(--text))}
+.ds-kind-warn > svg{flex-shrink:0;margin-top:0.14rem;color:var(--ds-warn)}
+/* 2016: the firm's own application, set up on this page: the steps at
+   Microsoft or Google, the boxes for what they give, one button on; set, a
+   line with Change and Remove. Pressing back without finishing, said. */
+.ds-app{border:1px solid color-mix(in srgb,var(--accent) 40%,var(--border));border-radius:var(--ds-r);padding:0.9rem 1rem 1rem;margin:0 0 0.9rem;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 7%,transparent),transparent 70%)}
+.ds-app-hd{display:flex;align-items:flex-start;gap:0.6rem}
+.ds-app-hd > svg,.ds-app.is-set > svg{flex-shrink:0;margin-top:0.15rem;color:var(--accent)}
+.ds-app-tx{display:flex;flex-direction:column;gap:0.2rem;min-width:0;flex:1 1 260px;font-size:0.84rem;line-height:1.5}
+.ds-app-tx b{font-weight:600;color:var(--text)}
+.ds-app-tx .mono{font-size:0.76rem;overflow-wrap:anywhere}
+.ds-app.is-set{display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;padding:0.7rem 0.85rem;background:none;border-color:var(--border)}
+.ds-app-acts{display:flex;gap:0.4rem;flex-wrap:wrap}
+.ds-app-warn{display:flex;align-items:flex-start;gap:0.45rem;margin:0.6rem 0 0;font-size:0.8rem;line-height:1.5;color:color-mix(in srgb,var(--ds-warn) 72%,var(--text))}
+.ds-app-warn > svg{flex-shrink:0;margin-top:0.15rem;color:var(--ds-warn)}
+.ds-steps{margin:0.75rem 0 0.4rem;padding:0 0 0 1.25rem;display:flex;flex-direction:column;gap:0.55rem;font-size:0.8rem;line-height:1.55;color:color-mix(in srgb,var(--text) 82%,var(--card))}
+.ds-steps li{padding-left:0.15rem}
+.ds-steps li::marker{font-weight:700;color:var(--accent)}
+.ds-steps b{color:var(--text);font-weight:600}
+.ds-steps a{color:var(--accent);text-decoration:underline}
+.ds-steps code{font-size:0.75rem;padding:0.05rem 0.3rem;border-radius:4px;background:color-mix(in srgb,var(--text) 8%,transparent)}
+.ds-steps .ds-door-row{margin-top:0.4rem}
+.ds-app-fields{margin-top:0.6rem}
+.ds-app-fields .form-input{font-size:0.8rem}
+.ds-app-go{display:flex;align-items:center;gap:0.5rem 0.75rem;flex-wrap:wrap;margin-top:0.35rem}
+.ds-app-go .ds-muted{flex:1 1 260px;min-width:0}
+.ds-app-go .btn svg{width:16px;height:16px;vertical-align:-3px;margin-right:0.35rem}
+.ds-access-acts{display:flex;gap:0.4rem;flex-wrap:wrap;align-self:center}
+.ds-back{flex:1 1 100%;min-width:0;display:flex;align-items:flex-start;gap:0.45rem;padding:0.6rem 0.7rem;border-radius:8px;font-size:0.78rem;line-height:1.55;border:1px dashed color-mix(in srgb,var(--ds-warn) 45%,var(--border));background:color-mix(in srgb,var(--ds-warn) 6%,transparent)}
+.ds-back > svg{flex-shrink:0;margin-top:0.18rem;color:var(--ds-warn)}
+.ds-back b{font-weight:600}
+.ds-back .ds-door-row{margin:0.35rem 0}
+.ds-account + .ds-back{margin:-0.4rem 0 0.9rem}
+.ds-linkbtn{border:0;background:none;padding:0;font:inherit;color:var(--accent);text-decoration:underline;cursor:pointer}
+.ds-paste-said .ds-paste-go{margin:0.15rem 0.3rem 0.15rem 0}
+.ds-paste-said .ds-paste-go svg{width:14px;height:14px;vertical-align:-2px;margin-right:0.3rem}
 .app.rb-pushed .ds-layout-pv,body.rb-barred .ds-layout-pv{top:calc(60px + 4.25rem)}
 @media (max-width:980px){.ds-layout{grid-template-columns:minmax(0,1fr)}.ds-layout-pv{position:static}}
 @media (max-width:720px){
@@ -4886,7 +4946,7 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
   .ds-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
   .ds-card .card-header > .ds-switch{margin-left:0}
 }
-@media (prefers-reduced-motion:reduce){.ds-prov,.ds-token,.ds-switch-ui,.ds-switch-ui::after,.ds-prov-tick{transition:none}.ds-shimmer,.ds-spin{animation:none}}
+@media (prefers-reduced-motion:reduce){.ds-prov,.ds-token,.ds-switch-ui,.ds-switch-ui::after,.ds-prov-tick{transition:none}.ds-shimmer,.ds-spin,.ds-filled{animation:none}}
 /* 1856: THE CLIENT AND PEOPLE FORMS, AND THE LISTS OF PEOPLE. [stated] Arian,
    of the New Client window: "i want this to be more modern and seamless", and
    "the design can be imporved to be more modern professional and seamless same

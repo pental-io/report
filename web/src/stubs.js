@@ -37,6 +37,8 @@ function _dashWidgetOn() { return false; }
 function _docsBackWhenReady() { return; }
 function _docsEngineBoot() { return; }
 function _docsEngineKick() { return; }
+function _dsBackCheck() { return; }
+function _dsPaintLive() { return; }
 function _dsTabHtml() { return ''; }
 function _emailSignatureHtml() { return ''; }
 function _findingTicketsHtml() { return ''; }
