@@ -20742,9 +20742,9 @@ async function _loadAllDataInner() {
   + ',self_scan_default_cooldown_hours,self_scan_window_start,self_scan_window_end'
   + ',self_scan_notify,self_scan_report';
 
-  var _settingsCols_staff = _settingsCols_base + ',notes_prompt,caveats_prompt,contractor_rate,public_ip,exec_summary_prompt,finding_desc_prompt,finding_rem_prompt,retest_summary_prompt,email_templates,meeting_auto_invite,contact_integration,meeting_integration,ai_provider,ai_custom_model,ai_custom_url,ai_custom_format,ai_custom_max_tokens,ai_ollama_num_ctx,ai_requests_per_minute,ai_parallel_requests,smtp_host,smtp_port,smtp_user,smtp_oauth_provider,smtp_oauth_user,smtp_from_name,smtp_from_email,auto_start_enabled,auto_start_time,auto_complete_enabled,auto_complete_time,automation_timezone,automation_workdays_only,auto_credentials_enabled,auto_credentials_time,auto_credentials_days,mail_outbox_enabled,mail_outbox_started_at,invoice_automation,invoice_auto_send_days,standard_field_prompts,teams_tenant_id,teams_client_id,teams_user_email,zoom_account_id,zoom_client_id,slack_channel_id,proposal_multi_year_enabled,proposal_subscription_enabled,proposal_custom_titles,plan_max_users,plan_max_clients,scanning_enabled,scan_min_severity,scan_ai_write,scan_client_visible_default,scan_exec_summary_prompt,scan_finding_prompt,scan_default_provider,scan_billing_mode,scan_billing_amount,scan_phase_default,scan_import_maps,cvss_version,date_format,self_scan_enabled,self_scan_default_provider_id,self_scan_type_providers,self_scan_lands,self_scan_billing,self_scan_price_pence,self_scan_stripe_price_id,self_scan_active_providers,self_scan_who,self_scan_target_policy,self_scan_require_auth,self_scan_auth_when,self_scan_auth_text,self_scan_frequencies,self_scan_price_daily_pence,self_scan_price_weekly_pence,self_scan_price_monthly_pence,self_scan_price_annual_pence,self_scan_stripe_sub_price_daily,self_scan_stripe_sub_price_weekly,self_scan_stripe_sub_price_monthly,self_scan_stripe_sub_price_annual,self_scan_self_hosted_only,self_scan_internal_enabled,self_scan_appliances,self_scan_max_targets,self_scan_default_cap,self_scan_default_cooldown_hours,self_scan_default_hour,self_scan_window_start,self_scan_window_end,self_scan_notify,self_scan_report,account_owner_id,scan_fields,vuln_report_fields,final_pdf_names,scan_summary_auto,finding_default_draft,google_place_id,qa_checklist,qa_checklist_on,qa_ai_enabled,qa_ai_prompt,qa_submit_word,qa_submit_ticks';
+  var _settingsCols_staff = _settingsCols_base + ',notes_prompt,caveats_prompt,contractor_rate,public_ip,exec_summary_prompt,finding_desc_prompt,finding_rem_prompt,retest_summary_prompt,email_templates,meeting_auto_invite,contact_integration,meeting_integration,ai_provider,ai_custom_model,ai_custom_url,ai_custom_format,ai_custom_max_tokens,ai_ollama_num_ctx,ai_requests_per_minute,ai_parallel_requests,smtp_host,smtp_port,smtp_user,smtp_oauth_provider,smtp_oauth_user,smtp_from_name,smtp_from_email,auto_start_enabled,auto_start_time,auto_complete_enabled,auto_complete_time,automation_timezone,automation_workdays_only,auto_credentials_enabled,auto_credentials_time,auto_credentials_days,mail_outbox_enabled,mail_outbox_started_at,invoice_automation,invoice_auto_send_days,standard_field_prompts,teams_tenant_id,teams_client_id,teams_user_email,zoom_account_id,zoom_client_id,slack_channel_id,proposal_multi_year_enabled,proposal_subscription_enabled,proposal_custom_titles,plan_max_users,plan_max_clients,scanning_enabled,scan_min_severity,scan_ai_write,scan_client_visible_default,scan_exec_summary_prompt,scan_finding_prompt,scan_default_provider,scan_billing_mode,scan_billing_amount,scan_phase_default,scan_import_maps,cvss_version,date_format,self_scan_enabled,self_scan_default_provider_id,self_scan_type_providers,self_scan_lands,self_scan_billing,self_scan_price_pence,self_scan_stripe_price_id,self_scan_active_providers,self_scan_who,self_scan_target_policy,self_scan_require_auth,self_scan_auth_when,self_scan_auth_text,self_scan_frequencies,self_scan_price_daily_pence,self_scan_price_weekly_pence,self_scan_price_monthly_pence,self_scan_price_annual_pence,self_scan_stripe_sub_price_daily,self_scan_stripe_sub_price_weekly,self_scan_stripe_sub_price_monthly,self_scan_stripe_sub_price_annual,self_scan_self_hosted_only,self_scan_internal_enabled,self_scan_appliances,self_scan_max_targets,self_scan_default_cap,self_scan_default_cooldown_hours,self_scan_default_hour,self_scan_window_start,self_scan_window_end,self_scan_notify,self_scan_report,account_owner_id,scan_fields,vuln_report_fields,final_pdf_names,scan_summary_auto,finding_default_draft,google_place_id,qa_checklist,qa_checklist_on,qa_ai_enabled,qa_ai_prompt';
 
-  var _settingsCols = isClient ? _settingsCols_base + ',public_ip' : (isCon ? _settingsCols_base + ',ai_parallel_requests,qa_checklist,qa_checklist_on,qa_submit_word,qa_submit_ticks' : _settingsCols_staff);
+  var _settingsCols = isClient ? _settingsCols_base + ',public_ip' : (isCon ? _settingsCols_base + ',ai_parallel_requests,qa_checklist,qa_checklist_on' : _settingsCols_staff);
 
   p1.settings = _syncApi('1:settings', 'settings', _settingsCols);
 
@@ -31176,7 +31176,7 @@ function renderAssessmentDetail() {
         h += '</div>';
       });
       h += '</div>';
-      h += '<p style="font-size:0.85rem;margin-bottom:0.75rem">Your lead tester has been notified. Credentials will be deleted from the portal after viewing.' + _credCopyNote() + '</p>';
+      h += '<p style="font-size:0.85rem;margin-bottom:0.75rem">Your lead tester has been notified. Credentials will be deleted after viewing.</p>';
     }
 
     if (_credRecvd.length > 0) {
@@ -31196,7 +31196,7 @@ function renderAssessmentDetail() {
     if (!_assessDone) {
     h += '<div class="cred-form" oninput="_credDraftSave()" onchange="_credDraftSave()" style="' + (_hasCredsPending ? 'border-top:1px solid var(--border);padding-top:0.75rem' : '') + '">';
     if (_hasCredsPending) h += '<p class="hint" style="margin-bottom:0.5rem">Add another set of credentials:</p>';
-    else h += '<p class="hint" style="margin-bottom:0.75rem">Securely share test credentials, authorisation details or files with your lead tester. Only fill in what\'s relevant - these are <strong>one-time view only</strong> and deleted from the portal after the tester copies or downloads them.' + _credCopyNote() + '</p>';
+    else h += '<p class="hint" style="margin-bottom:0.75rem">Securely share test credentials, authorisation details or files with your lead tester. Only fill in what\'s relevant - these are <strong>one-time view only</strong> and deleted after the tester copies or downloads them.</p>';
     if (_credStatus === 'viewed' && !_hasCredsPending && _credRecvd.length === 0) h += '<p class="hint" style="margin-bottom:0.5rem;font-size:0.78rem">Previous credentials were received. You can submit new ones if needed.</p>';
     if (_credStatus === 'viewed' && !_hasCredsPending && _credRecvd.length > 0) h += '<p class="hint" style="margin-bottom:0.5rem;font-size:0.78rem">Need to submit additional credentials?</p>';
 
@@ -31216,7 +31216,7 @@ function renderAssessmentDetail() {
 
     h += '<div class="form-group"><label class="form-label" for="credFiles">Files <span style="color:var(--gray);font-weight:400">(optional)</span></label>';
     h += '<input type="file" class="form-input" id="credFiles" multiple>';
-    h += '<p class="hint" style="margin-top:0.3rem;font-size:0.75rem">A VPN profile, certificate, key or document, up to 3 MB in total. Encrypted like the rest, and deleted from the portal once your tester has downloaded it.</p></div>';
+    h += '<p class="hint" style="margin-top:0.3rem;font-size:0.75rem">A VPN profile, certificate, key or document, up to 3 MB in total. Encrypted like the rest, and deleted once your tester has downloaded it.</p></div>';
     h += '<div class="form-group"><label class="form-label">Additional Notes <span style="color:var(--gray);font-weight:400">(optional)</span></label>';
     h += '<textarea class="form-input" id="credNotes" rows="2" placeholder="e.g. scope restrictions, accounts not to lock out..."></textarea></div>';
     h += '<button class="btn btn-primary" onclick="submitCredentials(\'' + a.id + '\')">' + IC.key + ' Submit Credentials</button>';
@@ -47155,117 +47155,6 @@ var _appendixMeta = {
   dos: { label: 'Denial of Service' },
   tc: { label: 'Terms & Conditions' }
 };
-var _TPL_WORD = { report: {}, proposal: {} };
-(function () {
-  var r = _TPL_WORD.report;
-  var same = function (pre, list) { list.forEach(function (k) { r[pre + k] = [pre + k]; }); };
-  same('show_', ['affected_hosts', 'appendices', 'artifacts', 'assessment_info', 'caveats', 'cvss', 'cwe', 'description', 'evidence', 'executive_summary',
-    'findings', 'findings_summary', 'findings_table', 'overview', 'references', 'remediation', 'retest_results', 'retest_summary', 'scope', 'severity_boxes',
-    'severity_scale', 'source_ip', 'testing_perspective', 'toc', 'version_history']);
-  same('heading_', ['artifacts', 'assessment_details', 'caveats', 'findings', 'findings_summary', 'overview', 'perspective', 'scope', 'severity_scale',
-    'source_ip', 'toc', 'version_history']);
-  same('col_', ['id', 'finding', 'severity', 'cvss', 'status', 'category']);
-  same('appendix_', ['qa', 'methodology', 'dos', 'tc']);
-  Object.assign(r, {
-    cover_title: ['document_title'], cover_subtitle: ['cover_subtitle'], cover_label_client: ['cover_label_client'], cover_label_type: ['cover_label_type'],
-    cover_label_reference: ['cover_label_reference'], cover_label_period: ['cover_label_period'],
-    cover_classification: ['classification', 'has_classification'], classification_text: ['classification', 'has_classification'],
-    text_perspective_auth: ['test_perspective_description'], text_perspective_unauth: ['test_perspective_description'],
-    intro_caveats: ['caveats', 'has_caveats'], text_no_artifacts: ['artifacts_text'], intro_scope: ['intro_scope_text'],
-    intro_exec_summary: ['intro_exec_summary_text'], intro_findings_summary: ['intro_findings_summary_text'], intro_artifacts: ['intro_artifacts_text'],
-    appendix_methodology_title: ['methodology_title'], appendix_methodology_text: ['methodology_text'], appendix_methodology_links: ['methodology_links'],
-    appendix_tc_title: ['testing_conditions_title'], appendix_tc_text: ['testing_conditions_text'], appendix_qa_title: ['qa_title'], appendix_qa_text: ['qa_text'],
-    appendix_dos_title: ['dos_title'], appendix_dos_text: ['dos_text'],
-    sev_desc_critical: ['severity_scale'], sev_desc_high: ['severity_scale'], sev_desc_medium: ['severity_scale'], sev_desc_low: ['severity_scale'], sev_desc_info: ['severity_scale'],
-    show_exec_summary: ['show_executive_summary'], show_radar_chart: ['show_radar_chart', 'radar_chart_image'], vh_rows: ['version_history'],
-    accent_color: true, header_color: true, header_text_color: true,
-    heading_appendices: true, heading_additional_evidence: true, heading_exec_summary: true, heading_retest_summary: true,
-  });
-
-  var sev = function (t) { return Object.keys(t).some(function (k) { return /^severity/.test(k); }); };
-  ['critical', 'high', 'medium', 'low', 'info'].forEach(function (k) { r['sev_' + k] = sev; });
-  ['bold', 'case', 'colour', 'fillhex', 'filltext', 'hex'].forEach(function (k) { r['sev_style_' + k] = sev; });
-  r.severity_colors = sev;
-  Object.assign(_TPL_WORD.proposal, {
-    title: ['document_title'], text_terms: ['terms_text'], text_terms_link_url: ['terms_link_url'], text_terms_link_label: ['terms_link_label'],
-    text_prerequisites: ['prerequisites_text'], heading_client_info: ['heading_client'], heading_perspective: ['heading_perspective'],
-    heading_process: ['heading_process'], heading_terms: ['heading_terms'], heading_signed: ['heading_signed'], heading_prerequisites: ['heading_prerequisites'],
-    label_start_date: ['label_start_date'], label_end_date: ['label_end_date'], label_cost: ['label_cost'], label_client: ['label_client'], label_contact: ['label_contact'],
-    text_perspective_auth: ['perspective_text'], text_perspective_unauth: ['perspective_text'], text_process_steps: ['process_text'],
-    currency_symbol: function (t) { return Object.keys(t).some(function (k) { return /cost|_rate$/.test(k); }); },
-  });
-})();
-var _TPL_WORD_TITLE = 'What your Word template prints from Pental: the document controls, the headings and the other settings its placeholders use';
-function _tplWordMap(type) { return (type === 'report' || type === 'vuln_report') ? _TPL_WORD.report : (type === 'proposal' ? _TPL_WORD.proposal : {}); }
-function _pdfMakes(k, exportOnly) {
-  var rts = (_rtSettingsOn() && _rtHasDb()) ? _rtList() : [];
-  try {
-    if (k === 'report' && !exportOnly) return !_rdMainOf('') || rts.some(function (t) { return !_rtWith(t.id, function () { return _getDocxTemplateMeta('report'); }); });
-    if (k === 'loa') return !_getDefaultDocxTemplateId('loa') || rts.some(function (t) { return t.docs && t.docs.loa === 'builtin'; });
-    return !_getDefaultDocxTemplateId(k);
-  } catch (e) { return true; }
-}
-function _tplWordOnly(type) { return !_pdfMakes(_docxKeyOf(type)); }
-function _tplWordAny(type) { return Object.keys(_tplWordMap(type)).length > 0; }
-var _tplWordTokMemo = {};
-function _tplWordTok(type) {
-  var slot = _docxKeyOf(type);
-  var files = _listDocxTemplates(slot);
-  var key = slot + '|' + files.map(function (f) { return f.id + ':' + (f.updated_at || f.uploaded_at || f.created_at || '') + ':' + (f.size || ''); }).join(',');
-  var m = _tplWordTokMemo[key];
-  if (m && m.done) return m.used;
-  if (!m) {
-    m = _tplWordTokMemo[key] = { done: false, used: null };
-    Promise.all(files.map(function (f) { return _rtTokensOfWord(slot, f.id); })).then(function (all) {
-      var used = {}, any = false;
-      all.forEach(function (u) { if (u) { any = true; Object.keys(u).forEach(function (k) { used[k] = true; }); } });
-      m.used = any ? used : false;
-      m.done = true;
-      if (S.modal && S.modal.type === 'templateeditor' && S.modal.editType === type) render();
-    }, function () { m.used = false; m.done = true; });
-  }
-  return null;
-}
-function _tplShows(type, key, used) {
-  var w = _tplWordMap(type)[key];
-  if (!w) return false;
-  if (w === true || !used) return true;
-  if (typeof w === 'function') return w(used);
-  return w.some(function (t) { return !!used[t]; });
-}
-var _TPL_WORD_TAB = { header_color: 'style', header_text_color: 'style', accent_color: 'style' };
-function _tplWordFilter(type, html, used, tab) {
-  var box = document.createElement('div');
-  box.innerHTML = html;
-  var sel = 'input[id^="tpl_"], select[id^="tpl_"], textarea[id^="tpl_"], [data-tpl-key]';
-  var off = function (el) { for (var x = el; x && x !== box; x = x.parentNode) { if (x.style && x.style.display === 'none') return true; } return false; };
-  Array.prototype.slice.call(box.querySelectorAll(sel)).forEach(function (el) {
-    var key = el.getAttribute('data-tpl-key') || el.id.slice(4);
-    if (_tplShows(type, key, used) && (!tab || !_TPL_WORD_TAB[key] || _TPL_WORD_TAB[key] === tab)) return;
-    var w = el;
-    while (w.parentNode && w.parentNode !== box && w.parentNode.querySelectorAll(sel).length === 1) w = w.parentNode;
-    w.style.display = 'none';
-  });
-
-  Array.prototype.slice.call(box.querySelectorAll('[onclick*="_tplMoveItem("]')).forEach(function (b) { b.style.display = 'none'; });
-
-  var kids = Array.prototype.slice.call(box.children), shown = 0, i = 0;
-  while (i < kids.length) {
-    if (!kids[i].classList.contains('tpl-h')) {
-      if (Array.prototype.some.call(kids[i].querySelectorAll(sel), function (el) { return !off(el); })) shown++;
-      i++; continue;
-    }
-    var j = i + 1, live = false;
-    while (j < kids.length && !kids[j].classList.contains('tpl-h')) {
-      if (Array.prototype.some.call(kids[j].querySelectorAll(sel), function (el) { return !off(el); }) || (kids[j].matches(sel) && !off(kids[j]))) live = true;
-      j++;
-    }
-    if (live) shown++;
-    else for (var k = i; k < j; k++) kids[k].style.display = 'none';
-    i = j;
-  }
-  return { html: box.innerHTML, any: shown > 0 };
-}
 function renderTemplateEditorModal() {
   var activeType = S.modal.editType || 'report';
   var activeTab = S.modal._tab || 'cover';
@@ -47273,66 +47162,51 @@ function renderTemplateEditorModal() {
 
   var _ts = 'padding:0.55rem 0.85rem;font-size:0.8rem;font-weight:500;border-bottom:2px solid transparent;margin-bottom:-2px;border-radius:0;white-space:nowrap;flex-shrink:0;min-width:0';
 
-  var _dt = _docTemplateTypes().filter(function (t) { return t.editorKey === activeType; })[0];
-  var _word = _tplWordOnly(activeType);
-  var _used = _word ? _tplWordTok(activeType) : null;
-
   var h = '<div class="modal-header" style="padding-bottom:0">';
-  h += '<div style="flex:1;min-width:0"><h2 class="modal-title" style="margin-bottom:0.4rem">' + IC.edit + ' ' + esc(_dt ? _dt.label + ' template editor' : 'Template Editor') + '</h2>';
+  h += '<div style="flex:1;min-width:0"><h2 class="modal-title" style="margin-bottom:0.4rem">' + IC.edit + ' Template Editor</h2>';
 
-  if (!_word) h += '<p class="hint" style="margin:-0.15rem 0 0.75rem">The design of Pental’s own PDF. A Word template of yours keeps its own design, and takes from here only what it has a placeholder for, such as a heading’s {heading_scope}.</p>';
-  else h += '<p class="hint" style="margin:-0.15rem 0 0.75rem">Made with your Word template, which keeps its own design. '
-    + (_used === null ? 'Reading which placeholders it has…' : _used === false ? 'It could not be read just now, so everything a Word template can take from here is shown.' : 'Shown is only what it prints from here: the settings its placeholders use.')
-    + '</p>';
-  h += '</div>';
+  h += '<p class="hint" style="margin:-0.15rem 0 0.5rem">The design of Pental’s own PDF. A Word template of yours keeps its own design, and takes from here only what it has a placeholder for, such as a heading’s {heading_scope}.</p>';
+
+  h += '<div style="display:flex;flex-wrap:wrap;gap:0;border-bottom:2px solid var(--border);margin:0 -1rem;padding:0 1rem">';
+
+  var docTabs = _docTemplateTypes().map(function (t) { return { key: t.editorKey, label: t.label }; });
+  docTabs.forEach(function(t) {
+    var a = t.key === activeType;
+    h += '<button class="btn btn-ghost" onclick="openTemplateEditor(\'' + t.key + '\')" style="' + _ts + ';color:' + (a ? 'var(--accent)' : 'var(--gray)') + ';border-bottom-color:' + (a ? 'var(--accent)' : 'transparent') + ';font-weight:' + (a ? '700' : '500') + '">' + t.label + '</button>';
+  });
+  h += '</div></div>';
   h += '<button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
 
   h += '<div class="modal-body" style="padding:0;max-height:72vh;overflow:hidden;display:flex;flex-direction:column">';
 
-  var _wordNone = '<p class="hint tpl-word-none">Your Word template takes none of these settings: everything here is the design of Pental’s own PDF, which none of your documents of this kind is made with.</p>';
-  var _wordWait = '<p class="hint tpl-word-wait">Reading your Word template…</p>';
-  var _bodyOf = function (html) {
-    if (!_word) return html;
-    if (_used === null) return _wordWait;
-    var f = _tplWordFilter(activeType, html, _used);
-    return f.any ? f.html : _wordNone;
-  };
   if (activeType === 'report' || activeType === 'vuln_report') {
 
+    h += '<div style="display:flex;flex-wrap:wrap;gap:0;padding:0 1rem;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--card)">';
     var subTabs = [{key:'cover',label:'Cover Page'},{key:'layout',label:'Sections & Order'},{key:'findings',label:'Findings'},{key:'appendices',label:'Appendices'},{key:'text',label:'Text & Labels'},{key:'style',label:'Style'}];
-    var _tabHtml = function (k) {
-      return k === 'cover' ? _renderCoverTab(tpl) : k === 'layout' ? _renderLayoutTab(tpl) : k === 'findings' ? _renderFindingsTab(tpl)
-        : k === 'appendices' ? _renderAppendicesTab(tpl) : k === 'text' ? _renderTextTab(tpl) : k === 'style' ? _renderStyleTab(tpl) : '';
-    };
-    var _wBodies = {};
-    if (_word && _used !== null) {
-      subTabs = subTabs.filter(function (t) { var f = _tplWordFilter(activeType, _tabHtml(t.key), _used, t.key); _wBodies[t.key] = f.html; return f.any; });
-      if (subTabs.length && !subTabs.some(function (t) { return t.key === activeTab; })) { activeTab = subTabs[0].key; S.modal._tab = activeTab; }
-    }
-    if (!_word || _used !== null) {
-      h += '<div style="display:flex;flex-wrap:wrap;gap:0;padding:0 1rem;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--card)">';
-      subTabs.forEach(function(t) {
-        var a = t.key === activeTab;
-        h += '<button class="btn btn-ghost" onclick="openTemplateEditor(\'' + activeType + '\',\'' + t.key + '\')" style="' + _ts + ';font-size:0.75rem;padding:0.45rem 0.7rem;color:' + (a ? 'var(--text)' : 'var(--gray)') + ';border-bottom-color:' + (a ? 'var(--text)' : 'transparent') + ';font-weight:' + (a ? '700' : '400') + '">' + t.label + '</button>';
-      });
-      h += '</div>';
-    }
+    subTabs.forEach(function(t) {
+      var a = t.key === activeTab;
+      h += '<button class="btn btn-ghost" onclick="openTemplateEditor(\'' + activeType + '\',\'' + t.key + '\')" style="' + _ts + ';font-size:0.75rem;padding:0.45rem 0.7rem;color:' + (a ? 'var(--text)' : 'var(--gray)') + ';border-bottom-color:' + (a ? 'var(--text)' : 'transparent') + ';font-weight:' + (a ? '700' : '400') + '">' + t.label + '</button>';
+    });
+    h += '</div>';
     h += '<div style="overflow-y:auto;padding:1rem;flex:1">';
-    if (!_word) h += _tabHtml(activeTab);
-    else if (_used === null) h += _wordWait;
-    else h += subTabs.length ? _wBodies[activeTab] : _wordNone;
+    if (activeTab === 'cover') h += _renderCoverTab(tpl);
+    else if (activeTab === 'layout') h += _renderLayoutTab(tpl);
+    else if (activeTab === 'findings') h += _renderFindingsTab(tpl);
+    else if (activeTab === 'appendices') h += _renderAppendicesTab(tpl);
+    else if (activeTab === 'text') h += _renderTextTab(tpl);
+    else if (activeTab === 'style') h += _renderStyleTab(tpl);
     h += '</div>';
   } else if (activeType === 'proposal') {
     h += '<div style="overflow-y:auto;padding:1rem;flex:1">';
-    h += _bodyOf(_renderProposalTemplateFields(tpl));
+    h += _renderProposalTemplateFields(tpl);
     h += '</div>';
   } else if (activeType === 'invoice') {
     h += '<div style="overflow-y:auto;padding:1rem;flex:1">';
-    h += _bodyOf(_renderInvoiceTemplateFields(tpl));
+    h += _renderInvoiceTemplateFields(tpl);
     h += '</div>';
   } else if (activeType === 'attestation') {
     h += '<div style="overflow-y:auto;padding:1rem;flex:1">';
-    h += _bodyOf(_renderAttestationTemplateFields(tpl));
+    h += _renderAttestationTemplateFields(tpl);
     h += '</div>';
   }
 
@@ -47343,7 +47217,7 @@ function renderTemplateEditorModal() {
   return h;
 }
 function _tplH(title, desc) {
-  return '<div class="tpl-h" style="margin-bottom:0.5rem;margin-top:1.25rem"><div style="font-weight:700;font-size:0.88rem;color:var(--text)">' + title + '</div>' + (desc ? '<div style="font-size:0.72rem;color:var(--gray);margin-top:1px">' + desc + '</div>' : '') + '</div>';
+  return '<div style="margin-bottom:0.5rem;margin-top:1.25rem"><div style="font-weight:700;font-size:0.88rem;color:var(--text)">' + title + '</div>' + (desc ? '<div style="font-size:0.72rem;color:var(--gray);margin-top:1px">' + desc + '</div>' : '') + '</div>';
 }
 function _tplC(id, label, value) {
   return '<div style="flex-shrink:0"><label class="form-label" style="margin-bottom:0.2rem;font-size:0.75rem">' + label + '</label><div style="display:flex;align-items:center;gap:0.25rem"><input type="color" id="tpl_' + id + '" value="' + esc(value) + '" style="width:30px;height:30px;padding:1px;cursor:pointer;border-radius:5px;border:1px solid var(--border)" oninput="this.nextElementSibling.value=this.value"><input type="text" class="form-input mono" value="' + esc(value) + '" style="width:78px;height:30px;font-size:0.72rem;padding:0 0.3rem" maxlength="7" oninput="var c=this.value.trim();if(c.match(/^#[0-9a-fA-F]{6}$/)){this.previousElementSibling.value=c}"></div></div>';
@@ -47684,8 +47558,8 @@ function _renderTextTab(tpl) {
   h += _tplT('show_col_category', 'Show a Category column in the findings table', tpl.show_col_category === true);
   h += '</div>';
 
-  h += _tplH('Document Controls', 'The rows of the document history table. Untick one to leave it out, rename it, renumber it, or add your own.');
-  h += '<div id="vhRows" data-tpl-key="vh_rows">';
+  h += _tplH('Document History', 'The rows in the document history table. Untick one to leave it out, rename it, renumber it, or add your own.');
+  h += '<div id="vhRows">';
 
   var _vhAll = (Array.isArray(tpl.vh_rows) && tpl.vh_rows.length)
     ? tpl.vh_rows.map(function (r) { return r ? Object.assign({}, r, { ds: _vhRowDs(r, tpl) }) : r; })
@@ -52327,7 +52201,7 @@ function _rtDefaultDocOf(key) {
 function _rtAskDefault(key, fileId, tplName) {
   if (!fileId || fileId === 'builtin' || fileId !== _rtDefaultDocOf(key)) return Promise.resolve('none');
   var f = _listDocxTemplates(key).filter(function (x) { return x.id === fileId; })[0];
-  var what = key === 'loa' ? 'letters of attestation' : key === 'findings' ? 'findings exports' : 'reports';
+  var what = key === 'loa' ? 'letters of attestation' : 'reports';
   return new Promise(function (resolve) {
     showConfirm('<b>' + esc((f && f.name) || 'This Word file') + '</b> is the Word file the Default makes its ' + what + ' with. '
       + 'Keep it the Default’s as well, or make it <b>' + esc(tplName || 'this template') + '</b>’s alone? '
@@ -52866,8 +52740,7 @@ function _rdReportHtml(dt) {
   h += n ? '<span class="doc-chip is-word">' + n + ' report' + (n === 1 ? '' : 's') + '</span>' : '<span class="doc-chip">Built-in PDF</span>';
   h += '<div class="doc-desc">' + esc(dt.desc) + '</div></div><div class="doc-acts">';
   var builtIn = !dMain || tpls.some(function (t) { return t.docs && t.docs.report === 'builtin'; });
-
-  h += '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + dt.editorKey + '\')" title="' + (builtIn ? 'The design of Pental’s own PDF, where this document is made with it: its sections, finding fields, colours and labels. A Word template of yours has its own.' : esc(_TPL_WORD_TITLE)) + '">' + IC.edit + ' Customise</button>';
+  if (builtIn) h += '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + dt.editorKey + '\')" title="The design of Pental’s own PDF, where this document is made with it: its sections, finding fields, colours and labels. A Word template of yours has its own.">' + IC.edit + ' Customise</button>';
   h += '<button class="btn btn-ghost btn-sm" onclick="showDocxVariableRef(\'' + key + '\')" title="Every placeholder a Word template for it can hold, and a draft with them all">Placeholders</button>';
   if (list.length) h += '<button class="btn btn-ghost btn-sm" onclick="showStyleMapping(\'' + key + '\')" title="The styles used for code, headings, captions and lists">Styles</button>';
   h += '</div></div>';
@@ -52891,37 +52764,6 @@ var _RD_ROLE = {
   form: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/></svg>'
 };
 var _RD_DOC = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>';
-var _RD_MOVE = {
-  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>',
-  down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>'
-};
-function _rdMoveBtns(key, tid, id, name, i, n) {
-  if (n < 2) return '';
-  var a = '\'' + esc(key) + '\',\'' + esc(tid || '') + '\',\'' + esc(id) + '\'';
-  return '<button class="btn btn-ghost btn-sm rp-move" onclick="_rdMoveFile(' + a + ',-1)" title="Move it up the dropdown" aria-label="Move ' + esc(name) + ' up the dropdown"' + (i === 0 ? ' disabled' : '') + '>' + _RD_MOVE.up + '</button>'
-    + '<button class="btn btn-ghost btn-sm rp-move" onclick="_rdMoveFile(' + a + ',1)" title="Move it down the dropdown" aria-label="Move ' + esc(name) + ' down the dropdown"' + (i === n - 1 ? ' disabled' : '') + '>' + _RD_MOVE.down + '</button>';
-}
-async function _rdMoveFile(key, tid, fileId, dir) {
-  if (!canManage()) return;
-  await _ensurePdfTemplates();
-  var list = key === 'report' ? _rdVersionsOf(tid || '') : _listDocxTemplates(key);
-  var ids = list.map(function (f) { return f.id; });
-  var i = ids.indexOf(fileId), j = i + (dir < 0 ? -1 : 1);
-  if (i < 0 || j < 0 || j >= ids.length) return;
-  var arr = ((S.data.settings || {}).pdf_templates || {})['docx_templates_' + key];
-  if (!Array.isArray(arr)) return;
-  var pos = function (id) { for (var k = 0; k < arr.length; k++) { if (arr[k] && arr[k].id === id) return k; } return -1; };
-  var a = pos(ids[i]), b = pos(ids[j]);
-  if (a < 0 || b < 0) return;
-  var swap = function () { var t = arr[a]; arr[a] = arr[b]; arr[b] = t; };
-  swap();
-  _showLoading();
-  try { if ((await _persistPdfTemplates()) === false) swap(); }
-  catch (e) { swap(); toast('Could not move it: ' + ((e && e.message) || e), 'error'); }
-  finally { _hideLoading(); }
-  render();
-}
-window._rdMoveFile = _rdMoveFile;
 function _rdConvHtml(fileId, isMain) {
   var cv = _docxConvFor('report', fileId);
   if (isMain && cv === 'none') cv = 'internal';
@@ -52979,7 +52821,7 @@ function _rdBaseHtml(tid, main, auto, mgr, canTpl) {
 
   if ((main || vers.length) && (vers.length || mgr)) {
     h += '<div class="rp-vers">' + (vers.length ? '<div class="rp-vers-head">' + _afmDestHtml(false, 'report', false, _rdBtnName()) + '<span>Its versions, beside the ' + esc(_rdBtnName()) + ' on its engagements</span></div>' : '');
-    vers.forEach(function (v, vi) {
+    vers.forEach(function (v) {
       var vn = v.name || v.filename || 'Word template';
       var vf = _rdSameName(vn, v.filename) ? '' : (v.filename || '');
       var vm = [vf, _rdSize(v.size)].filter(Boolean).join(' · ');
@@ -52987,7 +52829,6 @@ function _rdBaseHtml(tid, main, auto, mgr, canTpl) {
         + (vm ? '<span class="rp-ver-meta">' + esc(vm) + '</span>' : '') + '</div>';
       if (auto) h += _rdConvHtml(v.id, false);
       h += '</div><span class="rp-icons">';
-      if (mgr) h += _rdMoveBtns('report', tid, v.id, vn, vi, vers.length);
       if (mgr) h += '<button class="btn btn-ghost btn-sm" onclick="_rdMakeMain(\'' + idTxt + '\',\'' + esc(v.id) + '\')" title="Make it the one on the ' + esc(_rdBtnName()) + '" aria-label="Make ' + esc(vn) + ' the main Word file">' + IC.star + '</button>'
         + '<button class="btn btn-ghost btn-sm" onclick="uploadDocxTemplate(\'report\', undefined, { replace: \'' + esc(v.id) + '\' })" title="Replace it with a new copy of the file" aria-label="Replace ' + esc(vn) + '">' + IC.refresh + '</button>';
       h += '<button class="btn btn-ghost btn-sm" onclick="downloadCustomDocxTemplate(\'report\',\'' + esc(v.id) + '\')" title="Download it" aria-label="Download ' + esc(vn) + '">' + IC.dl + '</button>';
@@ -53989,38 +53830,20 @@ function _rdToolsHtml(tid, main) {
         + '<option value=""' + (cur ? '' : ' selected') + '>like the Default (' + esc(_rtDocText('', 'report')) + ')</option>'
         + '<option value="builtin"' + (cur ? ' selected' : '') + '>with Pental’s own PDF</option></select></label>';
     }
+    if (typeof _attestationOn === 'function' && _attestationOn()) {
+      var cl = docs.loa || '';
+      var o = '<label class="rp-pick"><span>Its letter of attestation</span><select class="form-select" id="rp_loa_' + idTxt + '" onchange="_rdDocSet(\'' + idTxt + '\', \'loa\', this.value)">';
+      o += '<option value=""' + (!cl ? ' selected' : '') + '>As the Default (' + esc(_rtDocText('', 'loa')) + ')</option>';
+      o += '<option value="builtin"' + (cl === 'builtin' ? ' selected' : '') + '>Pental’s own PDF</option>';
+      _listDocxTemplates('loa').forEach(function (x) {
+        var by = _rtList().filter(function (y) { return y.id !== tid && y.docs && y.docs.loa === x.id; })[0];
+        o += '<option value="' + esc(x.id) + '"' + (cl === x.id ? ' selected' : '') + '>' + esc(x.name || 'Word template') + (by ? ' (' + esc(by.name) + '’s too)' : '') + '</option>';
+      });
+      h += o + '</select></label>';
+    }
   }
-
-  if (typeof _attestationOn === 'function' && _attestationOn() && (t || _listDocxTemplates('loa').length)) h += _rdDocPickHtml(tid, 'loa', 'Its letter of attestation');
-  if (_fxSlotTypes().length && _listDocxTemplates(_FX_SLOT).length) h += _rdDocPickHtml(tid, _FX_SLOT, 'Its findings export');
   return h + '</div>';
 }
-function _rdDocPickHtml(tid, key, label) {
-  var idTxt = esc(tid || '');
-  var files = _listDocxTemplates(key);
-  var o = '<label class="rp-pick"><span>' + esc(label) + '</span><select class="form-select" id="rp_' + key + '_' + (tid ? idTxt : 'default') + '" onchange="'
-    + (tid ? '_rdDocSet(\'' + idTxt + '\', \'' + key + '\', this.value)' : '_rdDefaultDocSet(\'' + key + '\', this.value)') + '">';
-  var mine = function (x) {
-    var by = _rtList().filter(function (y) { return y.id !== tid && y.docs && y.docs[key] === x.id; })[0];
-    return esc(x.name || 'Word template') + (by ? ' (' + esc(by.name) + '’s too)' : '');
-  };
-  if (tid) {
-    var t = _rtById(tid), cl = ((t && t.docs) || {})[key] || '';
-    o += '<option value=""' + (!cl ? ' selected' : '') + '>As the Default (' + esc(_rtDocText('', key)) + ')</option>';
-    o += '<option value="builtin"' + (cl === 'builtin' ? ' selected' : '') + '>Pental’s own PDF</option>';
-    files.forEach(function (x) { o += '<option value="' + esc(x.id) + '"' + (cl === x.id ? ' selected' : '') + '>' + mine(x) + '</option>'; });
-  } else {
-    var cur = _rtWith('', function () { return _getDefaultDocxTemplateId(key); }) || '';
-    if (!cur) o += '<option value="" selected>Pental’s own PDF</option>';
-    files.forEach(function (x) { o += '<option value="' + esc(x.id) + '"' + (cur === x.id ? ' selected' : '') + '>' + mine(x) + '</option>'; });
-  }
-  return o + '</select></label>';
-}
-async function _rdDefaultDocSet(key, v) {
-  if (!v) { render(); return; }
-  await setDefaultDocxTemplate(key, v);
-}
-window._rdDefaultDocSet = _rdDefaultDocSet;
 async function _rdDocSet(tid, key, v) {
   var t = _rtById(tid);
   if (!t) return;
@@ -55138,8 +54961,6 @@ function _rdRowHtml(dt) {
 
   var builtIn = !word || ((key === 'report' || key === 'loa') && _rtList().some(function (t) { return t.docs && t.docs[key] === 'builtin'; }));
   if (!fx && builtIn) h += '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + dt.editorKey + '\')" title="The design of Pental’s own PDF, where this document is made with it: its sections, finding fields, colours and labels. A Word template of yours has its own.">' + IC.edit + ' Customise</button>';
-
-  else if (!fx && _tplWordAny(dt.editorKey)) h += '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + dt.editorKey + '\')" title="' + esc(_TPL_WORD_TITLE) + '">' + IC.edit + ' Customise</button>';
   h += '<button class="btn btn-ghost btn-sm" onclick="showDocxVariableRef(\'' + key + '\')" title="Every placeholder a Word template for it can hold, and a draft with them all">Placeholders</button>';
   if (list.length) h += '<button class="btn btn-ghost btn-sm" onclick="showStyleMapping(\'' + key + '\')" title="The styles used for code, headings, captions and lists">Styles</button>';
   h += '<button class="btn btn-secondary btn-sm" onclick="uploadDocxTemplate(\'' + key + '\')">' + IC.upload + ' ' + (list.length ? 'Add a Word template' : 'Upload a Word template') + '</button>';
@@ -55188,7 +55009,6 @@ function _rdRowHtml(dt) {
       h += '</div>';
     }
     h += '</div><div class="doc-tpl-acts">'
-      + (key === 'report' ? '' : _rdMoveBtns(key, '', t.id, name, idx, list.length))
       + '<button class="btn btn-ghost btn-sm" onclick="downloadCustomDocxTemplate(\'' + key + '\',\'' + esc(t.id) + '\')" title="Download it" aria-label="Download ' + esc(name) + '">' + IC.dl + '</button>'
       + '<button class="btn btn-ghost btn-sm" onclick="renameDocxTemplate(\'' + key + '\',\'' + esc(t.id) + '\')" title="Rename it" aria-label="Rename ' + esc(name) + '">' + IC.edit + '</button>'
       + '<button class="btn btn-ghost btn-sm doc-del" onclick="deleteDocxTemplate(\'' + key + '\',\'' + esc(t.id) + '\')" title="Delete it" aria-label="Delete ' + esc(name) + '">' + IC.trash + '</button>'
@@ -55201,7 +55021,13 @@ function _pdfOwnDocs() {
   var out = [];
   var rts = (_rtSettingsOn() && _rtHasDb()) ? _rtList() : [];
   _docTemplateTypes().concat(_fxSlotTypes()).forEach(function (dt) {
-    if (_pdfMakes(dt.key, dt.exportOnly)) out.push(dt.label);
+    var k = dt.key, pdf;
+    try {
+      if (k === 'report' && !dt.exportOnly) pdf = !_rdMainOf('') || rts.some(function (t) { return !_rtWith(t.id, function () { return _getDocxTemplateMeta('report'); }); });
+      else if (k === 'loa') pdf = !_getDefaultDocxTemplateId('loa') || rts.some(function (t) { return t.docs && t.docs.loa === 'builtin'; });
+      else pdf = !_getDefaultDocxTemplateId(k);
+    } catch (e) { pdf = true; }
+    if (pdf) out.push(dt.label);
   });
   return out;
 }
@@ -62350,10 +62176,7 @@ async function downloadEditedReport(assessmentId, quiet) {
       var _mkRes = _mk ? _qaWriteMarkup(zip, a, _mk) : null;
       window._docxQaComments = null;
 
-      var _levelled = 0;
-      try { _levelled = _levelRowCells(zip); } catch (e) { console.warn('[Render] row levelling skipped:', e && e.message); }
-
-      if (_repaired || _levelled || (refreshed && refreshed.updated) || (_mkRes && (_mkRes.tracked || _mkRes.comments))) {
+      if (_repaired || (refreshed && refreshed.updated) || (_mkRes && (_mkRes.tracked || _mkRes.comments))) {
         blob = zip.generate({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
       }
     } catch (e) {
@@ -67101,59 +66924,6 @@ function _setInScope(el) {
 function _setSavesItself(t) {
   return !!(t && t.getAttribute && /(^|[^\w.$])save[A-Z][\w$]*\(/.test((t.getAttribute('onchange') || '') + ' ' + (t.getAttribute('oninput') || '')));
 }
-function _setCardSaveFn(b) {
-  if (!b || !b.classList || !b.classList.contains('btn-primary') || !/^\s*Save\b/.test(b.textContent || '') || (b.closest && b.closest('[data-nodirty]'))) return null;
-  var m = /^\s*([A-Za-z_$][\w$]*)\(\)\s*;?\s*$/.exec(b.getAttribute('onclick') || '');
-  return m && typeof window[m[1]] === 'function' ? m[1] : null;
-}
-function _setHideCardSaves() {
-  var sc = _setScope();
-  if (!sc) return;
-  Array.prototype.forEach.call(sc.querySelectorAll('button.btn-primary'), function (b) {
-
-    var fn = _setCardSaveFn(b);
-    if (b.classList.contains('set-card-save') || !fn || _setSaveFnFor(b) !== fn) return;
-    var card = b.closest ? b.closest('.card') : null;
-    if (!card || card.querySelector('canvas')) return;
-    b.classList.add('set-card-save');
-  });
-}
-function _setCardsState(fn) {
-  var sc = _setScope();
-  if (!sc || !fn) return '';
-  var re = new RegExp('^\\s*' + fn.replace(/\$/g, '\\$') + '\\(\\)\\s*;?\\s*$');
-  return Array.prototype.filter.call(sc.querySelectorAll('.card'), function (c) {
-    return Array.prototype.some.call(c.querySelectorAll('button.btn-primary'), function (b) { return b.closest('.card') === c && re.test(b.getAttribute('onclick') || ''); });
-  }).map(function (c) {
-    return Array.prototype.filter.call(c.querySelectorAll('input, select, textarea'), function (el) {
-      return el.type !== 'file' && _setInScope(el);
-    }).map(function (el) {
-      return (el.id || el.name || el.className || el.tagName) + '=' + ((el.type === 'checkbox' || el.type === 'radio') ? (el.checked ? '1' : '0') : String(el.value));
-    }).join('\u0001');
-  }).join('\u0002');
-}
-(function () {
-  document.addEventListener('click', function (e) {
-    var b = e.target && e.target.closest ? e.target.closest('button') : null;
-    if (!b || !_setInScope(b) || b.classList.contains('set-card-save') || _setCardSaveFn(b)) return;
-
-    if (b.hasAttribute('aria-expanded') || b.getAttribute('role') === 'tab') return;
-    var fn = _setSaveFnFor(b);
-    if (!fn) return;
-    var before = _setCardsState(fn), at = Date.now();
-    var look = function () {
-      if (_setDirty[fn] || S.page !== 'settings' && !S.wizard) return;
-
-      if ((_setSavedAtCard[fn] || 0) >= at || _setForgotAt >= at) return;
-      if (_setCardsState(fn) === before) return;
-      var sc = _setScope(), el = null;
-      if (sc) Array.prototype.some.call(sc.querySelectorAll('button.btn-primary'), function (x) { if (_setSaveFnFor(x) === fn) { el = x; return true; } return false; });
-      if (el) _setMarkDirty(el);
-    };
-    setTimeout(look, 0);
-    setTimeout(look, 400);
-  }, true);
-})();
 function _setIsDirty() { for (var k in _setDirty) { if (_setDirty[k]) return true; } return _dashEdWaiting(); }
 function _setSnapshot() {
   var s = S.data.settings || {}, keep = {};
@@ -67266,16 +67036,13 @@ function _setTake(key, value, ed) {
   }
   S.data.settings[key] = value;
 }
-var _setForgotAt = 0;
 function _setForget() {
-  _setForgotAt = Date.now();
   _setDirty = {};
   _setCardHold = {};
   _setBase = null;
   S._ffPromptDraft = null; S._ffCatDraft = null; S._ffPend = null;
   S._smPromptDraft = null; S._smPend = null;
   S._dsDraft = null;
-  S._dsLinkSaid = null; S._dsLinkText = '';
   _setBarSync();
 }
 function _setLeaveAsk(go) {
@@ -67293,7 +67060,6 @@ function _setGoTab(tab) {
   });
 }
 function _setBarSync() {
-  try { _setHideCardSaves(); } catch (e) {}
   var bar = document.getElementById('setDirtyBar');
   var on = _setIsDirty() && S.page === 'settings' && !S.wizard && !S.modal;
   if (on && !bar) {
@@ -72211,23 +71977,6 @@ function _credSplit(meta, status) {
   return { waiting: waiting, received: received };
 }
 window._credSplit = _credSplit;
-var _CRED_COPY_WORDS = ' Your tester’s firm also keeps a copy with its own files for this engagement.';
-function _credCopyNote() {
-  _credCopiedLoad();
-  return '<span class="cred-copy-note">' + (S._credCopied && S._credCopied.v ? esc(_CRED_COPY_WORDS) : '') + '</span>';
-}
-function _credCopiedLoad() {
-  if (S._credCopied && Date.now() - S._credCopied.at < 120000) return;
-  S._credCopied = { v: !!(S._credCopied && S._credCopied.v), at: Date.now() };
-  try {
-    Promise.resolve(supabaseClient.rpc('rpc_credentials_copied')).then(function (r) {
-      var v = !!(r && !r.error && r.data === true);
-      S._credCopied.v = v;
-      var els = document.querySelectorAll('.cred-copy-note');
-      for (var i = 0; i < els.length; i++) els[i].textContent = v ? _CRED_COPY_WORDS : '';
-    }, function () {});
-  } catch (e) {}
-}
 function _credItems(list) {
   return (list || []).reduce(function (n, c) {
     var i = c && Number(c.items);
@@ -78343,8 +78092,6 @@ async function _fillTemplateAndDownload(templateBuf, data, filename, _docType, _
 
   _fixInvisibleCellText(filledZip);
 
-  try { _levelRowCells(filledZip); } catch (e) { console.warn('[Render] row levelling skipped:', e && e.message); }
-
   try {
     var _tocFile = filledZip.file('word/document.xml');
     if (_tocFile && typeof _dcrDropStaleTocBookmarks === 'function') {
@@ -81231,127 +80978,6 @@ function _fixInvisibleCellText(zip) {
     zip.file('word/document.xml', result);
   } catch (e) { console.warn('[Render] invisible-text fix skipped:', e && e.message); }
 }
-function _levelRowCells(zip) {
-  var docFile = zip.file('word/document.xml');
-  if (!docFile) return 0;
-  var xml = docFile.asText();
-  if (!/<w:tbl[\s>]/.test(xml)) return 0;
-  var styXml = zip.file('word/styles.xml') ? zip.file('word/styles.xml').asText() : '';
-  var styles = {}, defId = '';
-  var num = function (v) { var n = parseInt(v, 10); return isNaN(n) ? undefined : n; };
-
-  var ownOf = function (pPr) {
-    var at = String(pPr || '').search(/<w:(rPr|sectPr|pPrChange)\b/);
-    return at < 0 ? String(pPr || '') : String(pPr).slice(0, at);
-  };
-  var read = function (own) {
-    var o = {};
-    var c = /<w:contextualSpacing\b([^>]*?)\/?>/.exec(own);
-    if (c) { var v = /w:val="([^"]*)"/.exec(c[1]); o.ctx = !(v && /^(0|false|off)$/i.test(v[1])); }
-    var sp = /<w:spacing\b([^>]*?)\/?>/.exec(own);
-    if (sp) {
-      var b = /w:before="(\d+)"/.exec(sp[1]), a = /w:after="(\d+)"/.exec(sp[1]);
-      if (b) o.before = num(b[1]);
-      if (a) o.after = num(a[1]);
-      if (/w:(beforeAutospacing|afterAutospacing)="(1|true|on)"/.test(sp[1]) || /w:(beforeLines|afterLines)="[1-9]/.test(sp[1])) o.odd = true;
-    }
-    return o;
-  };
-  var sre = /<w:style\b([^>]*)>([\s\S]*?)<\/w:style>/g, m;
-  while ((m = sre.exec(styXml)) !== null) {
-    if (!/w:type="paragraph"/.test(m[1])) continue;
-    var id = /w:styleId="([^"]+)"/.exec(m[1]);
-    if (!id) continue;
-    var sp = /<w:pPr>([\s\S]*?)<\/w:pPr>/.exec(m[2]);
-    var base = /<w:basedOn w:val="([^"]+)"/.exec(m[2]);
-    styles[id[1]] = { base: base ? base[1] : '', p: read(sp ? sp[1] : '') };
-    if (/w:default="(1|true)"/.test(m[1])) defId = id[1];
-  }
-  var dd = /<w:pPrDefault>[\s\S]*?<w:pPr>([\s\S]*?)<\/w:pPr>/.exec(styXml);
-  var ddP = read(dd ? dd[1] : '');
-
-  var info = function (p) {
-    var pp = /^<w:p\b[^>]*>\s*<w:pPr>([\s\S]*?)<\/w:pPr>/.exec(p);
-    var own = ownOf(pp ? pp[1] : '');
-    var sid = (/<w:pStyle w:val="([^"]+)"/.exec(own) || [])[1] || defId;
-    var e = read(own), seen = {};
-    for (var k = sid; k && styles[k] && !seen[k]; k = styles[k].base) {
-      seen[k] = true;
-      var s = styles[k].p;
-      if (e.ctx === undefined) e.ctx = s.ctx;
-      if (e.before === undefined) e.before = s.before;
-      if (e.after === undefined) e.after = s.after;
-      if (s.odd) e.odd = true;
-    }
-    if (e.ctx === undefined) e.ctx = ddP.ctx;
-    if (e.before === undefined) e.before = ddP.before;
-    if (e.after === undefined) e.after = ddP.after;
-    if (ddP.odd) e.odd = true;
-    return { sid: sid, ctx: !!e.ctx, before: e.before || 0, after: e.after || 0, odd: !!e.odd };
-  };
-
-  var LATER = /<w:(ind|contextualSpacing|mirrorIndents|suppressOverlap|jc|textDirection|textAlignment|textboxTightWrap|outlineLvl|divId|cnfStyle|rPr|sectPr|pPrChange)\b/;
-  var none = function (p, side) {
-    var open = /^<w:p\b[^>]*>/.exec(p);
-    var rest = p.slice(open[0].length);
-    var put = 'w:' + side + '="0"';
-    if (rest.indexOf('<w:pPr>') !== 0) return open[0] + '<w:pPr><w:spacing ' + put + '/></w:pPr>' + rest;
-    var end = rest.indexOf('</w:pPr>');
-    var inner = rest.slice(7, end);
-    var cut = inner.search(/<w:(rPr|sectPr|pPrChange)\b/);
-    var own = cut < 0 ? inner : inner.slice(0, cut), tail = cut < 0 ? '' : inner.slice(cut);
-    var re = new RegExp('(\\s)w:' + side + '="\\d+"');
-    if (/<w:spacing\b/.test(own)) {
-      own = own.replace(/<w:spacing\b[^>]*?\/?>/, function (s) {
-        return re.test(s) ? s.replace(re, '$1' + put) : s.replace('<w:spacing', '<w:spacing ' + put);
-      });
-    } else {
-      var at = own.search(LATER);
-      own = at < 0 ? own + '<w:spacing ' + put + '/>' : own.slice(0, at) + '<w:spacing ' + put + '/>' + own.slice(at);
-    }
-    return open[0] + '<w:pPr>' + own + tail + '</w:pPr>' + rest.slice(end + 8);
-  };
-
-  var rows = [], stack = [], tre = /<w:tr\b[^>]*>|<\/w:tr>/g, t;
-  while ((t = tre.exec(xml)) !== null) {
-    if (t[0] !== '</w:tr>') { stack.push(t.index); continue; }
-    var from = stack.pop();
-    if (from === undefined) continue;
-    var row = xml.slice(from, t.index + 7);
-    if (!/<w:tbl[\s>]/.test(row) && row.indexOf('<w:txbxContent') < 0) rows.push({ from: from, to: t.index + 7, xml: row });
-  }
-  var edits = [];
-  rows.forEach(function (r) {
-    var cells = r.xml.match(/<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/g) || [];
-    if (cells.length < 2) return;
-    var ends = [];
-    for (var i = 0; i < cells.length; i++) {
-      var ps = cells[i].match(/<w:p\b[^>]*?\/>|<w:p\b[^>]*>[\s\S]*?<\/w:p>/g) || [];
-      if (!ps.length) return;
-      ends.push({ first: ps[0], last: ps[ps.length - 1], a: info(ps[0]), z: info(ps[ps.length - 1]) });
-    }
-    var sid = ends[0].a.sid;
-    var one = ends.every(function (e) { return e.a.sid === sid && e.z.sid === sid && e.a.ctx && e.z.ctx && !e.a.odd && !e.z.odd; });
-    if (!one) return;
-    var head = ends[0], tail = ends[ends.length - 1];
-    var top = head.a.before > 0, bottom = tail.z.after > 0;
-    if (!top && !bottom) return;
-    var x = r.xml;
-    if (top) { var p0 = head.first; x = x.replace(p0, function () { return /^<w:p\b[^>]*?\/>$/.test(p0) ? '<w:p><w:pPr><w:spacing w:before="0"/></w:pPr></w:p>' : none(p0, 'before'); }); }
-    if (bottom) {
-      var pz = tail.last, at = x.lastIndexOf(pz);
-      var put = /^<w:p\b[^>]*?\/>$/.test(pz) ? '<w:p><w:pPr><w:spacing w:after="0"/></w:pPr></w:p>' : none(pz, 'after');
-      x = x.slice(0, at) + put + x.slice(at + pz.length);
-    }
-    edits.push({ from: r.from, to: r.to, xml: x });
-  });
-  if (!edits.length) return 0;
-  edits.sort(function (a, b) { return b.from - a.from; });
-  edits.forEach(function (e) { xml = xml.slice(0, e.from) + e.xml + xml.slice(e.to); });
-  zip.file('word/document.xml', xml);
-  return edits.length;
-}
-window._levelRowCells = _levelRowCells;
 function _numXmlAddNums(numXml, nums) {
   var at = numXml.search(/<w:numIdMacAtCleanup\b/);
   if (at === -1) at = numXml.lastIndexOf('</w:numbering>');
