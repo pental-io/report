@@ -2860,8 +2860,11 @@ body.rb-barred{min-height:calc(100vh - var(--rb-bar,3rem))}
 .ss-freq strong{font-size:0.83rem;color:var(--text)}
 .ss-freq-price{display:block;font-size:0.7rem;color:var(--gray);margin-top:0.25rem}
 
-/* Settings: two columns where there is room, one where there is not. */
-.ss-set-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:0 1rem;margin-top:0.9rem}
+/* Settings: two columns where there is room, one where there is not. 2009:
+   each at least 17rem (it was 15rem): Settings as wide as the page took a
+   fifth across a 1920 screen, which cut "Straight to the customer
+   (default)" in its box. */
+.ss-set-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(17rem,1fr));gap:0 1rem;margin-top:0.9rem}
 .ss-freq-set{display:grid;grid-template-columns:minmax(7rem,1fr) minmax(8rem,1fr) minmax(9rem,1fr);
   gap:0.5rem;align-items:center;margin-bottom:0.5rem}
 @media(max-width:640px){.ss-freq-set{grid-template-columns:1fr}}

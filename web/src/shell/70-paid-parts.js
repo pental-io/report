@@ -45,12 +45,14 @@ function _ffScannerImport() { return false; }
 // for the portal; here it is always this server.
 function _signinStateHtml() { return ''; }
 
-// A report's version history: written, tested, released. The portal's
+// A report's version history: written, tested, released, re-tested. The portal's
 // default adds a QA review row, which belongs to its QA module.
 var VH_DEFAULT_ROWS = [
   { k: 'creation', v: '0.1', l: 'Document Creation' },
   { k: 'details', v: '0.2', l: 'Test Details Added' },
   { k: 'release', v: '1.0', l: 'Document Release' },
+  // 2012: and re-tested, as in the portal: printed once a finding has been.
+  { k: 'retest', v: '1.1', l: 'Re-test' },
 ];
 // 1977, the full audit: the dates a version history row can take, in the
 // template editor. The portal's QA review date is not one: there is no QA
@@ -62,6 +64,7 @@ var VH_DATE_SOURCES = [
   { v: 'ended',     l: 'End date' },
   { v: 'delivered', l: 'Release date' },
   { v: 'updated',   l: 'Last updated' },
+  { v: 'retest',    l: 'First retest date' },   // 2012
   { v: 'none',      l: 'Leave blank' },
 ];
 // And who a row names: the portal's QA reviewer is not one, for the same reason.

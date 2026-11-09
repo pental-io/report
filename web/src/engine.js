@@ -12375,6 +12375,8 @@ var _RB_JOB = [
   { t: '{start_date}', label: 'Start date' },
   { t: '{end_date}', label: 'End date' },
   { t: '{report_date}', label: 'Report date' },
+
+  { t: '{first_retest_date}', label: 'First retest date' },
 ];
 var _RB_PEOPLE = [
   { t: '{lead_tester_name}', label: 'Lead tester' },
@@ -16761,6 +16763,7 @@ function _rbPreviewData(marked) {
     vat_number: (st.vat_number || 'GB000000000'),
     classification: (st.classification_text || 'CLIENT CONFIDENTIAL'),
     report_date: '12 August 2026', start_date: '3 August 2026', end_date: '7 August 2026',
+    first_retest_date: '21 August 2026',
     lead_tester_name: (S.profile || {}).name || 'Lead tester',
     lead_tester_email: (S.profile || {}).email || 'lead@example.com',
     qa_reviewer_name: 'QA reviewer',
@@ -42292,7 +42295,8 @@ function renderSettings__portal() {
   h += '<div style="font-weight:700;font-size:0.9rem;margin-bottom:0.15rem">Automation Timezone</div>';
   h += '<div style="font-size:0.78rem;color:var(--gray);margin-bottom:0.75rem">Every time on this page' + (scanningEnabled() ? ', and the scan schedule times,' : '') + ' are read in this zone. It also decides when your day rolls over, which is what makes an assessment dated tomorrow due tomorrow.</div>';
   h += '<div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">';
-  h += '<select class="form-input" id="set_automation_timezone" aria-label="Automation timezone" style="width:260px;max-width:100%;height:34px;font-size:0.85rem">';
+
+  h += '<select class="form-input" id="set_automation_timezone" aria-label="Automation timezone" style="width:260px;max-width:100%;height:34px;font-size:0.85rem;padding:0 0.75rem">';
   if (_tzAll.length) h += '<optgroup label="Common">';
   for (var _tzi = 0; _tzi < _tzList.length; _tzi++) {
     h += '<option value="' + esc(_tzList[_tzi]) + '"' + (_tzList[_tzi] === _autoTz ? ' selected' : '') + '>' + esc(_tzList[_tzi].replace(/_/g, ' ')) + '</option>';
@@ -47218,10 +47222,14 @@ function _tplH(title, desc) {
 function _tplC(id, label, value) {
   return '<div style="flex-shrink:0"><label class="form-label" style="margin-bottom:0.2rem;font-size:0.75rem">' + label + '</label><div style="display:flex;align-items:center;gap:0.25rem"><input type="color" id="tpl_' + id + '" value="' + esc(value) + '" style="width:30px;height:30px;padding:1px;cursor:pointer;border-radius:5px;border:1px solid var(--border)" oninput="this.nextElementSibling.value=this.value"><input type="text" class="form-input mono" value="' + esc(value) + '" style="width:78px;height:30px;font-size:0.72rem;padding:0 0.3rem" maxlength="7" oninput="var c=this.value.trim();if(c.match(/^#[0-9a-fA-F]{6}$/)){this.previousElementSibling.value=c}"></div></div>';
 }
+var VH_BUILT_IN = ['creation', 'details', 'qa_review', 'release', 'retest'];
 function _vhRows(tpl) {
   tpl = tpl || {};
   if (Array.isArray(tpl.vh_rows) && tpl.vh_rows.length) {
-    return tpl.vh_rows.filter(function (r) { return r && r.on !== false && (r.v || r.l); })
+    var saved = tpl.vh_rows.filter(function (r) { return !!r; });
+
+    if (!saved.some(function (r) { return r.k === 'retest'; })) saved = saved.concat([{ k: 'retest', v: '1.1', l: 'Re-test', on: true }]);
+    return saved.filter(function (r) { return r.on !== false && (r.v || r.l); })
       .map(function (r) { return Object.assign({}, r, { ds: _vhRowDs(r, tpl) }); });
   }
   var lbl = { creation: tpl.vh_creation, details: tpl.vh_details,
@@ -47235,6 +47243,8 @@ var VH_ROW_DEFAULT_SRC = {
   details:   { d: 'ended',     a: 'lead_all' },
   qa_review: { d: 'qa',        a: 'qa' },
   release:   { d: 'delivered', a: 'lead' },
+
+  retest:    { d: 'retest',    a: 'lead' },
 };
 var VH_ROW_OLD_SRC = { creation: 'created', details: 'started' };
 function _vhRowDs(r, tpl) {
@@ -47252,6 +47262,7 @@ function _vhResolve(row, ctx) {
            : ds === 'qa' ? ctx.qaDate
            : ds === 'delivered' ? ctx.released
            : ds === 'updated' ? ctx.updated
+           : ds === 'retest' ? ctx.retest
            : '';
   var author = as === 'lead' ? ctx.lead
              : as === 'contributors' ? ctx.contributors
@@ -47260,6 +47271,15 @@ function _vhResolve(row, ctx) {
              : '';
   return { date: date || '', author: author || '' };
 }
+function _vhFirstRetest(findings) {
+  var first = '';
+  (findings || []).forEach(function (f) {
+    var t = f && f.retest_completed_at;
+    if (t && (!first || Date.parse(t) < Date.parse(first))) first = t;
+  });
+  return first ? (fmtDate(first) || '') : '';
+}
+function _vhShows(r, ctx) { return !(r && r.k === 'retest') || !!(ctx && ctx.retest); }
 function _vhRowHtml(r, idx) {
   var def = VH_ROW_DEFAULT_SRC[r.k] || { d: 'none', a: 'none' };
   function sel(cls, list, cur) {
@@ -47279,9 +47299,11 @@ function _vhRowHtml(r, idx) {
      + sel('vh-ds', VH_DATE_SOURCES, r.ds || def.d) + '</div>';
   h += '<div style="width:150px"><label class="form-label" style="font-size:0.7rem;margin-bottom:0.15rem">Author</label>'
      + sel('vh-as', VH_AUTHOR_SOURCES, r.as || def.a) + '</div>';
-  if (['creation', 'details', 'qa_review', 'release'].indexOf(r.k) === -1) {
+  if (VH_BUILT_IN.indexOf(r.k) === -1) {
     h += '<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:0.35rem" onclick="this.closest(\'.vh-row\').remove()">Remove</button>';
   }
+
+  if (r.k === 'retest') h += '<div class="vh-note" style="flex:1 1 100%;font-size:0.7rem;color:var(--gray);padding:0 0 0.2rem 1.6rem">Printed once a finding has been retested, dated the day the first one was.</div>';
   return h + '</div>';
 }
 function _vhAddRow() {
@@ -47542,6 +47564,8 @@ function _renderTextTab(tpl) {
   var _vhAll = (Array.isArray(tpl.vh_rows) && tpl.vh_rows.length)
     ? tpl.vh_rows.map(function (r) { return r ? Object.assign({}, r, { ds: _vhRowDs(r, tpl) }) : r; })
     : _vhRows(tpl);
+
+  if (!_vhAll.some(function (r) { return r && r.k === 'retest'; })) _vhAll = _vhAll.concat([{ k: 'retest', v: '1.1', l: 'Re-test', on: true, ds: 'retest', as: 'lead' }]);
   _vhAll.forEach(function (r, idx) { h += _vhRowHtml(r, idx); });
   h += '</div>';
   h += '<button type="button" class="btn btn-secondary btn-sm" style="margin-top:0.4rem" onclick="_vhAddRow()">+ Add row</button>';
@@ -51516,6 +51540,7 @@ function renderAppendixModal() {
       ap.items.forEach(function(item) {
         if (item.type === 'text') contentHtml += '<p>' + esc(item.content || '').replace(/\n/g, '<br>') + '</p>';
         else if (item.type === 'code') contentHtml += '<pre>' + esc(item.content || '') + '</pre>';
+        else if (item.type === 'html') contentHtml += sanitizeHtml(item.content || '');
         else if (item.type === 'image') {
           if (item.data && item.data.indexOf('storage:') === 0) {
             contentHtml += '<div style="text-align:center;margin:1rem 0"><img data-sp="' + esc(item.data.replace('storage:', '')) + '" alt="Screenshot" style="max-width:100%;min-height:60px;background:var(--bg)">';
@@ -51568,6 +51593,30 @@ function renderAppendixModal() {
 
   return h;
 }
+function _apxPlainOf(node) {
+  if (!node) return '';
+  var name = node.nodeName;
+  var kids = function (el, test) { return [].slice.call(el.children).filter(test); };
+  var isList = function (c) { return c.nodeName === 'UL' || c.nodeName === 'OL'; };
+  if (isList(node)) {
+    return kids(node, function (c) { return c.nodeName === 'LI'; }).map(function (li, i) {
+      var own = [].slice.call(li.childNodes).filter(function (c) { return !isList(c); })
+        .map(function (c) { return c.textContent; }).join('').replace(/\s+/g, ' ').trim();
+      var sub = kids(li, isList).map(function (c) {
+        return _apxPlainOf(c).split('\n').map(function (l) { return '  ' + l; }).join('\n');
+      }).join('\n');
+      return (name === 'OL' ? (i + 1) + '. ' : '• ') + own + (sub ? '\n' + sub : '');
+    }).join('\n');
+  }
+  if (name === 'TABLE') {
+    return [].slice.call(node.querySelectorAll('tr')).filter(function (tr) { return tr.closest('table') === node; }).map(function (tr) {
+      return kids(tr, function (c) { return c.nodeName === 'TD' || c.nodeName === 'TH'; })
+        .map(function (c) { return c.textContent.replace(/\s+/g, ' ').trim(); }).join(' | ');
+    }).join('\n');
+  }
+  return String(node.textContent || '');
+}
+window._apxPlainOf = _apxPlainOf;
 async function saveAppendix(aid, idx) {
   _showLoading();
   try {
@@ -51647,6 +51696,13 @@ async function saveAppendix(aid, idx) {
 
         currentText += node.textContent + '\n';
       }
+    } else if ((node.nodeName === 'UL' || node.nodeName === 'OL' || node.nodeName === 'TABLE') && !node.querySelector('img')) {
+
+      if (currentText.trim()) {
+        items.push({type: 'text', content: currentText.trim()});
+        currentText = '';
+      }
+      items.push({type: 'html', content: sanitizeHtml(node.outerHTML), text: _apxPlainOf(node)});
     } else {
 
       var otherImgs = node.querySelectorAll('img');
@@ -51678,7 +51734,7 @@ async function saveAppendix(aid, idx) {
   items = await uploadEvidenceToStorage(items, aid, 'appendix_' + Date.now());
 
   var content = items.map(function(item) {
-    return item.content || '';
+    return item.type === 'html' ? (item.text || '') : (item.content || '');
   }).join('\n\n');
 
   var appendix = { title: title, content: content, items: items };
@@ -52954,14 +53010,14 @@ var _RT_SEC_KEYS = {
   findings: ['findings', 'critical_findings', 'high_findings', 'medium_findings', 'low_findings', 'info_findings', 'phases_data',
     'show_findings', 'show_findings_table', 'heading_findings'],
 
-  evidence: []
+  evidence: ['engagement_appendices', 'has_engagement_appendices', 'heading_engagement_appendices']
 };
 var _RT_SEC_NEVER = { documents: true, scan_import: true, timeline: true, credentials: true, files: true, comments: true };
 var _RT_SEC_KEEP = { findings: true };
 function _rtSecFollows(key) {
   return !_RT_SEC_NEVER[key] && !_RT_SEC_KEEP[key] && Object.prototype.hasOwnProperty.call(_RT_SEC_KEYS, key);
 }
-var _RT_SEC_PUT_IN = { retest_summary: true, notes: true };
+var _RT_SEC_PUT_IN = { retest_summary: true, notes: true, evidence: true };
 function _rtPrintKeys(kind, custom, key) {
   var tokOf = function (tok) { var k = String(tok || '').replace(/[{}]/g, ''); return k ? [k] : []; };
   if (kind === 'findings') {
@@ -55131,6 +55187,26 @@ function _apxHeadingSaved(tpl) {
   return v === 'Additional Evidence' ? '' : v;
 }
 window._apxHeadingSaved = _apxHeadingSaved;
+function _apxDocRows(a, imgCache) {
+  var list = [];
+  try { list = a && a.appendices ? (typeof a.appendices === 'string' ? JSON.parse(a.appendices) : a.appendices) : []; } catch (e) { list = []; }
+  if (!Array.isArray(list) || !list.length) return [];
+  try { if (typeof _secInDocs === 'function' && !_secInDocs('evidence')) return []; } catch (e) {}
+  var rows = [];
+  list.forEach(function (ap) {
+    if (!ap) return;
+    var items = (Array.isArray(ap.items) && ap.items.length) ? ap.items
+      : (String(ap.content || '').trim() ? [{ type: 'code', content: String(ap.content) }] : []);
+    if (!items.length && !String(ap.title || '').trim()) return;
+    rows.push({
+      appendix_title: String(ap.title || '').trim() || ('Appendix ' + (rows.length + 1)),
+      appendix_number: rows.length + 1,
+      appendix_content: _evidenceMarker(items, imgCache)
+    });
+  });
+  return rows;
+}
+window._apxDocRows = _apxDocRows;
 function _docSecHeading(key, tplHeading, def) {
   var lab = '';
   try { lab = String(_smLabel(key) || '').trim(); } catch (e) { lab = ''; }
@@ -74027,8 +74103,9 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
     contributors: otherAuthors.join('\n'),
     leadAndAuthors: leadName + (otherAuthors.length ? '\n' + otherAuthors.join('\n') : ''),
     qaName: qaReviewerName,
+    retest: _vhFirstRetest(findings),
   };
-  var vhData = _vhRows(tpl).map(function (r) {
+  var vhData = _vhRows(tpl).filter(function (r) { return _vhShows(r, _vhCtx); }).map(function (r) {
     var x = _vhResolve(r, _vhCtx);
     return [r.v || '', x.date || '', x.author || '', r.l || ''];
   });
@@ -75159,6 +75236,12 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
           y = _pdfCodeLines(doc, codeLines, mg, cw, y, accentRgb, darkGray, function() { newPage(); return y; });
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(9);
+        } else if (item.type === 'html' && item.content) {
+
+          var _apB = parseHtmlForPdf(item.content);
+          var _apRef = {y: y};
+          renderPdfBlocks(doc, _apB, mg, cw, pw, function(need, yr) { y = yr.y; var r = checkPage(need); yr.y = y; return r; }, _apRef, {darkGray: darkGray, gray: gray, accentRgb: accentRgb, imgCache: _imgCache, figCaption: _figCaption});
+          y = _apRef.y;
         } else if (item.type === 'image' && item.data) {
           try {
             var _apImgData = item.data;
@@ -77414,34 +77497,7 @@ function _injectSummarySections(zip, data) {
     function pStyleOf(p) { var m = p.match(/<w:pStyle w:val="([^"]+)"/); return m ? m[1] : ''; }
     function isHeadingP(p) { var s = pStyleOf(p); return !!s && /heading/i.test(s); }
 
-    var levelOf = (function() {
-      var meta = {};
-      try {
-        var sf = zip.file('word/styles.xml');
-        if (sf) {
-          var sx = sf.asText();
-          var re = /<w:style\b[^>]*w:styleId="([^"]+)"[\s\S]*?<\/w:style>/g, m;
-          while ((m = re.exec(sx))) {
-            var bo = m[0].match(/<w:basedOn w:val="([^"]+)"/);
-            var ol = m[0].match(/<w:outlineLvl w:val="(\d+)"/);
-            meta[m[1]] = { basedOn: bo ? bo[1] : null, outline: ol ? parseInt(ol[1], 10) : null };
-          }
-        }
-      } catch (e) {}
-      return function(style) {
-        var seen = {}, cur = style, hops = 0;
-        while (cur && !seen[cur] && hops < 12) {
-          seen[cur] = 1; hops++;
-          var mm = meta[cur];
-          if (mm && mm.outline != null) return mm.outline;
-          var nm = /^heading\s*([0-9])$/i.exec(cur);
-          if (nm) return parseInt(nm[1], 10) - 1;
-          cur = mm ? mm.basedOn : null;
-        }
-        var nm2 = /^heading\s*([0-9])$/i.exec(style || '');
-        return nm2 ? parseInt(nm2[1], 10) - 1 : 5;
-      };
-    })();
+    var levelOf = _docxLevelOf(zip);
 
     var execTokIdx = -1;
     for (var t1 = 0; t1 < paras.length; t1++) {
@@ -77575,6 +77631,120 @@ function _injectSummarySections(zip, data) {
 
     zip.file('word/document.xml', xml);
   } catch (e) { console.warn('[Render] summary section injection skipped:', e && e.message); }
+}
+function _docxLevelOf(zip) {
+  var meta = {};
+  try {
+    var sf = zip.file('word/styles.xml');
+    if (sf) {
+      var sx = sf.asText();
+      var re = /<w:style\b[^>]*w:styleId="([^"]+)"[\s\S]*?<\/w:style>/g, m;
+      while ((m = re.exec(sx))) {
+        var bo = m[0].match(/<w:basedOn w:val="([^"]+)"/);
+        var ol = m[0].match(/<w:outlineLvl w:val="(\d+)"/);
+        meta[m[1]] = { basedOn: bo ? bo[1] : null, outline: ol ? parseInt(ol[1], 10) : null };
+      }
+    }
+  } catch (e) {}
+  return function(style) {
+    var seen = {}, cur = style, hops = 0;
+    while (cur && !seen[cur] && hops < 12) {
+      seen[cur] = 1; hops++;
+      var mm = meta[cur];
+      if (mm && mm.outline != null) return mm.outline;
+      var nm = /^heading\s*([0-9])$/i.exec(cur);
+      if (nm) return parseInt(nm[1], 10) - 1;
+      cur = mm ? mm.basedOn : null;
+    }
+    var nm2 = /^heading\s*([0-9])$/i.exec(style || '');
+    return nm2 ? parseInt(nm2[1], 10) - 1 : 5;
+  };
+}
+function _injectEngagementAppendices(zip, data) {
+  try {
+    if (!data || !Array.isArray(data.engagement_appendices) || !data.engagement_appendices.length) return;
+    var f = zip.file('word/document.xml'); if (!f) return;
+    var xml = f.asText();
+
+    if (/engagement_appendices/.test(xml.replace(/<[^>]+>/g, ''))) return;
+    var _sdl = null;
+    try { _sdl = typeof _dtplDelims === 'function' ? _dtplDelims(zip) : null; } catch (e) {}
+    var tok = function (t) { return _sdl ? _sdl.start + t + _sdl.end : '{' + t + '}'; };
+    var xe = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    var pText = function (p) { return (p.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []).map(function (x) { return x.replace(/<[^>]*>/g, ''); }).join('').trim(); };
+    var pStyleOf = function (p) { var m = p.match(/<w:pStyle w:val="([^"]+)"/); return m ? m[1] : ''; };
+    var levelOf = _docxLevelOf(zip);
+
+    var isHeadingP = function (p) { var s = pStyleOf(p); return !!s && (/heading/i.test(s) || levelOf(s) < 5); };
+
+    var paras = [], re = /<w:p\b[\s\S]*?<\/w:p>/g, mm;
+    while ((mm = re.exec(xml))) {
+      if (typeof _pntlInsideCell === 'function' && _pntlInsideCell(xml, mm.index)) continue;
+      paras.push({ x: mm[0], at: mm.index, end: mm.index + mm[0].length });
+    }
+    var heads = paras.filter(function (p) { return isHeadingP(p.x); });
+    var named = ['appendix', 'appendices', data.heading_appendices, data.heading_engagement_appendices]
+      .map(function (n) { return String(n || '').trim().toLowerCase(); }).filter(Boolean);
+    var textOf = function (p) { return pText(p.x).replace(/\{[^}]*\}/g, '').trim().toLowerCase(); };
+
+    var exact = heads.filter(function (p) {
+      return named.indexOf(textOf(p)) >= 0 || /\{\s*heading_(appendices|additional_evidence|engagement_appendices)\s*\}/.test(pText(p.x));
+    })[0] || null;
+    var first = heads.filter(function (p) { return /^appendi(x|ces)\b/.test(textOf(p)); })[0] || null;
+
+    var under = function (top) {
+      var want = levelOf(pStyleOf(top.x)) + 1;
+      var next = heads.filter(function (p) { return p.at > top.at && levelOf(pStyleOf(p.x)) === want; })[0];
+      if (next) return pStyleOf(next.x);
+      var n = {};
+      heads.forEach(function (p) { var s = pStyleOf(p.x); if (levelOf(s) === want) n[s] = (n[s] || 0) + 1; });
+      var k = Object.keys(n).sort(function (a, b) { return n[b] - n[a]; });
+      return k.length ? k[0] : pStyleOf(top.x);
+    };
+    var P = function (style, text, brk) {
+      return '<w:p>' + (style || brk ? '<w:pPr>' + (style ? '<w:pStyle w:val="' + style + '"/>' : '') + (brk ? '<w:pageBreakBefore/>' : '') + '</w:pPr>' : '')
+        + '<w:r><w:t xml:space="preserve">' + text + '</w:t></w:r></w:p>';
+    };
+    var loop = function (titleStyle) {
+      return P('', tok('#engagement_appendices')) + P(titleStyle, tok('appendix_title'))
+        + P('', tok('appendix_content')) + P('', tok('/engagement_appendices'));
+    };
+
+    var topStyle = function () {
+      var best = null;
+      heads.forEach(function (p) { var l = levelOf(pStyleOf(p.x)); if (best === null || l < best.l) best = { l: l, p: p }; });
+      return best ? best.p : null;
+    };
+    var at = -1, block = '';
+    if (exact) {
+      at = exact.end;
+      block = loop(under(exact));
+    } else {
+      var lead = first || topStyle();
+      var hs = lead ? pStyleOf(lead.x) : 'Heading1';
+      var section = P(hs, xe(data.heading_engagement_appendices || 'Appendices'), true) + loop(lead ? under(lead) : 'Heading2');
+      if (first) {
+        at = typeof _pntlBeforeOpeners === 'function' ? _pntlBeforeOpeners(xml, first.at) : first.at;
+      } else {
+
+        var close = null;
+        paras.forEach(function (p) { if (/\{\s*\/\s*(findings|vulnerabilities|phase_findings|phases_data)\s*\}/i.test(pText(p.x))) close = p; });
+        if (close) {
+          var ci = paras.indexOf(close);
+          while (ci + 1 < paras.length && /^\s*(\{\s*\/[^{}]*\}\s*)+$/.test(pText(paras[ci + 1].x))
+            && xml.slice(paras[ci].end, paras[ci + 1].at).indexOf('<w:tbl') === -1) ci++;
+          at = paras[ci].end;
+        } else {
+          at = xml.lastIndexOf('<w:sectPr');
+          if (at === -1) at = xml.lastIndexOf('</w:body>');
+        }
+      }
+      block = section;
+    }
+    if (at < 0) return;
+    xml = xml.slice(0, at) + block + xml.slice(at);
+    zip.file('word/document.xml', xml);
+  } catch (e) { console.warn('[Render] the engagement\'s appendices were not put in:', e && e.message); }
 }
 function _pntlBeforeOpeners(xml, at) {
   for (var guard = 0; guard < 50 && at > 6; guard++) {
@@ -77850,6 +78020,7 @@ async function _fillTemplateAndDownload(templateBuf, data, filename, _docType, _
   _fixReferencesRow(zip);
   _fixUnmappedFunctionTokens(zip);
   _injectSummarySections(zip, data);
+  _injectEngagementAppendices(zip, data);
   var doc;
   try {
     doc = new window.docxtemplater(zip, _dtplOpts(zip, {
@@ -83368,6 +83539,7 @@ function _buildPentalVariableCatalogue(docType) {
   add('ref', 'var', 'Reference URL (inside refs_list loop)', '', []);
 
   add('retest_date', 'var', 'When this finding was retested (inside the findings loop). Empty until it has been.', '', []);
+  add('first_retest_date', 'var', 'The day the first finding was retested (any finding in the report). Empty until one has been.', 'A cover\u2019s re-test date', []);
   add('generated_date', 'var', 'The date this document was produced. Not stored: it moves every time the report is downloaded.', '', []);
   add('version', 'var', 'Document version (inside version_history loop)', '', ['0.1', '1.0']);
   add('vh_date', 'var', 'Version date (inside version_history loop)', '', []);
@@ -86436,6 +86608,8 @@ function _buildPentalBodyXml(type) {
       ['Type', '{assessment_type}'],
       ['Reference', '{job_code}', 'job_code'],
       ['Testing window', '{start_date} to {end_date}'],
+
+      ['Re-test date', '{first_retest_date}', 'first_retest_date'],
       ['Days of testing', '{test_days}'],
       ['Status', '{status}'],
       ['Report date', '{report_date}'],
@@ -86570,6 +86744,13 @@ function _buildPentalBodyXml(type) {
     xml += tag('{#show_appendices}');
     xml += tag('{#has_appendices}');
     xml += h1('Appendices', true);
+
+    xml += tag('{#has_engagement_appendices}');
+    xml += tag('{#engagement_appendices}');
+    xml += h2('{appendix_title}');
+    xml += para('{appendix_content}');
+    xml += tag('{/engagement_appendices}');
+    xml += tag('{/has_engagement_appendices}');
     xml += tag('{#appendix_methodology}');
     xml += tag('{#methodology_text}');
     xml += h2('{methodology_title}');
@@ -87377,6 +87558,19 @@ function showDocxVariableRef(type) {
         ]
       },
       {
+
+        name: 'Engagement Appendices Loop',
+        desc: 'Iterate over the appendices added on the engagement (Add Appendix)',
+        loops: true,
+        vars: [
+          { name: '#engagement_appendices ... /engagement_appendices', desc: 'Loop wrapper', example: '{#engagement_appendices}...{/engagement_appendices}' },
+          { name: 'appendix_title', desc: 'Appendix title', example: 'Unauthenticated Endpoints' },
+          { name: 'appendix_number', desc: 'Its place in the list (1, 2, 3)', example: '1' },
+          { name: 'appendix_content', desc: 'Its content: text, code, tables, lists and screenshots', example: '' },
+          { name: 'heading_engagement_appendices', desc: 'The heading the engagement’s appendices go under', example: 'Appendices' }
+        ]
+      },
+      {
         name: 'Document-level Conditionals',
         desc: 'Show content based on whether sections have data',
         vars: [
@@ -87384,6 +87578,7 @@ function showDocxVariableRef(type) {
           { name: '#has_caveats ... /has_caveats', desc: 'Show only if caveats are non-empty', example: '' },
           { name: '#has_artifacts ... /has_artifacts', desc: 'Show only if findings have artefacts', example: '' },
           { name: '#has_appendices ... /has_appendices', desc: 'Show only if appendices exist', example: '' },
+          { name: '#has_engagement_appendices ... /has_engagement_appendices', desc: 'Show only if the engagement has appendices of its own', example: '' },
           { name: '#has_retests ... /has_retests', desc: 'Show only if there were retests', example: '' },
           { name: '#has_public_ip ... /has_public_ip', desc: 'Show only if a public IP was recorded', example: '' }
         ]
@@ -87858,8 +88053,9 @@ async function buildReportData(assessmentId, docType, _opts) {
     contributors: _otherAuthors.join('\n'),
     leadAndAuthors: _v02Author,
     qaName: qaName,
+    retest: _vhFirstRetest(findings),
   };
-  var versionHistory = _vhRows(tpl).map(function (r) {
+  var versionHistory = _vhRows(tpl).filter(function (r) { return _vhShows(r, _vhCtxD); }).map(function (r) {
     var x = _vhResolve(r, _vhCtxD);
     return { version: r.v || '', vh_date: x.date || '', vh_author: x.author || '', vh_comment: r.l || '' };
   });
@@ -88172,6 +88368,9 @@ async function buildReportData(assessmentId, docType, _opts) {
     });
   });
   tocEntries.push({ toc_text: 'Severity Scale' });
+
+  var _apxRows = (_dxType === 'vuln_report' || (_opts && _opts.findingIds)) ? [] : _apxDocRows(a, _imgCache);
+  _apxRows.forEach(function (r) { tocEntries.push({ toc_text: r.appendix_title }); });
   tocEntries.push({ toc_text: 'Methodology' });
   tocEntries.push({ toc_text: 'Quality Assurance' });
   tocEntries.push({ toc_text: 'Terms and Conditions' });
@@ -88274,6 +88473,8 @@ async function buildReportData(assessmentId, docType, _opts) {
     info_findings: infoFindings,
     version_history: versionHistory,
     document_version: documentVersion,
+
+    first_retest_date: _vhCtxD.retest,
     severity_scale: sevScale,
     scope_items: scopeItems,
     phases_data: phasesData,
@@ -88297,6 +88498,10 @@ async function buildReportData(assessmentId, docType, _opts) {
     has_notes: _cfHasContent(a.notes),
     has_artifacts: false,
     has_appendices: true,
+
+    engagement_appendices: _apxRows,
+    has_engagement_appendices: _apxRows.length > 0,
+    heading_engagement_appendices: _docSecHeading('evidence', _apxHeadingSaved(tpl), 'Appendices'),
     is_authenticated: !!(a.test_perspective === 'authenticated' || a.authenticated),
     is_unauthenticated: !(a.test_perspective === 'authenticated' || a.authenticated),
     has_retests: findings.some(function(f) { return f.retest_status; }),
