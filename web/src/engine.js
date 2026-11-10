@@ -48566,15 +48566,6 @@ function _tplWordTok(type, only, redraw) {
   }, function () { m.used = false; m.done = true; after(); });
   return null;
 }
-function _tplWordHas(type, files, own) {
-  var used = _tplWordTok(type, files, true);
-  if (used === null) return null;
-  var map = _tplWordMap(type);
-  return Object.keys(map).some(function (k) {
-    if (own && /^sev_/.test(k)) return false;
-    return _tplShows(type, k, used);
-  });
-}
 function _tplShows(type, key, used) {
   var w = _tplWordMap(type)[key];
   if (!w) return false;
@@ -49176,9 +49167,11 @@ function _renderStyleTab(tpl, word) {
 
   if (_rtOwn && !word) h += _tplH('Severity Colours and Wording', _verOwn ? 'Its severity colours and their wording are its report’s: the report’s own Severity, under its Edit, or else the firm’s, and the wording in the Default’s editor.' : 'Its severity colours are its own Severity’s, under its Edit, or else the firm’s; their wording is the firm’s, in the Default’s editor.')
     + '<div data-tpl-key="severity_colors"></div>';
-  if (!_rtOwn) {
-  h += _tplH('Severity Colours', 'Customise the colour for each severity rating in PDF and DOCX reports');
-  var sc = tpl.severity_colors || {};
+
+  if (!_rtOwn || word) {
+  h += _tplH('Severity Colours', _rtOwn ? 'Your firm\u2019s colour for each severity, in every report that prints them. A report that gives a level a colour of its own, under its Edit, Severity, prints that one.' : 'Customise the colour for each severity rating in PDF and DOCX reports');
+
+  var sc = (_rtOwn && typeof _sevColors === 'function') ? _sevColors() : (tpl.severity_colors || {});
   h += '<div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end">';
   h += _tplC('sev_critical', 'Critical', sc.critical);
   h += _tplC('sev_high', 'High', sc.high);
@@ -49188,7 +49181,7 @@ function _renderStyleTab(tpl, word) {
   h += '</div>';
   h += '<div style="margin-top:0.4rem"><button class="btn btn-ghost" onclick="syncSevFromDashboard()" style="font-size:0.65rem;padding:0.15rem 0.4rem;border:1px solid var(--border);border-radius:4px;color:var(--accent)" title="Copy the severity colours from Settings, Branding">↻ Sync from Branding</button></div>';
 
-  h += _tplH('Severity Wording', 'How a severity READS in a generated report: CRITICAL, Critical or critical, bold or not, in colour or in the template\'s own text colour');
+  h += _tplH('Severity Wording', (_rtOwn ? 'Your firm\u2019s, in every report. ' : '') + 'How a severity READS in a generated report: CRITICAL, Critical or critical, bold or not, in colour or in the template\'s own text colour');
   var _svs = (typeof _sevStyleCfg === 'function') ? _sevStyleCfg() : { case: 'upper', bold: true, colour: 'severity' };
   h += '<div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end">';
   h += _tplS('sev_style_case', 'Case', _svs.case, [
@@ -54393,8 +54386,7 @@ function _rdBaseHtml(tid, main, auto, mgr, canTpl) {
     h += '<button class="btn btn-ghost btn-sm rp-edit" onclick="_rtOpenTpl(\'' + (tid ? idTxt : _RT_DEF) + '\')" aria-expanded="' + open + '">' + (open ? 'Close' : 'Edit') + '</button>';
 
     var _wMain = main || (tid ? _rtWith(tid, function () { return _getDocxTemplateMeta('report'); }) : null);
-    var _wHas = _wMain ? _tplWordHas('report', [_wMain].concat(vers), !!tid) : true;
-    if (_wHas) h += '<button class="btn btn-ghost btn-sm rp-custom" onclick="openTemplateEditor(\'report\',\'cover\',\'' + idTxt + '\')" title="'
+    h += '<button class="btn btn-ghost btn-sm rp-custom" onclick="openTemplateEditor(\'report\',\'cover\',\'' + idTxt + '\')" title="'
       + esc(_wMain ? _TPL_WORD_TITLE : 'The design of Pental’s own PDF for this report: its sections, finding fields, colours and labels')
       + (tid ? '. What you leave as it is follows the Default’s.' : '') + '">' + IC.edit + ' Customise</button>';
   }
@@ -54419,7 +54411,7 @@ function _rdBaseHtml(tid, main, auto, mgr, canTpl) {
       if (auto) h += _rdConvHtml(v.id, false);
       h += '</div><span class="rp-icons">';
 
-      if (mgr && _tplWordHas('report', [v], true)) h += '<button class="btn btn-ghost btn-sm rp-custom rp-ver-custom" onclick="openTemplateEditor(\'report\',\'cover\',\'' + idTxt + '\',\'' + esc(v.id) + '\')" title="'
+      if (mgr) h += '<button class="btn btn-ghost btn-sm rp-custom rp-ver-custom" onclick="openTemplateEditor(\'report\',\'cover\',\'' + idTxt + '\',\'' + esc(v.id) + '\')" title="'
         + esc('What Pental makes for ' + vn + ' that the file cannot: its document controls, the chart’s colour and the words chosen for each engagement. What you leave as it is follows ' + (tid ? name + '’s' : 'the Default’s') + '.')
         + '" aria-label="Customise ' + esc(vn) + '">' + IC.edit + ' Customise</button>';
       if (mgr) h += _rdMoveBtns('report', tid, v.id, vn, vi, vers.length);
@@ -56636,24 +56628,19 @@ function _rdFileCustom(dt, key, t, name) {
   if (!dt || dt.exportOnly || !t || !_tplWordAny(dt.editorKey)) return '';
   var on, title;
 
-  var has;
   if (key === 'report') {
     var main = _rdMainOf('');
     if (main && main.id === t.id) {
-      has = _tplWordHas('report', [main].concat(_rdVersionsOf('')), false);
       on = 'openTemplateEditor(\'report\',\'cover\',\'\')';
       title = _TPL_WORD_TITLE + '. Its other Word files follow it, unless they change it.';
     } else {
-      has = _tplWordHas('report', [t], true);
       on = 'openTemplateEditor(\'report\',\'cover\',\'\',\'' + esc(t.id) + '\')';
       title = 'What Pental makes for ' + name + ' that the file cannot: its document controls, the chart’s colour and the words chosen for each engagement. What you leave as it is follows the Default’s.';
     }
   } else {
-    has = _tplWordHas(dt.editorKey, [t], false);
     on = 'openTemplateEditor(\'' + dt.editorKey + '\',undefined,undefined,\'' + esc(t.id) + '\')';
     title = 'What Pental makes for ' + name + ' that the file cannot: the words it chooses for each document, for this Word file alone.';
   }
-  if (!has) return '';
   return '<button class="btn btn-ghost btn-sm doc-custom" onclick="' + on + '" title="' + esc(title) + '" aria-label="Customise ' + esc(name) + '">' + IC.edit + ' Customise</button>';
 }
 function _pdfOwnDocs() {

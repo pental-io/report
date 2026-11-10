@@ -98,6 +98,10 @@ function _setTabOn(id) {
   return !!_REPORTER_SETTINGS_TABS[id];
 }
 function renderSettings() {
+  // 2021: the tab remembered before a reload, read before it is checked
+  // ([stated] Arian: "refreshing doesnt stay on same page (on report tool)"):
+  // unread, no tab was one of the tool's, and Settings opened on Branding.
+  if (!S.settingsTab) { try { S.settingsTab = localStorage.getItem('pental_settings_tab') || 'login'; } catch (e) { S.settingsTab = 'login'; } }
   // 1977: a Testing IPs tab remembered from before opens Assessments, where the card is.
   if (S.settingsTab === 'testing_ip') S.settingsTab = 'assessments';
   // 2001: and Report Templates, Documents, where the card is (the
