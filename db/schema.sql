@@ -553,6 +553,13 @@ CREATE TABLE IF NOT EXISTS public.contractor_payments (id uuid NOT NULL DEFAULT 
 CREATE TABLE IF NOT EXISTS public.email_notifications (id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY, to_email text NOT NULL, subject text NOT NULL, body text NOT NULL, notification_type text DEFAULT 'general', related_id uuid, status text DEFAULT 'pending' CHECK (status = ANY (ARRAY['pending','sent','failed','cancelled'])), from_name text, from_email text, error_message text, attempts integer DEFAULT 0, sent_at timestamptz, created_at timestamptz DEFAULT now());
 CREATE TABLE IF NOT EXISTS public.payment_events (id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY, invoice_id uuid REFERENCES public.invoices(id), event_type text NOT NULL, stripe_event_id text, amount numeric, currency text DEFAULT 'gbp', metadata jsonb DEFAULT '{}', created_at timestamptz DEFAULT now());
 CREATE TABLE IF NOT EXISTS public.qa_comments (id uuid NOT NULL DEFAULT uuid_generate_v4() PRIMARY KEY, assessment_id uuid REFERENCES public.assessments(id), finding_id uuid REFERENCES public.findings(id), user_id uuid REFERENCES public.profiles(id), user_name text, comment text NOT NULL, highlight text, resolved boolean DEFAULT false, resolved_at timestamptz, created_at timestamptz DEFAULT now());
+-- 2018: the files a sealed box names, beside it (see "THE TESTING WORK,
+-- END-TO-END ENCRYPTED", near the end of this file). Here, so the rules
+-- below that ask what a client is shown can read it on a new database.
+ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS e2e_refs jsonb;
+ALTER TABLE public.assessments ADD COLUMN IF NOT EXISTS e2e_refs jsonb;
+ALTER TABLE public.qa_comments ADD COLUMN IF NOT EXISTS e2e_refs jsonb;
+ALTER TABLE public.assessment_comments ADD COLUMN IF NOT EXISTS e2e_refs jsonb;
 CREATE TABLE IF NOT EXISTS public.login_codes (id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY, email text NOT NULL, code text NOT NULL, expires_at timestamptz NOT NULL, used boolean DEFAULT false, created_at timestamptz DEFAULT now());
 CREATE TABLE IF NOT EXISTS public._credentials_key (id integer NOT NULL DEFAULT 1 CHECK (id = 1) PRIMARY KEY, encryption_key text NOT NULL, created_at timestamptz DEFAULT now());
 CREATE TABLE IF NOT EXISTS public._encryption_keys (key_name text NOT NULL PRIMARY KEY, key_value text NOT NULL, created_at timestamptz DEFAULT now());
@@ -560,8 +567,11 @@ CREATE TABLE IF NOT EXISTS public._internal_secrets (key text NOT NULL PRIMARY K
 
 -- Default data
 INSERT INTO public.settings (company_name) VALUES ('') ON CONFLICT DO NOTHING;
-INSERT INTO public._credentials_key (encryption_key) VALUES (encode(extensions.gen_random_bytes(32), 'hex')) ON CONFLICT DO NOTHING;
-INSERT INTO public._encryption_keys (key_name, key_value) VALUES ('credentials', encode(extensions.gen_random_bytes(32), 'hex')) ON CONFLICT DO NOTHING;
+-- 2017: no key is made in _credentials_key or _encryption_keys any more. The
+-- two keys are the Vault's (credentials_aes_key, given one in step 15, and
+-- settings_aes_key, made at the end by _keys_seal) and the two tables are kept
+-- empty: a key made here on every run would have been copied over the Vault's
+-- own by step 15, and nothing sealed before would have opened again.
 INSERT INTO public._internal_secrets (key, value) VALUES ('CRON_SECRET', encode(extensions.gen_random_bytes(32), 'hex')) ON CONFLICT DO NOTHING;
 -- 1812: WEBAUTHN_VERIFY_URL is gone. Passkeys are checked in this database
 -- (_webauthn_verify_assertion); nothing here names Pental's checker any more,
@@ -1779,19 +1789,25 @@ GRANT EXECUTE ON FUNCTION public._client_sees_section(uuid, text) TO service_rol
 CREATE OR REPLACE FUNCTION public._client_section_refers(p_assessment uuid, p_path text) RETURNS boolean
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = public, pg_catalog, pg_temp AS $csref$
+  -- 2018: a sealed section names its files in `e2e_refs` (by column, and an
+  -- engagement's own sections by section), as its words cannot be searched.
   SELECT EXISTS (
     SELECT 1 FROM public.assessments a
      WHERE a.id = p_assessment AND COALESCE(p_path, '') <> ''
        AND strpos(concat_ws(' ', a.exec_summary, a.caveats, a.retest_summary, a.notes, a.scope,
-                            a.appendices::text, a.summary_sections::text), p_path) > 0
-       AND ((strpos(COALESCE(a.exec_summary, ''), p_path) > 0 AND public._client_sees_section(a.id, 'exec_summary'))
-         OR (strpos(COALESCE(a.caveats, ''), p_path) > 0 AND public._client_sees_section(a.id, 'caveats'))
-         OR (strpos(COALESCE(a.retest_summary, ''), p_path) > 0 AND public._client_sees_section(a.id, 'retest_summary'))
-         OR (strpos(COALESCE(a.notes, ''), p_path) > 0 AND public._client_sees_section(a.id, 'notes'))
-         OR (strpos(COALESCE(a.scope, ''), p_path) > 0 AND public._client_sees_section(a.id, 'scope'))
-         OR (strpos(COALESCE(a.appendices::text, ''), p_path) > 0 AND public._client_sees_section(a.id, 'appendices'))
+                            a.appendices::text, a.summary_sections::text, a.e2e_refs::text), p_path) > 0
+       AND ((strpos(COALESCE(a.exec_summary, '') || COALESCE(a.e2e_refs->>'exec_summary', ''), p_path) > 0 AND public._client_sees_section(a.id, 'exec_summary'))
+         OR (strpos(COALESCE(a.caveats, '') || COALESCE(a.e2e_refs->>'caveats', ''), p_path) > 0 AND public._client_sees_section(a.id, 'caveats'))
+         OR (strpos(COALESCE(a.retest_summary, '') || COALESCE(a.e2e_refs->>'retest_summary', ''), p_path) > 0 AND public._client_sees_section(a.id, 'retest_summary'))
+         OR (strpos(COALESCE(a.notes, '') || COALESCE(a.e2e_refs->>'notes', ''), p_path) > 0 AND public._client_sees_section(a.id, 'notes'))
+         OR (strpos(COALESCE(a.scope, '') || COALESCE(a.e2e_refs->>'scope', ''), p_path) > 0 AND public._client_sees_section(a.id, 'scope'))
+         OR (strpos(COALESCE(a.appendices::text, '') || COALESCE(a.e2e_refs->>'appendices', ''), p_path) > 0 AND public._client_sees_section(a.id, 'appendices'))
          OR EXISTS (SELECT 1 FROM jsonb_each_text(CASE WHEN jsonb_typeof(a.summary_sections) = 'object'
                                                        THEN a.summary_sections ELSE '{}'::jsonb END) sec
+                     WHERE strpos(sec.value, p_path) > 0
+                       AND public._client_sees_section(a.id, 'summary_' || sec.key))
+         OR EXISTS (SELECT 1 FROM jsonb_each_text(CASE WHEN jsonb_typeof(a.e2e_refs->'summary_sections') = 'object'
+                                                       THEN a.e2e_refs->'summary_sections' ELSE '{}'::jsonb END) sec
                      WHERE strpos(sec.value, p_path) > 0
                        AND public._client_sees_section(a.id, 'summary_' || sec.key))))
 $csref$;
@@ -1819,7 +1835,7 @@ BEGIN
     -- them (`retest_client_visible`); hidden, the rest of the finding still does.
     IF EXISTS (SELECT 1 FROM public.findings f
                 WHERE f.assessment_id = v_home AND f.client_visible = true
-                  AND strpos(CASE WHEN f.retest_client_visible IS FALSE THEN (to_jsonb(f) - 'retest_results')::text ELSE f::text END, p_path) > 0)
+                  AND strpos(public._e2e_finding_names(f, true), p_path) > 0)
        OR public._client_section_refers(v_home, p_path) THEN
       RETURN true;
     END IF;
@@ -1831,7 +1847,7 @@ BEGIN
                 AND f.assessment_id IS DISTINCT FROM v_home
                 AND (f.assessment_id IN (SELECT a.id FROM public.assessments a WHERE a.client_id = p_client)
                      OR (f.assessment_id IS NULL AND f.client_id = p_client))
-                AND strpos(CASE WHEN f.retest_client_visible IS FALSE THEN (to_jsonb(f) - 'retest_results')::text ELSE f::text END, p_path) > 0) THEN
+                AND strpos(public._e2e_finding_names(f, true), p_path) > 0) THEN
     RETURN true;
   END IF;
   RETURN EXISTS (SELECT 1 FROM public.assessments a
@@ -2007,7 +2023,7 @@ BEGIN
                     AND (fd.assessment_id IN (SELECT a.id FROM public.assessments a WHERE a.client_id = v_client_id)
                          OR (fd.assessment_id IS NULL AND fd.client_id = v_client_id))
                     -- 1989: its retest results only while they are shown to the client.
-                    AND strpos(CASE WHEN fd.retest_client_visible IS FALSE THEN (to_jsonb(fd) - 'retest_results')::text ELSE fd::text END, file_path) > 0) THEN
+                    AND strpos(public._e2e_finding_names(fd, true), file_path) > 0) THEN
         RETURN true;
       END IF;
     END IF;
@@ -2763,12 +2779,18 @@ BEGIN
       RAISE EXCEPTION 'Up to 10 files can be sent at once' USING ERRCODE = '22023';
     END IF;
     FOR v_f IN SELECT e FROM jsonb_array_elements(p_credential -> 'files') e LOOP
+      -- 2018: or sealed in the client's browser (its size as they said, never
+      -- more than the sealed file could hold).
       IF jsonb_typeof(v_f) IS DISTINCT FROM 'object' OR jsonb_typeof(v_f -> 'b64') IS DISTINCT FROM 'string'
-         OR (v_f ->> 'b64') !~ '^[A-Za-z0-9+/]*={0,2}$' THEN
+         OR NOT ((v_f ->> 'b64') ~ '^[A-Za-z0-9+/]*={0,2}$' OR ((v_f ->> 'b64') <> '' AND public._e2e_sealed_text(v_f ->> 'b64'))) THEN
         RAISE EXCEPTION 'A file could not be read' USING ERRCODE = '22023';
       END IF;
       v_b64 := v_f ->> 'b64';
-      v_bytes := floor(length(v_b64) * 3 / 4.0)::bigint - CASE WHEN v_b64 LIKE '%==' THEN 2 WHEN v_b64 LIKE '%=' THEN 1 ELSE 0 END;
+      IF v_b64 ~ '^pe2[es]1\.' THEN
+        v_bytes := LEAST(GREATEST(COALESCE(CASE WHEN COALESCE(v_f ->> 'size', '') ~ '^[0-9]{1,12}$' THEN (v_f ->> 'size')::bigint END, 0), 0), length(v_b64));
+      ELSE
+        v_bytes := floor(length(v_b64) * 3 / 4.0)::bigint - CASE WHEN v_b64 LIKE '%==' THEN 2 WHEN v_b64 LIKE '%=' THEN 1 ELSE 0 END;
+      END IF;
       v_total := v_total + v_bytes;
       -- The route's String(f.name || 'file'): text that is not empty, or a
       -- number that is not nought; anything else is 'file'.
@@ -2796,7 +2818,10 @@ BEGIN
       v_row := '{}'::jsonb;
       FOREACH v_k IN ARRAY ARRAY['role', 'username', 'password', 'mfa', 'notes'] LOOP
         IF jsonb_typeof(v_a -> v_k) IS NULL OR jsonb_typeof(v_a -> v_k) = 'null' OR (v_a -> v_k) = '""'::jsonb THEN CONTINUE; END IF;
-        IF jsonb_typeof(v_a -> v_k) <> 'string' OR length(v_a ->> v_k) > 4000 THEN
+        -- 2018: sealed, as long as 4,000 characters of any text come to: up to
+        -- 16,000 bytes, with the 93 a seal to a key adds, in base64url (21,458)
+        -- after the 39 characters that name the seal and its key.
+        IF jsonb_typeof(v_a -> v_k) <> 'string' OR length(v_a ->> v_k) > (CASE WHEN (v_a ->> v_k) ~ '^pe2[es]1\.' THEN 21500 ELSE 4000 END) THEN
           RAISE EXCEPTION 'An account could not be read' USING ERRCODE = '22023';
         END IF;
         v_row := v_row || jsonb_build_object(v_k, v_a ->> v_k);
@@ -3388,6 +3413,9 @@ DECLARE
 BEGIN
   v_input := regexp_replace(COALESCE(p_code, ''), '\s', '', 'g');
   IF length(v_input) != 6 OR v_input !~ '^[0-9]{6}$' THEN RETURN false; END IF;
+  -- 2017: the secret as it is kept is sealed; opened here, for this check alone.
+  IF p_secret_b32 LIKE 'sealed:%' THEN p_secret_b32 := public._totp_plain(p_secret_b32); END IF;
+  IF p_secret_b32 IS NULL OR p_secret_b32 = '' THEN RETURN false; END IF;
   IF public._totp_code(p_secret_b32, v_now) = v_input THEN RETURN true; END IF;
   IF public._totp_code(p_secret_b32, v_now - 30) = v_input THEN RETURN true; END IF;
   IF public._totp_code(p_secret_b32, v_now + 30) = v_input THEN RETURN true; END IF;
@@ -9025,7 +9053,7 @@ GRANT EXECUTE ON FUNCTION public.rpc_cleanup_orphan_auth(text, jsonb) TO authent
 -- old tables present but empty (for rollback window). _get_cred_key() now
 -- reads from Vault.
 DO $$
-DECLARE v_existing_key text; v_slot uuid;
+DECLARE v_existing_key text; v_slot uuid; v_cur text;
 BEGIN
   -- Take existing key from _credentials_key or _encryption_keys, whichever is populated
   SELECT encryption_key INTO v_existing_key FROM public._credentials_key LIMIT 1;
@@ -9033,12 +9061,25 @@ BEGIN
     SELECT key_value INTO v_existing_key FROM public._encryption_keys WHERE key_name = 'credentials' LIMIT 1;
   END IF;
 
-  -- Write to Vault if not already set
-  SELECT id INTO v_slot FROM vault.decrypted_secrets WHERE name = 'credentials_aes_key';
+  -- 2017: AN EMPTY SLOT IS GIVEN A KEY, AND NO OTHER. This made a new key
+  -- whenever both tables were empty, over the one already in the Vault; with
+  -- the keys in the Vault alone (_keys_seal, at the end of this file) every
+  -- re-run would have done it, and no credential sealed before would have
+  -- opened again. A slot this connection cannot open (NULL: a gateway's
+  -- connection without its key) is not given one either. A key still in a
+  -- table is the one what was sealed came with, as before, and the one it
+  -- replaces is kept beside it in the Vault rather than lost.
+  SELECT id, decrypted_secret INTO v_slot, v_cur FROM vault.decrypted_secrets WHERE name = 'credentials_aes_key';
   IF v_slot IS NOT NULL THEN
     IF v_existing_key IS NOT NULL AND v_existing_key != '' THEN
-      PERFORM vault.update_secret(v_slot, v_existing_key);
-    ELSE
+      IF v_cur IS DISTINCT FROM v_existing_key THEN
+        IF COALESCE(v_cur, '') <> '' THEN
+          PERFORM vault.create_secret(v_cur, 'credentials_aes_key_' || to_char(clock_timestamp(), 'YYYYMMDDHH24MISSUS'),
+            'A credentials key the Vault held until ' || to_char(now(), 'YYYY-MM-DD') || ', when the one in _credentials_key replaced it. Kept so nothing it sealed is lost.');
+        END IF;
+        PERFORM vault.update_secret(v_slot, v_existing_key);
+      END IF;
+    ELSIF v_cur = '' THEN
       -- Fresh install: generate and store
       PERFORM vault.update_secret(v_slot, encode(extensions.gen_random_bytes(32), 'hex'));
     END IF;
@@ -13844,6 +13885,27 @@ DECLARE
 BEGIN
   _claims := event -> 'claims';
 
+  -- 2020: SIGN-IN IS A PASSWORD, WHATEVER THE AUTH SERVER STILL OFFERS.
+  -- [stated] Arian, of Google and Microsoft sign-in and the emailed code:
+  -- "Remove both"; and of a gateway's own sign-on, still answering where a
+  -- firm set it up: "yes". The portal ends every sign-in with a password
+  -- grant (a bridge the schema sets), so a session begun any other way (a
+  -- provider set up on a Supabase project or in a gateway's environment, an
+  -- emailed link) is refused here, at every home: Supabase's auth server
+  -- refuses the token for the error, and a gateway that issues the claims
+  -- anyway issues them as nobody's (role anon, no second-factor stamp), which
+  -- opens nothing. A refresh carries the session's first method in `amr`.
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(_claims -> 'amr') = 'array' THEN _claims -> 'amr' ELSE '[]'::jsonb END) x
+              WHERE COALESCE(CASE WHEN jsonb_typeof(x) = 'object' THEN x ->> 'method' END, CASE WHEN jsonb_typeof(x) = 'string' THEN x #>> '{}' END)
+                    IN ('oauth', 'sso/saml', 'otp', 'magiclink'))
+     OR COALESCE(event ->> 'authentication_method', '') IN ('oauth', 'sso/saml', 'otp', 'magiclink') THEN
+    _claims := jsonb_set(_claims, '{role}', '"anon"');
+    _claims := jsonb_set(_claims, '{app_metadata}',
+      (COALESCE(_claims -> 'app_metadata', '{}'::jsonb) - 'mfa_verified_at') || jsonb_build_object('pental_refused', 'sign-in method'));
+    RETURN jsonb_build_object('claims', _claims,
+      'error', jsonb_build_object('http_code', 403, 'message', 'Sign in with your password. Single sign-on and emailed sign-in links are not used by this portal.'));
+  END IF;
+
   -- Pull mfa_verified_at directly from auth.users.raw_app_meta_data and
   -- copy it into the JWT app_metadata so mfa_is_fresh() (used by RLS on
   -- sensitive tables) and the portal's freshness check both see the
@@ -13921,6 +13983,68 @@ ALTER TABLE public.settings
   ADD COLUMN IF NOT EXISTS sso_ms_client_secret_enc bytea,
   ADD COLUMN IF NOT EXISTS sso_ms_tenant text DEFAULT 'common';
 
+-- 2017: THE SETTINGS KEY IS THE VAULT'S. The settings secrets, the Drive's
+-- refresh token, the SharePoint and Drive application's secret, the password
+-- manager's secrets and the authenticator secrets are sealed under the Vault's
+-- settings_aes_key, not under a key in a table beside them, so a copy of the
+-- database (a dump, a backup, an export) opens none of them. The keys a sealed
+-- value may be under, in the order they are tried and the first the one that
+-- seals: the one still in _encryption_keys, where a database has not had this
+-- file's end run yet (what it sealed came with it; _keys_seal moves it into the
+-- Vault), then the Vault's own, then any it kept when another replaced it. A
+-- Vault this connection cannot open gives none.
+CREATE OR REPLACE FUNCTION public._settings_keys() RETURNS text[]
+  LANGUAGE plpgsql STABLE SECURITY DEFINER
+  SET search_path = public, extensions, pg_catalog, pg_temp
+AS $fn$
+DECLARE v_out text[] := ARRAY[]::text[]; v_key text;
+BEGIN
+  SELECT key_value INTO v_key FROM public._encryption_keys WHERE key_name = 'credentials' LIMIT 1;
+  IF COALESCE(v_key, '') <> '' THEN v_out := v_out || v_key; END IF;
+  BEGIN
+    FOR v_key IN
+      SELECT d.decrypted_secret FROM vault.decrypted_secrets d
+       WHERE d.name = 'settings_aes_key' OR d.name LIKE 'settings\_aes\_key\_%'
+       ORDER BY (d.name = 'settings_aes_key') DESC, d.created_at DESC
+    LOOP
+      IF COALESCE(v_key, '') <> '' AND NOT (v_key = ANY (v_out)) THEN v_out := v_out || v_key; END IF;
+    END LOOP;
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+  RETURN v_out;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public._settings_keys() FROM PUBLIC, anon, authenticated;
+
+-- Made only where a database has no settings key at all: none in
+-- _encryption_keys and no settings_aes_key in the Vault, not even one this
+-- connection cannot open (a gateway's connection without its key reads every
+-- secret as nothing, and a key made then would leave all that was sealed shut).
+CREATE OR REPLACE FUNCTION public._settings_key_make() RETURNS text
+  LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+  SET search_path = public, extensions, pg_catalog, pg_temp
+AS $fn$
+DECLARE v_keys text[] := public._settings_keys(); v_id uuid; v_cur text; v_new text;
+BEGIN
+  IF array_length(v_keys, 1) IS NOT NULL THEN RETURN v_keys[1]; END IF;
+  SELECT d.id, d.decrypted_secret INTO v_id, v_cur FROM vault.decrypted_secrets d WHERE d.name = 'settings_aes_key' LIMIT 1;
+  IF v_id IS NOT NULL AND v_cur IS NULL THEN RETURN NULL; END IF;
+  v_new := encode(extensions.gen_random_bytes(32), 'hex');
+  IF v_id IS NULL THEN
+    PERFORM vault.create_secret(v_new, 'settings_aes_key',
+      'The key the settings secrets, the Drive refresh token, the SharePoint and Drive application secret, the password manager''s and the authenticator secrets are sealed under.');
+  ELSE
+    PERFORM vault.update_secret(v_id, v_new);
+  END IF;
+  RETURN v_new;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'no settings key could be made in the Vault: %', SQLERRM;
+  RETURN NULL;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public._settings_key_make() FROM PUBLIC, anon, authenticated;
+
 CREATE OR REPLACE FUNCTION public._settings_encrypt(p_plain text)
   RETURNS bytea LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   SET search_path = public, extensions, pg_catalog, pg_temp
@@ -13929,29 +14053,16 @@ DECLARE v_key text;
 BEGIN
   IF p_plain IS NULL THEN RETURN NULL; END IF;
   IF p_plain = '' THEN RETURN NULL; END IF;
-  SELECT key_value INTO v_key FROM public._encryption_keys
-    WHERE key_name = 'credentials' LIMIT 1;
-  -- Self-heal: a database provisioned from an older byo-setup.sql (or one whose
-  -- key was wiped) may not have the 'credentials' key yet. Rather than raise and
-  -- block the whole settings write, create the key now. This matches the
-  -- pentest-credential path, which uses the same key_name.
-  -- 1844: AND ONE THAT IS THERE BUT EMPTY. Kept as it was (DO NOTHING), every
-  -- secret written stayed in plain text for good, and re-running the setup
-  -- could not encrypt it ("Stored without encryption" that would not go). An
-  -- empty key never encrypted anything (this refuses one, and so does
-  -- _settings_decrypt), so giving it a value loses nothing.
-  IF v_key IS NULL OR v_key = '' THEN
-    INSERT INTO public._encryption_keys (key_name, key_value)
-      VALUES ('credentials', encode(extensions.gen_random_bytes(32), 'hex'))
-      ON CONFLICT (key_name) DO UPDATE SET key_value = EXCLUDED.key_value
-        WHERE public._encryption_keys.key_value IS NULL OR public._encryption_keys.key_value = '';
-    SELECT key_value INTO v_key FROM public._encryption_keys
-      WHERE key_name = 'credentials' LIMIT 1;
-  END IF;
-  IF v_key IS NULL OR v_key = '' THEN
-    -- Still nothing (should be impossible): leave the plaintext write to proceed
-    -- rather than blocking the save. The value stays in the plaintext column and
-    -- gets encrypted on the next write once the key exists.
+  v_key := (public._settings_keys())[1];
+  -- Self-heal: a database with no key yet gets one now rather than refusing the
+  -- whole settings write (1844: one that is there but empty too; an empty key
+  -- never sealed anything). 2017: made in the Vault, and only where there is
+  -- none at all (_settings_key_make).
+  IF COALESCE(v_key, '') = '' THEN v_key := public._settings_key_make(); END IF;
+  IF COALESCE(v_key, '') = '' THEN
+    -- Still nothing (a Vault this connection cannot open): leave the plaintext
+    -- write to proceed rather than blocking the save. The value stays in the
+    -- plaintext column and gets encrypted on the next write once the key exists.
     RETURN NULL;
   END IF;
   RETURN extensions.pgp_sym_encrypt(p_plain, v_key);
@@ -13966,14 +14077,16 @@ AS $fn$
 DECLARE v_key text;
 BEGIN
   IF p_cipher IS NULL THEN RETURN NULL; END IF;
-  SELECT key_value INTO v_key FROM public._encryption_keys
-    WHERE key_name = 'credentials' LIMIT 1;
-  IF v_key IS NULL OR v_key = '' THEN RETURN NULL; END IF;
-  BEGIN
-    RETURN extensions.pgp_sym_decrypt(p_cipher, v_key);
-  EXCEPTION WHEN OTHERS THEN
-    RETURN NULL;
-  END;
+  -- 2017: each key it may be under, in turn (_settings_keys). A wrong key is
+  -- refused by pgcrypto, never read as something else.
+  FOREACH v_key IN ARRAY public._settings_keys() LOOP
+    BEGIN
+      RETURN extensions.pgp_sym_decrypt(p_cipher, v_key);
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
+  END LOOP;
+  RETURN NULL;
 END;
 $fn$;
 REVOKE ALL ON FUNCTION public._settings_decrypt(bytea) FROM PUBLIC, anon, authenticated;
@@ -14820,9 +14933,18 @@ CREATE OR REPLACE FUNCTION public._settings_secrets_fault() RETURNS text
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $ssf$
 DECLARE v_key text; v_found boolean; v_trig "char";
 BEGIN
-  SELECT key_value, true INTO v_key, v_found FROM public._encryption_keys WHERE key_name = 'credentials';
-  IF NOT COALESCE(v_found, false) THEN RETURN 'key_missing'; END IF;
-  IF COALESCE(v_key, '') = '' THEN RETURN 'key_empty'; END IF;
+  -- 2017: the key is the Vault's settings_aes_key (or one not yet moved there
+  -- from _encryption_keys): none that opens is 'key_missing', an empty one
+  -- 'key_empty'.
+  IF array_length(public._settings_keys(), 1) IS NULL THEN
+    v_found := false;
+    BEGIN
+      SELECT d.decrypted_secret, true INTO v_key, v_found FROM vault.decrypted_secrets d WHERE d.name = 'settings_aes_key' LIMIT 1;
+    EXCEPTION WHEN OTHERS THEN v_found := false;
+    END;
+    IF COALESCE(v_found, false) AND v_key = '' THEN RETURN 'key_empty'; END IF;
+    RETURN 'key_missing';
+  END IF;
   IF to_regprocedure('extensions.pgp_sym_encrypt(text,text)') IS NULL THEN RETURN 'no_pgcrypto'; END IF;
   SELECT tgenabled INTO v_trig FROM pg_trigger WHERE tgrelid = 'public.settings'::regclass AND tgname = 'zzz_tr_settings_encrypt_secrets';
   IF NOT FOUND THEN RETURN 'trigger_missing'; END IF;
@@ -17161,6 +17283,11 @@ BEGIN
   IF NOT FOUND OR NOT COALESCE(v_profile.active, true) THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'no_account');
   END IF;
+  -- 2018: somebody who has never had a password (they signed in with a code,
+  -- Google or Microsoft, all gone) is sent the link to set their first.
+  IF p_purpose = 'reset' AND NOT EXISTS (SELECT 1 FROM public.user_credentials WHERE profile_id = v_profile.id) THEN
+    p_purpose := 'set';
+  END IF;
 
   -- A first-time setup link may sit in an inbox for a while; a reset link is
   -- short-lived because it is a live path to an existing account.
@@ -17344,7 +17471,7 @@ DECLARE
   v_enabled boolean;
   v_profile RECORD;
   v_hash text;
-  v_bridge text;
+  v_bridge jsonb;
   v_delay interval;
   v_key text;
   v_thr RECORD;
@@ -17427,18 +17554,17 @@ BEGIN
          last_login_at = now(), updated_at = now()
    WHERE profile_id = v_profile.id;
 
-  v_bridge := encode(extensions.gen_random_bytes(32), 'base64');
-  PERFORM set_config('pental.bypass_protect', 'true', true);
-  UPDATE auth.users
-     SET encrypted_password = extensions.crypt(v_bridge, extensions.gen_salt('bf')),
-         email_confirmed_at = COALESCE(email_confirmed_at, now()),
-         updated_at = now()
-   WHERE email = lower(v_profile.email);
-  IF NOT FOUND THEN
+  -- 2018: the one-time password a gateway or GoTrue signs in with, set as
+  -- _signin_bridge sets it, which also makes the sign-in record of somebody
+  -- the firm invited who has never signed in (an emailed code did that
+  -- before; a password does now that codes are gone) and links it to the
+  -- profile the firm made.
+  v_bridge := public._signin_bridge(v_profile.id);
+  IF v_bridge IS NULL THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'invalid');
   END IF;
 
-  RETURN jsonb_build_object('ok', true, 'bridge', v_bridge, 'email', lower(v_profile.email));
+  RETURN jsonb_build_object('ok', true) || v_bridge;
 END;
 $$;
 
@@ -24141,6 +24267,14 @@ BEGIN
   IF v_mode IS DISTINCT FROM 'user_jwt' OR NOT public.is_delivery_staff() OR NOT public.mfa_is_fresh() THEN
     RETURN jsonb_build_object('error', 'Not permitted');
   END IF;
+  -- 2018: grouped by their words, so the portal opens the engagement's scan
+  -- findings first (rpc_e2e_scan_open), and they are held while it runs.
+  IF public._e2e_active() THEN
+    PERFORM public._e2e_scan_hold(NULL, NULL, p_assessment_id);
+    IF public._e2e_scan_sealed(NULL, NULL, p_assessment_id) THEN
+      RETURN jsonb_build_object('error', 'These findings are encrypted, and this page has not opened them: reload it, and try again.', 'code', 'e2e_open');
+    END IF;
+  END IF;
 
   -- GROUPED BY WHAT THE FINDING ITSELF CARRIES, not only by the issue key.
   --
@@ -26198,6 +26332,9 @@ BEGIN
       FROM public._ticket_raise_candidates(NULL, NULL, false) c
      WHERE NOT EXISTS (SELECT 1 FROM public._ticket_jobs q WHERE q.kind = 'raise' AND q.finding_id = c.finding_id AND q.tracker_id = c.tracker_id
                          AND q.state IN ('planned', 'queued', 'sending'))
+       -- 2018: a sealed finding's words are not here to send: the firm's next
+       -- browser raises it (rpc_ticket_auto_due).
+       AND NOT EXISTS (SELECT 1 FROM public.findings sf WHERE sf.id = c.finding_id AND sf.title ~ '^pe2[ejst]1\.')
      ORDER BY c.created_at ASC
      LIMIT 25;
   ELSIF p_stage = 'poll' THEN
@@ -26437,6 +26574,11 @@ BEGIN
   SELECT * INTO tr FROM public.issue_trackers WHERE id = p_tracker_id;
   SELECT * INTO f FROM public.findings WHERE id = p_finding_id;
   IF NOT COALESCE(tr.is_active, false) THEN RETURN jsonb_build_object('ok', false, 'error', 'That tracker is paused'); END IF;
+  -- 2018: a sealed finding's ticket carries the words the browser raising it
+  -- opened; this database has none of its own to put in.
+  IF (COALESCE(p_title, '') = '' OR p_body IS NULL) AND (f.title ~ '^pe2[ejst]1\.' OR f.description ~ '^pe2[ejst]1\.') THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'This finding is encrypted: raise it from a page that has opened it.');
+  END IF;
   IF NOT public._tk_severity_ok(f.severity, tr.min_severity) THEN
     RETURN jsonb_build_object('ok', false, 'error', 'That finding is below the tracker''s severity floor');
   END IF;
@@ -28491,10 +28633,14 @@ GRANT EXECUTE ON FUNCTION public.rpc_mail_capability() TO authenticated;
 DROP FUNCTION IF EXISTS public.rpc_mail_submit(text, text, text, text, uuid, text, text);
 DROP FUNCTION IF EXISTS public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text);
 DROP FUNCTION IF EXISTS public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text, text);
+DROP FUNCTION IF EXISTS public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text, text, text, jsonb);
 CREATE OR REPLACE FUNCTION public.rpc_mail_submit(p_to text, p_subject text, p_body text, p_type text DEFAULT 'general',
   p_related_id uuid DEFAULT NULL, p_from_name text DEFAULT NULL, p_reply_to text DEFAULT NULL,
   p_fallback_subject text DEFAULT NULL, p_fallback_body text DEFAULT NULL, p_key text DEFAULT NULL, p_calendar text DEFAULT NULL,
-  p_template text DEFAULT NULL, p_template_data jsonb DEFAULT NULL) RETURNS jsonb
+  p_template text DEFAULT NULL, p_template_data jsonb DEFAULT NULL,
+  -- 2018: the same subject and body sealed, for the Email Log to keep once
+  -- the email has gone (an email with a finding's detail in it).
+  p_subject_sealed text DEFAULT NULL, p_body_sealed text DEFAULT NULL) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $mlsubmit$
 DECLARE v_type text := COALESCE(NULLIF(btrim(COALESCE(p_type, '')), ''), 'general'); v_side text; c jsonb; v_nid uuid; v_job uuid; v_to text := btrim(COALESCE(p_to, ''));
         v_key text := NULLIF(btrim(COALESCE(p_key, '')), ''); j public._mail_jobs; v_locked boolean;
@@ -28554,12 +28700,15 @@ BEGIN
     IF v_side IS NULL AND NOT v_locked THEN RETURN jsonb_build_object('ok', false, 'code', 'unavailable', 'retry', false); END IF;
   END IF;
   IF v_side IS NULL AND NOT v_locked THEN RETURN jsonb_build_object('ok', false, 'code', 'unavailable'); END IF;
-  INSERT INTO public.email_notifications (to_email, subject, body, notification_type, related_id, status, from_name, attempts, sent_via, fallback_subject, fallback_body, error_message, calendar, template, template_data)
+  INSERT INTO public.email_notifications (to_email, subject, body, notification_type, related_id, status, from_name, attempts, sent_via, fallback_subject, fallback_body, error_message, calendar, template, template_data,
+                                          subject_sealed, body_sealed)
   VALUES (v_to, p_subject, p_body, v_type, p_related_id, 'pending', NULLIF(left(COALESCE(p_from_name, ''), 200), ''), 0, 'local',
           CASE WHEN length(COALESCE(p_fallback_subject, '')) BETWEEN 1 AND 2000 THEN p_fallback_subject END,
           CASE WHEN length(COALESCE(p_fallback_body, '')) BETWEEN 1 AND 3000000 THEN p_fallback_body END,
           CASE WHEN v_side IS NULL THEN 'Waiting to be sent from this portal''s own side, which cannot send just now.' END,
-          NULLIF(p_calendar, ''), v_named ->> 'template', v_named -> 'data')
+          NULLIF(p_calendar, ''), v_named ->> 'template', v_named -> 'data',
+          CASE WHEN public._e2e_sealed_text(p_subject_sealed) AND COALESCE(p_subject_sealed, '') <> '' THEN p_subject_sealed END,
+          CASE WHEN public._e2e_sealed_text(p_body_sealed) AND COALESCE(p_body_sealed, '') <> '' THEN p_body_sealed END)
   RETURNING id INTO v_nid;
   INSERT INTO public._mail_jobs (kind, notification_id, asked_by, submit_key, origin, input)
   VALUES ('send', v_nid, auth.uid(), v_key, 'portal', jsonb_build_object('from_name', NULLIF(left(COALESCE(p_from_name, ''), 200), ''),
@@ -28569,8 +28718,8 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'id', v_job, 'notification_id', v_nid, 'sender', v_side)
       || CASE WHEN v_side IS NULL THEN '{"waiting": true}'::jsonb ELSE '{}'::jsonb END;
 END $mlsubmit$;
-REVOKE ALL ON FUNCTION public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text, text, text, jsonb) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text, text, text, jsonb) TO authenticated;
+REVOKE ALL ON FUNCTION public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text, text, text, jsonb, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_mail_submit(text, text, text, text, uuid, text, text, text, text, text, text, text, jsonb, text, text) TO authenticated;
 
 -- What came of an email the person sent, once, moving this database's mail
 -- on while it is asked: { state: 'pending' }, { state: 'done', ok, error,
@@ -29385,6 +29534,8 @@ DECLARE r record; n integer := 0;
 BEGIN
   FOR r IN SELECT id, attempts, imported_at, trigger_source FROM public.scan_runs
             WHERE claimed_by IS NOT NULL AND lease_until < now() AND status IN ('starting', 'running', 'importing')
+              -- 2018: one waiting for the firm's next browser is not lost.
+              AND NOT EXISTS (SELECT 1 FROM public._e2e_scan_queue q WHERE q.run_id = scan_runs.id)
             ORDER BY lease_until LIMIT 50 FOR UPDATE SKIP LOCKED LOOP
     n := n + 1;
     IF r.imported_at IS NOT NULL THEN
@@ -29414,6 +29565,7 @@ BEGIN
   -- landed and a reader down for a day is no reason to throw it away.
   FOR r IN SELECT s.id, s.trigger_source FROM public.scan_runs s
             WHERE s.claimed_by IS NULL AND s.status IN ('starting', 'running', 'importing') AND s.updated_at < now() - interval '24 hours'
+              AND NOT EXISTS (SELECT 1 FROM public._e2e_scan_queue q WHERE q.run_id = s.id)
               AND (s.updated_at < now() - interval '7 days'
                    OR NOT EXISTS (SELECT 1 FROM public._scan_pushes x WHERE x.run_id = s.id AND x.state = 'waiting'))
             ORDER BY s.updated_at LIMIT 50 FOR UPDATE OF s SKIP LOCKED LOOP
@@ -29814,6 +29966,15 @@ BEGIN
   IF jsonb_array_length(p_results) > 100 THEN RETURN jsonb_build_object('ok', false, 'error', 'A hundred results at a time is the most.'); END IF;
   IF COALESCE(p_partial, false) AND COALESCE(p_final, false) THEN RETURN jsonb_build_object('ok', false, 'error', 'Results so far are not the last of them.'); END IF;
   SELECT provider INTO v_kind FROM public.scan_providers WHERE id = r.provider_id;
+  -- 2018: once this client's earlier scan findings are encrypted, this
+  -- database cannot match these to them: they wait, in order, for the next of
+  -- the firm's browsers to open the portal (rpc_e2e_scan_drain).
+  IF public._e2e_active() AND (EXISTS (SELECT 1 FROM public._e2e_scan_queue q WHERE q.run_id = p_run_id)
+                               OR public._e2e_scan_sealed(r.client_id, p_run_id, NULL)) THEN
+    RETURN public._e2e_scan_wait(r, 'results', jsonb_build_object('results', p_results,
+             'final', COALESCE(p_final, false) AND NOT COALESCE(p_partial, false),
+             'full', CASE WHEN r.trigger_source = 'webhook' THEN true ELSE NOT public._scan_reports_deltas(COALESCE(v_kind, r.provider)) END));
+  END IF;
   -- A scanner's own output, posted by a pipeline, is the whole of that scan
   -- (as a post has always been read): what it leaves out of its own scanner's
   -- findings, on an address it examined, is fixed. A scan a collector ran is
@@ -29844,6 +30005,16 @@ BEGIN
   IF p_status IS NULL OR p_status NOT IN ('completed', 'failed') THEN RETURN jsonb_build_object('ok', false, 'error', 'A run ends completed or failed.'); END IF;
   r := public._collector_run(p_token, p_run_id);
   IF r.id IS NULL THEN RETURN public._collector_stop(p_run_id); END IF;
+  -- 2018: its results wait for the firm's next browser (rpc_e2e_scan_drain),
+  -- and so does its close, which comes after them.
+  IF EXISTS (SELECT 1 FROM public._e2e_scan_queue q WHERE q.run_id = p_run_id) THEN
+    v_customer := EXISTS (SELECT 1 FROM public.scan_providers sp WHERE r.claimed_by = 'collector:' || sp.id::text AND sp.client_id IS NOT NULL);
+    RETURN public._e2e_scan_wait(r, 'finish', jsonb_build_object('status', p_status,
+             'exec', CASE WHEN v_customer THEN NULL ELSE p_exec_summary END,
+             'html', CASE WHEN v_customer THEN NULL ELSE p_summary_html END,
+             'error', CASE WHEN p_status = 'failed' THEN left(COALESCE(NULLIF(p_error, ''), 'The collector reported a failure'), 1000) END,
+             'notice', CASE WHEN jsonb_typeof(p_notice) = 'object' AND NOT v_customer THEN p_notice END));
+  END IF;
   IF p_status = 'completed' AND r.imported_at IS NULL THEN
     RETURN jsonb_build_object('ok', false, 'error', 'Send the last of the results first.');
   END IF;
@@ -30400,6 +30571,15 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'A batch is a list of a hundred results at most');
   END IF;
   UPDATE public.scan_runs SET lease_until = now() + interval '15 minutes' WHERE id = p_run_id;
+  -- 2018: matched only against words, never sealed ones: the portal opens the
+  -- client's earlier scan findings first (rpc_e2e_scan_open), and they are
+  -- held until this batch is in.
+  IF public._e2e_active() THEN
+    PERFORM public._e2e_scan_hold(r.client_id, p_run_id, NULL);
+    IF public._e2e_scan_sealed(r.client_id, p_run_id, NULL) THEN
+      RETURN jsonb_build_object('ok', false, 'code', 'e2e_open', 'error', 'This client''s earlier scan findings are encrypted, and this page has not opened them: reload it, and import again.');
+    END IF;
+  END IF;
   v_out := public._scan_import_core(p_run_id, p_results, COALESCE(p_final, false), COALESCE(p_full_report, false));
   IF v_out ? 'error' THEN RETURN jsonb_build_object('ok', false, 'error', v_out ->> 'error'); END IF;
   IF COALESCE(p_final, false) THEN UPDATE public.scan_runs SET imported_at = now() WHERE id = p_run_id; END IF;
@@ -36765,6 +36945,11 @@ CREATE OR REPLACE FUNCTION public.rpc_signin_code_request(p_email text, p_key_ha
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $sicodereq$
 DECLARE v_t0 timestamptz := clock_timestamp(); v_email text := lower(btrim(COALESCE(p_email, ''))); v_key text; p record; v_n integer;
 BEGIN
+  -- 2018: a portal signs in with a password, then a second factor (what
+  -- opens a person's end-to-end encrypted work on a new browser). A page
+  -- from before that asks for a code is told so; nothing is sent.
+  RETURN jsonb_build_object('ok', false, 'code', 'removed',
+    'error', 'Sign in with your email address and password. If you have not set a password yet, use Set or reset your password, below the sign-in button.');
   IF v_email !~ '^[^\s@]+@[^\s@]+\.[^\s@]+$' OR length(v_email) > 320 THEN RETURN jsonb_build_object('ok', false, 'error', 'Enter a valid email address.'); END IF;
   IF COALESCE(p_key_hash, '') !~ '^[0-9a-f]{64}$' THEN RETURN jsonb_build_object('ok', false, 'error', 'This page could not ask for a code. Reload it and try again.'); END IF;
   IF public._xero_stood_down() IS NOT NULL OR NOT public._signin_ready() THEN
@@ -36799,6 +36984,9 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catal
 DECLARE v_email text := lower(btrim(COALESCE(p_email, ''))); v_key text; v_khash text := public._signin_sha(COALESCE(p_key, '')); c record; v_hit public._signin_codes;
   v_code text := regexp_replace(COALESCE(p_code, ''), '\s', '', 'g'); v_out jsonb;
 BEGIN
+  -- 2018: no code signs anybody in (rpc_signin_code_request).
+  RETURN jsonb_build_object('ok', false, 'reason', 'removed',
+    'error', 'Sign-in codes have been replaced by passwords. Sign in with your email address and password.');
   IF v_email = '' OR v_code !~ '^[0-9]{6}$' THEN RETURN jsonb_build_object('ok', false, 'reason', 'invalid'); END IF;
   v_key := public._signin_email_key(v_email);
   IF (SELECT count(*) FROM public._signin_hits WHERE email_key = v_key AND kind = 'wrong' AND at > now() - interval '1 hour') >= 10 THEN
@@ -36846,7 +37034,13 @@ BEGIN
   SELECT id, email INTO p FROM public.profiles WHERE lower(email) = v_email AND COALESCE(active, true) LIMIT 1;
   IF COALESCE(v_on, false) AND p.id IS NOT NULL AND public._signin_hit(v_key, 'pwmail', interval '15 minutes') <= 5 THEN
     BEGIN
-      PERFORM public._signin_send_link(p.id, 'reset', 'password_reset', p_origin, NULL);
+      -- 2018: somebody who has never had one (they signed in with a code,
+      -- Google or Microsoft) is sent the link to set their first.
+      IF EXISTS (SELECT 1 FROM public.user_credentials WHERE profile_id = p.id) THEN
+        PERFORM public._signin_send_link(p.id, 'reset', 'password_reset', p_origin, NULL);
+      ELSE
+        PERFORM public._signin_send_link(p.id, 'set', 'password_setup', p_origin, NULL);
+      END IF;
     EXCEPTION WHEN OTHERS THEN NULL;
     END;
   END IF;
@@ -37067,6 +37261,9 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catal
 DECLARE v_prov text := lower(btrim(COALESCE(p_provider, ''))); s record; st public._signin_state; v_own boolean; v_state text; v_nonce text;
   v_verifier text; v_client text; v_tenant text; v_origin text := public._sso_origin(p_origin); v_q jsonb; v_wire text; v_redirect text;
 BEGIN
+  -- 2018: Google and Microsoft sign-in are gone (rpc_signin_code_request).
+  RETURN jsonb_build_object('ok', false, 'code', 'removed',
+    'error', 'Google and Microsoft sign-in has been switched off. Sign in with your email address and password.');
   IF v_prov NOT IN ('google', 'microsoft') THEN RETURN jsonb_build_object('ok', false, 'error', 'Not a provider this portal signs in with.'); END IF;
   IF COALESCE(p_key_hash, '') !~ '^[0-9a-f]{64}$' THEN RETURN jsonb_build_object('ok', false, 'error', 'This page could not begin the sign-in. Reload it and try again.'); END IF;
   IF public._xero_stood_down() IS NOT NULL OR NOT public._sso_ready(v_prov) OR v_origin IS NULL THEN
@@ -37273,6 +37470,9 @@ CREATE OR REPLACE FUNCTION public.rpc_sso_finish(p_state text, p_key text, p_id_
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $ssofinish$
 DECLARE p public._sso_pending; c jsonb; v_hdr jsonb; v_parts text[]; v_jwk jsonb; v_why text; v_who jsonb; v_prof uuid; v_out jsonb;
 BEGIN
+  -- 2018: and none begun before finishes.
+  RETURN jsonb_build_object('ok', false, 'reason', 'removed',
+    'error', 'Google and Microsoft sign-in has been switched off. Sign in with your email address and password.');
   IF COALESCE(p_state, '') !~ '^[0-9a-f]{48}$' THEN RETURN jsonb_build_object('ok', false, 'reason', 'expired', 'error', 'This sign-in has expired. Start again.'); END IF;
   IF pg_try_advisory_xact_lock(hashtext('pental_net_tick')) THEN PERFORM public._net_settle(); END IF;
   SELECT * INTO p FROM public._sso_pending WHERE state = p_state FOR UPDATE;
@@ -38483,7 +38683,8 @@ RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_cat
 DECLARE v_id uuid; v_started timestamptz; v_value text := p_value; v_big boolean := COALESCE(p_big, false);
 BEGIN
   IF auth.uid() IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not signed in'); END IF;
-  IF v_value IS NOT NULL AND octet_length(v_value) > 65536 THEN v_value := NULL; v_big := true; END IF;
+  -- 2018: a sealed draft is about a third longer than its words.
+  IF v_value IS NOT NULL AND octet_length(v_value) > (CASE WHEN v_value ~ '^pe2[ejst]1\.' THEN 90112 ELSE 65536 END) THEN v_value := NULL; v_big := true; END IF;
   IF random() < 0.05 THEN PERFORM public._co_live_sweep(); END IF;
   INSERT INTO public.co_live AS c (rec_table, rec_id, field, tab, value, big)
   VALUES (p_table, p_id, p_field, p_tab, v_value, v_big)
@@ -41570,7 +41771,7 @@ BEGIN
       RETURN jsonb_build_object('code', 'config', 'error', CASE t ->> 'via'
         WHEN 'teams' THEN 'The saved Teams secret cannot be read here (it was sealed with another key). Enter it again in Settings, Integrations, Microsoft Teams.'
         WHEN 'docs' THEN 'The saved secret of your SharePoint application cannot be read here (it was sealed with another key). Enter it again in Settings, SharePoint & Drive, Your Microsoft application.'
-        ELSE 'The saved Microsoft sign-in secret cannot be read here (it was sealed with another key). Enter it again in Settings, Login Page, Single sign-on.' END);
+        ELSE 'The saved secret of your Microsoft application cannot be read here (it was sealed with another key). Enter your application in Settings, SharePoint & Drive, Your Microsoft application.' END);
     END IF;
     IF t ->> 'tenant' IS NULL THEN
       RETURN jsonb_build_object('code', 'needs_access', 'error', 'Give your Microsoft sign-in application access to SharePoint first: an administrator of your Microsoft 365 signs in once, from here.');
@@ -41587,7 +41788,7 @@ BEGIN
     IF COALESCE((t ->> 'undecryptable')::boolean, false) THEN
       RETURN jsonb_build_object('code', 'config', 'error', CASE WHEN t ->> 'via' = 'docs'
         THEN 'The saved secret of your Google application for Drive cannot be read here (it was sealed with another key). Enter it again in Settings, SharePoint & Drive, Your Google application.'
-        ELSE 'The saved Google sign-in secret cannot be read here (it was sealed with another key). Enter it again in Settings, Login Page, Single sign-on.' END);
+        ELSE 'The saved secret of your Google application cannot be read here (it was sealed with another key). Enter your application in Settings, SharePoint & Drive, Your Google application.' END);
     END IF;
     IF NOT public._docs_google_connected() THEN
       RETURN jsonb_build_object('code', 'not_connected', 'error',
@@ -43194,7 +43395,7 @@ BEGIN
   END IF;
   IF COALESCE((v_app ->> 'undecryptable')::boolean, false) THEN
     RETURN jsonb_build_object('ok', false, 'code', 'config', 'error', 'The saved secret of your Google application cannot be read here (it was sealed with another key). Enter it again in Settings, '
-      || CASE WHEN v_app ->> 'via' = 'docs' THEN 'SharePoint & Drive, Your Google application.' ELSE 'Login Page, Single sign-on.' END);
+      || 'SharePoint & Drive, Your Google application.');
   END IF;
   IF v_origin IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'This page''s address could not be read. Reload it and try again.'); END IF;
   IF public._net_sender() IS NULL THEN
@@ -43277,10 +43478,17 @@ GRANT EXECUTE ON FUNCTION public.rpc_docs_google_disconnect() TO authenticated;
 -- reads each file where it keeps it); on Supabase, the browser of a member
 -- of the firm's team whose portal is open. Never both: 'gateway' or
 -- 'browser', or NULL where nothing here can reach Microsoft or Google.
+-- 2018: once the firm's work is end-to-end encrypted, always a browser: a
+-- gateway reads only the sealed file, and a browser of the firm's team opens
+-- it and sends it as it was added.
+-- (plpgsql: _e2e_active is made further down this file.)
 CREATE OR REPLACE FUNCTION public._docs_by() RETURNS text
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsby$
-  SELECT CASE public._net_sender() WHEN 'gateway' THEN 'gateway' WHEN 'pg_net' THEN 'browser' END;
-$dsby$;
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsby$
+DECLARE v_s text := public._net_sender();
+BEGIN
+  IF v_s IN ('gateway', 'pg_net') AND public._e2e_active() THEN RETURN 'browser'; END IF;
+  RETURN CASE v_s WHEN 'gateway' THEN 'gateway' WHEN 'pg_net' THEN 'browser' END;
+END $dsby$;
 REVOKE ALL ON FUNCTION public._docs_by() FROM PUBLIC, anon, authenticated;
 
 -- Whether this person (their browser) or this gateway's worker holds a file.
@@ -43769,7 +43977,7 @@ BEGIN
   END IF;
   IF a ->> 'secret' IS NULL THEN
     RETURN jsonb_build_object('error', 'The secret of ' || public._docs_ms_words(a ->> 'via') || ' cannot be read here: enter it again in Settings, '
-      || CASE WHEN a ->> 'via' = 'docs' THEN 'SharePoint & Drive.' ELSE 'Login Page, Single sign-on.' END, 'code', 'config');
+      || 'SharePoint & Drive, Your Microsoft application.', 'code', 'config');
   END IF;
   IF a ->> 'tenant' IS NULL OR public._docs_ms_dir(a ->> 'tenant') = 'organizations' THEN
     RETURN jsonb_build_object('error', 'Which Microsoft 365 the sign-in application reaches SharePoint in is not known yet: give it access to SharePoint first.', 'code', 'config');
@@ -43840,7 +44048,7 @@ BEGIN
   END IF;
   IF COALESCE((d ->> 'undecryptable')::boolean, false) OR d ->> 'secret' IS NULL THEN
     RETURN jsonb_build_object('ok', false, 'code', 'config', 'error', 'The saved secret of ' || public._docs_ms_words(d ->> 'via') || ' cannot be read here (it was sealed with another key). Enter it again in Settings, '
-      || CASE d ->> 'via' WHEN 'teams' THEN 'Integrations, Microsoft Teams.' WHEN 'docs' THEN 'SharePoint & Drive, Your Microsoft application.' ELSE 'Login Page, Single sign-on.' END);
+      || CASE d ->> 'via' WHEN 'teams' THEN 'Integrations, Microsoft Teams.' ELSE 'SharePoint & Drive, Your Microsoft application.' END);
   END IF;
   IF NOT public._teams_is_object_id(a ->> 'client') OR NOT public._teams_is_object_id(d ->> 'client') THEN
     RETURN jsonb_build_object('ok', false, 'code', 'config', 'error', 'The saved application ID is not one Microsoft gives (it looks like 00000000-0000-0000-0000-000000000000).');
@@ -44470,22 +44678,34 @@ BEGIN
   v_files := CASE WHEN jsonb_typeof(p_entry -> 'files') = 'array' THEN p_entry -> 'files' ELSE '[]'::jsonb END;
   FOR f, i IN SELECT y, o FROM jsonb_array_elements(v_files) WITH ORDINALITY AS t(y, o) LOOP
     v_names := v_names || (v_stamp || ' ' || COALESCE(NULLIF(btrim(f ->> 'name'), ''), 'file'));
-    v_bytes := CASE WHEN jsonb_typeof(f -> 'b64') = 'string' THEN octet_length(decode(f ->> 'b64', 'base64')) ELSE 0 END;
+    v_bytes := CASE WHEN jsonb_typeof(f -> 'b64') = 'string' AND (f ->> 'b64') ~ '^pe2[es]1\.' THEN COALESCE(NULLIF(f ->> 'size', '')::bigint, 0)
+                    WHEN jsonb_typeof(f -> 'b64') = 'string' THEN octet_length(decode(f ->> 'b64', 'base64')) ELSE 0 END;
     v_shown := v_shown || (v_names[i] || ' (' || CASE WHEN v_bytes < 1024 THEN v_bytes || ' bytes' WHEN v_bytes < 1048576 THEN round(v_bytes / 1024.0) || ' KB'
                                                     ELSE to_char(v_bytes / 1048576.0, 'FM990.0') || ' MB' END || ')');
   END LOOP;
+  -- 2018: a set sealed in the client's browser cannot be laid out here: it is
+  -- kept as it came, and the browser sending it opens it and lays it out as
+  -- this does (rpc_docs_sync_cred_file, _e2eCredText in the portal).
+  IF p_entry::text ~ '"pe2[ejst]1\.' THEN
+    INSERT INTO public._docs_creds (assessment_id, entry_at, part, file_name, mime, size, enc)
+    VALUES (p_assessment, v_at, 0, left(v_stamp || ' ' || COALESCE(v_label, v_type), 180) || '.txt', 'application/vnd.pental.e2e-credentials+json',
+            NULL, extensions.pgp_sym_encrypt((p_entry - 'files')::text, v_key))
+    ON CONFLICT (assessment_id, entry_at, part) DO NOTHING;
+  ELSE
   v_text := public._docs_cred_text(p_entry, p_assessment, v_shown);
   INSERT INTO public._docs_creds (assessment_id, entry_at, part, file_name, mime, size, enc)
   VALUES (p_assessment, v_at, 0, left(v_stamp || ' ' || COALESCE(v_label, v_type), 180) || '.txt', 'text/plain; charset=utf-8',
           octet_length(convert_to(v_text, 'UTF8')), extensions.pgp_sym_encrypt(v_text, v_key))
   ON CONFLICT (assessment_id, entry_at, part) DO NOTHING;
+  END IF;
   GET DIAGNOSTICS v_one = ROW_COUNT;
   v_n := v_n + v_one;
   FOR f, i IN SELECT y, o FROM jsonb_array_elements(v_files) WITH ORDINALITY AS t(y, o) LOOP
     CONTINUE WHEN jsonb_typeof(f -> 'b64') IS DISTINCT FROM 'string';
     INSERT INTO public._docs_creds (assessment_id, entry_at, part, file_name, mime, size, enc)
     VALUES (p_assessment, v_at, i, v_names[i], COALESCE(NULLIF(f ->> 'type', ''), 'application/octet-stream'),
-            octet_length(decode(f ->> 'b64', 'base64')), extensions.pgp_sym_encrypt(f ->> 'b64', v_key))
+            CASE WHEN (f ->> 'b64') ~ '^pe2[es]1\.' THEN NULLIF((f ->> 'size'), '')::bigint ELSE octet_length(decode(f ->> 'b64', 'base64')) END,
+            extensions.pgp_sym_encrypt(f ->> 'b64', v_key))
     ON CONFLICT (assessment_id, entry_at, part) DO NOTHING;
     GET DIAGNOSTICS v_one = ROW_COUNT;
     v_n := v_n + v_one;
@@ -44519,6 +44739,16 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     RETURN jsonb_build_object('ok', false, 'error', 'They could not be opened here.');
   END;
+  -- 2018: sealed in the client's browser: the set as it came (opened in this
+  -- browser), what the text says of the engagement, and the files kept beside
+  -- it, for the portal to lay out as _docs_cred_text does.
+  IF dc.part = 0 AND dc.mime = 'application/vnd.pental.e2e-credentials+json' THEN
+    RETURN jsonb_build_object('ok', true, 'name', i.name, 'type', 'text/plain; charset=utf-8', 'entry', v::jsonb,
+      'about', (SELECT jsonb_build_object('engagement', x.name, 'job', x.job_code, 'client', y.name, 'tz', public._docs_tz())
+                  FROM public.assessments x LEFT JOIN public.clients y ON y.id = x.client_id WHERE x.id = dc.assessment_id),
+      'files', COALESCE((SELECT jsonb_agg(jsonb_build_object('name', o.file_name, 'size', o.size) ORDER BY o.part)
+                           FROM public._docs_creds o WHERE o.assessment_id = dc.assessment_id AND o.entry_at = dc.entry_at AND o.part > 0), '[]'::jsonb));
+  END IF;
   RETURN jsonb_build_object('ok', true, 'name', i.name, 'type', dc.mime, 'b64', CASE WHEN dc.part = 0 THEN public._tk_b64(v) ELSE v END);
 END $dscredfile$;
 REVOKE ALL ON FUNCTION public.rpc_docs_sync_cred_file(uuid) FROM PUBLIC, anon;
@@ -45078,6 +45308,14 @@ BEGIN
       FOR f IN SELECT * FROM jsonb_array_elements(it -> 'files') LIMIT 40 LOOP
         IF jsonb_typeof(f) = 'object' AND (f ->> 'ci') ~ '^[0-9]{1,4}$' AND (f ->> 'fi') ~ '^[0-9]{1,4}$' THEN
           v_f := v_list -> ((f ->> 'ci')::integer) -> 'files' -> ((f ->> 'fi')::integer);
+          -- 2018: a file sealed in the client's browser is sent as the
+          -- browser sending it opened it (its base64), and as nothing else.
+          IF jsonb_typeof(v_f) = 'object' AND (v_f ->> 'b64') ~ '^pe2[es]1\.' THEN
+            IF COALESCE(f ->> 'b64', '') = '' OR (f ->> 'b64') !~ '^[A-Za-z0-9+/]*={0,2}$' THEN
+              RETURN jsonb_build_object('error', 'Open the client''s credentials on this page, then send them again.');
+            END IF;
+            v_f := v_f || jsonb_build_object('b64', f ->> 'b64');
+          END IF;
           IF jsonb_typeof(v_f) = 'object' AND jsonb_typeof(v_f -> 'b64') = 'string' THEN
             v_size := v_size + length(v_f ->> 'b64');
             v_files := v_files || jsonb_build_array(jsonb_build_object('ci', (f ->> 'ci')::integer, 'fi', (f ->> 'fi')::integer,
@@ -45627,11 +45865,14 @@ END $apibrowser$;
 REVOKE ALL ON FUNCTION public._api_from_browser() FROM PUBLIC, anon, authenticated;
 
 -- The key a secret is, by its SHA-256; nothing for anything that is not one.
+-- 2018: a key made once the firm's work is encrypted carries a second part
+-- after a dot, which opens the encrypted fields in the tool and is never this
+-- database's: only the part before it is the key here (a tool may send both).
 CREATE OR REPLACE FUNCTION public._api_key_by_secret(p_key text) RETURNS public.api_keys
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $apibysecret$
   SELECT k.* FROM public.api_keys k
-   WHERE btrim(COALESCE(p_key, '')) ~ '^pental_[0-9a-f]{8}_[0-9a-f]{64}$'
-     AND k.key_hash = encode(extensions.digest(btrim(p_key), 'sha256'), 'hex')
+   WHERE btrim(COALESCE(p_key, '')) ~ '^pental_[0-9a-f]{8}_[0-9a-f]{64}(\.[A-Za-z0-9_-]{43})?$'
+     AND k.key_hash = encode(extensions.digest(split_part(btrim(p_key), '.', 1), 'sha256'), 'hex')
 $apibysecret$;
 REVOKE ALL ON FUNCTION public._api_key_by_secret(text) FROM PUBLIC, anon, authenticated;
 
@@ -46977,14 +47218,1651 @@ BEGIN
 END $rls_once$;
 -- 1958: END
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 2017: THE KEYS IN THE VAULT, AND THE AUTHENTICATOR SECRETS SEALED
+-- ═══════════════════════════════════════════════════════════════════════════
+-- [stated] Arian, of the keys that open the sealed secrets sitting in two plain
+-- tables beside them: "yes but don't break anything. Do it". A copy of the
+-- database (a dump, a backup, an export) held every key it needed: the
+-- credentials key in _credentials_key (the Vault's credentials_aes_key was a
+-- copy of it), and the settings key in _encryption_keys. Now both are the
+-- Vault's alone, credentials_aes_key and settings_aes_key: Supabase keeps the
+-- Vault's own key outside the database, and a gateway seals its vault under
+-- VAULT_KEY, which only the gateway holds. The authenticator (TOTP) secrets,
+-- in plain text in profiles until now, are sealed under the settings key
+-- ('sealed:' and the sealed value in base64): _totp_check opens one as it
+-- checks a code, and nothing else reads them.
+--
+-- Nothing is rewritten that would not open again: a key leaves its table only
+-- once the Vault gives back exactly that key, and a key the Vault held that a
+-- table's replaces is kept beside it (settings_aes_key_<when>, as step 15 now
+-- does for credentials_aes_key). Where this connection cannot open the Vault
+-- (a gateway's connection without its key) nothing is touched. Once the keys
+-- have left, the two tables refuse a key (_keys_plain_refused): an older copy
+-- of this file made one in each and copied the credentials one over the
+-- Vault's, and now stops at its first such statement instead, with everything
+-- as it was.
+
+-- An authenticator secret as it is kept.
+CREATE OR REPLACE FUNCTION public._totp_seal(p_secret text) RETURNS text
+  LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $tse$
+DECLARE v_enc bytea;
+BEGIN
+  IF p_secret IS NULL OR p_secret = '' OR p_secret LIKE 'sealed:%' THEN RETURN p_secret; END IF;
+  v_enc := public._settings_encrypt(p_secret);
+  -- No key to seal it with (a Vault this connection cannot open): kept as it
+  -- came, as a settings secret is, and sealed when it is next written or this
+  -- file is run again.
+  IF v_enc IS NULL THEN RETURN p_secret; END IF;
+  RETURN 'sealed:' || translate(encode(v_enc, 'base64'), E'\n', '');
+END $tse$;
+REVOKE ALL ON FUNCTION public._totp_seal(text) FROM PUBLIC, anon, authenticated;
+
+-- And opened, to check a code against it (_totp_check): NULL where it does not open.
+CREATE OR REPLACE FUNCTION public._totp_plain(p_secret text) RETURNS text
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $tpl$
+BEGIN
+  IF p_secret IS NULL OR p_secret NOT LIKE 'sealed:%' THEN RETURN p_secret; END IF;
+  RETURN public._settings_decrypt(decode(substr(p_secret, 8), 'base64'));
+EXCEPTION WHEN OTHERS THEN
+  RETURN NULL;
+END $tpl$;
+REVOKE ALL ON FUNCTION public._totp_plain(text) FROM PUBLIC, anon, authenticated;
+
+-- Sealed as it is written, whoever writes it. The last of the profile's own
+-- triggers (they run in name order), so the guards before it see the secret
+-- as it was written.
+CREATE OR REPLACE FUNCTION public._profiles_seal_totp() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $pst$
+BEGIN
+  IF NEW.totp_secret IS NOT NULL AND NEW.totp_secret <> '' AND NEW.totp_secret NOT LIKE 'sealed:%' THEN
+    NEW.totp_secret := public._totp_seal(NEW.totp_secret);
+  END IF;
+  RETURN NEW;
+END $pst$;
+REVOKE ALL ON FUNCTION public._profiles_seal_totp() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS zzz_tr_profiles_seal_totp ON public.profiles;
+CREATE TRIGGER zzz_tr_profiles_seal_totp
+  BEFORE INSERT OR UPDATE OF totp_secret ON public.profiles
+  FOR EACH ROW EXECUTE FUNCTION public._profiles_seal_totp();
+
+-- What the two tables say to anything that writes a key into them now.
+CREATE OR REPLACE FUNCTION public._keys_plain_refused() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = public, pg_catalog, pg_temp AS $kpr$
+BEGIN
+  RAISE EXCEPTION 'This database keeps its keys in the Vault (setup 2025111001 and later), not in %. Run the latest database setup from pental.io.', TG_TABLE_NAME
+    USING ERRCODE = '55000';
+END $kpr$;
+REVOKE ALL ON FUNCTION public._keys_plain_refused() FROM PUBLIC, anon, authenticated;
+
+-- The keys into the Vault, and the authenticator secrets sealed. What it did,
+-- for the run below to say.
+CREATE OR REPLACE FUNCTION public._keys_seal() RETURNS jsonb
+  LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $kse$
+DECLARE
+  v_ck text; v_ek text; v_cid uuid; v_cval text; v_sid uuid; v_sval text; v_n integer;
+  v_out jsonb := '{}'::jsonb;
+BEGIN
+  SELECT d.id, d.decrypted_secret INTO v_cid, v_cval FROM vault.decrypted_secrets d WHERE d.name = 'credentials_aes_key' LIMIT 1;
+  SELECT d.id, d.decrypted_secret INTO v_sid, v_sval FROM vault.decrypted_secrets d WHERE d.name = 'settings_aes_key' LIMIT 1;
+  IF (v_cid IS NOT NULL AND v_cval IS NULL) OR (v_sid IS NOT NULL AND v_sval IS NULL) THEN
+    RAISE WARNING 'keys: this connection cannot open the Vault, so the keys stay where they are';
+    RETURN jsonb_build_object('sealed', false, 'why', 'the Vault cannot be opened on this connection');
+  END IF;
+
+  -- The credentials key: step 15 has made the Vault's the one in the table.
+  SELECT encryption_key INTO v_ck FROM public._credentials_key LIMIT 1;
+  IF v_ck IS NOT NULL THEN
+    IF v_ck = '' OR v_ck = v_cval THEN
+      DELETE FROM public._credentials_key;
+      v_out := v_out || jsonb_build_object('credentials_key', 'moved to the Vault');
+    ELSE
+      v_out := v_out || jsonb_build_object('credentials_key', 'kept: the Vault does not hold it');
+    END IF;
+  END IF;
+
+  -- The settings key: into the Vault as settings_aes_key, then out of the table.
+  SELECT key_value INTO v_ek FROM public._encryption_keys WHERE key_name = 'credentials' LIMIT 1;
+  IF COALESCE(v_ek, '') <> '' THEN
+    IF v_sid IS NULL THEN
+      PERFORM vault.create_secret(v_ek, 'settings_aes_key',
+        'The key the settings secrets, the Drive refresh token, the SharePoint and Drive application secret, the password manager''s and the authenticator secrets are sealed under.');
+    ELSIF v_sval IS DISTINCT FROM v_ek THEN
+      -- What is sealed came with the table's key (a move from a database that
+      -- had not had this yet): it is the Vault's now, and the one it replaces
+      -- is kept beside it.
+      IF COALESCE(v_sval, '') <> '' THEN
+        PERFORM vault.create_secret(v_sval, 'settings_aes_key_' || to_char(clock_timestamp(), 'YYYYMMDDHH24MISSUS'),
+          'A settings key the Vault held until ' || to_char(now(), 'YYYY-MM-DD') || ', when the one in _encryption_keys replaced it. Kept so nothing it sealed is lost.');
+      END IF;
+      PERFORM vault.update_secret(v_sid, v_ek);
+    END IF;
+    SELECT d.decrypted_secret INTO v_sval FROM vault.decrypted_secrets d WHERE d.name = 'settings_aes_key' LIMIT 1;
+    IF v_sval = v_ek THEN
+      DELETE FROM public._encryption_keys WHERE key_name = 'credentials';
+      v_out := v_out || jsonb_build_object('settings_key', 'moved to the Vault');
+    ELSE
+      v_out := v_out || jsonb_build_object('settings_key', 'kept: the Vault did not take it');
+    END IF;
+  ELSE
+    IF v_ek IS NOT NULL THEN DELETE FROM public._encryption_keys WHERE key_name = 'credentials'; END IF;
+    IF public._settings_key_make() IS NULL THEN
+      v_out := v_out || jsonb_build_object('settings_key', 'none could be made');
+    END IF;
+  END IF;
+
+  -- The authenticator secrets still in plain text, through the trigger above.
+  UPDATE public.profiles SET totp_secret = totp_secret
+   WHERE totp_secret IS NOT NULL AND totp_secret <> '' AND totp_secret NOT LIKE 'sealed:%';
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  IF v_n > 0 THEN v_out := v_out || jsonb_build_object('authenticators_sealed', v_n); END IF;
+
+  v_out := v_out || jsonb_build_object('sealed',
+    NOT EXISTS (SELECT 1 FROM public._credentials_key)
+    AND NOT EXISTS (SELECT 1 FROM public._encryption_keys WHERE key_name = 'credentials'));
+  RETURN v_out;
+END $kse$;
+REVOKE ALL ON FUNCTION public._keys_seal() FROM PUBLIC, anon, authenticated;
+
+DO $keys2017$
+DECLARE v jsonb;
+BEGIN
+  v := public._keys_seal();
+  IF COALESCE((v ->> 'sealed')::boolean, false) THEN
+    DROP TRIGGER IF EXISTS tr_keys_plain_refused ON public._credentials_key;
+    CREATE TRIGGER tr_keys_plain_refused BEFORE INSERT OR UPDATE ON public._credentials_key
+      FOR EACH ROW EXECUTE FUNCTION public._keys_plain_refused();
+    DROP TRIGGER IF EXISTS tr_keys_plain_refused ON public._encryption_keys;
+    CREATE TRIGGER tr_keys_plain_refused BEFORE INSERT OR UPDATE ON public._encryption_keys
+      FOR EACH ROW EXECUTE FUNCTION public._keys_plain_refused();
+    RAISE NOTICE 'keys: in the Vault (%)', v;
+  ELSE
+    RAISE WARNING 'keys: NOT all in the Vault yet on this database (%); run this file again through a connection that opens the Vault', v;
+  END IF;
+END $keys2017$;
+-- 2017: END
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 2018: THE TESTING WORK, END-TO-END ENCRYPTED.
+--
+-- [stated] Arian: "build the end to end encryption the most modern
+-- professional seamless beautiful way possible, do not break anything and
+-- ensure everything works as it does", and, asked, "All the testing work",
+-- "Keep them working" (the integrations), "Automatic, plus optional kit" (no
+-- recovery key at setup) and "On for every firm with the update".
+--
+-- WHAT IS ENCRYPTED, AND WHERE. The words of the testing work (_e2e_columns:
+-- a finding in full, an engagement's scope, summaries, notes and sections,
+-- comments, the QA review's remarks, the timeline's entries, a client's
+-- tickets, the asset inventory, a scan's results) and every file of an
+-- engagement are encrypted in the browser before they are sent, and opened
+-- in the browser after they arrive. This database keeps them only as sealed
+-- values (`pe2e1.<key>.<sealed>`, or `pe2s1.` for one sealed to a key's
+-- public half by somebody who does not hold it) and sealed files, and holds
+-- no key that opens them: each key is kept here only wrapped for the people
+-- and browsers allowed to open it (e2e_grants), and only they can unwrap it.
+-- Client and engagement names, dates, statuses, severities, scores,
+-- proposals and invoices stay readable, so billing, the calendar, counts and
+-- the firm's own sending keep working.
+--
+-- THE KEYS. One for the firm and one for each client (e2e_keys): an
+-- engagement's work is under its client's key, so a client's own people can
+-- be given that key and no other. Each person has their browsers (a device:
+-- a key the browser made and can use but never hand out) and, where they
+-- sign in with a passkey or a password, or keep a recovery kit, an account
+-- key opened by any of those (e2e_principals, e2e_account_wraps). Every key a
+-- person may open is wrapped for each of theirs (e2e_grants), by whichever of
+-- the firm's browsers next holds it (rpc_e2e_needed): a new browser is given
+-- its keys by the person's own passkey or password as they sign in, or by
+-- any other browser of theirs or a teammate's that is open, with nothing to
+-- set up. Who may open a key is this database's rule (_e2e_entitled): the
+-- firm's admins, seniors and testers every key; a contractor the keys of the
+-- clients whose engagements they work on; a client's own people their
+-- client's key; sales and marketing none, as they read no testing work.
+--
+-- WHAT STILL READS IT. The firm's own sending (an email with a finding in it,
+-- a ticket in a client's tracker, a file put in SharePoint or Google Drive, an
+-- AI request, a password manager) is handed the words by the browser that
+-- sends it, as it is sent, and keeps nothing (later sections). What arrives
+-- from outside (a scanner's results, a signed proposal's sections, the API)
+-- is written as it comes and sealed by the next of the firm's browsers to
+-- open the portal (rpc_e2e_plain_rows, rpc_e2e_seal_rows), which is also how
+-- a firm's existing work is sealed: in the background, by the first
+-- administrator to sign in after this update (rpc_e2e_activate).
+--
+-- A PAGE FROM BEFORE THIS cannot write words into those columns once the
+-- firm's work is encrypted (_e2e_guard): it is told to reload, rather than
+-- leaving a finding readable here.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- The columns, by table. The portal holds the same list (_E2E_COLS), and
+-- check_e2e_columns compares the two.
+CREATE OR REPLACE FUNCTION public._e2e_columns(p_table text) RETURNS text[]
+  LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $eecols$
+  SELECT CASE p_table
+    WHEN 'findings' THEN ARRAY['title', 'description', 'impact', 'remediation', 'affected_hosts', 'cwe', 'category',
+                               'attack', 'retest_results', 'evidence', 'assets', 'refs', 'custom_fields', 'qa_comments',
+                               'scan_plugin_id', 'scan_port', 'scan_protocol', 'scan_service', 'scan_cve']
+    WHEN 'assessments' THEN ARRAY['scope', 'exec_summary', 'caveats', 'notes', 'qa_notes', 'client_comments',
+                                  'retest_summary', 'loa_text', 'artifacts', 'appendices', 'qa_comments',
+                                  'summary_sections', 'section_drafts', 'qa_ai_review']
+    WHEN 'assessment_comments' THEN ARRAY['content']
+    WHEN 'qa_comments' THEN ARRAY['comment', 'highlight']
+    WHEN 'timeline_events' THEN ARRAY['title', 'details', 'event']
+    WHEN 'tickets' THEN ARRAY['subject', 'message', 'responses']
+    WHEN 'assets' THEN ARRAY['name', 'label', 'notes', 'details']
+    WHEN 'scan_results' THEN ARRAY['title', 'description', 'impact', 'remediation', 'evidence', 'refs', 'cwe', 'category',
+                                   'raw', 'asset', 'cve', 'plugin_id', 'service', 'protocol']
+    WHEN 'scan_runs' THEN ARRAY['exec_summary', 'summary_html']
+    ELSE ARRAY[]::text[] END;
+$eecols$;
+GRANT EXECUTE ON FUNCTION public._e2e_columns(text) TO authenticated, service_role;
+
+-- A value that carries no words: nothing, an empty string, list or object.
+-- A sealed value: `pe2e1.` (words) or `pe2j1.` (a list or an object), or
+-- `pe2s1.` and `pe2t1.` for the same sealed to a key's public half; then a
+-- key's id without its dashes, a dot and the sealed bytes in base64url.
+CREATE OR REPLACE FUNCTION public._e2e_sealed_json(v jsonb) RETURNS boolean
+  LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $eesj$
+  SELECT v IS NULL OR v = 'null'::jsonb OR v = '[]'::jsonb OR v = '{}'::jsonb
+      OR (jsonb_typeof(v) = 'string'
+          AND (btrim(v #>> '{}') = '' OR (v #>> '{}') ~ '^pe2[ejst]1\.[0-9a-f]{32}\.[A-Za-z0-9_-]{16,}$'));
+$eesj$;
+CREATE OR REPLACE FUNCTION public._e2e_sealed_text(v text) RETURNS boolean
+  LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $eest$
+  SELECT v IS NULL OR btrim(v) = '' OR v ~ '^pe2[ejst]1\.[0-9a-f]{32}\.[A-Za-z0-9_-]{16,}$';
+$eest$;
+-- The key a sealed value is under, or NULL.
+CREATE OR REPLACE FUNCTION public._e2e_kid(v text) RETURNS uuid
+  LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $eekid$
+  SELECT CASE WHEN v ~ '^pe2[ejst]1\.[0-9a-f]{32}\.' THEN substr(v, 7, 32)::uuid END;
+$eekid$;
+GRANT EXECUTE ON FUNCTION public._e2e_sealed_json(jsonb) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._e2e_sealed_text(text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._e2e_kid(text) TO authenticated, service_role;
+
+-- ── The state ──────────────────────────────────────────────────────────────
+-- One row. `activated_at`: the moment the firm's work began to be sealed;
+-- from then on a browser writes only sealed words. `auto` false keeps a
+-- database as it was until an administrator turns encryption on in Settings
+-- (the verification suites that read the database's words directly use it;
+-- nothing in the portal sets it). `migration`: how far the background
+-- sealing of what was here before has gone, as the browser doing it says.
+CREATE TABLE IF NOT EXISTS public._e2e_state (
+  id boolean PRIMARY KEY DEFAULT true CHECK (id),
+  activated_at timestamptz,
+  activated_by uuid,
+  auto boolean NOT NULL DEFAULT true,
+  migration jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO public._e2e_state (id) VALUES (true) ON CONFLICT (id) DO NOTHING;
+ALTER TABLE public._e2e_state ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public._e2e_state FROM anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public._e2e_active() RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeact$
+  SELECT EXISTS (SELECT 1 FROM public._e2e_state WHERE id AND activated_at IS NOT NULL);
+$eeact$;
+REVOKE ALL ON FUNCTION public._e2e_active() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._e2e_active() TO authenticated, service_role;
+
+-- ── Keys, people's keys, and the keys wrapped for them ─────────────────────
+CREATE TABLE IF NOT EXISTS public.e2e_keys (
+  id uuid PRIMARY KEY,
+  scope text NOT NULL CHECK (scope IN ('firm', 'client')),
+  client_id uuid REFERENCES public.clients(id) ON DELETE CASCADE,
+  -- The key's public half (P-256, SPKI, base64url): what a browser that does
+  -- not hold the key seals to (a client's own person before they are given it).
+  pub text NOT NULL CHECK (pub ~ '^[A-Za-z0-9_-]{80,200}$'),
+  created_by uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  retired_at timestamptz,
+  CONSTRAINT e2e_keys_scope_ck CHECK ((scope = 'firm') = (client_id IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS e2e_keys_one_firm ON public.e2e_keys ((true)) WHERE scope = 'firm' AND retired_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS e2e_keys_one_client ON public.e2e_keys (client_id) WHERE scope = 'client' AND retired_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS public.e2e_principals (
+  id uuid PRIMARY KEY,
+  profile_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  -- 'device': one browser's own key, which it can use and never hand out.
+  -- 'account': opened by a passkey, a password or a recovery kit (e2e_account_wraps).
+  -- 'apikey': held by a tool the firm gave an API key with it (2018, the API).
+  kind text NOT NULL CHECK (kind IN ('device', 'account', 'apikey')),
+  pub text NOT NULL CHECK (pub ~ '^[A-Za-z0-9_-]{80,200}$'),
+  label text CHECK (label IS NULL OR length(label) <= 200),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz,
+  revoked_at timestamptz,
+  revoked_by uuid REFERENCES public.profiles(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS e2e_principals_profile ON public.e2e_principals (profile_id) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS public.e2e_grants (
+  key_id uuid NOT NULL REFERENCES public.e2e_keys(id) ON DELETE CASCADE,
+  principal_id uuid NOT NULL REFERENCES public.e2e_principals(id) ON DELETE CASCADE,
+  -- The key, sealed to the principal's public half (ECDH P-256, HKDF-SHA-256,
+  -- AES-256-GCM), as `pe2w1.<sealed>`.
+  wrapped text NOT NULL CHECK (wrapped ~ '^pe2w1\.[A-Za-z0-9_-]+$' AND length(wrapped) BETWEEN 100 AND 4000),
+  granted_by uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (key_id, principal_id)
+);
+CREATE INDEX IF NOT EXISTS e2e_grants_principal ON public.e2e_grants (principal_id);
+
+CREATE TABLE IF NOT EXISTS public.e2e_account_wraps (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  principal_id uuid NOT NULL REFERENCES public.e2e_principals(id) ON DELETE CASCADE,
+  method text NOT NULL CHECK (method IN ('passkey', 'password', 'kit', 'apikey')),
+  -- The passkey's credential id; '' for a password or a kit; an API key's id
+  -- for the key a tool opens it with (kind 'apikey').
+  ref text NOT NULL DEFAULT '' CHECK (length(ref) <= 1024),
+  -- What opens it again, never the secret: a salt, and Argon2id's cost.
+  params jsonb NOT NULL DEFAULT '{}'::jsonb,
+  wrapped text NOT NULL CHECK (wrapped ~ '^pe2a1\.[A-Za-z0-9_-]+$' AND length(wrapped) BETWEEN 60 AND 4000),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (principal_id, method, ref)
+);
+
+-- What happened to whose keys, for the firm's administrators: a browser added
+-- or taken away, keys given, encryption turned on, a kit made or used.
+CREATE TABLE IF NOT EXISTS public.e2e_events (
+  id bigserial PRIMARY KEY,
+  at timestamptz NOT NULL DEFAULT now(),
+  actor uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+  kind text NOT NULL CHECK (length(kind) <= 40),
+  subject uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+  principal_id uuid,
+  detail jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS e2e_events_at ON public.e2e_events (at DESC);
+
+-- The engagement files already sealed (a browser seals each as it uploads it,
+-- and the background sealing records the ones it seals).
+CREATE TABLE IF NOT EXISTS public._e2e_files (
+  bucket text NOT NULL,
+  path text NOT NULL,
+  key_id uuid,
+  sealed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (bucket, path)
+);
+
+ALTER TABLE public.e2e_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.e2e_principals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.e2e_grants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.e2e_account_wraps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.e2e_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public._e2e_files ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.e2e_keys, public.e2e_principals, public.e2e_grants, public.e2e_account_wraps,
+              public.e2e_events, public._e2e_files FROM anon, authenticated;
+REVOKE ALL ON SEQUENCE public.e2e_events_id_seq FROM anon, authenticated;
+-- Read through the functions below, and a person's own grants and browsers as
+-- they change (the live updates need a row they may read).
+GRANT SELECT ON public.e2e_grants TO authenticated;
+GRANT SELECT ON public.e2e_principals TO authenticated;
+DROP POLICY IF EXISTS e2e_grants_own ON public.e2e_grants;
+CREATE POLICY e2e_grants_own ON public.e2e_grants FOR SELECT TO authenticated
+  USING (principal_id IN (SELECT p.id FROM public.e2e_principals p WHERE p.profile_id = public.current_profile_id()));
+DROP POLICY IF EXISTS e2e_principals_seen ON public.e2e_principals;
+CREATE POLICY e2e_principals_seen ON public.e2e_principals FOR SELECT TO authenticated
+  USING (profile_id = public.current_profile_id() OR public.is_delivery_staff());
+
+-- ── Who may open a key ─────────────────────────────────────────────────────
+-- Asked of any person, not the caller: whether their browsers may be given
+-- this key. The firm's admins, seniors and testers, every key; a contractor
+-- (while contractors are on) the keys of the clients whose engagements they
+-- lead or their team works on; a client's own people their client's key.
+CREATE OR REPLACE FUNCTION public._e2e_entitled(p_profile uuid, p_key uuid) RETURNS boolean
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeent$
+DECLARE v_p record; v_k record; v_cons boolean;
+BEGIN
+  SELECT id, role, client_id, contractor_team_id, active INTO v_p FROM public.profiles WHERE id = p_profile;
+  IF NOT FOUND OR v_p.active IS NOT TRUE THEN RETURN false; END IF;
+  SELECT scope, client_id, retired_at INTO v_k FROM public.e2e_keys WHERE id = p_key;
+  IF NOT FOUND THEN RETURN false; END IF;
+  IF v_p.role IN ('admin', 'senior', 'standard') THEN RETURN true; END IF;
+  IF v_k.scope <> 'client' THEN RETURN false; END IF;
+  IF v_p.role = 'client' THEN RETURN v_p.client_id IS NOT DISTINCT FROM v_k.client_id AND v_p.client_id IS NOT NULL; END IF;
+  IF v_p.role = 'contractor' THEN
+    SELECT COALESCE((SELECT s.contractors_enabled FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1), false) INTO v_cons;
+    IF NOT v_cons THEN RETURN false; END IF;
+    RETURN EXISTS (SELECT 1 FROM public.assessments a
+                    WHERE a.client_id = v_k.client_id
+                      AND (a.lead_id = v_p.id
+                           OR (a.contractor_team_id IS NOT NULL AND a.contractor_team_id = v_p.contractor_team_id)));
+  END IF;
+  RETURN false;
+END $eeent$;
+REVOKE ALL ON FUNCTION public._e2e_entitled(uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._e2e_entitled(uuid, uuid) TO service_role;
+
+-- Whether the caller holds a key: one of their own live principals has it.
+CREATE OR REPLACE FUNCTION public._e2e_holds(p_key uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eehold$
+  SELECT EXISTS (SELECT 1 FROM public.e2e_grants g JOIN public.e2e_principals p ON p.id = g.principal_id
+                  WHERE g.key_id = p_key AND p.revoked_at IS NULL AND p.profile_id = public.current_profile_id());
+$eehold$;
+REVOKE ALL ON FUNCTION public._e2e_holds(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._e2e_holds(uuid) TO service_role;
+
+CREATE OR REPLACE FUNCTION public._e2e_event(p_kind text, p_subject uuid, p_principal uuid, p_detail jsonb DEFAULT '{}'::jsonb)
+  RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeev$
+  INSERT INTO public.e2e_events (actor, kind, subject, principal_id, detail)
+  VALUES (public.current_profile_id(), p_kind, p_subject, p_principal, COALESCE(p_detail, '{}'::jsonb));
+$eeev$;
+REVOKE ALL ON FUNCTION public._e2e_event(text, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated;
+
+-- ── What a browser asks first ──────────────────────────────────────────────
+-- Whether this database has encryption, whether the firm's work is sealed,
+-- the keys there are (their public halves), and the caller's own: their
+-- principals and what is wrapped for them. Nothing here opens anything.
+-- 2020: [stated] Arian, of an administrator's status at about 88 KB, "yes".
+-- A browser that holds its own key names it (p_principal) and is sent only
+-- what was given to that key, which is all it can open; asked with nothing
+-- (a sign-in that opens a password, passkey or kit, or a page from before),
+-- everything given to the caller's live keys, as before. A key named that is
+-- not the caller's, or is taken away, is sent nothing.
+DROP FUNCTION IF EXISTS public.rpc_e2e_status();
+CREATE OR REPLACE FUNCTION public.rpc_e2e_status(p_principal uuid DEFAULT NULL) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eestat$
+DECLARE v_me uuid := public.current_profile_id(); v_role text := public.current_user_role(); v_st record;
+BEGIN
+  IF v_me IS NULL THEN RETURN jsonb_build_object('available', true, 'signed_in', false); END IF;
+  SELECT activated_at, auto, migration INTO v_st FROM public._e2e_state WHERE id;
+  RETURN jsonb_build_object(
+    'available', true,
+    'signed_in', true,
+    'active', v_st.activated_at IS NOT NULL,
+    'activated_at', v_st.activated_at,
+    'auto', COALESCE(v_st.auto, true),
+    'migration', COALESCE(v_st.migration, '{}'::jsonb),
+    'role', v_role,
+    'profile_id', v_me,
+    'client_id', public.current_user_client_id(),
+    'keys', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', k.id, 'scope', k.scope, 'client_id', k.client_id, 'pub', k.pub)
+                                       ORDER BY k.created_at)
+                        FROM public.e2e_keys k
+                       WHERE k.retired_at IS NULL
+                         AND (public.is_delivery_staff()
+                              OR (k.scope = 'client' AND v_role = 'client' AND k.client_id = public.current_user_client_id())
+                              OR (k.scope = 'client' AND v_role = 'contractor' AND public._e2e_entitled(v_me, k.id)))), '[]'::jsonb),
+    'principals', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', p.id, 'kind', p.kind, 'pub', p.pub, 'label', p.label,
+                                                                'created_at', p.created_at, 'revoked', p.revoked_at IS NOT NULL)
+                                             ORDER BY p.created_at)
+                              FROM public.e2e_principals p WHERE p.profile_id = v_me), '[]'::jsonb),
+    'fresh', public.mfa_is_fresh(),
+    'grants', CASE WHEN NOT public.mfa_is_fresh() THEN '[]'::jsonb ELSE COALESCE((SELECT jsonb_agg(jsonb_build_object('key_id', g.key_id, 'principal_id', g.principal_id, 'wrapped', g.wrapped))
+                          FROM public.e2e_grants g JOIN public.e2e_principals p ON p.id = g.principal_id
+                         WHERE p.profile_id = v_me AND p.revoked_at IS NULL
+                           AND (p_principal IS NULL OR p.id = p_principal)), '[]'::jsonb) END,
+    'wraps', CASE WHEN NOT public.mfa_is_fresh() THEN '[]'::jsonb ELSE COALESCE((SELECT jsonb_agg(jsonb_build_object('principal_id', w.principal_id, 'method', w.method, 'ref', w.ref,
+                                                           'params', w.params, 'wrapped', w.wrapped))
+                         FROM public.e2e_account_wraps w JOIN public.e2e_principals p ON p.id = w.principal_id
+                        WHERE p.profile_id = v_me AND p.revoked_at IS NULL AND p.kind = 'account'), '[]'::jsonb) END,
+    -- Whether anybody else holds the firm's keys, for the one-key-holder advice.
+    'holders', (SELECT count(DISTINCT p.profile_id) FROM public.e2e_principals p JOIN public.e2e_grants g ON g.principal_id = p.id
+                 JOIN public.e2e_keys k ON k.id = g.key_id AND k.scope = 'firm'
+                WHERE p.revoked_at IS NULL)
+  );
+END $eestat$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_status(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_status(uuid) TO authenticated;
+
+-- ── A key let go ───────────────────────────────────────────────────────────
+-- A browser taken away, a password changed, a passkey or an API key removed,
+-- a kit replaced: the key is marked gone, and everything that was given to it
+-- and what opened it go with it.
+CREATE OR REPLACE FUNCTION public._e2e_let_go(p_principal uuid, p_by uuid, p_why text DEFAULT NULL) RETURNS void
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eelet$
+DECLARE v_p record;
+BEGIN
+  SELECT id, profile_id, kind, label, revoked_at INTO v_p FROM public.e2e_principals WHERE id = p_principal;
+  IF NOT FOUND THEN RETURN; END IF;
+  UPDATE public.e2e_principals SET revoked_at = COALESCE(revoked_at, now()), revoked_by = COALESCE(revoked_by, p_by) WHERE id = p_principal;
+  DELETE FROM public.e2e_grants WHERE principal_id = p_principal;
+  DELETE FROM public.e2e_account_wraps WHERE principal_id = p_principal;
+  IF v_p.revoked_at IS NULL THEN
+    INSERT INTO public.e2e_events (actor, kind, subject, principal_id, detail)
+    VALUES (p_by, 'removed', v_p.profile_id, p_principal, jsonb_build_object('kind', v_p.kind, 'label', v_p.label, 'why', p_why));
+  END IF;
+END $eelet$;
+REVOKE ALL ON FUNCTION public._e2e_let_go(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
+
+-- ── A browser, or an account key, of the caller's ──────────────────────────
+CREATE OR REPLACE FUNCTION public.rpc_e2e_register_principal(p_id uuid, p_kind text, p_pub text, p_label text DEFAULT NULL)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eereg$
+DECLARE v_me uuid := public.current_profile_id(); v_has record;
+BEGIN
+  IF v_me IS NULL OR public.current_user_role() = 'none' THEN RAISE EXCEPTION 'Sign in first.' USING ERRCODE = '42501'; END IF;
+  IF NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Confirm it is you first.' USING ERRCODE = '42501'; END IF;
+  IF p_kind NOT IN ('device', 'account') THEN RAISE EXCEPTION 'Not a kind of key a browser keeps.' USING ERRCODE = '22023'; END IF;
+  SELECT profile_id, kind, pub INTO v_has FROM public.e2e_principals WHERE id = p_id;
+  IF FOUND THEN
+    IF v_has.profile_id <> v_me OR v_has.kind <> p_kind OR v_has.pub <> p_pub THEN
+      RAISE EXCEPTION 'That key is somebody else''s.' USING ERRCODE = '42501';
+    END IF;
+    UPDATE public.e2e_principals SET last_seen_at = now() WHERE id = p_id;
+    RETURN jsonb_build_object('ok', true, 'existing', true);
+  END IF;
+  -- Each passkey, a password and a kit is a key of its own (one of each
+  -- replaces the one before only once it is opened by what it is for:
+  -- rpc_e2e_put_wrap).
+  INSERT INTO public.e2e_principals (id, profile_id, kind, pub, label, last_seen_at)
+  VALUES (p_id, v_me, p_kind, p_pub, left(NULLIF(btrim(COALESCE(p_label, '')), ''), 200), now());
+  PERFORM public._e2e_event(CASE p_kind WHEN 'device' THEN 'device_added' ELSE 'account_key' END, v_me, p_id,
+                            jsonb_build_object('label', left(COALESCE(p_label, ''), 200)));
+  RETURN jsonb_build_object('ok', true, 'existing', false);
+END $eereg$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_register_principal(uuid, text, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_register_principal(uuid, text, text, text) TO authenticated;
+
+-- ── The firm's work, sealed from now on ────────────────────────────────────
+-- The first administrator to sign in after this update makes the keys (the
+-- firm's and one for every client), gives them to their own browser and
+-- account key, and turns encryption on. Only once, and only while the state
+-- is on its own (`auto`) or an administrator asks in Settings (p_force).
+CREATE OR REPLACE FUNCTION public.rpc_e2e_activate(p_keys jsonb, p_grants jsonb, p_force boolean DEFAULT false)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeon$
+DECLARE v_me uuid := public.current_profile_id(); v_st record; v_k jsonb; v_g jsonb; v_missing jsonb; v_n int := 0;
+BEGIN
+  IF public.current_user_role() <> 'admin' THEN RAISE EXCEPTION 'Only an administrator turns encryption on.' USING ERRCODE = '42501'; END IF;
+  IF NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Confirm it is you first.' USING ERRCODE = '42501'; END IF;
+  SELECT * INTO v_st FROM public._e2e_state WHERE id FOR UPDATE;
+  IF v_st.activated_at IS NOT NULL THEN RETURN jsonb_build_object('ok', false, 'already', true); END IF;
+  IF NOT COALESCE(v_st.auto, true) AND NOT COALESCE(p_force, false) THEN RETURN jsonb_build_object('ok', false, 'held', true); END IF;
+  IF jsonb_typeof(p_keys) <> 'array' OR jsonb_typeof(p_grants) <> 'array' THEN RAISE EXCEPTION 'Keys and grants, as lists.' USING ERRCODE = '22023'; END IF;
+  -- A key for every client there is (one made since the browser looked is
+  -- asked for again).
+  SELECT jsonb_agg(c.id) INTO v_missing FROM public.clients c
+   WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(p_keys) k WHERE k->>'scope' = 'client' AND (k->>'client_id')::uuid = c.id);
+  IF v_missing IS NOT NULL THEN RETURN jsonb_build_object('ok', false, 'missing_clients', v_missing); END IF;
+  IF (SELECT count(*) FROM jsonb_array_elements(p_keys) k WHERE k->>'scope' = 'firm') <> 1 THEN
+    RAISE EXCEPTION 'One firm key.' USING ERRCODE = '22023';
+  END IF;
+  FOR v_k IN SELECT * FROM jsonb_array_elements(p_keys) LOOP
+    INSERT INTO public.e2e_keys (id, scope, client_id, pub, created_by)
+    VALUES ((v_k->>'id')::uuid, v_k->>'scope', NULLIF(v_k->>'client_id', '')::uuid, v_k->>'pub', v_me);
+  END LOOP;
+  -- Only to the caller's own principals: everybody else's come from the
+  -- browsers that hold the keys (rpc_e2e_needed).
+  FOR v_g IN SELECT * FROM jsonb_array_elements(p_grants) LOOP
+    IF NOT EXISTS (SELECT 1 FROM public.e2e_principals p WHERE p.id = (v_g->>'principal_id')::uuid AND p.profile_id = v_me AND p.revoked_at IS NULL) THEN
+      RAISE EXCEPTION 'Keys are given to your own browser first.' USING ERRCODE = '42501';
+    END IF;
+    INSERT INTO public.e2e_grants (key_id, principal_id, wrapped, granted_by)
+    VALUES ((v_g->>'key_id')::uuid, (v_g->>'principal_id')::uuid, v_g->>'wrapped', v_me)
+    ON CONFLICT DO NOTHING;
+    v_n := v_n + 1;
+  END LOOP;
+  -- Every key is held by the browser that made it, or nothing is turned on.
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_keys) k
+              WHERE NOT EXISTS (SELECT 1 FROM public.e2e_grants g JOIN public.e2e_principals p ON p.id = g.principal_id
+                                 WHERE g.key_id = (k->>'id')::uuid AND p.profile_id = v_me AND p.kind = 'device')) THEN
+    RAISE EXCEPTION 'Every key is given to your browser first.' USING ERRCODE = '22023';
+  END IF;
+  UPDATE public._e2e_state SET activated_at = now(), activated_by = v_me,
+         migration = jsonb_build_object('started_at', now(), 'by', v_me), updated_at = now() WHERE id;
+  PERFORM public._e2e_event('activated', v_me, NULL, jsonb_build_object('keys', jsonb_array_length(p_keys)));
+  RETURN jsonb_build_object('ok', true, 'grants', v_n);
+END $eeon$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_activate(jsonb, jsonb, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_activate(jsonb, jsonb, boolean) TO authenticated;
+
+-- ── A client added since: their key ────────────────────────────────────────
+-- Made by the first browser that needs it (a member of staff saving the
+-- client's first sealed words); a key another browser made a moment before
+-- is the one, and is returned.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_key_create(p_key jsonb, p_grants jsonb)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eekc$
+DECLARE v_me uuid := public.current_profile_id(); v_client uuid; v_has record; v_g jsonb; v_id uuid;
+BEGIN
+  IF NOT public.is_delivery_staff() AND public.current_user_role() <> 'contractor' THEN
+    RAISE EXCEPTION 'Only the firm''s people make a client''s key.' USING ERRCODE = '42501';
+  END IF;
+  IF NOT public._e2e_active() THEN RAISE EXCEPTION 'Encryption is not on yet.' USING ERRCODE = '55000'; END IF;
+  v_client := (p_key->>'client_id')::uuid;
+  v_id := (p_key->>'id')::uuid;
+  IF NOT public.can_see_client(v_client) THEN RAISE EXCEPTION 'Not a client of yours.' USING ERRCODE = '42501'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('pental_e2e_key_' || v_client::text));
+  SELECT id, pub INTO v_has FROM public.e2e_keys WHERE scope = 'client' AND client_id = v_client AND retired_at IS NULL;
+  IF FOUND THEN RETURN jsonb_build_object('ok', true, 'created', false, 'id', v_has.id, 'pub', v_has.pub); END IF;
+  INSERT INTO public.e2e_keys (id, scope, client_id, pub, created_by) VALUES (v_id, 'client', v_client, p_key->>'pub', v_me);
+  FOR v_g IN SELECT * FROM jsonb_array_elements(COALESCE(p_grants, '[]'::jsonb)) LOOP
+    IF (v_g->>'key_id')::uuid IS DISTINCT FROM v_id THEN CONTINUE; END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.e2e_principals p WHERE p.id = (v_g->>'principal_id')::uuid AND p.revoked_at IS NULL
+                     AND public._e2e_entitled(p.profile_id, v_id)) THEN CONTINUE; END IF;
+    INSERT INTO public.e2e_grants (key_id, principal_id, wrapped, granted_by)
+    VALUES (v_id, (v_g->>'principal_id')::uuid, v_g->>'wrapped', v_me) ON CONFLICT DO NOTHING;
+  END LOOP;
+  IF NOT EXISTS (SELECT 1 FROM public.e2e_grants g JOIN public.e2e_principals p ON p.id = g.principal_id
+                  WHERE g.key_id = v_id AND p.profile_id = v_me) THEN
+    RAISE EXCEPTION 'The key is given to your browser first.' USING ERRCODE = '22023';
+  END IF;
+  PERFORM public._e2e_event('client_key', NULL, NULL, jsonb_build_object('client_id', v_client));
+  RETURN jsonb_build_object('ok', true, 'created', true, 'id', v_id, 'pub', p_key->>'pub');
+END $eekc$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_key_create(jsonb, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_key_create(jsonb, jsonb) TO authenticated;
+
+-- ── Keys a browser can give, to whoever lacks them ─────────────────────────
+-- The live principals of everybody who may open a key the caller holds and
+-- has no grant of it: a new browser of a teammate's, a new client user, a
+-- person's new account key. The caller's browser wraps the key for each
+-- (rpc_e2e_put_grants): automatic, and every one kept in e2e_events.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_needed(p_limit int DEFAULT 200) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeneed$
+DECLARE v_me uuid := public.current_profile_id(); v_cons boolean;
+BEGIN
+  IF v_me IS NULL OR NOT public._e2e_active() THEN RETURN '[]'::jsonb; END IF;
+  SELECT COALESCE((SELECT s.contractors_enabled FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1), false) INTO v_cons;
+  -- _e2e_entitled, asked of every pair at once.
+  RETURN COALESCE((
+    WITH held AS (
+      SELECT DISTINCT g.key_id FROM public.e2e_grants g JOIN public.e2e_principals p ON p.id = g.principal_id
+       WHERE p.profile_id = v_me AND p.revoked_at IS NULL),
+    keys AS (SELECT k.* FROM public.e2e_keys k JOIN held h ON h.key_id = k.id WHERE k.retired_at IS NULL),
+    ent AS (
+      SELECT pr.id AS profile_id, k.id AS key_id FROM public.profiles pr CROSS JOIN keys k
+       WHERE pr.active IS TRUE AND pr.role IN ('admin', 'senior', 'standard')
+      UNION
+      SELECT pr.id, k.id FROM public.profiles pr JOIN keys k ON k.scope = 'client' AND k.client_id = pr.client_id
+       WHERE pr.active IS TRUE AND pr.role = 'client'
+      UNION
+      SELECT pr.id, k.id FROM public.profiles pr JOIN public.assessments a
+          ON (a.lead_id = pr.id OR (a.contractor_team_id IS NOT NULL AND a.contractor_team_id = pr.contractor_team_id))
+        JOIN keys k ON k.scope = 'client' AND k.client_id = a.client_id
+       WHERE v_cons AND pr.active IS TRUE AND pr.role = 'contractor')
+    SELECT jsonb_agg(jsonb_build_object('key_id', x.key_id, 'principal_id', x.pid, 'pub', x.pub, 'profile_id', x.profile_id, 'kind', x.kind))
+      FROM (SELECT e.key_id, p.id AS pid, p.pub, p.profile_id, p.kind
+              FROM ent e JOIN public.e2e_principals p ON p.profile_id = e.profile_id AND p.revoked_at IS NULL
+             WHERE NOT EXISTS (SELECT 1 FROM public.e2e_grants g WHERE g.key_id = e.key_id AND g.principal_id = p.id)
+               -- An account key once something opens it; an API key's while
+               -- the key works.
+               AND (p.kind = 'device'
+                    OR (p.kind = 'account' AND EXISTS (SELECT 1 FROM public.e2e_account_wraps w WHERE w.principal_id = p.id))
+                    OR (p.kind = 'apikey' AND EXISTS (SELECT 1 FROM public.e2e_account_wraps w JOIN public.api_keys ak ON ak.id::text = w.ref
+                                                        WHERE w.principal_id = p.id AND w.method = 'apikey'
+                                                          AND ak.revoked_at IS NULL AND ak.expires_at > now())))
+             ORDER BY p.created_at DESC
+             LIMIT GREATEST(1, LEAST(COALESCE(p_limit, 200), 1000))) x), '[]'::jsonb);
+END $eeneed$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_needed(int) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_needed(int) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.rpc_e2e_put_grants(p_grants jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeput$
+DECLARE v_me uuid := public.current_profile_id(); v_g jsonb; v_p record; v_n int := 0; v_k uuid; v_pid uuid;
+BEGIN
+  IF v_me IS NULL OR public.current_user_role() = 'none' THEN RAISE EXCEPTION 'Sign in first.' USING ERRCODE = '42501'; END IF;
+  IF NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Confirm it is you first.' USING ERRCODE = '42501'; END IF;
+  IF jsonb_typeof(p_grants) <> 'array' OR jsonb_array_length(p_grants) > 1000 THEN RAISE EXCEPTION 'A list of up to a thousand.' USING ERRCODE = '22023'; END IF;
+  FOR v_g IN SELECT * FROM jsonb_array_elements(p_grants) LOOP
+    v_k := (v_g->>'key_id')::uuid; v_pid := (v_g->>'principal_id')::uuid;
+    SELECT id, profile_id, revoked_at INTO v_p FROM public.e2e_principals WHERE id = v_pid;
+    IF NOT FOUND OR v_p.revoked_at IS NOT NULL THEN CONTINUE; END IF;
+    -- A key the caller holds, to somebody who may open it; or one the caller
+    -- has just opened with their own account key, to their own new browser.
+    IF NOT public._e2e_holds(v_k) THEN CONTINUE; END IF;
+    IF NOT public._e2e_entitled(v_p.profile_id, v_k) THEN CONTINUE; END IF;
+    INSERT INTO public.e2e_grants (key_id, principal_id, wrapped, granted_by)
+    VALUES (v_k, v_pid, v_g->>'wrapped', v_me) ON CONFLICT DO NOTHING;
+    IF FOUND THEN
+      v_n := v_n + 1;
+      IF v_p.profile_id <> v_me THEN PERFORM public._e2e_event('granted', v_p.profile_id, v_pid, jsonb_build_object('key_id', v_k)); END IF;
+    END IF;
+  END LOOP;
+  RETURN jsonb_build_object('ok', true, 'given', v_n);
+END $eeput$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_put_grants(jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_put_grants(jsonb) TO authenticated;
+
+-- A grant that would not open (wrapped wrongly, or for a key of a principal
+-- since replaced) is let go by its own holder, so another browser gives it again.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_drop_grant(p_key uuid, p_principal uuid) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eedrop$
+BEGIN
+  DELETE FROM public.e2e_grants g USING public.e2e_principals p
+   WHERE g.key_id = p_key AND g.principal_id = p_principal AND p.id = g.principal_id AND p.profile_id = public.current_profile_id();
+  RETURN jsonb_build_object('ok', FOUND);
+END $eedrop$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_drop_grant(uuid, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_drop_grant(uuid, uuid) TO authenticated;
+
+-- ── An account key, opened by a passkey, a password or a recovery kit ──────
+CREATE OR REPLACE FUNCTION public.rpc_e2e_put_wrap(p_principal uuid, p_method text, p_ref text, p_params jsonb, p_wrapped text)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eewrap$
+DECLARE v_me uuid := public.current_profile_id(); v_old uuid;
+BEGIN
+  IF NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Confirm it is you first.' USING ERRCODE = '42501'; END IF;
+  IF p_method IS NULL OR p_method NOT IN ('passkey', 'password', 'kit') THEN RAISE EXCEPTION 'A passkey, a password or a kit.' USING ERRCODE = '22023'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.e2e_principals WHERE id = p_principal AND profile_id = v_me AND kind = 'account' AND revoked_at IS NULL) THEN
+    RAISE EXCEPTION 'Not your account key.' USING ERRCODE = '42501';
+  END IF;
+  INSERT INTO public.e2e_account_wraps (principal_id, method, ref, params, wrapped)
+  VALUES (p_principal, p_method, COALESCE(p_ref, ''), COALESCE(p_params, '{}'::jsonb), p_wrapped)
+  ON CONFLICT (principal_id, method, ref) DO UPDATE SET params = EXCLUDED.params, wrapped = EXCLUDED.wrapped, created_at = now();
+  -- One of each a person (a password's, a kit's, each passkey's): the one
+  -- before goes, with what it was given.
+  FOR v_old IN SELECT DISTINCT w.principal_id FROM public.e2e_account_wraps w JOIN public.e2e_principals p ON p.id = w.principal_id
+                WHERE p.profile_id = v_me AND w.principal_id <> p_principal AND w.method = p_method
+                  AND (p_method <> 'passkey' OR w.ref = COALESCE(p_ref, '')) LOOP
+    PERFORM public._e2e_let_go(v_old, v_me, 'replaced');
+  END LOOP;
+  IF p_method = 'kit' THEN PERFORM public._e2e_event('kit_made', v_me, p_principal); END IF;
+  RETURN jsonb_build_object('ok', true);
+END $eewrap$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_put_wrap(uuid, text, text, jsonb, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_put_wrap(uuid, text, text, jsonb, text) TO authenticated;
+
+-- A person's own passkey, password or kit no longer opening their keys (the
+-- kit removed in Settings): its key goes.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_drop_wrap(p_method text, p_ref text DEFAULT '') RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eedw$
+DECLARE v_me uuid := public.current_profile_id(); v_old uuid; v_n int := 0;
+BEGIN
+  IF NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Confirm it is you first.' USING ERRCODE = '42501'; END IF;
+  FOR v_old IN SELECT DISTINCT w.principal_id FROM public.e2e_account_wraps w JOIN public.e2e_principals p ON p.id = w.principal_id
+                WHERE p.profile_id = v_me AND w.method = p_method AND (p_method <> 'passkey' OR w.ref = COALESCE(p_ref, '')) LOOP
+    PERFORM public._e2e_let_go(v_old, v_me, CASE p_method WHEN 'kit' THEN 'kit removed' ELSE 'removed' END);
+    v_n := v_n + 1;
+  END LOOP;
+  RETURN jsonb_build_object('ok', true, 'removed', v_n);
+END $eedw$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_drop_wrap(text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_drop_wrap(text, text) TO authenticated;
+
+-- A password changed or reset: what it opened cannot be opened by the new
+-- one, so it goes (the next browser to hold the account key wraps it again).
+CREATE OR REPLACE FUNCTION public._e2e_password_changed() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eepw$
+DECLARE v_pid uuid; v_old uuid;
+BEGIN
+  IF TG_OP = 'DELETE' THEN v_pid := OLD.profile_id;
+  ELSIF NEW.password_hash IS DISTINCT FROM OLD.password_hash THEN v_pid := NEW.profile_id;
+  END IF;
+  IF v_pid IS NOT NULL THEN
+    FOR v_old IN SELECT DISTINCT w.principal_id FROM public.e2e_account_wraps w JOIN public.e2e_principals p ON p.id = w.principal_id
+                  WHERE p.profile_id = v_pid AND w.method = 'password' LOOP
+      PERFORM public._e2e_let_go(v_old, public.current_profile_id(), 'password changed');
+    END LOOP;
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END $eepw$;
+DROP TRIGGER IF EXISTS zz_e2e_password_changed ON public.user_credentials;
+CREATE TRIGGER zz_e2e_password_changed AFTER UPDATE OF password_hash OR DELETE ON public.user_credentials
+  FOR EACH ROW EXECUTE FUNCTION public._e2e_password_changed();
+
+-- A passkey removed (by its person, or with their second factor reset by an
+-- administrator): the key it opened goes.
+CREATE OR REPLACE FUNCTION public._e2e_passkey_gone() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eepkg$
+DECLARE v_old uuid;
+BEGIN
+  FOR v_old IN SELECT DISTINCT w.principal_id FROM public.e2e_account_wraps w WHERE w.method = 'passkey' AND w.ref = OLD.credential_id LOOP
+    PERFORM public._e2e_let_go(v_old, public.current_profile_id(), 'passkey removed');
+  END LOOP;
+  RETURN OLD;
+END $eepkg$;
+DROP TRIGGER IF EXISTS zz_e2e_passkey_gone ON public.webauthn_credentials;
+CREATE TRIGGER zz_e2e_passkey_gone AFTER DELETE ON public.webauthn_credentials
+  FOR EACH ROW EXECUTE FUNCTION public._e2e_passkey_gone();
+
+-- ── Browsers, as the firm's administrators see them ────────────────────────
+CREATE OR REPLACE FUNCTION public.rpc_e2e_people() RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eepeople$
+DECLARE v_me uuid := public.current_profile_id(); v_admin boolean := public.current_user_role() = 'admin';
+BEGIN
+  IF v_me IS NULL THEN RETURN '[]'::jsonb; END IF;
+  RETURN COALESCE((
+    SELECT jsonb_agg(jsonb_build_object(
+             'id', p.id, 'profile_id', p.profile_id, 'name', pr.name, 'email', pr.email, 'role', pr.role,
+             'kind', p.kind, 'label', p.label, 'created_at', p.created_at, 'last_seen_at', p.last_seen_at,
+             'keys', (SELECT count(*) FROM public.e2e_grants g WHERE g.principal_id = p.id),
+             'methods', (SELECT COALESCE(jsonb_agg(DISTINCT w.method), '[]'::jsonb) FROM public.e2e_account_wraps w WHERE w.principal_id = p.id))
+           ORDER BY pr.name, p.created_at)
+      FROM public.e2e_principals p JOIN public.profiles pr ON pr.id = p.profile_id
+     WHERE p.revoked_at IS NULL AND (v_admin OR p.profile_id = v_me)), '[]'::jsonb);
+END $eepeople$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_people() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_people() TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.rpc_e2e_revoke(p_principal uuid) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eerev$
+DECLARE v_me uuid := public.current_profile_id(); v_p record;
+BEGIN
+  IF NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Confirm it is you first.' USING ERRCODE = '42501'; END IF;
+  SELECT * INTO v_p FROM public.e2e_principals WHERE id = p_principal;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false); END IF;
+  IF v_p.profile_id <> v_me AND public.current_user_role() <> 'admin' THEN RAISE EXCEPTION 'Not yours to remove.' USING ERRCODE = '42501'; END IF;
+  UPDATE public.e2e_principals SET revoked_at = now(), revoked_by = v_me WHERE id = p_principal AND revoked_at IS NULL;
+  DELETE FROM public.e2e_grants WHERE principal_id = p_principal;
+  DELETE FROM public.e2e_account_wraps WHERE principal_id = p_principal;
+  PERFORM public._e2e_event('removed', v_p.profile_id, p_principal, jsonb_build_object('kind', v_p.kind, 'label', v_p.label));
+  RETURN jsonb_build_object('ok', true);
+END $eerev$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_revoke(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_revoke(uuid) TO authenticated;
+
+-- ── Who can read an engagement's work ──────────────────────────────────────
+-- For its badge: how many people's browsers hold its client's key (the
+-- firm's and the client's own), and, for the firm, who they are.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_holders(p_client uuid) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeholdtwo$
+DECLARE v_kid uuid; v_role text := public.current_user_role(); v_out jsonb;
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() OR v_role IN ('none', 'sales', 'marketing') THEN RETURN jsonb_build_object('ok', false); END IF;
+  IF v_role = 'client' AND p_client IS DISTINCT FROM public.current_user_client_id() THEN RETURN jsonb_build_object('ok', false); END IF;
+  IF v_role <> 'client' AND NOT public.can_see_client(p_client) THEN RETURN jsonb_build_object('ok', false); END IF;
+  SELECT id INTO v_kid FROM public.e2e_keys WHERE scope = 'client' AND client_id = p_client AND retired_at IS NULL;
+  IF v_kid IS NULL THEN RETURN jsonb_build_object('ok', true, 'firm', 0, 'client', 0); END IF;
+  SELECT jsonb_build_object('ok', true,
+           'firm', count(DISTINCT pr.id) FILTER (WHERE pr.role <> 'client'),
+           'client', count(DISTINCT pr.id) FILTER (WHERE pr.role = 'client'),
+           'people', CASE WHEN v_role = 'client' THEN NULL ELSE
+             (SELECT jsonb_agg(jsonb_build_object('name', x.name, 'role', x.role) ORDER BY x.role = 'client', x.name)
+                FROM (SELECT DISTINCT pr2.id, pr2.name, pr2.role FROM public.e2e_grants g2
+                        JOIN public.e2e_principals p2 ON p2.id = g2.principal_id AND p2.revoked_at IS NULL
+                        JOIN public.profiles pr2 ON pr2.id = p2.profile_id AND pr2.active IS TRUE
+                       WHERE g2.key_id = v_kid) x) END)
+    INTO v_out
+    FROM public.e2e_grants g JOIN public.e2e_principals p ON p.id = g.principal_id AND p.revoked_at IS NULL
+    JOIN public.profiles pr ON pr.id = p.profile_id AND pr.active IS TRUE
+   WHERE g.key_id = v_kid;
+  RETURN v_out;
+END $eeholdtwo$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_holders(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_holders(uuid) TO authenticated;
+
+-- ── A tool's API key, able to open what its person may ──────────────────────
+-- Made by the browser that makes the key (rpc_api_key_create shows the key
+-- once): a key of its own for the tool, its private half sealed under one
+-- the API key itself derives (HKDF-SHA-256 of the key, 'pental e2e apikey
+-- v1'), so only whoever holds the API key opens it. Given the person's keys as
+-- any of their browsers is (rpc_e2e_needed), and let go with the API key
+-- (revoked, expired, or its person's access ending). The tool asks for its
+-- keys with api_v1_keys and opens the API's sealed values itself.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_apikey_principal(p_key uuid, p_id uuid, p_pub text, p_wrapped text) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeapk$
+DECLARE v_me uuid := public.current_profile_id(); v_k record;
+BEGIN
+  IF v_me IS NULL OR NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Confirm it is you first.' USING ERRCODE = '42501'; END IF;
+  IF NOT public._e2e_active() THEN RETURN jsonb_build_object('ok', false, 'off', true); END IF;
+  SELECT id, prefix, name INTO v_k FROM public.api_keys
+   WHERE id = p_key AND profile_id = v_me AND revoked_at IS NULL AND expires_at > now();
+  IF NOT FOUND THEN RAISE EXCEPTION 'Not an API key of yours that works.' USING ERRCODE = '42501'; END IF;
+  IF EXISTS (SELECT 1 FROM public.e2e_account_wraps w JOIN public.e2e_principals p ON p.id = w.principal_id
+              WHERE w.method = 'apikey' AND w.ref = p_key::text AND p.revoked_at IS NULL) THEN
+    RETURN jsonb_build_object('ok', true, 'existing', true);
+  END IF;
+  INSERT INTO public.e2e_principals (id, profile_id, kind, pub, label, last_seen_at)
+  VALUES (p_id, v_me, 'apikey', p_pub, left('API key ' || v_k.prefix || ' (' || v_k.name || ')', 200), now());
+  INSERT INTO public.e2e_account_wraps (principal_id, method, ref, params, wrapped)
+  VALUES (p_id, 'apikey', p_key::text, '{}'::jsonb, p_wrapped);
+  PERFORM public._e2e_event('apikey_key', v_me, p_id, jsonb_build_object('prefix', v_k.prefix));
+  RETURN jsonb_build_object('ok', true, 'existing', false);
+END $eeapk$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_apikey_principal(uuid, uuid, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_apikey_principal(uuid, uuid, text, text) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public._e2e_apikey_gone() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeapkg$
+DECLARE v_old uuid;
+BEGIN
+  IF NEW.revoked_at IS NOT NULL AND OLD.revoked_at IS NULL THEN
+    FOR v_old IN SELECT DISTINCT w.principal_id FROM public.e2e_account_wraps w WHERE w.method = 'apikey' AND w.ref = NEW.id::text LOOP
+      PERFORM public._e2e_let_go(v_old, public.current_profile_id(), 'API key revoked');
+    END LOOP;
+  END IF;
+  RETURN NEW;
+END $eeapkg$;
+DROP TRIGGER IF EXISTS zz_e2e_apikey_gone ON public.api_keys;
+CREATE TRIGGER zz_e2e_apikey_gone AFTER UPDATE OF revoked_at ON public.api_keys
+  FOR EACH ROW EXECUTE FUNCTION public._e2e_apikey_gone();
+
+-- A tool's keys, for the API key it signed in with: one row a key, each with
+-- the tool's own key sealed for its API key (principal_wrapped) and the data
+-- key sealed for the tool's (key_wrapped). No rows: nothing of this firm's is
+-- encrypted yet, or the key was made before it was, and is not given any.
+CREATE OR REPLACE FUNCTION public.api_v1_keys()
+RETURNS TABLE (principal_id uuid, principal_wrapped text, key_id uuid, key_scope text, key_client_id uuid, key_wrapped text)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $apikeys$
+#variable_conflict use_column
+DECLARE v_key uuid := public._api_need_key();
+BEGIN
+  RETURN QUERY
+  SELECT p.id, w.wrapped, k.id, k.scope, k.client_id, g.wrapped
+    FROM public.e2e_account_wraps w
+    JOIN public.e2e_principals p ON p.id = w.principal_id AND p.kind = 'apikey' AND p.revoked_at IS NULL
+    JOIN public.e2e_grants g ON g.principal_id = p.id
+    JOIN public.e2e_keys k ON k.id = g.key_id AND k.retired_at IS NULL
+   WHERE w.method = 'apikey' AND w.ref = v_key::text
+   ORDER BY k.scope DESC, k.created_at;
+END $apikeys$;
+REVOKE ALL ON FUNCTION public.api_v1_keys() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.api_v1_keys() TO authenticated, service_role;
+
+-- A person who leaves keeps nothing: their browsers' grants go with them.
+CREATE OR REPLACE FUNCTION public._e2e_profile_gone() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eegone$
+BEGIN
+  IF NEW.active IS DISTINCT FROM true OR NEW.role IS DISTINCT FROM OLD.role OR NEW.client_id IS DISTINCT FROM OLD.client_id THEN
+    -- What they may open now (a role or client changed), and nothing more.
+    DELETE FROM public.e2e_grants g USING public.e2e_principals p
+     WHERE g.principal_id = p.id AND p.profile_id = NEW.id AND NOT public._e2e_entitled(NEW.id, g.key_id);
+    IF NEW.active IS DISTINCT FROM true THEN
+      UPDATE public.e2e_principals SET revoked_at = now() WHERE profile_id = NEW.id AND revoked_at IS NULL;
+      DELETE FROM public.e2e_account_wraps w USING public.e2e_principals p WHERE w.principal_id = p.id AND p.profile_id = NEW.id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END $eegone$;
+DROP TRIGGER IF EXISTS zz_e2e_profile_gone ON public.profiles;
+CREATE TRIGGER zz_e2e_profile_gone AFTER UPDATE OF active, role, client_id ON public.profiles
+  FOR EACH ROW EXECUTE FUNCTION public._e2e_profile_gone();
+
+CREATE OR REPLACE FUNCTION public.rpc_e2e_events(p_limit int DEFAULT 100) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeevs$
+DECLARE v_me uuid := public.current_profile_id(); v_admin boolean := public.current_user_role() = 'admin';
+BEGIN
+  RETURN COALESCE((SELECT jsonb_agg(jsonb_build_object('at', e.at, 'kind', e.kind, 'actor', a.name, 'subject', s.name, 'detail', e.detail) ORDER BY e.at DESC)
+                     FROM (SELECT * FROM public.e2e_events e WHERE v_admin OR e.subject = v_me OR e.actor = v_me
+                            ORDER BY e.at DESC LIMIT GREATEST(1, LEAST(COALESCE(p_limit, 100), 500))) e
+                     LEFT JOIN public.profiles a ON a.id = e.actor LEFT JOIN public.profiles s ON s.id = e.subject), '[]'::jsonb);
+END $eeevs$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_events(int) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_events(int) TO authenticated;
+
+-- ── A page from before this: no words written in the clear ─────────────────
+-- Once the firm's work is sealed, a browser (a request as `authenticated` or
+-- `anon`, through the API's tables) writes only sealed values into these
+-- columns, or leaves them as they are. The database's own work (a scan's
+-- import, a signed proposal's sections, the API's functions) writes as it did
+-- and is sealed after (rpc_e2e_seal_rows).
+-- A session an API key signed in (1977): a tool writing through the API's
+-- functions, whose words are sealed after, as the database's own are.
+CREATE OR REPLACE FUNCTION public._e2e_api_session() RETURNS boolean
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeapi$
+DECLARE v_sid text;
+BEGIN
+  BEGIN v_sid := auth.jwt() ->> 'session_id'; EXCEPTION WHEN OTHERS THEN RETURN false; END;
+  IF v_sid IS NULL OR v_sid !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN RETURN false; END IF;
+  RETURN EXISTS (SELECT 1 FROM public.api_key_sessions WHERE session_id = v_sid::uuid);
+END $eeapi$;
+REVOKE ALL ON FUNCTION public._e2e_api_session() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._e2e_api_session() TO authenticated, service_role;
+
+-- Run as the writer (not SECURITY DEFINER), so `current_user` says whose
+-- write it is: a browser's through the tables is `authenticated` or `anon`;
+-- the database's own, inside one of its functions, is the function's owner.
+CREATE OR REPLACE FUNCTION public._e2e_guard() RETURNS trigger
+  LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $eeguard$
+DECLARE v_new jsonb; v_old jsonb; c text; v jsonb;
+BEGIN
+  IF current_user NOT IN ('authenticated', 'anon') THEN RETURN NEW; END IF;
+  IF NOT public._e2e_active() THEN RETURN NEW; END IF;
+  v_new := to_jsonb(NEW);
+  IF TG_TABLE_NAME = 'co_live' AND COALESCE(v_new->>'rec_table', '') NOT IN ('findings', 'assessments') THEN RETURN NEW; END IF;
+  IF public._e2e_api_session() THEN RETURN NEW; END IF;
+  v_old := CASE WHEN TG_OP = 'UPDATE' THEN to_jsonb(OLD) ELSE '{}'::jsonb END;
+  FOREACH c IN ARRAY (CASE WHEN TG_TABLE_NAME = 'co_live' THEN ARRAY['value'] ELSE public._e2e_columns(TG_TABLE_NAME) END) LOOP
+    v := v_new -> c;
+    IF public._e2e_sealed_json(v) THEN CONTINUE; END IF;
+    IF TG_OP = 'UPDATE' AND v IS NOT DISTINCT FROM (v_old -> c) THEN CONTINUE; END IF;
+    RAISE EXCEPTION 'This page is from before your firm''s work was encrypted: reload it, and save again.'
+      USING ERRCODE = '55E2E', DETAIL = TG_TABLE_NAME || '.' || c;
+  END LOOP;
+  RETURN NEW;
+END $eeguard$;
+DO $eeguards$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['findings', 'assessments', 'assessment_comments', 'qa_comments', 'timeline_events',
+                           'tickets', 'assets', 'scan_results', 'scan_runs', 'co_live'] LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS zz_e2e_guard ON public.%I', t);
+    EXECUTE format('CREATE TRIGGER zz_e2e_guard BEFORE INSERT OR UPDATE ON public.%I FOR EACH ROW EXECUTE FUNCTION public._e2e_guard()', t);
+  END LOOP;
+END $eeguards$;
+
+-- The live drafts of a sealed box are sealed too, and a sealed value is longer
+-- than its words: a draft of up to 64 KB of words is up to about 88 KB sealed.
+DO $eeco$ BEGIN
+  ALTER TABLE public.co_live DROP CONSTRAINT IF EXISTS co_live_value_ck;
+  ALTER TABLE public.co_live ADD CONSTRAINT co_live_value_ck CHECK (value IS NULL OR octet_length(value) <= 90112);
+  ALTER TABLE public.assets DROP CONSTRAINT IF EXISTS assets_name_check;
+  ALTER TABLE public.assets ADD CONSTRAINT assets_name_check CHECK (length(btrim(name)) BETWEEN 1 AND 800);
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'Pental setup: updating the rule % failed, so the earlier one stays (%)', 'co_live_value_ck/assets_name_check', SQLERRM;
+END $eeco$;
+
+-- ── The pictures a sealed box names ────────────────────────────────────────
+-- A sealed value cannot be searched for the files it points at, and three
+-- rules ask that of a finding or an engagement (whether a client may open a
+-- picture, whether a tester may remove one nobody uses, what is sent to
+-- SharePoint): the browser that seals a box writes beside it the paths of the
+-- files the box names (`e2e_refs`, by column, and for an engagement's own
+-- sections by section). Only paths: an engagement's id, a folder, a number.
+-- What a write names is merged into what the row named before, column by
+-- column, so a write of one box leaves the others' as they were.
+CREATE OR REPLACE FUNCTION public._e2e_refs_merge() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $eerefs$
+BEGIN
+  IF NEW.e2e_refs IS NOT NULL AND jsonb_typeof(NEW.e2e_refs) <> 'object' THEN NEW.e2e_refs := NULL; END IF;
+  IF TG_OP = 'UPDATE' AND OLD.e2e_refs IS NOT NULL AND NEW.e2e_refs IS DISTINCT FROM OLD.e2e_refs THEN
+    NEW.e2e_refs := OLD.e2e_refs || COALESCE(NEW.e2e_refs, '{}'::jsonb);
+  END IF;
+  RETURN NEW;
+END $eerefs$;
+DO $eerefst$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['findings', 'assessments', 'qa_comments', 'assessment_comments'] LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS zy_e2e_refs ON public.%I', t);
+    EXECUTE format('CREATE TRIGGER zy_e2e_refs BEFORE INSERT OR UPDATE OF e2e_refs ON public.%I FOR EACH ROW EXECUTE FUNCTION public._e2e_refs_merge()', t);
+  END LOOP;
+END $eerefst$;
+
+-- Which client each of some rows is under, for the browser that seals a write
+-- to one it does not have in hand. Only rows the caller may read.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_clients_of(p_table text, p_ids uuid[]) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eecotwo$
+BEGIN
+  IF public.current_user_role() IN ('none', 'sales', 'marketing') OR cardinality(p_ids) > 500 THEN RETURN '{}'::jsonb; END IF;
+  RETURN COALESCE(CASE p_table
+    WHEN 'assessments' THEN (SELECT jsonb_object_agg(a.id, a.client_id) FROM public.assessments a
+                              WHERE a.id = ANY (p_ids) AND public.can_access_assessment(a.id))
+    WHEN 'findings' THEN (SELECT jsonb_object_agg(f.id, COALESCE(f.client_id, a.client_id)) FROM public.findings f
+                           LEFT JOIN public.assessments a ON a.id = f.assessment_id
+                          WHERE f.id = ANY (p_ids) AND (f.assessment_id IS NULL OR public.can_access_assessment(f.assessment_id)))
+    WHEN 'scan_runs' THEN (SELECT jsonb_object_agg(r.id, r.client_id) FROM public.scan_runs r
+                            WHERE r.id = ANY (p_ids) AND public.can_see_client(r.client_id))
+    WHEN 'qa_comments' THEN (SELECT jsonb_object_agg(q.id, COALESCE(a.client_id, (SELECT COALESCE(f.client_id, a2.client_id) FROM public.findings f LEFT JOIN public.assessments a2 ON a2.id = f.assessment_id WHERE f.id = q.finding_id)))
+                              FROM public.qa_comments q LEFT JOIN public.assessments a ON a.id = q.assessment_id
+                             WHERE q.id = ANY (p_ids))
+    WHEN 'assessment_comments' THEN (SELECT jsonb_object_agg(c.id, a.client_id) FROM public.assessment_comments c
+                                      JOIN public.assessments a ON a.id = c.assessment_id
+                                     WHERE c.id = ANY (p_ids) AND public.can_access_assessment(a.id))
+    WHEN 'timeline_events' THEN (SELECT jsonb_object_agg(t.id, a.client_id) FROM public.timeline_events t
+                                  JOIN public.assessments a ON a.id = t.assessment_id
+                                 WHERE t.id = ANY (p_ids) AND public.can_access_assessment(a.id))
+    WHEN 'scan_results' THEN (SELECT jsonb_object_agg(x.id, r.client_id) FROM public.scan_results x
+                               JOIN public.scan_runs r ON r.id = x.run_id WHERE x.id = ANY (p_ids) AND public.can_see_client(r.client_id))
+    WHEN 'tickets' THEN (SELECT jsonb_object_agg(t.id, t.client_id) FROM public.tickets t WHERE t.id = ANY (p_ids) AND public.can_access_client(t.client_id))
+    WHEN 'assets' THEN (SELECT jsonb_object_agg(t.id, t.client_id) FROM public.assets t WHERE t.id = ANY (p_ids) AND public.can_see_client(t.client_id))
+  END, '{}'::jsonb);
+END $eecotwo$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_clients_of(text, uuid[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_clients_of(text, uuid[]) TO authenticated;
+
+-- What a finding names, for the rules that ask whether it names a file: the
+-- whole row, as before, and the paths its sealed boxes name (`e2e_refs`), its
+-- retest's only while its client is shown the retest.
+CREATE OR REPLACE FUNCTION public._e2e_finding_names(f public.findings, p_for_client boolean) RETURNS text
+  LANGUAGE sql STABLE SET search_path = public, pg_catalog, pg_temp AS $eefn$
+  SELECT CASE WHEN p_for_client AND f.retest_client_visible IS FALSE
+              THEN (to_jsonb(f) - 'retest_results' - 'e2e_refs')::text || COALESCE((f.e2e_refs - 'retest_results')::text, '')
+              ELSE f::text END;
+$eefn$;
+
+-- ── An email with a finding in it ─────────────────────────────────────────
+-- The browser that writes an email of a finding's detail or a comment's words
+-- (critical_finding, comment_new, comment_reply) hands the database the email
+-- to send and, beside it, its subject and body sealed under the firm's key.
+-- The words are kept only while the email waits to go: once it has gone, been
+-- refused or cancelled, the Email Log keeps the sealed copy alone (opened in
+-- an administrator's browser as before).
+ALTER TABLE public.email_notifications ADD COLUMN IF NOT EXISTS subject_sealed text;
+ALTER TABLE public.email_notifications ADD COLUMN IF NOT EXISTS body_sealed text;
+CREATE OR REPLACE FUNCTION public._e2e_mail_settled() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = public, pg_catalog, pg_temp AS $eemail$
+BEGIN
+  IF NEW.body_sealed IS NULL AND NEW.subject_sealed IS NULL THEN RETURN NEW; END IF;
+  IF NOT public._e2e_sealed_text(NEW.body_sealed) OR NOT public._e2e_sealed_text(NEW.subject_sealed) THEN
+    NEW.body_sealed := NULL; NEW.subject_sealed := NULL;
+    RETURN NEW;
+  END IF;
+  IF NEW.status IN ('sent', 'failed', 'cancelled') THEN
+    IF COALESCE(NEW.body_sealed, '') <> '' THEN NEW.body := NEW.body_sealed; END IF;
+    IF COALESCE(NEW.subject_sealed, '') <> '' THEN NEW.subject := NEW.subject_sealed; END IF;
+    NEW.body_sealed := NULL; NEW.subject_sealed := NULL;
+  END IF;
+  RETURN NEW;
+END $eemail$;
+DROP TRIGGER IF EXISTS zz_e2e_mail_settled ON public.email_notifications;
+CREATE TRIGGER zz_e2e_mail_settled BEFORE INSERT OR UPDATE ON public.email_notifications
+  FOR EACH ROW EXECUTE FUNCTION public._e2e_mail_settled();
+
+-- ── A ticket raised on its own, for a sealed finding ──────────────────────
+-- A tracker that raises tickets on its own (auto_raise) is sent a sealed
+-- finding's words by the firm's next browser to be open, which raises it as
+-- a person would (rpc_ticket_raise, with the words it opened). These are the
+-- ones waiting for that.
+CREATE OR REPLACE FUNCTION public.rpc_ticket_auto_due(p_limit int DEFAULT 25) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eetk$
+BEGIN
+  IF NOT public.is_delivery_staff() OR NOT public._e2e_active() THEN RETURN '[]'::jsonb; END IF;
+  RETURN COALESCE((SELECT jsonb_agg(jsonb_build_object('finding_id', c.finding_id, 'tracker_id', c.tracker_id))
+                     FROM (SELECT c.finding_id, c.tracker_id FROM public._ticket_raise_candidates(NULL, NULL, false) c
+                             JOIN public.findings f ON f.id = c.finding_id AND f.title ~ '^pe2[ejst]1\.'
+                            WHERE NOT EXISTS (SELECT 1 FROM public._ticket_jobs q WHERE q.kind = 'raise' AND q.finding_id = c.finding_id
+                                                AND q.tracker_id = c.tracker_id AND q.state IN ('planned', 'queued', 'sending'))
+                            ORDER BY c.created_at LIMIT GREATEST(1, LEAST(COALESCE(p_limit, 25), 100))) c), '[]'::jsonb);
+END $eetk$;
+REVOKE ALL ON FUNCTION public.rpc_ticket_auto_due(int) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_ticket_auto_due(int) TO authenticated;
+
+-- ── A scan's results, matched to what is already there ────────────────────
+-- An import matches each result to the client's earlier scan findings by
+-- their words (a title, the hosts, the evidence it adds a host to), which
+-- this database cannot read once they are sealed. So the portal importing a
+-- file first opens those findings (rpc_e2e_scan_scope, then rpc_e2e_scan_open
+-- puts their words back for the import), the import runs as it always has,
+-- and the same page seals them again straight after (rpc_e2e_plain_rows and
+-- rpc_e2e_seal_rows, for that client). A scanner's own collector, or a post a
+-- pipeline makes, cannot open them: what it sends waits here, in order, for
+-- the next of the firm's browsers to open the portal (_e2e_scan_queue,
+-- rpc_e2e_scan_drain), which does the same. Nothing is ever matched to, or
+-- added to, a sealed value: an import, a drain and a merge refuse while any is
+-- left, and hold the rows they read until they are done.
+CREATE TABLE IF NOT EXISTS public._e2e_scan_queue (
+  id bigserial PRIMARY KEY,
+  run_id uuid NOT NULL REFERENCES public.scan_runs(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('results', 'finish')),
+  args jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS _e2e_scan_queue_run ON public._e2e_scan_queue (run_id, id);
+ALTER TABLE public._e2e_scan_queue ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public._e2e_scan_queue FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON SEQUENCE public._e2e_scan_queue_id_seq FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public._e2e_finding_sealed(f public.findings) RETURNS boolean
+  LANGUAGE sql STABLE SET search_path = public, pg_catalog, pg_temp AS $eefsd$
+  SELECT COALESCE(f.title, '') ~ '^pe2[ejst]1\.' OR COALESCE(f.description, '') ~ '^pe2[ejst]1\.'
+      OR COALESCE(f.impact, '') ~ '^pe2[ejst]1\.' OR COALESCE(f.remediation, '') ~ '^pe2[ejst]1\.'
+      OR COALESCE(f.affected_hosts, '') ~ '^pe2[ejst]1\.' OR COALESCE(f.cwe, '') ~ '^pe2[ejst]1\.'
+      OR COALESCE(f.category, '') ~ '^pe2[ejst]1\.' OR COALESCE(f.attack, '') ~ '^pe2[ejst]1\.'
+      OR COALESCE(f.retest_results, '') ~ '^pe2[ejst]1\.' OR COALESCE(f.scan_plugin_id, '') ~ '^pe2[ejst]1\.'
+      OR COALESCE(f.scan_port, '') ~ '^pe2[ejst]1\.' OR COALESCE(f.scan_protocol, '') ~ '^pe2[ejst]1\.'
+      OR COALESCE(f.scan_service, '') ~ '^pe2[ejst]1\.' OR COALESCE(f.scan_cve, '') ~ '^pe2[ejst]1\.'
+      OR jsonb_typeof(f.evidence) = 'string' OR jsonb_typeof(f.assets) = 'string' OR jsonb_typeof(f.refs) = 'string'
+      OR jsonb_typeof(f.custom_fields) = 'string' OR jsonb_typeof(f.qa_comments) = 'string';
+$eefsd$;
+CREATE OR REPLACE FUNCTION public._e2e_result_sealed(r public.scan_results) RETURNS boolean
+  LANGUAGE sql STABLE SET search_path = public, pg_catalog, pg_temp AS $eersd$
+  SELECT COALESCE(r.title, '') ~ '^pe2[ejst]1\.' OR COALESCE(r.description, '') ~ '^pe2[ejst]1\.'
+      OR COALESCE(r.impact, '') ~ '^pe2[ejst]1\.' OR COALESCE(r.remediation, '') ~ '^pe2[ejst]1\.'
+      OR COALESCE(r.evidence, '') ~ '^pe2[ejst]1\.' OR COALESCE(r.cwe, '') ~ '^pe2[ejst]1\.'
+      OR COALESCE(r.category, '') ~ '^pe2[ejst]1\.' OR COALESCE(r.asset, '') ~ '^pe2[ejst]1\.'
+      OR COALESCE(r.cve, '') ~ '^pe2[ejst]1\.' OR COALESCE(r.plugin_id, '') ~ '^pe2[ejst]1\.'
+      OR COALESCE(r.service, '') ~ '^pe2[ejst]1\.' OR COALESCE(r.protocol, '') ~ '^pe2[ejst]1\.'
+      OR jsonb_typeof(r.refs) = 'string' OR jsonb_typeof(r.raw) = 'string';
+$eersd$;
+
+-- What an import of this client's (or a merge on this engagement) reads: the
+-- client's scanners' findings on any of its engagements, and the run's own
+-- results so far.
+CREATE OR REPLACE FUNCTION public._e2e_scan_in(f public.findings, p_client uuid, p_assessment uuid) RETURNS boolean
+  LANGUAGE sql STABLE SET search_path = public, pg_catalog, pg_temp AS $eesin$
+  SELECT (f.scan_fingerprint IS NOT NULL OR f.scan_run_id IS NOT NULL)
+     AND CASE WHEN p_assessment IS NOT NULL THEN f.assessment_id = p_assessment
+              ELSE COALESCE(f.client_id, (SELECT a.client_id FROM public.assessments a WHERE a.id = f.assessment_id)) = p_client END;
+$eesin$;
+CREATE OR REPLACE FUNCTION public._e2e_scan_sealed(p_client uuid, p_run uuid, p_assessment uuid DEFAULT NULL) RETURNS boolean
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eessd$
+BEGIN
+  IF NOT public._e2e_active() THEN RETURN false; END IF;
+  RETURN EXISTS (SELECT 1 FROM public.findings f WHERE public._e2e_scan_in(f, p_client, p_assessment) AND public._e2e_finding_sealed(f))
+      OR (p_run IS NOT NULL AND EXISTS (SELECT 1 FROM public.scan_results r WHERE r.run_id = p_run AND public._e2e_result_sealed(r)));
+END $eessd$;
+REVOKE ALL ON FUNCTION public._e2e_scan_sealed(uuid, uuid, uuid) FROM PUBLIC, anon, authenticated;
+-- Held until the import's end: nothing seals them in the middle of it.
+CREATE OR REPLACE FUNCTION public._e2e_scan_hold(p_client uuid, p_run uuid, p_assessment uuid DEFAULT NULL) RETURNS void
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeshold$
+BEGIN
+  PERFORM 1 FROM public.findings f WHERE public._e2e_scan_in(f, p_client, p_assessment) FOR UPDATE OF f;
+  IF p_run IS NOT NULL THEN PERFORM 1 FROM public.scan_results r WHERE r.run_id = p_run FOR UPDATE OF r; END IF;
+END $eeshold$;
+REVOKE ALL ON FUNCTION public._e2e_scan_hold(uuid, uuid, uuid) FROM PUBLIC, anon, authenticated;
+
+-- Whose a scope is: the person importing a run (its holder), the firm's team
+-- reading one that waits, or the firm's team merging on an engagement they
+-- may open. The run's (or engagement's) client.
+CREATE OR REPLACE FUNCTION public._e2e_scan_may(p_run_id uuid, p_assessment_id uuid) RETURNS uuid
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eesmay$
+DECLARE v_run record; v_client uuid;
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() OR public.current_user_role() NOT IN ('admin', 'senior', 'standard', 'contractor') THEN
+    RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501';
+  END IF;
+  IF p_run_id IS NOT NULL THEN
+    SELECT id, client_id, claimed_by INTO v_run FROM public.scan_runs WHERE id = p_run_id;
+    IF NOT FOUND THEN RAISE EXCEPTION 'That scan is not here.' USING ERRCODE = '22023'; END IF;
+    IF v_run.claimed_by IS DISTINCT FROM public._scan_uploader()
+       AND NOT (public.is_delivery_staff() AND EXISTS (SELECT 1 FROM public._e2e_scan_queue q WHERE q.run_id = p_run_id)) THEN
+      RAISE EXCEPTION 'Not a scan this page is importing.' USING ERRCODE = '42501';
+    END IF;
+    v_client := v_run.client_id;
+  ELSE
+    IF p_assessment_id IS NULL OR NOT public.is_delivery_staff() OR NOT public.can_access_assessment(p_assessment_id) THEN
+      RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501';
+    END IF;
+    SELECT client_id INTO v_client FROM public.assessments WHERE id = p_assessment_id;
+  END IF;
+  IF v_client IS NULL OR NOT public.can_access_client(v_client) THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
+  RETURN v_client;
+END $eesmay$;
+REVOKE ALL ON FUNCTION public._e2e_scan_may(uuid, uuid) FROM PUBLIC, anon, authenticated;
+
+-- The sealed rows of a scope, a page at a time ({ rows: [{ id, cols }] }):
+-- opened in the portal, and handed back to rpc_e2e_scan_open.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_scan_scope(p_table text, p_run_id uuid DEFAULT NULL, p_assessment_id uuid DEFAULT NULL,
+                                                     p_after uuid DEFAULT NULL, p_limit int DEFAULT 100) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eesscope$
+DECLARE v_client uuid := public._e2e_scan_may(p_run_id, p_assessment_id); v_lim int := GREATEST(1, LEAST(COALESCE(p_limit, 100), 200));
+BEGIN
+  IF NOT public._e2e_active() THEN RETURN jsonb_build_object('rows', '[]'::jsonb); END IF;
+  IF p_table = 'findings' THEN
+    RETURN jsonb_build_object('rows', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', x.id, 'cols', x.cols) ORDER BY x.id)
+      FROM (SELECT f.id, (SELECT jsonb_object_agg(e.key, e.value) FROM jsonb_each(to_jsonb(f)) e
+                           WHERE e.key = ANY (public._e2e_columns('findings')) AND jsonb_typeof(e.value) = 'string'
+                             AND (e.value #>> '{}') ~ '^pe2[ejst]1\.') AS cols
+              FROM public.findings f
+             WHERE public._e2e_scan_in(f, v_client, p_assessment_id) AND public._e2e_finding_sealed(f)
+               AND (p_after IS NULL OR f.id > p_after)
+             ORDER BY f.id LIMIT v_lim) x), '[]'::jsonb));
+  ELSIF p_table = 'scan_results' AND p_run_id IS NOT NULL THEN
+    RETURN jsonb_build_object('rows', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', x.id, 'cols', x.cols) ORDER BY x.id)
+      FROM (SELECT r.id, (SELECT jsonb_object_agg(e.key, e.value) FROM jsonb_each(to_jsonb(r)) e
+                           WHERE e.key = ANY (public._e2e_columns('scan_results')) AND jsonb_typeof(e.value) = 'string'
+                             AND (e.value #>> '{}') ~ '^pe2[ejst]1\.') AS cols
+              FROM public.scan_results r
+             WHERE r.run_id = p_run_id AND public._e2e_result_sealed(r) AND (p_after IS NULL OR r.id > p_after)
+             ORDER BY r.id LIMIT v_lim) x), '[]'::jsonb));
+  END IF;
+  RETURN jsonb_build_object('rows', '[]'::jsonb);
+END $eesscope$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_scan_scope(text, uuid, uuid, uuid, int) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_scan_scope(text, uuid, uuid, uuid, int) TO authenticated;
+
+-- Their words put back for the import ([{ id, cols: { <column>: words } }]):
+-- only over a value that is sealed, only in the scope, and without moving a
+-- row's version (the words are the ones every open page already shows).
+CREATE OR REPLACE FUNCTION public.rpc_e2e_scan_open(p_table text, p_run_id uuid, p_assessment_id uuid, p_rows jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eesopen$
+DECLARE v_client uuid := public._e2e_scan_may(p_run_id, p_assessment_id); v_r jsonb; c text; v_val jsonb; v_type text; v_n int := 0; v_ok boolean;
+BEGIN
+  IF NOT public._e2e_active() THEN RETURN jsonb_build_object('ok', true, 'opened', 0); END IF;
+  IF p_table NOT IN ('findings', 'scan_results') OR (p_table = 'scan_results' AND p_run_id IS NULL) THEN
+    RAISE EXCEPTION 'Findings, or a run''s results.' USING ERRCODE = '22023';
+  END IF;
+  IF jsonb_typeof(p_rows) <> 'array' OR jsonb_array_length(p_rows) > 200 THEN RAISE EXCEPTION 'Up to 200 rows.' USING ERRCODE = '22023'; END IF;
+  PERFORM set_config('pental.e2e_seal', 'on', true);
+  FOR v_r IN SELECT * FROM jsonb_array_elements(p_rows) LOOP
+    IF p_table = 'findings' THEN
+      SELECT public._e2e_scan_in(f, v_client, p_assessment_id) INTO v_ok FROM public.findings f WHERE f.id = (v_r->>'id')::uuid;
+    ELSE
+      SELECT r.run_id = p_run_id INTO v_ok FROM public.scan_results r WHERE r.id = (v_r->>'id')::uuid;
+    END IF;
+    CONTINUE WHEN NOT COALESCE(v_ok, false);
+    FOR c IN SELECT * FROM jsonb_object_keys(COALESCE(v_r->'cols', '{}'::jsonb)) LOOP
+      CONTINUE WHEN NOT (c = ANY (public._e2e_columns(p_table)));
+      v_val := v_r->'cols'->c;
+      -- Words, never a seal or what a page shows in place of one.
+      CONTINUE WHEN v_val IS NULL OR (jsonb_typeof(v_val) = 'string' AND (v_val #>> '{}') ~ '^pe2[ejst]1\.')
+                 OR strpos(v_val::text, chr(8291) || 'Encrypted' || chr(8291)) > 0;
+      SELECT data_type INTO v_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = p_table AND column_name = c;
+      EXECUTE format('UPDATE public.%I t SET %I = %s WHERE t.id = $1 AND jsonb_typeof(to_jsonb(t.%I)) = ''string'' AND (to_jsonb(t.%I) #>> ''{}'') ~ ''^pe2[ejst]1\.''',
+                     p_table, c, CASE WHEN v_type IN ('jsonb', 'json') THEN '$2' ELSE '($2 #>> ''{}'')' END, c, c)
+        USING (v_r->>'id')::uuid, v_val;
+      IF FOUND THEN v_n := v_n + 1; END IF;
+    END LOOP;
+  END LOOP;
+  PERFORM set_config('pental.e2e_seal', 'off', true);
+  RETURN jsonb_build_object('ok', true, 'opened', v_n);
+END $eesopen$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_scan_open(text, uuid, uuid, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_scan_open(text, uuid, uuid, jsonb) TO authenticated;
+
+-- What a scanner's collector sent, kept to be read by the firm's next browser:
+-- the run held for it (a week), and the collector answered with what it sent.
+CREATE OR REPLACE FUNCTION public._e2e_scan_wait(p_run public.scan_runs, p_kind text, p_args jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeswait$
+DECLARE v_counts jsonb; v_min text;
+BEGIN
+  INSERT INTO public._e2e_scan_queue (run_id, kind, args) VALUES (p_run.id, p_kind, p_args);
+  UPDATE public.scan_runs SET lease_until = GREATEST(COALESCE(lease_until, now()), now() + interval '7 days'),
+         stage = 'Waiting for your team''s portal to read it (encrypted)', updated_at = now()
+   WHERE id = p_run.id;
+  IF p_kind <> 'results' THEN RETURN jsonb_build_object('ok', true, 'deferred', true); END IF;
+  SELECT jsonb_build_object(
+           'critical', count(*) FILTER (WHERE lower(x->>'severity') = 'critical'), 'high', count(*) FILTER (WHERE lower(x->>'severity') = 'high'),
+           'medium', count(*) FILTER (WHERE lower(x->>'severity') = 'medium'), 'low', count(*) FILTER (WHERE lower(x->>'severity') = 'low'),
+           'info', count(*) FILTER (WHERE lower(x->>'severity') IN ('info', 'informational')), 'total', count(*),
+           'hosts', count(DISTINCT NULLIF(btrim(x->>'asset'), '')))
+    INTO v_counts
+    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_args->'results') = 'array' THEN p_args->'results' ELSE '[]'::jsonb END) x
+   WHERE NOT COALESCE(x->>'gone', '') = 'true';
+  SELECT COALESCE((SELECT sc.min_severity FROM public.scan_schedules sc WHERE sc.id = p_run.schedule_id),
+                  (SELECT st.scan_min_severity FROM public.settings st ORDER BY st.created_at ASC NULLS LAST, st.id LIMIT 1), 'low') INTO v_min;
+  RETURN jsonb_build_object('ok', true, 'deferred', true, 'created', 0, 'updated', 0, 'closed', 0, 'counts', v_counts,
+                            'client_name', COALESCE((SELECT c.name FROM public.clients c WHERE c.id = p_run.client_id), ''), 'min_severity', v_min);
+END $eeswait$;
+REVOKE ALL ON FUNCTION public._e2e_scan_wait(public.scan_runs, text, jsonb) FROM PUBLIC, anon, authenticated;
+
+-- The runs waiting, for a member of the firm's team whose portal is open.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_scan_queued() RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eesq$
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() OR NOT public.is_delivery_staff() OR NOT public._e2e_active() THEN RETURN '[]'::jsonb; END IF;
+  RETURN COALESCE((SELECT jsonb_agg(jsonb_build_object('run_id', x.run_id, 'client_id', x.client_id) ORDER BY x.first)
+                     FROM (SELECT q.run_id, r.client_id, min(q.id) AS first FROM public._e2e_scan_queue q JOIN public.scan_runs r ON r.id = q.run_id
+                            WHERE public.can_access_client(r.client_id) GROUP BY q.run_id, r.client_id ORDER BY min(q.id) LIMIT 10) x), '[]'::jsonb);
+END $eesq$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_scan_queued() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_scan_queued() TO authenticated;
+
+-- A waiting run read, once this page has opened what it is matched to: its
+-- results imported in the order they came, then the run closed as its
+-- collector closed it. { ok, done, client_id }, or { ok: false, open: true }
+-- (open them first), or { ok: false, busy: true } (another page is at it).
+CREATE OR REPLACE FUNCTION public.rpc_e2e_scan_drain(p_run_id uuid) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $eesdrain$
+DECLARE v_client uuid; q record; v_out jsonb; v_n int := 0; v_final boolean;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public._e2e_scan_queue WHERE run_id = p_run_id) THEN RETURN jsonb_build_object('ok', true, 'done', 0); END IF;
+  v_client := public._e2e_scan_may(p_run_id, NULL);
+  IF NOT public.is_delivery_staff() THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
+  IF NOT pg_try_advisory_xact_lock(hashtext('pental_e2e_scan:' || p_run_id::text)) THEN RETURN jsonb_build_object('ok', false, 'busy', true); END IF;
+  PERFORM public._e2e_scan_hold(v_client, p_run_id, NULL);
+  IF public._e2e_scan_sealed(v_client, p_run_id, NULL) THEN RETURN jsonb_build_object('ok', false, 'open', true, 'client_id', v_client); END IF;
+  FOR q IN SELECT * FROM public._e2e_scan_queue WHERE run_id = p_run_id ORDER BY id FOR UPDATE LOOP
+    IF q.kind = 'results' THEN
+      v_final := COALESCE((q.args->>'final')::boolean, false);
+      v_out := public._scan_import_core(p_run_id, q.args->'results', v_final, COALESCE((q.args->>'full')::boolean, false));
+      IF v_out ? 'error' THEN
+        -- Stopped or closed since: nothing more of it is read.
+        DELETE FROM public._e2e_scan_queue WHERE run_id = p_run_id;
+        RETURN jsonb_build_object('ok', true, 'done', v_n, 'client_id', v_client, 'stopped', v_out->>'error');
+      END IF;
+      IF v_final THEN UPDATE public.scan_runs SET imported_at = now() WHERE id = p_run_id; END IF;
+    ELSE
+      PERFORM public._scan_close(p_run_id, q.args->>'status', q.args->>'exec', q.args->>'html', q.args->>'error',
+                                 CASE WHEN jsonb_typeof(q.args->'notice') = 'object' THEN q.args->'notice' END);
+    END IF;
+    DELETE FROM public._e2e_scan_queue WHERE id = q.id;
+    v_n := v_n + 1;
+  END LOOP;
+  RETURN jsonb_build_object('ok', true, 'done', v_n, 'client_id', v_client);
+END $eesdrain$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_scan_drain(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_scan_drain(uuid) TO authenticated;
+
+-- ── Sealing what was written in the clear ──────────────────────────────────
+-- What the database wrote itself (or held from before), a page at a time:
+-- each row with words in a sealed column, the client it is under, and each
+-- such column's words and their fingerprint (md5 of what is held), so the
+-- browser writes its sealed value only over exactly those words
+-- (rpc_e2e_seal_rows). For the firm's administrators and seniors, who may
+-- write any of it; and, for one client (p_client), for the firm's people
+-- with that client's work, as the page that has just imported a scan of it
+-- seals what the import wrote. In the background (no p_client), a client's
+-- scan findings and a run's results are left while one of its scans is
+-- being imported, which seals them itself when it is done.
+CREATE OR REPLACE FUNCTION public._e2e_client_expr(p_table text) RETURNS text
+  LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $eecx$
+  SELECT CASE p_table
+    WHEN 'findings' THEN 'COALESCE(t.client_id, (SELECT a.client_id FROM public.assessments a WHERE a.id = t.assessment_id))'
+    WHEN 'assessments' THEN 't.client_id'
+    WHEN 'assessment_comments' THEN '(SELECT a.client_id FROM public.assessments a WHERE a.id = t.assessment_id)'
+    WHEN 'qa_comments' THEN 'COALESCE((SELECT a.client_id FROM public.assessments a WHERE a.id = t.assessment_id), (SELECT COALESCE(f.client_id, a2.client_id) FROM public.findings f LEFT JOIN public.assessments a2 ON a2.id = f.assessment_id WHERE f.id = t.finding_id))'
+    WHEN 'timeline_events' THEN '(SELECT a.client_id FROM public.assessments a WHERE a.id = t.assessment_id)'
+    WHEN 'tickets' THEN 't.client_id'
+    WHEN 'assets' THEN 't.client_id'
+    WHEN 'scan_results' THEN '(SELECT r.client_id FROM public.scan_runs r WHERE r.id = t.run_id)'
+    WHEN 'scan_runs' THEN 't.client_id'
+    WHEN 'co_live' THEN 'CASE t.rec_table WHEN ''findings'' THEN (SELECT COALESCE(f.client_id, a.client_id) FROM public.findings f LEFT JOIN public.assessments a ON a.id = f.assessment_id WHERE f.id = t.rec_id) ELSE (SELECT a.client_id FROM public.assessments a WHERE a.id = t.rec_id) END'
+  END;
+$eecx$;
+REVOKE ALL ON FUNCTION public._e2e_client_expr(text) FROM PUBLIC, anon, authenticated;
+-- Whether this person may seal a client's words: an administrator or a senior
+-- any client's; the firm's other people (and a contractor) one they work for.
+CREATE OR REPLACE FUNCTION public._e2e_may_seal(p_client uuid) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eemay$
+  SELECT public.mfa_is_fresh() AND (public.can_manage()
+      OR (p_client IS NOT NULL AND public.current_user_role() IN ('standard', 'contractor') AND public.can_access_client(p_client)));
+$eemay$;
+REVOKE ALL ON FUNCTION public._e2e_may_seal(uuid) FROM PUBLIC, anon, authenticated;
+DROP FUNCTION IF EXISTS public.rpc_e2e_plain_rows(text, uuid, int);
+CREATE OR REPLACE FUNCTION public.rpc_e2e_plain_rows(p_table text, p_after uuid DEFAULT NULL, p_limit int DEFAULT 100, p_client uuid DEFAULT NULL)
+  RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeplain$
+DECLARE v_cols text[] := public._e2e_columns(p_table); v_cond text; v_client text; v_sql text; v_out jsonb; c text; v_busy text := '';
+BEGIN
+  IF NOT public._e2e_active() THEN RETURN '[]'::jsonb; END IF;
+  IF p_client IS NULL AND NOT public.can_manage() THEN RETURN '[]'::jsonb; END IF;
+  IF p_client IS NOT NULL AND NOT public._e2e_may_seal(p_client) THEN RETURN '[]'::jsonb; END IF;
+  IF p_table = 'co_live' THEN v_cols := ARRAY['value']; END IF;
+  IF cardinality(v_cols) = 0 THEN RAISE EXCEPTION 'Not a table with sealed words.' USING ERRCODE = '22023'; END IF;
+  v_cond := (SELECT string_agg(format('NOT public._e2e_sealed_json(to_jsonb(t.%I))', x), ' OR ') FROM unnest(v_cols) x);
+  IF p_client IS NULL AND p_table = 'findings' THEN
+    v_busy := 'AND NOT ((t.scan_fingerprint IS NOT NULL OR t.scan_run_id IS NOT NULL) AND EXISTS (SELECT 1 FROM public.scan_runs br WHERE br.client_id = '
+              || public._e2e_client_expr('findings') || ' AND br.status IN (''starting'', ''running'', ''importing'') AND br.updated_at > now() - interval ''30 minutes''))';
+  ELSIF p_client IS NULL AND p_table = 'scan_results' THEN
+    v_busy := 'AND NOT EXISTS (SELECT 1 FROM public.scan_runs br WHERE br.id = t.run_id AND br.status IN (''starting'', ''running'', ''importing'') AND br.updated_at > now() - interval ''30 minutes'')';
+  END IF;
+  IF p_client IS NOT NULL THEN v_busy := v_busy || format(' AND (%s) = %L::uuid', public._e2e_client_expr(p_table), p_client); END IF;
+  v_client := public._e2e_client_expr(p_table);
+  v_sql := format('SELECT COALESCE(jsonb_agg(r ORDER BY r->>''id''), ''[]''::jsonb) FROM (SELECT jsonb_build_object(''id'', t.id, ''client_id'', %s, ''cols'', jsonb_strip_nulls(jsonb_build_object(%s))) AS r FROM public.%I t WHERE (%s) %s %s %s ORDER BY t.id LIMIT %s) q',
+    v_client,
+    (SELECT string_agg(format('%L, CASE WHEN public._e2e_sealed_json(to_jsonb(t.%I)) THEN NULL ELSE jsonb_build_object(''v'', to_jsonb(t.%I), ''md5'', md5(t.%I::text)) END', x, x, x, x), ', ') FROM unnest(v_cols) x),
+    p_table, v_cond,
+    CASE WHEN p_after IS NOT NULL THEN format('AND t.id > %L::uuid', p_after) ELSE '' END,
+    CASE WHEN p_table = 'co_live' THEN 'AND t.rec_table IN (''findings'', ''assessments'')' ELSE '' END,
+    v_busy,
+    GREATEST(1, LEAST(COALESCE(p_limit, 100), 500)));
+  EXECUTE v_sql INTO v_out;
+  RETURN v_out;
+END $eeplain$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_plain_rows(text, uuid, int, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_plain_rows(text, uuid, int, uuid) TO authenticated;
+
+-- How much there is still to seal, for the progress the browser shows.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_plain_count() RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eepc$
+DECLARE t text; v_cols text[]; v_n bigint; v_out jsonb := '{}'::jsonb;
+BEGIN
+  IF NOT public.can_manage() THEN RETURN '{}'::jsonb; END IF;
+  FOREACH t IN ARRAY ARRAY['findings', 'assessments', 'assessment_comments', 'qa_comments', 'timeline_events',
+                           'tickets', 'assets', 'scan_results', 'scan_runs'] LOOP
+    v_cols := public._e2e_columns(t);
+    EXECUTE format('SELECT count(*) FROM public.%I t WHERE %s', t,
+      (SELECT string_agg(format('NOT public._e2e_sealed_json(to_jsonb(t.%I))', x), ' OR ') FROM unnest(v_cols) x)) INTO v_n;
+    IF v_n > 0 THEN v_out := v_out || jsonb_build_object(t, v_n); END IF;
+  END LOOP;
+  SELECT count(*) INTO v_n FROM storage.objects o
+   WHERE o.bucket_id = 'assessment-files' AND NOT public._e2e_file_open(o.name)
+     AND NOT EXISTS (SELECT 1 FROM public._e2e_files f WHERE f.bucket = o.bucket_id AND f.path = o.name);
+  IF v_n > 0 THEN v_out := v_out || jsonb_build_object('files', v_n); END IF;
+  RETURN v_out;
+END $eepc$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_plain_count() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_plain_count() TO authenticated;
+
+-- p_rows: [{ id, cols: { <column>: { md5, value } }, refs: { ... } }]. Each
+-- column is written only while it still holds what was read (its md5), and
+-- without moving the row's version or who last wrote it: the words are the
+-- same words, so nobody's open copy of the row is out of date and nobody is
+-- told it was changed.
+DROP FUNCTION IF EXISTS public.rpc_e2e_seal_rows(text, jsonb);
+CREATE OR REPLACE FUNCTION public.rpc_e2e_seal_rows(p_table text, p_rows jsonb, p_client uuid DEFAULT NULL) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeseal$
+DECLARE v_cols text[] := public._e2e_columns(p_table); v_r jsonb; c text; v_val jsonb; v_n int := 0; v_skipped int := 0;
+        v_type text; v_has_refs boolean; v_only text := '';
+BEGIN
+  IF p_client IS NULL AND NOT public.can_manage() THEN RAISE EXCEPTION 'Only an administrator or a senior seals the firm''s work.' USING ERRCODE = '42501'; END IF;
+  IF p_client IS NOT NULL AND NOT public._e2e_may_seal(p_client) THEN RAISE EXCEPTION 'Not a client of yours.' USING ERRCODE = '42501'; END IF;
+  IF p_client IS NOT NULL THEN v_only := format(' AND (%s) = %L::uuid', public._e2e_client_expr(p_table), p_client); END IF;
+  IF NOT public._e2e_active() THEN RAISE EXCEPTION 'Encryption is not on yet.' USING ERRCODE = '55000'; END IF;
+  IF p_table = 'co_live' THEN v_cols := ARRAY['value']; END IF;
+  IF cardinality(v_cols) = 0 THEN RAISE EXCEPTION 'Not a table with sealed words.' USING ERRCODE = '22023'; END IF;
+  IF jsonb_typeof(p_rows) <> 'array' OR jsonb_array_length(p_rows) > 500 THEN RAISE EXCEPTION 'Up to 500 rows.' USING ERRCODE = '22023'; END IF;
+  v_has_refs := p_table IN ('findings', 'assessments', 'qa_comments', 'assessment_comments');
+  PERFORM set_config('pental.e2e_seal', 'on', true);
+  FOR v_r IN SELECT * FROM jsonb_array_elements(p_rows) LOOP
+    FOR c IN SELECT * FROM jsonb_object_keys(COALESCE(v_r->'cols', '{}'::jsonb)) LOOP
+      IF NOT (c = ANY (v_cols)) THEN CONTINUE; END IF;
+      v_val := v_r->'cols'->c->'value';
+      IF jsonb_typeof(v_val) <> 'string' OR NOT public._e2e_sealed_json(v_val) THEN CONTINUE; END IF;
+      SELECT data_type INTO v_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = p_table AND column_name = c;
+      EXECUTE format('UPDATE public.%I t SET %I = %s WHERE t.id = $1 AND md5(t.%I::text) IS NOT DISTINCT FROM $2%s',
+                     p_table, c, CASE WHEN v_type IN ('jsonb', 'json') THEN '$3' ELSE '($3 #>> ''{}'')' END, c, v_only)
+        USING (v_r->>'id')::uuid, v_r->'cols'->c->>'md5', v_val;
+      IF FOUND THEN v_n := v_n + 1; ELSE v_skipped := v_skipped + 1; END IF;
+    END LOOP;
+    IF v_has_refs AND jsonb_typeof(v_r->'refs') = 'object' THEN
+      EXECUTE format('UPDATE public.%I t SET e2e_refs = COALESCE(t.e2e_refs, ''{}''::jsonb) || $2 WHERE t.id = $1%s', p_table, v_only)
+        USING (v_r->>'id')::uuid, v_r->'refs';
+    END IF;
+  END LOOP;
+  PERFORM set_config('pental.e2e_seal', 'off', true);
+  RETURN jsonb_build_object('ok', true, 'sealed', v_n, 'changed_since', v_skipped);
+END $eeseal$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_seal_rows(text, jsonb, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_seal_rows(text, jsonb, uuid) TO authenticated;
+
+-- While sealing, a row keeps its version and the person who last wrote it.
+CREATE OR REPLACE FUNCTION public._tg_row_version()
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $rowver$
+BEGIN
+  IF TG_OP = 'UPDATE' AND current_setting('pental.e2e_seal', true) = 'on' THEN
+    NEW.row_version := OLD.row_version;
+    RETURN NEW;
+  END IF;
+  NEW.row_version := (extract(epoch FROM clock_timestamp()) * 1000000)::bigint;
+  RETURN NEW;
+END $rowver$;
+CREATE OR REPLACE FUNCTION public._tg_row_by()
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $rowby$
+BEGIN
+  IF TG_OP = 'UPDATE' AND current_setting('pental.e2e_seal', true) = 'on' THEN
+    NEW.row_by := OLD.row_by;
+    RETURN NEW;
+  END IF;
+  NEW.row_by := auth.uid();
+  RETURN NEW;
+END $rowby$;
+
+-- ── Files ──────────────────────────────────────────────────────────────────
+-- An engagement's files are sealed, except a proposal's and an invoice's PDFs,
+-- which stay readable as proposals and invoices do.
+CREATE OR REPLACE FUNCTION public._e2e_file_open(p_name text) RETURNS boolean
+  LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $eefo$
+  SELECT split_part(p_name, '/', 2) = 'final-pdfs' AND split_part(p_name, '/', 3) ~ '^(proposal|invoice)_';
+$eefo$;
+GRANT EXECUTE ON FUNCTION public._e2e_file_open(text) TO authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.rpc_e2e_plain_files(p_limit int DEFAULT 50) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, storage, pg_catalog, pg_temp AS $eepf$
+BEGIN
+  IF NOT public.can_manage() OR NOT public._e2e_active() THEN RETURN '[]'::jsonb; END IF;
+  RETURN COALESCE((SELECT jsonb_agg(jsonb_build_object('path', o.name, 'size', (o.metadata->>'size')::bigint,
+                                                       'mime', o.metadata->>'mimetype'))
+                     FROM (SELECT o.* FROM storage.objects o
+                            WHERE o.bucket_id = 'assessment-files' AND NOT public._e2e_file_open(o.name)
+                              AND NOT EXISTS (SELECT 1 FROM public._e2e_files f WHERE f.bucket = o.bucket_id AND f.path = o.name)
+                            ORDER BY o.name LIMIT GREATEST(1, LEAST(COALESCE(p_limit, 50), 200))) o), '[]'::jsonb);
+END $eepf$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_plain_files(int) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_plain_files(int) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.rpc_e2e_files_sealed(p_files jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eefs$
+DECLARE v_f jsonb; v_n int := 0;
+BEGIN
+  IF public.current_user_role() IN ('none', 'sales', 'marketing') THEN RETURN jsonb_build_object('ok', false); END IF;
+  IF jsonb_typeof(p_files) <> 'array' OR jsonb_array_length(p_files) > 500 THEN RAISE EXCEPTION 'Up to 500 files.' USING ERRCODE = '22023'; END IF;
+  FOR v_f IN SELECT * FROM jsonb_array_elements(p_files) LOOP
+    IF NOT public.can_access_assessment_file(v_f->>'path') THEN CONTINUE; END IF;
+    INSERT INTO public._e2e_files (bucket, path, key_id) VALUES ('assessment-files', v_f->>'path', NULLIF(v_f->>'key_id', '')::uuid)
+    ON CONFLICT (bucket, path) DO UPDATE SET key_id = EXCLUDED.key_id, sealed_at = now();
+    v_n := v_n + 1;
+  END LOOP;
+  RETURN jsonb_build_object('ok', true, 'noted', v_n);
+END $eefs$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_files_sealed(jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_files_sealed(jsonb) TO authenticated;
+
+-- How far the background sealing has gone, as the browser doing it says.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_progress(p_progress jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeprog$
+BEGIN
+  IF NOT public.can_manage() THEN RETURN jsonb_build_object('ok', false); END IF;
+  UPDATE public._e2e_state SET migration = COALESCE(migration, '{}'::jsonb) || COALESCE(p_progress, '{}'::jsonb), updated_at = now() WHERE id;
+  RETURN jsonb_build_object('ok', true);
+END $eeprog$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_progress(jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_progress(jsonb) TO authenticated;
+
+-- Live: a browser told at once that it has been given its keys, and a firm's
+-- browsers that a new principal is waiting for them.
+DO $eert$
+DECLARE t text;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN CREATE PUBLICATION supabase_realtime; END IF;
+  FOREACH t IN ARRAY ARRAY['e2e_grants', 'e2e_principals'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = t) THEN
+      EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
+    END IF;
+  END LOOP;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'Pental setup: the live updates of the encryption keys could not be turned on (%)', SQLERRM;
+END $eert$;
+
+-- ── Signing in: a password, then a second factor ──────────────────────────
+-- [stated] Arian: "i dont want the neither option it seems too annoying for
+-- the users", and, asked which sign-ins go, "Remove both" (an email code, and
+-- Google or Microsoft). A sign-in with neither a password nor a passkey
+-- brings nothing that opens a person's keys on a new browser: what Google,
+-- Microsoft or an email code give a browser, and a TOTP app's secret, are
+-- known to the server too, so a key made from them would be readable by
+-- whoever reads this database. A password always, then TOTP or a passkey:
+-- every new browser opens the work as it signs in. The switches stay as
+-- columns (a portal from before reads them), always on and off: whatever a
+-- page saves, this is what is kept. Somebody who has never set a password
+-- sets their first from the sign-in page (rpc_signin_password_email sends
+-- them the setting link) or an invitation, which is always a password link.
+ALTER TABLE public.settings ALTER COLUMN password_login_enabled SET DEFAULT true;
+ALTER TABLE public.settings ALTER COLUMN sso_google_enabled SET DEFAULT false;
+ALTER TABLE public.settings ALTER COLUMN sso_microsoft_enabled SET DEFAULT false;
+CREATE OR REPLACE FUNCTION public._settings_signin_fixed() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $eesignin$
+BEGIN
+  NEW.password_login_enabled := true;
+  NEW.sso_google_enabled := false;
+  NEW.sso_microsoft_enabled := false;
+  RETURN NEW;
+END $eesignin$;
+REVOKE ALL ON FUNCTION public._settings_signin_fixed() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS settings_signin_fixed ON public.settings;
+CREATE TRIGGER settings_signin_fixed BEFORE INSERT OR UPDATE ON public.settings
+  FOR EACH ROW EXECUTE FUNCTION public._settings_signin_fixed();
+UPDATE public.settings SET password_login_enabled = true, sso_google_enabled = false, sso_microsoft_enabled = false
+ WHERE password_login_enabled IS DISTINCT FROM true OR sso_google_enabled IS DISTINCT FROM false
+    OR sso_microsoft_enabled IS DISTINCT FROM false;
+
+-- 2018: END
+
 -- 1806: the version stamp below is written by this file and read by anyone,
 -- never written by a session (a signed-in user could otherwise set it, and a
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: 8e6344feae248cef @ 2025110903
+-- schema-fingerprint: eb9d6285e6eef9bd @ 2025111004
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025110903, now())
+VALUES (1, 2025111004, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 

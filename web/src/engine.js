@@ -2218,58 +2218,6 @@ function _getPhases(obj) {
   return null;
 }
 var supabaseClient = null;
-function _forceSetSession(accessToken, refreshToken) {
-  try {
-
-    var parts = accessToken.split('.');
-    if (parts.length !== 3) return null;
-    var payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-    if (!payload.sub) return null;
-
-    var expiresAt = payload.exp || (Math.floor(Date.now() / 1000) + 3600);
-    var expiresIn = expiresAt - Math.floor(Date.now() / 1000);
-
-    var user = {
-      id: payload.sub,
-      aud: payload.aud || 'authenticated',
-      role: payload.role || 'authenticated',
-      email: payload.email || '',
-      app_metadata: payload.app_metadata || {},
-      user_metadata: payload.user_metadata || {},
-      created_at: '',
-    };
-
-    var session = {
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      token_type: 'bearer',
-      expires_in: expiresIn,
-      expires_at: expiresAt,
-      user: user,
-    };
-
-    var _url = EFFECTIVE_SUPABASE_URL || SUPABASE_URL;
-    var _ref = '';
-    try { _ref = new URL(_url).hostname.split('.')[0]; } catch(e) {}
-
-    var _isByoClient = (EFFECTIVE_SUPABASE_URL !== SUPABASE_URL);
-    var _pentalKey = (_isByoClient ? 'pental-portal-byo-' : 'pental-portal-') + (TENANT_ID || 'default');
-    try { localStorage.setItem(_pentalKey, JSON.stringify(session)); } catch(e) {}
-
-    if (_ref) {
-      try { localStorage.setItem('sb-' + _ref + '-auth-token', JSON.stringify(session)); } catch(e) {}
-    }
-
-    if (supabaseClient) {
-      try { supabaseClient.realtime.setAuth(accessToken); } catch(e) {}
-    }
-
-    return { session: session, user: user };
-  } catch(e) {
-    console.error('_forceSetSession failed:', e);
-    return null;
-  }
-}
 function _applyTenantWrapper() {
   if (!TENANT_ID || (TENANT_INFO && TENANT_INFO.is_byo)) return;
   var _origFrom = supabaseClient.from.bind(supabaseClient);
@@ -10536,7 +10484,7 @@ async function _setupRealtime() {
     if (!_isByo && TENANT_ID && _tenantScopedTables[table]) {
       opts.filter = 'tenant_id=eq.' + TENANT_ID;
     }
-    _realtimeChannel = _realtimeChannel.on('postgres_changes', opts, _rtHandleChange);
+    _realtimeChannel = _realtimeChannel.on('postgres_changes', opts, _e2eRtWrap(_rtHandleChange));
   });
 
   var _rtMine = _realtimeChannel;
@@ -11921,7 +11869,7 @@ async function _lfStart() {
   try {
     var ch = supabaseClient.channel('pental-live-' + Date.now());
     _lfChannel = ch;
-    ch.on('postgres_changes', { event: '*', schema: 'public', table: 'co_live' }, function (p) { if (_lfChannel === ch) _lfOnRt(p); });
+    ch.on('postgres_changes', { event: '*', schema: 'public', table: 'co_live' }, _e2eRtWrap(function (p) { if (_lfChannel === ch) _lfOnRt(p); }));
     ch.subscribe(function (status) {
       if (_lfChannel !== ch) return;
       if (status === 'SUBSCRIBED') _lfLoad();
@@ -20711,6 +20659,8 @@ function _syncApi(key, table, cols) {
 }
 async function _loadAllDataInner() {
   if (!S.profile) return;
+
+  _e2eReady();
   var isClient = S.profile.role === 'client';
   var isCon = isContractor();
   var isStaff = !isClient && !isCon;
@@ -21896,10 +21846,9 @@ async function _sentManySaid(list, what) {
 async function resendUserInvite(userId) {
   var u = _anyUserById(userId);
   if (!u) { toast('User not found', 'error'); return; }
-  var pw = (S.data.settings || {}).password_login_enabled === true;
+  var pw = true;
   var go = await confirmAsync('Make a new link for ' + (u.name || u.email) + ' to set their password? '
-    + (pw ? 'It works for 72 hours, any earlier link stops working, and you pass it on.'
-          : 'It carries a new sign-in code.'),
+    + 'It works for 72 hours, any earlier link stops working, and you pass it on.',
     { title: 'New Invitation Link', confirmText: 'Make the link', cancelText: 'Cancel' });
   if (!go) return;
   var r = await adminApi('resend_invite', { user_id: userId, password_login: pw });
@@ -21919,9 +21868,8 @@ async function sendUserPasswordReset(userId) {
 }
 function _sendButtons(u, labelled) {
   if (!_canSendTo(u)) return '';
-  var pw = (S.data.settings || {}).password_login_enabled === true;
   var h = '<button class="btn btn-ghost btn-sm" onclick="resendUserInvite(\'' + u.id + '\')" title="New invitation link">' + IC.send + (labelled ? ' Invitation link' : '') + '</button>';
-  if (pw) h += '<button class="btn btn-ghost btn-sm" onclick="sendUserPasswordReset(\'' + u.id + '\')" title="Password reset link">' + IC.lock + (labelled ? ' Password reset link' : '') + '</button>';
+  h += '<button class="btn btn-ghost btn-sm" onclick="sendUserPasswordReset(\'' + u.id + '\')" title="Password reset link">' + IC.lock + (labelled ? ' Password reset link' : '') + '</button>';
   return h;
 }
 window.resendUserInvite = resendUserInvite;
@@ -22168,7 +22116,7 @@ async function submitPasswordLogin(e) {
     var d = r && r.data;
     if (r && r.error) {
       if (_isMissingRpc(r.error)) {
-        return fail('Password sign-in is not set up on this database yet. An administrator needs to run the latest database update. Use an email sign-in code in the meantime.');
+        return fail('Password sign-in is not set up on this database yet. An administrator needs to run the latest database update.');
       }
 
       if (String(r.error.code) === '55006') {
@@ -22181,9 +22129,8 @@ async function submitPasswordLogin(e) {
     if (!d || !d.ok) {
       if (d && d.reason === 'throttled') {
         var mins = Math.ceil((d.retry_after_seconds || 60) / 60);
-        return fail('Too many attempts. Try again in about ' + mins + ' minute' + (mins === 1 ? '' : 's') + ', or use an email sign-in code.');
+        return fail('Too many attempts. Try again in about ' + mins + ' minute' + (mins === 1 ? '' : 's') + ', or ask an administrator for a link to set a new password.');
       }
-      if (d && d.reason === 'disabled') return fail('Password sign-in is not enabled for this portal.');
 
       return fail('Incorrect email or password.');
     }
@@ -22191,6 +22138,8 @@ async function submitPasswordLogin(e) {
     window._codeLoginInProgress = true;
     var signIn = await supabaseClient.auth.signInWithPassword({ email: email, password: d.bridge });
     if (signIn.error || !signIn.data || !signIn.data.session) return fail('Could not complete sign-in. Please try again.');
+
+    _e2eStashPassword(pw);
     S.user = signIn.data.session.user;
     window._mfaAccessToken = signIn.data.session.access_token;
     startSessionKeepalive();
@@ -22443,23 +22392,6 @@ async function _backToSignIn() {
   return false;
 }
 window._backToSignIn = _backToSignIn;
-function _signinKeyName() { return 'pental_signin_key:' + (typeof TENANT_ID !== 'undefined' && TENANT_ID ? TENANT_ID : 'portal'); }
-function _signinHex(bytes) { return Array.prototype.map.call(bytes, function (x) { return ('0' + x.toString(16)).slice(-2); }).join(''); }
-function _signinKey() {
-  var k = null;
-  try { k = localStorage.getItem(_signinKeyName()); } catch (e) {}
-  if (!k || !/^[0-9a-f]{64}$/.test(k)) {
-    var b = new Uint8Array(32);
-    crypto.getRandomValues(b);
-    k = _signinHex(b);
-    try { localStorage.setItem(_signinKeyName(), k); } catch (e) {}
-  }
-  return k;
-}
-async function _sha256Hex(t) {
-  var d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(t)));
-  return _signinHex(new Uint8Array(d));
-}
 async function _signinLocalAsk(fn, args) {
   try {
     var r = await supabaseClient.rpc(fn, args);
@@ -22471,325 +22403,11 @@ async function _signinLocalAsk(fn, args) {
     return { via: 'error', error: d.error || 'Something went wrong. Please try again.' };
   } catch (e) { return { via: 'pental' }; }
 }
-var _SIGNIN_LOCKED_WORDS = 'This portal could not send a sign-in email just now. Try again in a few minutes, or sign in another way. If it keeps happening, your administrator can check the portal’s email connection.';
-async function _bridgeSignIn(email, bridge) {
-  window._codeLoginInProgress = true;
-  var signIn = await supabaseClient.auth.signInWithPassword({ email: email, password: bridge });
-  if (signIn.error || !signIn.data || !signIn.data.session) {
-    window._codeLoginInProgress = false;
-    return { ok: false, error: 'Could not complete sign-in. Please try again.' };
-  }
-  try { localStorage.removeItem(_signinKeyName()); } catch (e) {}
-  S.user = signIn.data.session.user;
-  window._mfaAccessToken = signIn.data.session.access_token;
-  if (window._resendTimer) { clearInterval(window._resendTimer); window._resendTimer = null; }
-  startSessionKeepalive();
-  restoreNavState();
-  await loadProfile();
-  await _afterCredentialLogin();
-  return { ok: true };
-}
-async function _ssoStart(ev, provider) {
-  if (ev && ev.preventDefault) ev.preventDefault();
-  var errEl = document.getElementById('loginError');
-  if (errEl) errEl.style.display = 'none';
-  try {
-    var kh = await _sha256Hex(_signinKey());
-    var r = await _signinLocalAsk('rpc_sso_begin', { p_provider: provider, p_key_hash: kh, p_origin: window.location.origin });
-    if (r.via === 'firm' && r.data && r.data.authorize_url && /^https:\/\//.test(r.data.authorize_url)) {
-      window.location.href = r.data.authorize_url;
-      return false;
-    }
-    if (r.via === 'locked' || r.via === 'throttled' || r.via === 'error') {
-      if (errEl) { errEl.textContent = r.via === 'locked' ? 'Single sign-on could not be started just now. Try again in a moment, or sign in with an email code.' : r.error; errEl.style.display = 'block'; }
-      return false;
-    }
-  } catch (e) {  }
-  window.location.href = '/api/sso?provider=' + encodeURIComponent(provider);
-  return false;
-}
-window._ssoStart = _ssoStart;
 async function _ssoFinish(p) {
-  _showLoading();
-  var fail = function (msg) {
-    window._codeLoginInProgress = false;
-    _hideLoading();
-    window._ssoError = msg;
-    render();
-  };
-  try {
-    if (p.error) return fail(p.error);
-    var key = null;
-    try { key = localStorage.getItem(_signinKeyName()); } catch (e) {}
-    if (!key) return fail('This sign-in was begun in another browser or tab that has since closed. Start again here.');
-    var d = null;
-    for (var i = 0; i < 40; i++) {
-      var r = await supabaseClient.rpc('rpc_sso_finish', { p_state: p.state, p_key: key, p_id_token: p.id_token || null, p_code: i === 0 ? (p.code || null) : null });
-      if (r.error) return fail('Single sign-on could not be finished. Please try again.');
-      d = r.data || {};
-      if (!d.wait) break;
-      await new Promise(function (res) { setTimeout(res, 750); });
-    }
-    if (!d || d.wait) return fail('The sign-in provider did not answer in time. Please try again.');
-    if (!d.ok) return fail(d.error || 'Single sign-on failed. Please try again.');
-    var out = await _bridgeSignIn(d.email, d.bridge);
-    if (!out.ok) return fail(out.error);
-    _hideLoading();
-  } catch (e) {
-    console.error('SSO finish error:', e);
-    fail('Single sign-on failed. Please try again.');
-  }
-}
-async function sendMagicLink(e) {
-  e.preventDefault();
-  var email = ((document.getElementById('loginEmail') || {}).value || '').trim();
-  if (!email) return;
-
-  var errEl = document.getElementById('loginError');
-  var sucEl = document.getElementById('loginSuccess');
-  if (errEl) errEl.style.display = 'none';
-  if (sucEl) sucEl.style.display = 'none';
-
-  var btn = document.querySelector('.login-card .login-btn-primary') || document.querySelector('.login-card .btn-primary');
-  var origText = btn ? btn.innerHTML : '';
-  if (btn) { btn.disabled = true;
-  btn.innerHTML = 'Sending...' ; }
-
-  try {
-
-    window._signinLocal = false;
-    var _loc = await _signinLocalAsk('rpc_signin_code_request', { p_email: email, p_key_hash: await _sha256Hex(_signinKey()), p_origin: window.location.origin });
-    if (_loc.via === 'firm') { window._signinLocal = true; }
-    else if (_loc.via !== 'pental') {
-      if (btn) { btn.disabled = false; btn.innerHTML = origText; }
-      if (errEl) { errEl.textContent = _loc.via === 'locked' ? _SIGNIN_LOCKED_WORDS : _loc.error; errEl.style.display = 'block'; }
-      return;
-    }
-  } catch (e0) { window._signinLocal = false; }
-
-  if (!window._signinLocal) try {
-
-    var res = await tenantFetch('/api/auth-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'send', email: email })
-    });
-    if (!res.ok) {
-      var d = await res.json().catch(function() { return {}; });
-      if (btn) { btn.disabled = false; btn.innerHTML = origText; }
-      if (errEl) { errEl.textContent = d.error || 'Failed to send code. Please try again.'; errEl.style.display = 'block'; }
-      return;
-    }
-  } catch(e) {
-    console.warn('Send code error:', e);
-    if (btn) { btn.disabled = false; btn.innerHTML = origText; }
-    if (errEl) { errEl.textContent = 'Network error. Please check your connection and try again.'; errEl.style.display = 'block'; }
-    return;
-  }
-
-  if (btn) { btn.disabled = false; btn.innerHTML = origText; }
-
-  window._loginEmail = email;
-  window._resendCooldown = 60;
-  window._resendTimer = null;
-
-  var formEl = document.querySelector('.login-card form');
-  var headerEl = document.querySelector('.login-card .login-header');
-  if (formEl) formEl.classList.add('login-fade-out');
-  if (headerEl) headerEl.classList.add('login-fade-out');
-
-  setTimeout(function() {
-
-    if (formEl) formEl.style.display = 'none';
-    if (headerEl) headerEl.style.display = 'none';
-
-    sucEl.innerHTML = '<div class="magic-link-success login-step-content">' +
-      '<div style="text-align:center;margin-bottom:16px">' + _authLogo() + '</div>' +
-      '<div class="magic-title">Check your email</div>' +
-      '<div class="magic-text">We sent a sign-in code to<br><strong>' + esc(email) + '</strong></div>' +
-      '<div style="margin-top:16px"><input type="text" id="loginOtpCode" class="login-input-modern login-otp-input" maxlength="6" placeholder="000000" autocomplete="one-time-code" inputmode="numeric" ' +
-      'oninput="this.value=this.value.replace(/\\D/g,\'\').slice(0,6);if(this.value.length===6)verifyLoginCode()" ' +
-      'onkeydown="if(event.key===\'Enter\'&&this.value.length===6)verifyLoginCode()"></div>' +
-      '<div id="loginCodeError" style="display:none;color:#ef4444;font-size:13px;margin-top:8px;text-align:center"></div>' +
-      '<button onclick="verifyLoginCode()" class="login-btn-primary" id="loginVerifyBtn">Verify code</button>' +
-      '<button onclick="location.reload()" class="login-btn-secondary">Use a different email</button>' +
-      '<div class="login-resend" id="loginResendArea">' +
-      '<span id="loginResendText">Resend in <span id="loginResendCount">60</span>s</span>' +
-      '<button class="login-resend-btn" id="loginResendBtn" disabled onclick="resendLoginCode()">Resend code</button>' +
-      '</div>' +
-      '<div class="magic-hint" style="margin-top:8px">Check your spam folder if you don\'t see the email</div>' +
-      '</div>';
-    sucEl.style.display = 'block';
-    setTimeout(function() { var inp = document.getElementById('loginOtpCode'); if (inp) inp.focus(); }, 60);
-    _startResendTimer();
-  }, 200);
-}
-function _startResendTimer() {
-  if (window._resendTimer) clearInterval(window._resendTimer);
-  window._resendCooldown = 60;
-  var countEl = document.getElementById('loginResendCount');
-  var textEl = document.getElementById('loginResendText');
-  var btnEl = document.getElementById('loginResendBtn');
-  if (countEl) countEl.textContent = '60';
-  if (textEl) textEl.style.display = '';
-  if (btnEl) { btnEl.disabled = true; btnEl.style.display = 'none'; }
-
-  window._resendTimer = setInterval(function() {
-    window._resendCooldown--;
-    var c = document.getElementById('loginResendCount');
-    if (c) c.textContent = String(window._resendCooldown);
-    if (window._resendCooldown <= 0) {
-      clearInterval(window._resendTimer);
-      var t = document.getElementById('loginResendText');
-      var b = document.getElementById('loginResendBtn');
-      if (t) t.style.display = 'none';
-      if (b) { b.disabled = false; b.style.display = ''; }
-    }
-  }, 1000);
-}
-async function resendLoginCode() {
-  var email = window._loginEmail;
-  if (!email) return;
-  var btnEl = document.getElementById('loginResendBtn');
-  var errEl = document.getElementById('loginCodeError');
-  if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Sending...'; }
-
-  if (window._signinLocal) {
-    var _loc2 = await _signinLocalAsk('rpc_signin_code_request', { p_email: email, p_key_hash: await _sha256Hex(_signinKey()), p_origin: window.location.origin });
-    if (_loc2.via === 'firm') { if (btnEl) btnEl.textContent = 'Resend code'; _startResendTimer(); return; }
-    if (_loc2.via !== 'pental') {
-      if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Resend code'; }
-      if (errEl) { errEl.textContent = _loc2.via === 'locked' ? _SIGNIN_LOCKED_WORDS : _loc2.error; errEl.style.display = 'block'; }
-      return;
-    }
-    window._signinLocal = false;
-  }
-  try {
-    var res2 = await tenantFetch('/api/auth-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'send', email: email })
-    });
-    if (!res2.ok) {
-      if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Resend code'; }
-      if (errEl) { errEl.textContent = 'Failed to resend. Try again.'; errEl.style.display = 'block'; }
-      return;
-    }
-  } catch(e) {
-    console.warn('Resend error:', e);
-    if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Resend code'; }
-    if (errEl) { errEl.textContent = 'Network error. Try again.'; errEl.style.display = 'block'; }
-    return;
-  }
-  if (btnEl) { btnEl.textContent = 'Resend code'; }
-  _startResendTimer();
-}
-async function verifyLoginCode() {
-  if (window._verifyingCode) return;
-  var code = (document.getElementById('loginOtpCode') || {}).value || '';
-  var btn = document.getElementById('loginVerifyBtn');
-  var inp = document.getElementById('loginOtpCode');
-  var errEl = document.getElementById('loginCodeError');
-  if (code.length !== 6) { if (errEl) { errEl.textContent = 'Enter the 6-digit code'; errEl.style.display = 'block'; } return; }
-  if (errEl) errEl.style.display = 'none';
-  var email = window._loginEmail;
-  if (!email) return;
-  window._verifyingCode = true;
-  if (btn) { btn.disabled = true; btn.textContent = 'Verifying...'; }
-  if (inp) inp.disabled = true;
-
-  if (window._signinLocal) {
-    var _vfail = function (msg) {
-      window._verifyingCode = false;
-      if (btn) { btn.disabled = false; btn.textContent = 'Verify code'; }
-      if (inp) { inp.disabled = false; inp.value = ''; inp.focus(); }
-      if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; }
-    };
-    try {
-      var _vr = await supabaseClient.rpc('rpc_signin_code_verify', { p_email: email, p_code: code, p_key: _signinKey() });
-      var _vd = (_vr && _vr.data) || {};
-      if (_vr.error || !_vd.ok) {
-        return _vfail(_vd.reason === 'throttled' ? 'Too many wrong codes. Wait a while, then ask for a new code.'
-          : 'Invalid or expired code. A code works once, in the browser that asked for it.');
-      }
-      var _bo = await _bridgeSignIn(_vd.email, _vd.bridge);
-      if (!_bo.ok) return _vfail(_bo.error);
-    } catch (ve) {
-      console.error('Verify error:', ve);
-      _vfail('Verification failed');
-    }
-    return;
-  }
-  try {
-
-    var apiRes = await tenantFetch('/api/auth-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'verify', email: email, code: code })
-    });
-    var apiData = await apiRes.json().catch(function() { return {}; });
-    if (!apiRes.ok || !apiData.access_token) {
-      window._verifyingCode = false;
-      if (btn) { btn.disabled = false; btn.textContent = 'Verify code'; }
-      if (inp) { inp.disabled = false; inp.value = ''; inp.focus(); }
-      if (errEl) { errEl.textContent = apiData.error || 'Invalid or expired code'; errEl.style.display = 'block'; }
-      return;
-    }
-    window._codeLoginInProgress = true;
-    var sessData = _forceSetSession(apiData.access_token, apiData.refresh_token);
-    if (!sessData || !sessData.session) {
-      window._codeLoginInProgress = false;
-      window._verifyingCode = false;
-      if (btn) { btn.disabled = false; btn.textContent = 'Verify code'; }
-      if (inp) { inp.disabled = false; inp.focus(); }
-      if (errEl) { errEl.textContent = 'Session error. Please try again.'; errEl.style.display = 'block'; }
-      return;
-    }
-
-    S.user = sessData.session.user;
-    window._mfaAccessToken = sessData.session.access_token;
-    if (window._resendTimer) { clearInterval(window._resendTimer); window._resendTimer = null; }
-    startSessionKeepalive();
-    restoreNavState();
-    await loadProfile();
-
-    if (S.profile) {
-
-      var _mfaPolicy = await _loadMfaPolicy();
-
-      var _needSetup = _mfaEnrolmentIncomplete(S.profile, _mfaPolicy);
-
-      var _mfaStale = _mfaNewSession();
-
-      if (_needSetup || _mfaStale) {
-        S._mfaProfile = S.profile;
-        S._mfaPolicy = _mfaPolicy;
-        _suppressRender = true;
-        document.body.classList.add('loaded');
-
-        if (_mfaStale && _mfaHasEnrolled(S.profile)) _showMfaVerify('L21691');
-        else renderMfaSetup();
-
-        return;
-      }
-
-      try { _updateActivity(); } catch (e) {}
-      _suppressRender = true;
-      _hydrateShellCache(); await loadAllData(); applyPendingRestore(); _setupRealtime(); startSessionTimeout();
-      registerActiveSession();
-    }
-    _suppressRender = false;
-    window._codeLoginInProgress = false;
-    window._showWelcomeToast = true;
-    _fadeToApp();
-  } catch(e) {
-    window._codeLoginInProgress = false;
-    window._verifyingCode = false;
-    if (btn) { btn.disabled = false; btn.textContent = 'Verify code'; }
-    if (inp) { inp.disabled = false; inp.focus(); }
-    console.error('Verify error:', e);
-    if (errEl) { errEl.textContent = 'Verification failed'; errEl.style.display = 'block'; }
-  }
+  window._codeLoginInProgress = false;
+  _hideLoading();
+  window._ssoError = (p && p.error) || 'Google and Microsoft sign-in has been switched off. Sign in with your email address and password.';
+  render();
 }
 async function logout() {
 
@@ -22803,6 +22421,8 @@ async function logout() {
   try { _rtKeepForget(); } catch (e) {}
 
   try { _imgCachesForget(); } catch (e) {}
+
+  try { _e2eForget(); } catch (e) {}
   S._mfaScreenShown = false;
   window._mfaAssertionDone = false;
   window._mfaAutoRan = false;
@@ -22897,7 +22517,7 @@ async function loadBrandingFromDB() {
         logo_url: d.logo_url || null,
         logo_url_light: d.logo_url_light || null,
 
-        password_login_enabled: d.password_login_enabled === true,
+        password_login_enabled: true,
         font_display: d.font_display || null,
         font_body: d.font_body || null,
         font_mono: d.font_mono || null,
@@ -22908,8 +22528,8 @@ async function loadBrandingFromDB() {
         login_show_logo: d.login_show_logo !== false,
         login_show_company_name: d.login_show_company_name !== false,
         login_show_title: d.login_show_title !== false,
-        sso_google_enabled: d.sso_google_enabled !== false,
-        sso_microsoft_enabled: d.sso_microsoft_enabled !== false,
+        sso_google_enabled: false,
+        sso_microsoft_enabled: false,
         login_button_text: d.login_button_text || '',
         login_custom_text: d.login_custom_text || '',
         portal_title: d.portal_title || '',
@@ -23179,6 +22799,7 @@ async function init() {
     sessionStorage.setItem('pental_db_key', EFFECTIVE_SUPABASE_KEY || '');
   } catch(e) {}
 
+  _e2eInstallFetch(_clientOpts);
   supabaseClient = window.supabase.createClient(EFFECTIVE_SUPABASE_URL, EFFECTIVE_SUPABASE_KEY, _clientOpts);
 
   if (typeof _mInstallWriteWatch === 'function') _mInstallWriteWatch(supabaseClient);
@@ -25523,16 +25144,23 @@ async function verifyMfaWebAuthn(manual) {
       _authTrace('requesting assertion: ' + allowCredentials.length + ' credential(s), transports=' +
         allowCredentials.map(function(c) { return (c.transports || []).join('/'); }).join(',') +
         (_missingTransports ? ' (' + _missingTransports + ' had none recorded, defaulted to internal)' : ''));
-      var assertionByo = await navigator.credentials.get({
-        publicKey: {
-          challenge: challengeBytes,
-          rpId: rpId,
-          allowCredentials: allowCredentials,
-          userVerification: 'preferred',
-          timeout: 60000,
-        },
-      });
+
+      var _prfSalt = null;
+      try { if (!_e2eOff() && S.profile) _prfSalt = await _e2ePrfSalt(); } catch (e) { _prfSalt = null; }
+      var _pkReq = {
+        challenge: challengeBytes,
+        rpId: rpId,
+        allowCredentials: allowCredentials,
+        userVerification: 'preferred',
+        timeout: 60000,
+      };
+      if (_prfSalt) _pkReq.extensions = { prf: { eval: { first: _prfSalt } } };
+      var assertionByo = await navigator.credentials.get({ publicKey: _pkReq });
       if (!assertionByo) throw new Error('No assertion returned');
+      try {
+        var _ext = assertionByo.getClientExtensionResults ? assertionByo.getClientExtensionResults() : null;
+        if (_ext && _ext.prf && _ext.prf.results && _ext.prf.results.first) _e2eStashPrf(_abToB64u(assertionByo.rawId), _ext.prf.results.first);
+      } catch (e) {  }
 
       var assertionDataByo = {
         credential_id: _abToB64u(assertionByo.rawId),
@@ -25659,7 +25287,7 @@ function _renderSecurityCardHtml() {
 
   var h = '';
 
-  if ((S.data.settings || {}).password_login_enabled === true) {
+  {
     h += '<div style="display:flex;align-items:center;gap:0.8rem;padding:0.85rem 1rem;border:1px solid var(--border);border-radius:8px;margin-bottom:1rem">';
     h += '<div style="flex:1;min-width:0"><div style="font-weight:600;color:var(--text);font-size:0.88rem">Password</div>';
     h += '<div style="font-size:0.75rem;color:var(--gray);margin-top:2px">Change the password you use to sign in. You will need your current one.</div></div>';
@@ -26321,6 +25949,8 @@ async function _enrollWebAuthnKeyInner() {
           authenticatorSelection: { residentKey: 'discouraged', userVerification: 'preferred' },
           timeout: 60000,
           attestation: 'none',
+
+          extensions: { prf: {} },
         },
       });
       if (!cred) { toast('No credential created', 'error'); return; }
@@ -26362,8 +25992,9 @@ async function _enrollWebAuthnKeyInner() {
         var assertCanonicalText = JSON.stringify(assertCanonical);
         var assertChallengeB64u = await _sha256B64u(assertCanonicalText);
         var assertChallengeBytes = new Uint8Array(_b64uToAb(assertChallengeB64u));
-        var assertResp = await navigator.credentials.get({
-          publicKey: {
+        var _regPrf = null;
+        try { if (!_e2eOff() && S.profile) _regPrf = await _e2ePrfSalt(); } catch (e) { _regPrf = null; }
+        var _regReq = {
             challenge: assertChallengeBytes,
             rpId: rpId,
             allowCredentials: [{
@@ -26373,9 +26004,14 @@ async function _enrollWebAuthnKeyInner() {
             }],
             userVerification: 'preferred',
             timeout: 60000,
-          },
-        });
+          };
+        if (_regPrf) _regReq.extensions = { prf: { eval: { first: _regPrf } } };
+        var assertResp = await navigator.credentials.get({ publicKey: _regReq });
         if (assertResp) {
+          try {
+            var _rx = assertResp.getClientExtensionResults ? assertResp.getClientExtensionResults() : null;
+            if (_rx && _rx.prf && _rx.prf.results && _rx.prf.results.first) _e2ePasskeyAdded(ext.credentialIdB64u, _rx.prf.results.first);
+          } catch (e) {  }
           var assertData = {
             credential_id: _abToB64u(assertResp.rawId),
             client_data_json: _abToB64u(assertResp.response.clientDataJSON),
@@ -26746,62 +26382,15 @@ async function verifyMfaCode() {
   }
 }
 async function _verifyMagicToken(email, token) {
-  _showLoading();
-  try {
-    var res = await tenantFetch('/api/auth-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'verify', email: email, code: token })
-    });
-    var data = await res.json();
-    if (!res.ok || !data.access_token) {
-      _hideLoading();
-
-      render();
-      setTimeout(function() {
-        var errEl = document.getElementById('loginError');
-        if (errEl) { errEl.textContent = 'Sign-in link expired or already used. Please request a new code.'; errEl.style.display = 'block'; }
-      }, 100);
-      return;
-    }
-    window._codeLoginInProgress = true;
-    var sessData = _forceSetSession(data.access_token, data.refresh_token);
-    if (!sessData || !sessData.session) {
-      window._codeLoginInProgress = false;
-      _hideLoading();
-      render();
-      return;
-    }
-    S.user = sessData.session.user;
-    window._mfaAccessToken = sessData.session.access_token;
-    startSessionKeepalive();
-    restoreNavState();
-    _hideLoading();
-    await loadProfile();
-    if (S.profile) {
-
-      if (!S._mfaPolicy) { try { S._mfaPolicy = await _loadMfaPolicy(); } catch (e) {} }
-      var _needSetup = _mfaEnrolmentIncomplete(S.profile, S._mfaPolicy);
-
-      var _mfaStale = _mfaNewSession();
-      S._mfaProfile = S.profile;
-      _suppressRender = true;
-      document.body.classList.add('loaded');
-
-      if (_mfaStale && _mfaHasEnrolled(S.profile)) _showMfaVerify('L26482');
-      else renderMfaSetup();
-
-      return;
-    }
-    _suppressRender = false;
-    window._codeLoginInProgress = false;
-    window._showWelcomeToast = true;
-    _fadeToApp();
-  } catch(e) {
-    console.error('Magic link error:', e);
-    _hideLoading();
-    render();
-  }
+  void token;
+  _hideLoading();
+  render();
+  setTimeout(function () {
+    var em = document.getElementById('loginEmail');
+    if (em && email && !em.value) em.value = String(email);
+    var errEl = document.getElementById('loginError');
+    if (errEl) { errEl.textContent = 'Sign-in links and codes have been replaced by passwords. Sign in with your email address and password, or use Set or reset your password if you have not set one yet.'; errEl.style.display = 'block'; }
+  }, 100);
 }
 function _fadeToApp() {
   var loginPage = document.querySelector('.login-page');
@@ -26821,9 +26410,6 @@ function renderLogin__portal() {
   var loginTitle = branding.login_title || '';
   var supportEmail = branding.login_support_email || branding.company_email || '';
   var loginSub = branding.login_subtitle ? sanitizeHtml(branding.login_subtitle) : (supportEmail ? 'Contact <a href="mailto:' + esc(supportEmail) + '">' + esc(supportEmail) + '</a> for any issues' : '');
-
-  var loginBtn = branding.login_button_text
-    || (Object.keys(branding).length ? 'Sign in' : '');
   var showLogo = branding.login_show_logo !== false;
   var showName = branding.login_show_company_name !== false;
   var showTitle = branding.login_show_title !== false;
@@ -26847,9 +26433,7 @@ function renderLogin__portal() {
 
   var brandingLoaded = !!(window._dbBranding && Object.keys(window._dbBranding).length);
 
-  var _ssoGoogleTop = branding.sso_google_enabled !== false;
-  var _ssoMicrosoftTop = branding.sso_microsoft_enabled !== false;
-  var _hasBelowButton = _ssoGoogleTop || _ssoMicrosoftTop || !!branding.login_custom_text;
+  var _hasBelowButton = !!branding.login_custom_text;
   var h = '<div class="login-page"><div class="login-card"><div class="card-body' + (_hasBelowButton ? '' : ' login-card-tight') + '">';
   h += '<div class="login-header">';
   if (showLogo || showName) {
@@ -26870,42 +26454,20 @@ function renderLogin__portal() {
   if (loginSub) h += '<p class="login-sub">' + loginSub + '</p>';
   h += '</div>';
 
-  var _pwEnabled = branding.password_login_enabled === true;
-  h += '<form onsubmit="' + (_pwEnabled ? 'submitPasswordLogin(event)' : 'sendMagicLink(event)') + '" id="loginForm">';
+  h += '<form onsubmit="submitPasswordLogin(event)" id="loginForm">';
   h += '<div class="form-group"><label class="form-label">Email Address</label>';
   h += '<input type="email" class="login-input-modern" id="loginEmail" placeholder="you@company.com" autocomplete="username" required></div>';
-  if (_pwEnabled) {
-    h += '<div class="form-group"><label class="form-label">Password</label>';
-    h += '<input type="password" class="login-input-modern" id="loginPassword" placeholder="Your password" autocomplete="current-password" required></div>';
-  }
+  h += '<div class="form-group"><label class="form-label">Password</label>';
+  h += '<input type="password" class="login-input-modern" id="loginPassword" placeholder="Your password" autocomplete="current-password" required></div>';
   h += '<div id="loginError" class="err"' + (window._ssoError ? ' style="display:block"' : '') + '>' + (window._ssoError ? esc(window._ssoError) : '') + '</div>';
   if (window._ssoError) window._ssoError = null;
-  h += '<button type="submit" class="login-btn-primary">' + (_pwEnabled ? 'Sign in' : IC.mail + ' ' + esc(loginBtn)) + '</button>';
+  h += '<button type="submit" class="login-btn-primary">Sign in</button>';
   h += '</form>';
-  if (_pwEnabled) {
-    h += '<div style="text-align:center;margin-top:0.85rem;font-size:0.8rem">';
-    h += '<a href="#" onclick="renderPasswordRequest();return false" style="color:var(--accent);text-decoration:none;font-weight:600">Forgotten your password?</a>';
-    h += '</div>';
-  }
+  h += '<div style="text-align:center;margin-top:0.85rem;font-size:0.8rem">';
+  h += '<a href="#" onclick="renderPasswordRequest();return false" style="color:var(--accent);text-decoration:none;font-weight:600">Forgotten your password?</a>';
+  h += '</div>';
   h += '<div id="loginSuccess" class="success-msg"></div>';
 
-  var _ssoGoogle = branding.sso_google_enabled !== false;
-  var _ssoMicrosoft = branding.sso_microsoft_enabled !== false;
-  if (_ssoGoogle || _ssoMicrosoft) {
-  h += '<div style="display:flex;align-items:center;gap:0.75rem;margin:1.25rem 0 1rem"><div style="flex:1;height:1px;background:var(--border)"></div><span style="font-size:0.72rem;color:var(--gray);white-space:nowrap">or sign in with</span><div style="flex:1;height:1px;background:var(--border)"></div></div>';
-  h += '<div style="display:flex;gap:0.5rem">';
-  if (_ssoGoogle) {
-  h += '<a href="/api/sso?provider=google" onclick="return _ssoStart(event,\'google\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:0.5rem;padding:0.6rem;border:1px solid var(--border);border-radius:8px;background:var(--card);text-decoration:none;font-family:inherit;font-size:0.82rem;font-weight:600;color:var(--text);transition:border-color 0.15s" onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\'">';
-  h += '<svg width="16" height="16" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>';
-  h += 'Google</a>';
-  }
-  if (_ssoMicrosoft) {
-  h += '<a href="/api/sso?provider=microsoft" onclick="return _ssoStart(event,\'microsoft\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:0.5rem;padding:0.6rem;border:1px solid var(--border);border-radius:8px;background:var(--card);text-decoration:none;font-family:inherit;font-size:0.82rem;font-weight:600;color:var(--text);transition:border-color 0.15s" onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\'">';
-  h += '<svg width="16" height="16" viewBox="0 0 23 23"><path fill="#f35325" d="M1 1h10v10H1z"/><path fill="#81bc06" d="M12 1h10v10H12z"/><path fill="#05a6f0" d="M1 12h10v10H1z"/><path fill="#ffba08" d="M12 12h10v10H12z"/></svg>';
-  h += 'Microsoft</a>';
-  }
-  h += '</div>';
-  }
   if (branding.login_custom_text) {
     h += '<div style="margin-top:1rem;padding-top:0.75rem;border-top:1px solid var(--border);font-size:0.82rem;color:var(--gray);text-align:center">' + sanitizeHtml(branding.login_custom_text) + '</div>';
   }
@@ -26980,7 +26542,7 @@ function renderOverLimitBanner() {
 }
 window.renderOverLimitBanner = renderOverLimitBanner;
 function renderApp() {
-  return '<div class="app"><div class="mobile-overlay" id="mobOverlay" onclick="closeMobileMenu()"></div>' + renderSidebar() + renderMainRegion() + renderMobBottomNav() + '</div>' + '<div id="rbBanner">' + _rbRunBanner() + '</div>' + (S.modal && !S.wizard ? renderModal() : '') + (S.wizard ? renderSetupWizard() : '');
+  return '<div class="app"><div class="mobile-overlay" id="mobOverlay" onclick="closeMobileMenu()"></div>' + renderSidebar() + renderMainRegion() + renderMobBottomNav() + '</div>' + '<div id="rbBanner">' + _rbRunBanner() + '</div>' + '<div id="e2eBar">' + _e2eBarHtml() + '</div>' + (S.modal && !S.wizard ? renderModal() : '') + (S.wizard ? renderSetupWizard() : '');
 }
 function getTitle() {
 
@@ -27866,6 +27428,1627 @@ function renderMoveBanner() {
     + '<div style="font-size:0.74rem;color:var(--gray);margin-top:1px">You can keep reading. Saving works again in a few minutes, and nothing already saved is lost.</div></div></div>';
 }
 window.renderMoveBanner = renderMoveBanner;
+var _E2E_COLS = {
+  findings: ['title', 'description', 'impact', 'remediation', 'affected_hosts', 'cwe', 'category',
+             'attack', 'retest_results', 'evidence', 'assets', 'refs', 'custom_fields', 'qa_comments',
+             'scan_plugin_id', 'scan_port', 'scan_protocol', 'scan_service', 'scan_cve'],
+  assessments: ['scope', 'exec_summary', 'caveats', 'notes', 'qa_notes', 'client_comments',
+                'retest_summary', 'loa_text', 'artifacts', 'appendices', 'qa_comments',
+                'summary_sections', 'section_drafts', 'qa_ai_review'],
+  assessment_comments: ['content'],
+  qa_comments: ['comment', 'highlight'],
+  timeline_events: ['title', 'details', 'event'],
+  tickets: ['subject', 'message', 'responses'],
+  assets: ['name', 'label', 'notes', 'details'],
+  scan_results: ['title', 'description', 'impact', 'remediation', 'evidence', 'refs', 'cwe', 'category',
+                 'raw', 'asset', 'cve', 'plugin_id', 'service', 'protocol'],
+  scan_runs: ['exec_summary', 'summary_html']
+};
+var _E2E_JSON = {
+  findings: { evidence: 'a', assets: 'a', refs: 'a', custom_fields: 'o', qa_comments: 'a' },
+  assessments: { artifacts: 'a', appendices: 'a', qa_comments: 'a', summary_sections: 'o', section_drafts: 'o', qa_ai_review: 'o' },
+  tickets: { responses: 'a' },
+  assets: { details: 'o' },
+  scan_results: { refs: 'a', raw: 'o' }
+};
+var _E2E_EMPTY_LIST = { evidence: 1, assets: 1, refs: 1, qa_comments: 1, artifacts: 1, appendices: 1, responses: 1 };
+var _E2E_REFS = { findings: 1, assessments: 1, qa_comments: 1, assessment_comments: 1 };
+var _E2E_LOCKED = '\u2063Encrypted\u2063';
+var _E2E_RE = /^pe2([ejst])1\.([0-9a-f]{32})\.([A-Za-z0-9_-]{16,})$/;
+var _E2E_EC = { name: 'ECDH', namedCurve: 'P-256' };
+var _E2E_PW_COST = { m: 65536, t: 3, p: 1 };
+var E2E = {
+  avail: false,
+  on: false,
+  waiting: false,
+  st: null,
+  device: null,
+  factors: {},
+  keys: {},
+  keyP: {},
+  pubs: {},
+  byClient: {},
+  firmKid: null,
+  grants: [],
+  ready: null,
+  cache: new Map(),
+  cacheBytes: 0,
+  lockedN: 0,
+  statusAt: 0, statusP: null, grantsDue: false,
+  clientOf: { findings: {}, assessments: {}, scan_runs: {}, qa_comments: {}, assessment_comments: {}, timeline_events: {}, scan_results: {}, tickets: {}, assets: {} },
+  noted: [], noteT: null,
+  stash: null,
+  loops: null
+};
+var _e2eTE = (typeof TextEncoder !== 'undefined') ? new TextEncoder() : null;
+var _e2eTD = (typeof TextDecoder !== 'undefined') ? new TextDecoder() : null;
+function _e2eOff() {
+  return !(typeof crypto !== 'undefined' && crypto && crypto.subtle && _e2eTE);
+}
+var _E2E_B64 = typeof Uint8Array.fromBase64 === 'function' && typeof Uint8Array.prototype.toBase64 === 'function';
+function _e2eB64u(u8) {
+  if (_E2E_B64) return u8.toBase64({ alphabet: 'base64url', omitPadding: true });
+  var s = '';
+  for (var i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function _e2eUnB64u(s) {
+  if (_E2E_B64) { try { return Uint8Array.fromBase64(String(s), { alphabet: 'base64url', lastChunkHandling: 'loose' }); } catch (e) {  } }
+  s = String(s).replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  var b = atob(s), u = new Uint8Array(b.length);
+  for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
+  return u;
+}
+function _e2eCat() {
+  var n = 0, i;
+  for (i = 0; i < arguments.length; i++) n += arguments[i].length;
+  var out = new Uint8Array(n), o = 0;
+  for (i = 0; i < arguments.length; i++) { out.set(arguments[i], o); o += arguments[i].length; }
+  return out;
+}
+function _e2eK32(kid) { return String(kid).replace(/-/g, '').toLowerCase(); }
+function _e2eKidOf32(k) { return k.slice(0, 8) + '-' + k.slice(8, 12) + '-' + k.slice(12, 16) + '-' + k.slice(16, 20) + '-' + k.slice(20, 32); }
+function _e2eUuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  var b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  var h = Array.prototype.map.call(b, function (x) { return (x + 0x100).toString(16).slice(1); }).join('');
+  return _e2eKidOf32(h);
+}
+function _e2eKidBytes(kid) {
+  var h = _e2eK32(kid), u = new Uint8Array(16);
+  for (var i = 0; i < 16; i++) u[i] = parseInt(h.substr(i * 2, 2), 16);
+  return u;
+}
+function _e2eKidFromBytes(u) {
+  return _e2eKidOf32(Array.prototype.map.call(u, function (x) { return (x + 0x100).toString(16).slice(1); }).join(''));
+}
+function _e2eAes(raw) { return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']); }
+async function _e2eHkdfAes(ikm, info, salt) {
+  var base = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: salt || new Uint8Array(32), info: _e2eTE.encode(info) },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function _e2eGcm(key, data, aad) {
+  var iv = crypto.getRandomValues(new Uint8Array(12));
+  var ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: _e2eTE.encode(aad) }, key, data));
+  return _e2eCat(iv, ct);
+}
+async function _e2eUnGcm(key, blob, aad) {
+  return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: blob.subarray(0, 12), additionalData: _e2eTE.encode(aad) }, key, blob.subarray(12)));
+}
+async function _e2eSealTo(pubKey, data, info) {
+  var eph = await crypto.subtle.generateKey(_E2E_EC, true, ['deriveBits']);
+  var ephRaw = new Uint8Array(await crypto.subtle.exportKey('raw', eph.publicKey));
+  var shared = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: pubKey }, eph.privateKey, 256));
+  var k = await _e2eHkdfAes(shared, info, ephRaw);
+  return _e2eCat(ephRaw, await _e2eGcm(k, data, info));
+}
+async function _e2eOpenFrom(privKey, blob, info) {
+  var ephRaw = blob.subarray(0, 65);
+  var ephPub = await crypto.subtle.importKey('raw', ephRaw, _E2E_EC, false, []);
+  var shared = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: ephPub }, privKey, 256));
+  var k = await _e2eHkdfAes(shared, info, ephRaw);
+  return _e2eUnGcm(k, blob.subarray(65), info);
+}
+function _e2ePubImport(b64u) { return crypto.subtle.importKey('spki', _e2eUnB64u(b64u), _E2E_EC, false, []); }
+async function _e2ePubExport(pub) { return _e2eB64u(new Uint8Array(await crypto.subtle.exportKey('spki', pub))); }
+function _e2ePrivImport(pkcs8) { return crypto.subtle.importKey('pkcs8', pkcs8, _E2E_EC, false, ['deriveBits']); }
+async function _e2eNewDataKey(scope, clientId) {
+  var id = _e2eUuid();
+  var sym = crypto.getRandomValues(new Uint8Array(32));
+  var pair = await crypto.subtle.generateKey(_E2E_EC, true, ['deriveBits']);
+  var pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
+  var pub = await _e2ePubExport(pair.publicKey);
+  var secret = _e2eTE.encode(JSON.stringify({ v: 1, kid: id, sym: _e2eB64u(sym), priv: _e2eB64u(pkcs8) }));
+  var k = await _e2eKeyFromSecret(secret, id);
+  k.scope = scope; k.client_id = clientId || null;
+  return { id: id, scope: scope, client_id: clientId || null, pub: pub, secret: secret, key: k };
+}
+async function _e2eKeyFromSecret(secret, kid) {
+  var o = JSON.parse(_e2eTD.decode(secret));
+  if (!o || o.v !== 1 || o.kid !== kid) throw new Error('not the key it says it is');
+  return { sym: await _e2eAes(_e2eUnB64u(o.sym)), priv: await _e2ePrivImport(_e2eUnB64u(o.priv)), secret: secret };
+}
+async function _e2eWrapFor(pubKey, kid, principalId, secret) {
+  return 'pe2w1.' + _e2eB64u(await _e2eSealTo(pubKey, secret, 'pe2w1|' + kid + '|' + principalId));
+}
+function _e2eUnwrap(privKey, kid, principalId, wrapped) {
+  return _e2eOpenFrom(privKey, _e2eUnB64u(String(wrapped).slice(6)), 'pe2w1|' + kid + '|' + principalId);
+}
+async function _e2eSeal(kid, key, value, isJson) {
+  var k32 = _e2eK32(kid), tag = isJson ? 'j' : 'e';
+  var plain = _e2eTE.encode(isJson ? JSON.stringify(value) : String(value));
+  return 'pe2' + tag + '1.' + k32 + '.' + _e2eB64u(await _e2eGcm(key.sym, plain, 'pe2' + tag + '1.' + k32));
+}
+async function _e2eSealToKey(kid, pubKey, value, isJson) {
+  var k32 = _e2eK32(kid), tag = isJson ? 't' : 's';
+  var plain = _e2eTE.encode(isJson ? JSON.stringify(value) : String(value));
+  return 'pe2' + tag + '1.' + k32 + '.' + _e2eB64u(await _e2eSealTo(pubKey, plain, 'pe2' + tag + '1.' + k32));
+}
+function _e2eIsSeal(v) { return typeof v === 'string' && v.charCodeAt(0) === 112 && v.slice(0, 3) === 'pe2' && _E2E_RE.test(v); }
+async function _e2eOpen(seal) {
+  var m = _E2E_RE.exec(seal);
+  if (!m) return seal;
+  var kid = _e2eKidOf32(m[2]);
+  var key = await _e2eKey(kid);
+  if (!key) { var e = new Error('locked'); e.locked = true; throw e; }
+  var t = m[1], blob = _e2eUnB64u(m[3]), aad = 'pe2' + t + '1.' + m[2];
+  var bytes = (t === 'e' || t === 'j') ? await _e2eUnGcm(key.sym, blob, aad) : await _e2eOpenFrom(key.priv, blob, aad);
+  var s = _e2eTD.decode(bytes);
+  return (t === 'j' || t === 't') ? JSON.parse(s) : s;
+}
+function _e2eSlot() { return String(TENANT_ID || location.host) + ':' + ((S && S.profile && S.profile.id) || ''); }
+function _e2eIdb() {
+  if (_e2eIdb._p) return _e2eIdb._p;
+  _e2eIdb._p = new Promise(function (res, rej) {
+    try {
+      var r = indexedDB.open('pental-e2e', 1);
+      r.onupgradeneeded = function () { if (!r.result.objectStoreNames.contains('device')) r.result.createObjectStore('device'); };
+      r.onsuccess = function () { res(r.result); };
+      r.onerror = function () { _e2eIdb._p = null; rej(r.error || new Error('IndexedDB')); };
+    } catch (e) { _e2eIdb._p = null; rej(e); }
+  });
+  return _e2eIdb._p;
+}
+async function _e2eIdbDo(mode, fn) {
+  var db = await _e2eIdb();
+  return new Promise(function (res, rej) {
+    var tx = db.transaction('device', mode), st = tx.objectStore('device'), r = fn(st);
+    tx.oncomplete = function () { res(r && 'result' in r ? r.result : undefined); };
+    tx.onerror = tx.onabort = function () { rej(tx.error || new Error('IndexedDB')); };
+  });
+}
+function _e2eDeviceLabel() {
+  var ua = navigator.userAgent || '';
+  var b = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'A browser';
+  var o = /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android' : /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : '';
+  return b + (o ? ' on ' + o : '');
+}
+async function _e2eDeviceUp() {
+  var slot = _e2eSlot(), rec = null;
+  try { rec = await _e2eIdbDo('readonly', function (st) { return st.get(slot); }); } catch (e) { rec = null; }
+  var mine = (E2E.st && E2E.st.principals) || [];
+  if (rec && mine.some(function (p) { return p.id === rec.id && p.revoked; })) {
+
+    try { await _e2eIdbDo('readwrite', function (st) { return st.delete(slot); }); } catch (e) {}
+    rec = null;
+  }
+  if (!rec) {
+
+    var pair = await crypto.subtle.generateKey(_E2E_EC, false, ['deriveBits']);
+    rec = { id: _e2eUuid(), priv: pair.privateKey, pub: await _e2ePubExport(pair.publicKey) };
+    await _e2eIdbDo('readwrite', function (st) { return st.put(rec, slot); });
+  }
+  var r = await supabaseClient.rpc('rpc_e2e_register_principal', { p_id: rec.id, p_kind: 'device', p_pub: rec.pub, p_label: _e2eDeviceLabel() });
+  if (r.error) throw r.error;
+  E2E.device = rec;
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+  return rec;
+}
+function _e2ePrfSalt() {
+  return crypto.subtle.digest('SHA-256', _e2eTE.encode('pental e2e prf v1|' + String(TENANT_ID || location.host) + '|' + ((S && S.profile && S.profile.id) || '')))
+    .then(function (b) { return new Uint8Array(b); });
+}
+async function _e2eKek(method, material, params) {
+  if (method === 'passkey') return _e2eHkdfAes(material, 'pental e2e passkey v1');
+  if (method === 'kit') return _e2eHkdfAes(material, 'pental e2e kit v1');
+  var hw = await _pmArgon2Lib();
+  var cost = (params && params.cost) || _E2E_PW_COST;
+  var out = await hw.argon2id({ password: material, salt: _e2eUnB64u(params.salt), parallelism: cost.p, iterations: cost.t,
+                                memorySize: cost.m, hashLength: 32, outputType: 'binary' });
+  return _e2eHkdfAes(out, 'pental e2e password v1');
+}
+async function _e2eFactorOpen(w, material) {
+  var kek = await _e2eKek(w.method, material, w.params || {});
+  var pkcs8 = await _e2eUnGcm(kek, _e2eUnB64u(String(w.wrapped).slice(6)), 'pe2a1|' + w.principal_id + '|' + w.method);
+  return _e2ePrivImport(pkcs8);
+}
+async function _e2eFactorNew(method, ref, material) {
+  var params = {};
+  if (method === 'password') params = { salt: _e2eB64u(crypto.getRandomValues(new Uint8Array(16))), cost: _E2E_PW_COST };
+  var kek = await _e2eKek(method, material, params);
+  var pair = await crypto.subtle.generateKey(_E2E_EC, true, ['deriveBits']);
+  var pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
+  var id = _e2eUuid(), pub = await _e2ePubExport(pair.publicKey);
+  var wrapped = 'pe2a1.' + _e2eB64u(await _e2eGcm(kek, pkcs8, 'pe2a1|' + id + '|' + method));
+  var label = method === 'passkey' ? 'Passkey' : method === 'password' ? 'Password' : 'Recovery kit';
+  var r = await supabaseClient.rpc('rpc_e2e_register_principal', { p_id: id, p_kind: 'account', p_pub: pub, p_label: label });
+  if (r.error) throw r.error;
+  var w = await supabaseClient.rpc('rpc_e2e_put_wrap', { p_principal: id, p_method: method, p_ref: ref || '', p_params: params, p_wrapped: wrapped });
+  if (w.error) throw w.error;
+  E2E.factors[id] = { priv: await _e2ePrivImport(pkcs8), method: method };
+  return id;
+}
+function _e2eStashPassword(pw) { if (!_e2eOff() && pw) E2E.stash = Object.assign(E2E.stash || {}, { pw: _e2eTE.encode(pw) }); }
+function _e2eStashPrf(credId, out) { if (!_e2eOff() && out) E2E.stash = Object.assign(E2E.stash || {}, { prf: { cred: credId, out: new Uint8Array(out) } }); }
+window._e2eStashPassword = _e2eStashPassword;
+function _e2eTake(st) {
+  var before = _e2eHeldKids();
+  E2E.st = st;
+  E2E.grants = Array.isArray(st.grants) ? st.grants : [];
+  (st.keys || []).forEach(function (k) {
+    if (!E2E.pubs[k.id]) E2E.pubs[k.id] = { pub: _e2ePubImport(k.pub), scope: k.scope, client_id: k.client_id };
+    if (k.scope === 'firm') E2E.firmKid = k.id;
+    else if (k.client_id) E2E.byClient[k.client_id] = k.id;
+  });
+
+  if (E2E.on && E2E.waiting && _e2eHeld().length) {
+    E2E.waiting = false;
+    setTimeout(function () {
+      _e2eShow();
+      _e2eEvery();
+      _e2eReadAgain();
+    }, 0);
+  } else if (E2E.on && E2E.lockedN) {
+
+    var after = _e2eHeldKids();
+    if (Object.keys(after).some(function (k) { return !before[k]; })) setTimeout(_e2eReadAgain, 0);
+  }
+}
+function _e2eHeldKids() {
+  var m = {};
+  _e2eHeld().forEach(function (g) { m[g.key_id] = 1; });
+  return m;
+}
+async function _e2eReadAgain() {
+  E2E.lockedN = 0;
+  try { if (typeof _loadAllDataPromise !== 'undefined' && _loadAllDataPromise) await _loadAllDataPromise.catch(function () {}); } catch (e) {}
+  try { if (typeof _syncReset === 'function') _syncReset(); } catch (e) {}
+  try { if (typeof refreshAndStay === 'function') await refreshAndStay(); } catch (e) {}
+}
+async function _e2eStatus(full) {
+  var dev = E2E.device || E2E.devicePre, args = null;
+  if (!full && dev && dev.id && !E2E.stash && !Object.keys(E2E.factors).length && !E2E.statusOld) args = { p_principal: dev.id };
+  var r = args ? await supabaseClient.rpc('rpc_e2e_status', args) : await supabaseClient.rpc('rpc_e2e_status');
+  if (r.error && args && _isMissingRpc(r.error)) { E2E.statusOld = true; r = await supabaseClient.rpc('rpc_e2e_status'); }
+  if (r.error) throw r.error;
+  E2E.statusAt = Date.now();
+  _e2eTake(r.data || {});
+  return E2E.st;
+}
+function _e2eStatusSoon() {
+  if (E2E.statusP) return E2E.statusP;
+  if (E2E.statusAt && Date.now() - E2E.statusAt < 10000) return Promise.resolve(E2E.st);
+  var p = E2E.statusP = _e2eStatus().catch(function () { return E2E.st; });
+  p.then(function () { if (E2E.statusP === p) E2E.statusP = null; });
+  return p;
+}
+function _e2eKey(kid) {
+  if (E2E.keys[kid]) return Promise.resolve(E2E.keys[kid]);
+  if (E2E.keyP[kid]) return E2E.keyP[kid];
+  var p = (async function () {
+    var gs = E2E.grants.filter(function (g) { return g.key_id === kid; });
+    if (!gs.length && E2E.on && !E2E.waiting && typeof supabaseClient !== 'undefined' && supabaseClient) {
+      await _e2eStatusSoon();
+      gs = E2E.grants.filter(function (g) { return g.key_id === kid; });
+    }
+    for (var i = 0; i < gs.length; i++) {
+      var g = gs[i];
+      var priv = (E2E.device && g.principal_id === E2E.device.id) ? E2E.device.priv : (E2E.factors[g.principal_id] && E2E.factors[g.principal_id].priv);
+      if (!priv) continue;
+      try {
+        var k = await _e2eKeyFromSecret(await _e2eUnwrap(priv, kid, g.principal_id, g.wrapped), kid);
+        var meta = E2E.pubs[kid] || {};
+        k.scope = meta.scope; k.client_id = meta.client_id;
+        E2E.keys[kid] = k;
+        return k;
+      } catch (e) {
+
+        console.warn('[e2e] a key given to this browser did not open; asking for it again');
+        try { await supabaseClient.rpc('rpc_e2e_drop_grant', { p_key: kid, p_principal: g.principal_id }); } catch (e2) {}
+      }
+    }
+    return null;
+  })();
+  E2E.keyP[kid] = p;
+  p.then(function (k) { if (!k) delete E2E.keyP[kid]; });
+  return p;
+}
+function _e2eHeld() {
+  var mine = {};
+  if (E2E.device) mine[E2E.device.id] = 1;
+  Object.keys(E2E.factors).forEach(function (id) { mine[id] = 1; });
+  return E2E.grants.filter(function (g) { return mine[g.principal_id]; });
+}
+function _e2eReady() {
+  if (_e2eOff() || typeof supabaseClient === 'undefined' || !supabaseClient || !S || !S.profile) return Promise.resolve();
+  if (!E2E.ready) {
+    var p = E2E.ready = _e2eStart().then(function (settled) {
+
+      if (settled === false && E2E.ready === p) E2E.ready = null;
+    }, function (e) {
+      console.warn('[e2e] could not open the keys:', (e && e.message) || e);
+      if (E2E.ready === p) E2E.ready = null;
+    });
+  }
+  return E2E.ready;
+}
+window._e2eReady = _e2eReady;
+async function _e2eStart() {
+  var st;
+
+  if (!E2E.device && !E2E.devicePre) {
+    try { var pre = await _e2eIdbDo('readonly', function (o) { return o.get(_e2eSlot()); }); if (pre && pre.id) E2E.devicePre = { id: pre.id }; } catch (e) {}
+  }
+  try { st = await _e2eStatus(); } catch (e) {
+    if (typeof _isMissingRpc === 'function' && _isMissingRpc(e)) { E2E.avail = false; return; }
+    throw e;
+  }
+  E2E.avail = true;
+  if (!st.signed_in || !st.fresh) return false;
+  if (!st.active) {
+
+    if (st.role === 'admin' && st.auto !== false) {
+      try { await _e2eActivate(); } catch (e) { console.warn('[e2e] turning encryption on did not finish:', (e && e.message) || e); }
+      st = await _e2eStatus();
+    }
+    if (!st.active) { E2E.on = false; _e2eWatchOn(); return true; }
+  }
+  E2E.on = true;
+  await _e2eDeviceUp();
+  await _e2eFactorsUp();
+  E2E.waiting = _e2eHeld().length === 0 && !_e2eNoKeysToHold();
+  _e2eLoops();
+  _e2eLive();
+  _e2eShow();
+  return true;
+}
+function _e2eWatchOn() {
+  if (E2E.watch) return;
+  E2E.watch = setInterval(function () { _e2eRecheck(); }, 120000);
+}
+async function _e2eRecheck() {
+  if (E2E.on || E2E.rechecking || !E2E.avail) return;
+  E2E.rechecking = true;
+  try {
+    var st = await _e2eStatus();
+    if (st && st.active) {
+      if (E2E.watch) { clearInterval(E2E.watch); E2E.watch = null; }
+      E2E.ready = null;
+      await _e2eReady();
+      try { if (typeof refreshAndStay === 'function') await refreshAndStay(); } catch (e) {}
+    }
+  } catch (e) {  }
+  finally { E2E.rechecking = false; }
+}
+function _e2eNoKeysToHold() { var r = E2E.st && E2E.st.role; return r === 'sales' || r === 'marketing' || r === 'none'; }
+async function _e2eFactorsUp() {
+  var stash = E2E.stash; E2E.stash = null;
+  if (!stash) return;
+  var wraps = (E2E.st && E2E.st.wraps) || [];
+  try {
+    if (stash.prf) {
+      var wp = wraps.filter(function (w) { return w.method === 'passkey' && w.ref === stash.prf.cred; })[0];
+      if (wp) E2E.factors[wp.principal_id] = { priv: await _e2eFactorOpen(wp, stash.prf.out), method: 'passkey' };
+      else E2E._newFactor = { method: 'passkey', ref: stash.prf.cred, material: stash.prf.out };
+    }
+  } catch (e) { console.warn('[e2e] the passkey did not open its key'); }
+  try {
+    if (stash.pw) {
+      var ww = wraps.filter(function (w) { return w.method === 'password'; })[0];
+      if (ww) E2E.factors[ww.principal_id] = { priv: await _e2eFactorOpen(ww, stash.pw), method: 'password' };
+      else E2E._newFactorPw = { method: 'password', ref: '', material: stash.pw };
+    }
+  } catch (e) { console.warn('[e2e] the password did not open its key'); }
+  if (Object.keys(E2E.factors).length) await _e2eSelfGive();
+}
+async function _e2eSelfGive() {
+  if (!E2E.device) return 0;
+
+  if (Object.keys(E2E.factors).length && !E2E.grants.some(function (g) { return E2E.factors[g.principal_id]; })) await _e2eStatus(true);
+  var have = {}, out = [];
+  E2E.grants.forEach(function (g) { if (g.principal_id === E2E.device.id) have[g.key_id] = 1; });
+  var kids = {};
+  E2E.grants.forEach(function (g) { if (E2E.factors[g.principal_id] && !have[g.key_id]) kids[g.key_id] = 1; });
+  var devPub = await _e2ePubImport(E2E.device.pub);
+  for (var kid in kids) {
+    var k = await _e2eKey(kid);
+    if (k) out.push({ key_id: kid, principal_id: E2E.device.id, wrapped: await _e2eWrapFor(devPub, kid, E2E.device.id, k.secret) });
+  }
+  if (!out.length) return 0;
+  var r = await supabaseClient.rpc('rpc_e2e_put_grants', { p_grants: out });
+  if (!r.error) await _e2eStatus();
+  return out.length;
+}
+async function _e2eActivate() {
+  await _e2eDeviceUp();
+  var cl = await _readPaged(supabaseClient.from('clients').select('id'));
+  if (cl.error) throw cl.error;
+  var made = {}, firm = await _e2eNewDataKey('firm', null);
+  made[firm.id] = firm;
+  var clientIds = (cl.data || []).map(function (c) { return c.id; });
+  for (var tries = 0; tries < 3; tries++) {
+    for (var i = 0; i < clientIds.length; i++) {
+      var have = false;
+      for (var id in made) if (made[id].client_id === clientIds[i]) have = true;
+      if (!have) { var k = await _e2eNewDataKey('client', clientIds[i]); made[k.id] = k; }
+    }
+    var devPub = await _e2ePubImport(E2E.device.pub), keys = [], grants = [];
+    for (var kid in made) {
+      keys.push({ id: kid, scope: made[kid].scope, client_id: made[kid].client_id, pub: made[kid].pub });
+      grants.push({ key_id: kid, principal_id: E2E.device.id, wrapped: await _e2eWrapFor(devPub, kid, E2E.device.id, made[kid].secret) });
+    }
+    var r = await supabaseClient.rpc('rpc_e2e_activate', { p_keys: keys, p_grants: grants, p_force: false });
+    if (r.error) throw r.error;
+    var d = r.data || {};
+    if (d.ok) {
+      for (var kk in made) E2E.keys[kk] = made[kk].key;
+      return true;
+    }
+    if (d.missing_clients) { clientIds = clientIds.concat(d.missing_clients); continue; }
+    return false;
+  }
+  return false;
+}
+function _e2eLoops() {
+  if (E2E.loops) return;
+  E2E.loops = { t: null, busy: false, every: 0 };
+  var run = async function () {
+    if (!E2E.loops || E2E.loops.busy) return;
+    E2E.loops.busy = true;
+    try {
+
+      if (E2E.waiting || E2E.grantsDue || E2E.lockedN) { E2E.grantsDue = false; await _e2eStatus(); }
+      if (!E2E.waiting) {
+        await _e2eGiveNeeded();
+        await _e2eFactorKeep();
+        await _e2eClientKeysUp();
+        await _e2eScanWaiting();
+        await _e2eTicketsDue();
+        if (typeof _e2eSweepSoon === 'function') _e2eSweepSoon();
+      }
+    } catch (e) { console.debug('[e2e] keys:', (e && e.message) || e); }
+    finally { if (E2E.loops) { E2E.loops.busy = false; _e2eEvery(); } }
+  };
+  E2E.loops.run = run;
+  run();
+  _e2eEvery();
+}
+function _e2eEvery() {
+  if (!E2E.loops) return;
+  var want = E2E.waiting ? 4000 : 60000;
+  if (E2E.loops.every === want && E2E.loops.t) return;
+  if (E2E.loops.t) clearInterval(E2E.loops.t);
+  E2E.loops.every = want;
+  E2E.loops.t = setInterval(E2E.loops.run, want);
+}
+function _e2eNudge() {
+  if (!E2E.loops || !E2E.loops.run) return;
+  if (E2E.nudgeT) clearTimeout(E2E.nudgeT);
+  E2E.nudgeT = setTimeout(function () { E2E.nudgeT = null; E2E.loops && E2E.loops.run && E2E.loops.run(); }, 300);
+}
+window._e2eNudge = _e2eNudge;
+async function _e2eGiveNeeded() {
+  var r = await supabaseClient.rpc('rpc_e2e_needed', { p_limit: 200 });
+  if (r.error || !Array.isArray(r.data) || !r.data.length) return 0;
+  var out = [], pubs = {};
+  for (var i = 0; i < r.data.length; i++) {
+    var n = r.data[i], k = await _e2eKey(n.key_id);
+    if (!k) continue;
+
+    if (!(n.principal_id in pubs)) {
+      try { pubs[n.principal_id] = await _e2ePubImport(n.pub); }
+      catch (e) { pubs[n.principal_id] = null; console.warn('[e2e] a browser\u2019s key could not be read, so it is passed over'); }
+    }
+    if (!pubs[n.principal_id]) continue;
+    out.push({ key_id: n.key_id, principal_id: n.principal_id, wrapped: await _e2eWrapFor(pubs[n.principal_id], n.key_id, n.principal_id, k.secret) });
+  }
+  if (!out.length) return 0;
+  var w = await supabaseClient.rpc('rpc_e2e_put_grants', { p_grants: out });
+  return w.error ? 0 : ((w.data && w.data.given) || 0);
+}
+async function _e2eFactorKeep() {
+  var todo = [E2E._newFactor, E2E._newFactorPw].filter(Boolean);
+  E2E._newFactor = E2E._newFactorPw = null;
+  for (var i = 0; i < todo.length; i++) {
+    try { await _e2eFactorNew(todo[i].method, todo[i].ref, todo[i].material); }
+    catch (e) { console.debug('[e2e] could not keep the ' + todo[i].method + ' able to open a new browser'); }
+  }
+  if (todo.length) await _e2eGiveNeeded();
+}
+function _e2eStateRow(list, id) {
+  try { var a = (S && S.data && S.data[list]) || []; for (var i = 0; i < a.length; i++) if (a[i] && a[i].id === id) return a[i]; } catch (e) {}
+  return null;
+}
+async function _e2eClientOf(table, id) {
+  if (!id) return null;
+  var c = E2E.clientOf[table] && E2E.clientOf[table][id];
+  if (c) return c;
+  if (table === 'assessments') { var a = _e2eStateRow('assessments', id); if (a && a.client_id) return a.client_id; }
+  if (table === 'findings') {
+    var f = _e2eStateRow('findings', id);
+    if (f && f.client_id) return f.client_id;
+    if (f && f.assessment_id) return _e2eClientOf('assessments', f.assessment_id);
+  }
+  if (table === 'scan_runs') { var sr = _e2eStateRow('scanRuns', id); if (sr && sr.client_id) return sr.client_id; }
+  var r = await supabaseClient.rpc('rpc_e2e_clients_of', { p_table: table, p_ids: [id] });
+  var got = r && !r.error && r.data ? r.data[id] : null;
+  if (got && E2E.clientOf[table]) E2E.clientOf[table][id] = got;
+  return got || null;
+}
+async function _e2eRowClient(table, row, ids) {
+  if (row) {
+    if (row.client_id && (table === 'assessments' || table === 'tickets' || table === 'assets' || table === 'scan_runs' || table === 'findings')) return row.client_id;
+    if (row.assessment_id) return _e2eClientOf('assessments', row.assessment_id);
+    if (table === 'qa_comments' && row.finding_id) return _e2eClientOf('findings', row.finding_id);
+    if (table === 'scan_results' && row.run_id) return _e2eClientOf('scan_runs', row.run_id);
+    if (row.id) { var c = await _e2eClientOf(table, row.id); if (c) return c; }
+  }
+  if (ids && ids.length) return _e2eClientOf(table, ids[0]);
+  return null;
+}
+async function _e2eKeyForClient(clientId) {
+  if (!clientId) return E2E.firmKid ? { kid: E2E.firmKid, key: await _e2eKey(E2E.firmKid), pub: E2E.pubs[E2E.firmKid] && E2E.pubs[E2E.firmKid].pub } : null;
+  var kid = E2E.byClient[clientId];
+  if (!kid) { await _e2eStatus(); kid = E2E.byClient[clientId]; }
+  if (!kid) {
+    var role = E2E.st && E2E.st.role;
+    if (role === 'admin' || role === 'senior' || role === 'standard' || role === 'contractor') kid = await _e2eMakeClientKey(clientId);
+  }
+  if (!kid) return null;
+  return { kid: kid, key: await _e2eKey(kid), pub: E2E.pubs[kid] && E2E.pubs[kid].pub };
+}
+async function _e2eMakeClientKey(clientId) {
+  var nk = await _e2eNewDataKey('client', clientId);
+  var grants = [];
+  var targets = [];
+  if (E2E.device) targets.push({ id: E2E.device.id, pub: E2E.device.pub });
+  for (var i = 0; i < targets.length; i++) {
+    grants.push({ key_id: nk.id, principal_id: targets[i].id, wrapped: await _e2eWrapFor(await _e2ePubImport(targets[i].pub), nk.id, targets[i].id, nk.secret) });
+  }
+  var r = await supabaseClient.rpc('rpc_e2e_key_create', { p_key: { id: nk.id, client_id: clientId, pub: nk.pub }, p_grants: grants });
+  if (r.error) throw r.error;
+  var d = r.data || {};
+  E2E.pubs[d.id] = { pub: _e2ePubImport(d.pub), scope: 'client', client_id: clientId };
+  E2E.byClient[clientId] = d.id;
+  if (d.created) {
+    E2E.keys[d.id] = nk.key; E2E.keys[d.id].scope = 'client'; E2E.keys[d.id].client_id = clientId;
+    E2E.grants.push(grants[0]);
+    _e2eNudge();
+  }
+  return d.id;
+}
+function _e2eRefsOf(v) {
+  var s = typeof v === 'string' ? v : JSON.stringify(v), out = [], m;
+  var re = /storage:([A-Za-z0-9_\-\/.%~]+)|data-sp=\\?"([^"\\]+)|"storagePath"\s*:\s*"([^"]+)"/g;
+  while ((m = re.exec(s))) { var p = m[1] || m[2] || m[3]; if (p && out.indexOf(p) < 0) out.push(p); }
+  return out;
+}
+function _e2eEmpty(v) {
+  if (v === null || v === undefined) return true;
+  if (typeof v === 'string') return v.trim() === '';
+  if (Array.isArray(v)) return v.length === 0;
+  if (typeof v === 'object') return Object.keys(v).length === 0;
+  return false;
+}
+function _e2eHasLocked(v) {
+  if (v === _E2E_LOCKED) return true;
+  if (typeof v === 'string') return v.indexOf(_E2E_LOCKED) >= 0;
+  if (v && typeof v === 'object') { try { return JSON.stringify(v).indexOf(_E2E_LOCKED) >= 0; } catch (e) { return false; } }
+  return false;
+}
+function _e2eRefusal(msg) {
+  var e = new Error(msg); e.e2eRefused = true; return e;
+}
+async function _e2eSealRows(table, rows, isInsert, ids) {
+  var cols = _E2E_COLS[table], json = _E2E_JSON[table] || {};
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    if (!row || typeof row !== 'object') continue;
+    var todo = cols.filter(function (c) { return c in row && !_e2eEmpty(row[c]) && !_e2eIsSeal(row[c]); });
+    if (!todo.length) continue;
+    for (var t = 0; t < todo.length; t++) if (_e2eHasLocked(row[todo[t]])) throw _e2eRefusal('This was not saved: some of it is still encrypted on this browser, which is waiting to be given its key. It will be in a moment.');
+    var clientId = await _e2eRowClient(table, row, ids);
+    var k = await _e2eKeyForClient(clientId);
+    if (!k) throw _e2eRefusal('This was not saved: its key could not be found. Reload the page and try again.');
+    if (!k.key && !isInsert) throw _e2eRefusal('This was not saved: this browser is still waiting to be given the key it needs, which takes a moment while a teammate\u2019s portal is open.');
+    var pub = k.key ? null : await k.pub;
+    var refs = {};
+    for (var j = 0; j < todo.length; j++) {
+      var c = todo[j], v = row[c], isJson = !!json[c];
+      if (_E2E_REFS[table]) {
+        if (table === 'assessments' && c === 'summary_sections' && v && typeof v === 'object') {
+          var per = {};
+          Object.keys(v).forEach(function (sk) { var rr = _e2eRefsOf(v[sk]); if (rr.length) per[sk] = rr; });
+          refs[c] = per;
+        } else refs[c] = _e2eRefsOf(v);
+      }
+      row[c] = k.key ? await _e2eSeal(k.kid, k.key, v, isJson) : await _e2eSealToKey(k.kid, pub, v, isJson);
+    }
+    if (_E2E_REFS[table]) row.e2e_refs = Object.assign({}, (row.e2e_refs && typeof row.e2e_refs === 'object') ? row.e2e_refs : {}, refs);
+  }
+}
+async function _e2eSealCoLive(args) {
+  if (!args || (args.p_table !== 'findings' && args.p_table !== 'assessments') || _e2eEmpty(args.p_value) || _e2eIsSeal(args.p_value)) return;
+  if (_e2eHasLocked(args.p_value)) throw _e2eRefusal('locked');
+  var k = await _e2eKeyForClient(await _e2eClientOf(args.p_table, args.p_id));
+  if (!k || !k.key) throw _e2eRefusal('This browser is still waiting to be given its key.');
+  args.p_value = await _e2eSeal(k.kid, k.key, args.p_value, false);
+}
+var _E2E_RPC = {
+  rpc_co_live_put: _e2eSealCoLive,
+  rpc_mail_submit: function (args) { return _e2eSealMailArgs(args); },
+  rpc_credentials_submit: function (args) { return _e2eSealCred(args); }
+};
+async function _e2eOpenDeep(root) {
+  var found = [];
+  var walk = function (o, parent, key) {
+    if (typeof o === 'string') { if (_e2eIsSeal(o)) found.push([parent, key, o]); return; }
+    if (!o || typeof o !== 'object') return;
+    if (Array.isArray(o)) { for (var i = 0; i < o.length; i++) walk(o[i], o, i); return; }
+    for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) walk(o[k], o, k);
+  };
+  var box = { v: root };
+  walk(root, box, 'v');
+  if (!found.length) return root;
+  var uniq = {}, list = [];
+  found.forEach(function (f) { if (!uniq[f[2]]) { uniq[f[2]] = 1; list.push(f[2]); } });
+  var opened = {};
+  for (var i = 0; i < list.length; i += 200) {
+    await Promise.all(list.slice(i, i + 200).map(function (seal) {
+      if (E2E.cache.has(seal)) { opened[seal] = { v: E2E.cache.get(seal) }; return null; }
+      return _e2eOpen(seal).then(function (v) {
+        opened[seal] = { v: v };
+        _e2eRemember(seal, v);
+      }, function (e) { opened[seal] = { locked: true }; if (!(e && e.locked)) console.warn('[e2e] a sealed value did not open', e && e.message); });
+    }));
+  }
+  found.forEach(function (f) {
+    var o = opened[f[2]];
+    if (o && !o.locked) { f[0][f[1]] = _e2eClone(o.v); return; }
+    E2E.lockedN = (E2E.lockedN || 0) + 1;
+    var t = f[2].charAt(3);
+    f[0][f[1]] = (t === 'j' || t === 't') ? (_E2E_EMPTY_LIST[f[1]] ? [] : {}) : _E2E_LOCKED;
+  });
+  return box.v;
+}
+function _e2eClone(v) { return (v && typeof v === 'object') ? JSON.parse(JSON.stringify(v)) : v; }
+function _e2eRemember(seal, v) {
+  var n = seal.length + (typeof v === 'string' ? v.length : 64);
+  E2E.cache.set(seal, v);
+  E2E.cacheBytes += n;
+  if (E2E.cacheBytes > 64 * 1024 * 1024) {
+
+    var drop = Math.floor(E2E.cache.size / 2), it = E2E.cache.keys();
+    for (var i = 0; i < drop; i++) E2E.cache.delete(it.next().value);
+    E2E.cacheBytes = Math.floor(E2E.cacheBytes / 2);
+  }
+}
+function _e2eLearn(table, data) {
+  var m = E2E.clientOf[table];
+  if (!m || !data) return;
+  var rows = Array.isArray(data) ? data : [data];
+  for (var i = 0; i < rows.length && i < 5000; i++) {
+    var r = rows[i];
+    if (!r || !r.id) continue;
+    if (r.client_id) m[r.id] = r.client_id;
+    else if (r.assessment_id && E2E.clientOf.assessments[r.assessment_id]) m[r.id] = E2E.clientOf.assessments[r.assessment_id];
+  }
+}
+function _e2eInstallFetch(opts) {
+  if (_e2eOff()) return opts;
+  opts.global = opts.global || {};
+  var base = opts.global.fetch || (typeof fetch === 'function' ? fetch.bind(window) : null);
+  if (!base) return opts;
+  opts.global.fetch = function (input, init) { return _e2eFetch(base, input, init); };
+  return opts;
+}
+async function _e2eFetch(base, input, init) {
+  var url = typeof input === 'string' ? input : ((input && input.url) || '');
+  var m = /\/(rest|storage)\/v1\/([^?#]*)/.exec(url);
+  if (!m) return base(input, init);
+  var method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+  try {
+    if (m[1] === 'storage') return await _e2eStorage(base, input, init, method, decodeURIComponent(m[2]));
+    var path = m[2];
+    if (E2E.on && (method === 'POST' || method === 'PATCH' || method === 'PUT') && init && typeof init.body === 'string' && init.body) {
+      if (path.indexOf('rpc/') === 0) {
+        var fn = path.slice(4), sealer = _E2E_RPC[fn];
+        if (sealer) {
+          var args = JSON.parse(init.body);
+          await sealer(args);
+          init = Object.assign({}, init, { body: JSON.stringify(args) });
+        }
+      } else if (path === 'email_notifications' && method === 'POST') {
+        var mb = JSON.parse(init.body), mrows = Array.isArray(mb) ? mb : [mb];
+        await _e2eSealMailRows(mrows);
+        init = Object.assign({}, init, { body: JSON.stringify(Array.isArray(mb) ? mrows : mrows[0]) });
+      } else if (_E2E_COLS[path]) {
+        var body = JSON.parse(init.body), rows = Array.isArray(body) ? body : [body];
+        var ids = [], q = url.split('?')[1] || '', mm;
+        var re = /(?:^|&)id=(?:eq\.([0-9a-f-]{36})|in\.\(([^)]*)\))/g;
+        while ((mm = re.exec(q))) { if (mm[1]) ids.push(mm[1]); else ids = ids.concat(decodeURIComponent(mm[2]).split(',').map(function (s) { return s.replace(/"/g, '').trim(); })); }
+        if (ids.length > 1 && rows.some(function (r) { return r && _E2E_COLS[path].some(function (c) { return c in r && !_e2eEmpty(r[c]) && !_e2eIsSeal(r[c]); }); })) {
+
+          var cs = {};
+          for (var ci = 0; ci < ids.length; ci++) cs[(await _e2eClientOf(path, ids[ci])) || ''] = 1;
+          if (Object.keys(cs).length > 1) throw _e2eRefusal('This change covers the work of more than one client, and each client\u2019s is sealed with its own key: make it for one client at a time.');
+        }
+        await _e2eSealRows(path, rows, method === 'POST', ids);
+        init = Object.assign({}, init, { body: JSON.stringify(Array.isArray(body) ? rows : rows[0]) });
+      }
+    }
+  } catch (e) {
+    if (e && e.e2eRefused) return _e2eRefused(e.message);
+    throw e;
+  }
+  var res = await base(input, init);
+  if (!E2E.avail || method === 'HEAD' || res.status === 204 || res.status === 205 || res.status === 304) return res;
+  var ct = res.headers.get('content-type') || '';
+  if (ct.indexOf('json') < 0) return res;
+  var text = await res.text();
+  var headers = new Headers(res.headers);
+  headers.delete('content-length'); headers.delete('content-encoding');
+
+  if (res.status >= 400 && !E2E.on && text.indexOf('"55E2E"') >= 0) _e2eRecheck();
+  if (_E2E_RAW[m[2]] || !/"pe2[ejst]1\./.test(text)) return new Response(text, { status: res.status, statusText: res.statusText, headers: headers });
+
+  if (E2E.ready && m[2].indexOf('rpc/rpc_e2e_') !== 0) { try { await E2E.ready; } catch (e) {} }
+  var data;
+  try { data = JSON.parse(text); } catch (e) { return new Response(text, { status: res.status, statusText: res.statusText, headers: headers }); }
+  data = await _e2eOpenDeep(data);
+  if (m[2].indexOf('rpc/') !== 0) _e2eLearn(m[2], data);
+  return new Response(JSON.stringify(data), { status: res.status, statusText: res.statusText, headers: headers });
+}
+function _e2eRefused(msg) {
+  return new Response(JSON.stringify({ code: 'PE2E0', message: msg, details: null, hint: null }),
+    { status: 409, statusText: 'Conflict', headers: { 'content-type': 'application/json' } });
+}
+var _E2E_FILE_MAGIC = [80, 69, 50, 69, 70, 49];
+var _E2E_FILE_MAGIC_PUB = [80, 69, 50, 69, 71, 49];
+function _e2eFileOpen(path) { var p = String(path).split('/'); return p[1] === 'final-pdfs' && /^(proposal|invoice)_/.test(p[2] || ''); }
+function _e2eIsSealedFile(u8) {
+  if (!u8 || u8.length < 34) return 0;
+  var a = true, b = true;
+  for (var i = 0; i < 6; i++) { if (u8[i] !== _E2E_FILE_MAGIC[i]) a = false; if (u8[i] !== _E2E_FILE_MAGIC_PUB[i]) b = false; }
+  return a ? 1 : b ? 2 : 0;
+}
+async function _e2eSealFile(bytes, mime, kid, key, pub) {
+  var mb = _e2eTE.encode(String(mime || 'application/octet-stream').slice(0, 200));
+  var plain = _e2eCat(new Uint8Array([mb.length >> 8, mb.length & 255]), mb, bytes);
+  var head = new Uint8Array(key ? _E2E_FILE_MAGIC : _E2E_FILE_MAGIC_PUB), kb = _e2eKidBytes(kid);
+  var aad = String.fromCharCode.apply(null, head) + _e2eK32(kid);
+  return _e2eCat(head, kb, key ? await _e2eGcm(key.sym, plain, aad) : await _e2eSealTo(pub, plain, aad));
+}
+async function _e2eOpenFile(u8) {
+  var kind = _e2eIsSealedFile(u8);
+  if (!kind) return null;
+  var kid = _e2eKidFromBytes(u8.subarray(6, 22));
+  var key = await _e2eKey(kid);
+  if (!key) { var e = new Error('locked'); e.locked = true; throw e; }
+  var aad = String.fromCharCode.apply(null, u8.subarray(0, 6)) + _e2eK32(kid);
+  var plain = kind === 1 ? await _e2eUnGcm(key.sym, u8.subarray(22), aad) : await _e2eOpenFrom(key.priv, u8.subarray(22), aad);
+  var ml = (plain[0] << 8) | plain[1];
+  return { mime: _e2eTD.decode(plain.subarray(2, 2 + ml)), bytes: plain.subarray(2 + ml) };
+}
+async function _e2eFileClient(path) {
+  var p = String(path).split('/');
+  if (p[1] === 'final-pdfs') {
+    var mm = /^(.*)_([0-9a-f-]{36})\.[a-z0-9]+$/i.exec(p[2] || '');
+    if (!mm) return null;
+    if (mm[1] === 'vuln_report') return _e2eClientOf('scan_runs', mm[2]);
+    return _e2eClientOf('assessments', mm[2]);
+  }
+  if (/^[0-9a-f-]{36}$/i.test(p[0] || '')) {
+    var c = await _e2eClientOf('assessments', p[0]);
+    if (c) return c;
+    if (/^[0-9a-f-]{36}$/i.test(p[1] || '')) return _e2eClientOf('assessments', p[1]);
+  }
+  return null;
+}
+function _e2eNoteSealed(path, kid) {
+  E2E.noted.push({ path: path, key_id: kid });
+  if (E2E.noteT) return;
+  E2E.noteT = setTimeout(function () {
+    var batch = E2E.noted.splice(0, 500); E2E.noteT = null;
+    if (batch.length) supabaseClient.rpc('rpc_e2e_files_sealed', { p_files: batch }).then(function () {}, function () {});
+  }, 1500);
+}
+async function _e2eStorage(base, input, init, method, rest) {
+
+  var up = /^object\/(assessment-files)\/(.+)$/.exec(rest);
+  var down = /^object\/(?:authenticated\/)?(assessment-files)\/(.+)$/.exec(rest);
+  if (E2E.on && up && (method === 'POST' || method === 'PUT') && init && init.body && !_e2eFileOpen(up[2])) {
+    var path = up[2];
+    var k = await _e2eKeyForClient(await _e2eFileClient(path));
+    if (!k) return _e2eRefused('This file was not saved: its key could not be found. Reload the page and try again.');
+    var pub = k.key ? null : await k.pub;
+    var body = init.body, sealed;
+    if (typeof FormData !== 'undefined' && body instanceof FormData) {
+      var fd = new FormData();
+      var entries = [];
+      body.forEach(function (v, name) { entries.push([name, v]); });
+      for (var i = 0; i < entries.length; i++) {
+        var v = entries[i][1];
+        if (typeof Blob !== 'undefined' && v instanceof Blob) {
+          var bytes = new Uint8Array(await v.arrayBuffer());
+          if (!_e2eIsSealedFile(bytes)) bytes = await _e2eSealFile(bytes, v.type, k.kid, k.key, pub);
+          fd.append(entries[i][0], new Blob([bytes], { type: v.type || 'application/octet-stream' }), v.name || 'blob');
+        } else fd.append(entries[i][0], v);
+      }
+      sealed = fd;
+    } else {
+      var raw = (typeof Blob !== 'undefined' && body instanceof Blob) ? new Uint8Array(await body.arrayBuffer())
+        : (body instanceof ArrayBuffer) ? new Uint8Array(body) : (ArrayBuffer.isView(body) ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength) : null);
+      if (!raw) return base(input, init);
+      var mime = (init.headers && (init.headers['content-type'] || init.headers['Content-Type'])) || (body && body.type) || 'application/octet-stream';
+      sealed = _e2eIsSealedFile(raw) ? raw : await _e2eSealFile(raw, mime, k.kid, k.key, pub);
+    }
+    var res = await base(input, Object.assign({}, init, { body: sealed }));
+    if (res.ok) _e2eNoteSealed(path, k.kid);
+    return res;
+  }
+  var res2 = await base(input, init);
+  if (!down || method !== 'GET' || !res2.ok || !E2E.avail) return res2;
+  var buf = new Uint8Array(await res2.arrayBuffer());
+  var h = new Headers(res2.headers);
+  h.delete('content-length'); h.delete('content-encoding');
+  if (!_e2eIsSealedFile(buf)) return new Response(buf, { status: res2.status, statusText: res2.statusText, headers: h });
+  if (E2E.ready) { try { await E2E.ready; } catch (e) {} }
+  try {
+    var f = await _e2eOpenFile(buf);
+    h.set('content-type', f.mime || 'application/octet-stream');
+    return new Response(f.bytes, { status: res2.status, statusText: res2.statusText, headers: h });
+  } catch (e) {
+    return new Response(JSON.stringify({ statusCode: '423', error: 'Locked', message: 'This file is encrypted, and this browser has not been given its key yet.' }),
+      { status: 423, statusText: 'Locked', headers: { 'content-type': 'application/json' } });
+  }
+}
+var _E2E_SWEEP = ['assessments', 'findings', 'qa_comments', 'assessment_comments', 'timeline_events', 'tickets',
+                  'assets', 'scan_runs', 'scan_results', 'co_live'];
+function _e2eSweepSoon() {
+  if (!E2E.on || E2E.waiting || E2E.sweeping) return;
+  var r = E2E.st && E2E.st.role;
+  if (r !== 'admin' && r !== 'senior') return;
+  if (E2E.sweptAt && Date.now() - E2E.sweptAt < 5 * 60000 && !E2E.sweepAgain) return;
+  E2E.sweeping = true; E2E.sweepAgain = false;
+  setTimeout(function () {
+    _e2eSweep().catch(function (e) { console.debug('[e2e] sealing paused:', (e && e.message) || e); })
+      .then(function () { E2E.sweeping = false; E2E.sweptAt = Date.now(); });
+  }, 1500);
+}
+window._e2eSweepSoon = _e2eSweepSoon;
+function _e2eBreath(ms) { return new Promise(function (r) { setTimeout(r, ms || 30); }); }
+async function _e2eSweep() {
+  var sealedRows = 0, sealedFiles = 0, began = Date.now();
+  for (var ti = 0; ti < _E2E_SWEEP.length; ti++) {
+    var table = _E2E_SWEEP[ti], after = null;
+    for (var guard = 0; guard < 100000; guard++) {
+      var r = await supabaseClient.rpc('rpc_e2e_plain_rows', { p_table: table, p_after: after, p_limit: 100 });
+      if (r.error) throw r.error;
+      var rows = Array.isArray(r.data) ? r.data : [];
+      if (!rows.length) break;
+      var out = await _e2eSealPlain(table, rows);
+      if (out.length) {
+        var w = await supabaseClient.rpc('rpc_e2e_seal_rows', { p_table: table, p_rows: out });
+        if (w.error) throw w.error;
+        sealedRows += (w.data && w.data.sealed) || 0;
+      }
+      after = rows[rows.length - 1].id;
+      await _e2eBreath(document && document.hidden ? 10 : 60);
+    }
+  }
+
+  for (var fg = 0; fg < 100000; fg++) {
+    var fr = await supabaseClient.rpc('rpc_e2e_plain_files', { p_limit: 20 });
+    if (fr.error) throw fr.error;
+    var files = Array.isArray(fr.data) ? fr.data : [];
+    if (!files.length) break;
+    var progressed = 0;
+    for (var fi = 0; fi < files.length; fi++) {
+      var f = files[fi];
+      try {
+        var dl = await supabaseClient.storage.from('assessment-files').download(f.path);
+        if (dl.error || !dl.data) { _e2eNoteSealed(f.path, null); continue; }
+        var up = await supabaseClient.storage.from('assessment-files').upload(f.path, dl.data, { upsert: true, contentType: dl.data.type || f.mime || 'application/octet-stream' });
+        if (!up.error) { sealedFiles++; progressed++; }
+      } catch (e) {  }
+      await _e2eBreath(80);
+    }
+    await new Promise(function (r) { setTimeout(r, 1700); });
+    if (!progressed) break;
+  }
+  if (sealedRows || sealedFiles) {
+    try { await supabaseClient.rpc('rpc_e2e_progress', { p_progress: { sealed_rows: sealedRows, sealed_files: sealedFiles, last_run_at: new Date().toISOString(), last_run_ms: Date.now() - began } }); } catch (e) {}
+  }
+  return { rows: sealedRows, files: sealedFiles };
+}
+function _e2eStaff() { var r = E2E.st && E2E.st.role; return r === 'admin' || r === 'senior' || r === 'standard'; }
+async function _e2eClientKeysUp() {
+  if (!_e2eStaff() || !E2E.st) return 0;
+  var have = {};
+  (E2E.st.keys || []).forEach(function (k) { if (k.client_id) have[k.client_id] = 1; });
+  var made = 0, clients = (S && S.data && S.data.clients) || [];
+  for (var i = 0; i < clients.length && made < 20; i++) {
+    var c = clients[i];
+    if (!c || !c.id || have[c.id] || E2E.byClient[c.id]) continue;
+    try { if (await _e2eMakeClientKey(c.id)) made++; } catch (e) { break; }
+  }
+  if (made) await _e2eStatus();
+  return made;
+}
+var _E2E_RAW = { 'rpc/rpc_e2e_scan_scope': 1 };
+async function _e2eScanOpen(scope) {
+  if (!E2E.on) return 0;
+  var n = 0, tables = scope.run ? ['findings', 'scan_results'] : ['findings'];
+  for (var t = 0; t < tables.length; t++) {
+    var after = null;
+    for (var guard = 0; guard < 2000; guard++) {
+      var r = await supabaseClient.rpc('rpc_e2e_scan_scope', { p_table: tables[t], p_run_id: scope.run || null,
+        p_assessment_id: scope.assessment || null, p_after: after, p_limit: 100 });
+      if (r.error) throw r.error;
+      var rows = (r.data && r.data.rows) || [];
+      if (!rows.length) break;
+      var out = [];
+      for (var i = 0; i < rows.length; i++) {
+        var cols = {}, any = false, row = rows[i];
+        for (var c in (row.cols || {})) {
+          try { cols[c] = await _e2eOpen(row.cols[c]); any = true; } catch (e) {  }
+        }
+        if (any) out.push({ id: row.id, cols: cols });
+      }
+      if (out.length) {
+        var w = await supabaseClient.rpc('rpc_e2e_scan_open', { p_table: tables[t], p_run_id: scope.run || null,
+          p_assessment_id: scope.assessment || null, p_rows: out });
+        if (w.error) throw w.error;
+        n += (w.data && w.data.opened) || 0;
+      }
+      after = rows[rows.length - 1].id;
+      if (rows.length < 100) break;
+    }
+  }
+  return n;
+}
+function _e2eRefsCols(table, c, v, refs) {
+  if (!_E2E_REFS[table]) return;
+  if (table === 'assessments' && c === 'summary_sections' && v && typeof v === 'object') {
+    var per = {};
+    Object.keys(v).forEach(function (sk) { var rr = _e2eRefsOf(v[sk]); if (rr.length) per[sk] = rr; });
+    refs[c] = per;
+  } else refs[c] = _e2eRefsOf(v);
+}
+async function _e2eSealPlain(table, rows) {
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i], k = null;
+    try { k = await _e2eKeyForClient(row.client_id || null); } catch (e) { k = null; }
+    if (!k || !k.key) continue;
+    var cols = {}, refs = {}, json = _E2E_JSON[table] || {};
+    for (var c in (row.cols || {})) {
+      var v = row.cols[c].v;
+      if (_e2eEmpty(v)) continue;
+      _e2eRefsCols(table, c, v, refs);
+      cols[c] = { md5: row.cols[c].md5, value: await _e2eSeal(k.kid, k.key, v, !!json[c] || (v !== null && typeof v === 'object')) };
+    }
+    if (Object.keys(cols).length) out.push({ id: row.id, cols: cols, refs: _E2E_REFS[table] ? refs : undefined });
+  }
+  return out;
+}
+async function _e2eSealClient(clientId, tables) {
+  if (!E2E.on || !clientId) return 0;
+  var n = 0, list = tables || ['findings', 'scan_results', 'scan_runs', 'timeline_events', 'assessments'];
+  for (var ti = 0; ti < list.length; ti++) {
+    var after = null;
+    for (var guard = 0; guard < 2000; guard++) {
+      var r = await supabaseClient.rpc('rpc_e2e_plain_rows', { p_table: list[ti], p_after: after, p_limit: 100, p_client: clientId });
+      if (r.error) throw r.error;
+      var rows = Array.isArray(r.data) ? r.data : [];
+      if (!rows.length) break;
+      var out = await _e2eSealPlain(list[ti], rows);
+      if (out.length) {
+        var w = await supabaseClient.rpc('rpc_e2e_seal_rows', { p_table: list[ti], p_rows: out, p_client: clientId });
+        if (w.error) throw w.error;
+        n += (w.data && w.data.sealed) || 0;
+      }
+      after = rows[rows.length - 1].id;
+      if (rows.length < 100) break;
+    }
+  }
+  return n;
+}
+window._e2eScanOpen = _e2eScanOpen;
+window._e2eSealClient = _e2eSealClient;
+async function _e2eScanWaiting() {
+  if (!_e2eStaff()) return 0;
+  var r = await supabaseClient.rpc('rpc_e2e_scan_queued');
+  if (r.error || !Array.isArray(r.data) || !r.data.length) return 0;
+  var n = 0;
+  for (var i = 0; i < r.data.length; i++) {
+    var run = r.data[i];
+    try {
+      for (var tries = 0; tries < 3; tries++) {
+        await _e2eScanOpen({ run: run.run_id });
+        var d = await supabaseClient.rpc('rpc_e2e_scan_drain', { p_run_id: run.run_id });
+        if (d.error) throw d.error;
+        var dd = d.data || {};
+        if (dd.open) continue;
+        n += dd.done || 0;
+        break;
+      }
+    } catch (e) { console.debug('[e2e] a waiting scan was not read:', (e && e.message) || e); }
+    finally { try { await _e2eSealClient(run.client_id); } catch (e) {} }
+  }
+  if (n) { try { if (typeof refreshAndStay === 'function') await refreshAndStay(); } catch (e) {} }
+  return n;
+}
+async function _e2eMailSeal(subject, body) {
+  var kid = E2E.firmKid;
+  if (!kid) return null;
+  var key = await _e2eKey(kid), pub = key ? null : await (E2E.pubs[kid] && E2E.pubs[kid].pub);
+  if (!key && !pub) return null;
+  var seal = function (v) { return key ? _e2eSeal(kid, key, v, false) : _e2eSealToKey(kid, pub, v, false); };
+  return { subject: await seal(subject), body: await seal(body) };
+}
+function _e2eMailDetail(type) { return typeof _MAIL_DETAIL !== 'undefined' && !!_MAIL_DETAIL[type]; }
+async function _e2eSealMailArgs(args) {
+  if (!args || !_e2eMailDetail(args.p_type) || !args.p_subject || !args.p_body) return;
+  var m = await _e2eMailSeal(String(args.p_subject), String(args.p_body));
+  if (m) { args.p_subject_sealed = m.subject; args.p_body_sealed = m.body; }
+}
+async function _e2eSealMailRows(rows) {
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r || !_e2eMailDetail(r.notification_type) || !r.subject || !r.body || r.subject_sealed) continue;
+    var m = await _e2eMailSeal(String(r.subject), String(r.body));
+    if (m) { r.subject_sealed = m.subject; r.body_sealed = m.body; }
+  }
+}
+var _E2E_CRED_KEEP = { auth_type: 1, label: 1, files: 1, accounts: 1, submitted_by: 1, submitted_at: 1 };
+async function _e2eSealCred(args) {
+  var c = args && args.p_credential;
+  if (!c || typeof c !== 'object') return;
+  var clientId = (await _e2eClientOf('assessments', args.p_assessment_id)) || (E2E.st && E2E.st.client_id) || null;
+  var k = await _e2eKeyForClient(clientId);
+  if (!k) throw _e2eRefusal('These could not be encrypted just now. Reload the page and send them again.');
+  var pub = k.key ? null : await k.pub;
+  var seal = function (v) { return k.key ? _e2eSeal(k.kid, k.key, v, false) : _e2eSealToKey(k.kid, pub, v, false); };
+  var key;
+  for (key in c) if (!_E2E_CRED_KEEP[key] && typeof c[key] === 'string' && c[key] !== '' && !_e2eIsSeal(c[key])) c[key] = await seal(c[key]);
+  if (Array.isArray(c.accounts)) for (var a = 0; a < c.accounts.length; a++) {
+    var acc = c.accounts[a];
+    if (!acc || typeof acc !== 'object') continue;
+    for (key in acc) if (typeof acc[key] === 'string' && acc[key] !== '' && !_e2eIsSeal(acc[key])) acc[key] = await seal(acc[key]);
+  }
+  if (Array.isArray(c.files)) for (var f = 0; f < c.files.length; f++) {
+    var file = c.files[f];
+    if (!file || typeof file.b64 !== 'string' || !file.b64 || _e2eIsSeal(file.b64)) continue;
+    if (!(Number(file.size) > 0)) file.size = Math.floor(file.b64.length * 3 / 4) - (/==$/.test(file.b64) ? 2 : /=$/.test(file.b64) ? 1 : 0);
+    file.b64 = await seal(file.b64);
+  }
+}
+function _e2eTitleKey(t) {
+  return String(t === null || t === undefined ? '' : t).toLowerCase().replace(/\s*\([^()]*\)\s*$/, '')
+    .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+async function _e2eKbReapply(k) {
+  var key = _e2eTitleKey(k.title), aliases = (Array.isArray(k.scan_titles) ? k.scan_titles : []).map(_e2eTitleKey);
+  var nz = function (v) { return v !== null && v !== undefined && String(v).trim() !== '' ? String(v).trim() : null; };
+  var hits = ((S.data && S.data.findings) || []).filter(function (f) {
+    if (!(f && f.source === 'scan') || _e2eHasLocked(f.title)) return false;
+    var fk = _e2eTitleKey(f.title);
+    return fk === key || aliases.indexOf(fk) >= 0;
+  });
+  var n = 0, failed = 0;
+  for (var i = 0; i < hits.length; i++) {
+    var f = hits[i], kc = Number(k.cvss) || 0, fc = Number(f.cvss) || 0;
+    var patch = {
+      title: nz(k.title) || f.title,
+      description: nz(k.description) || f.description,
+      remediation: nz(k.recommendation) || f.remediation,
+      refs: (Array.isArray(k.refs) && k.refs.length) ? k.refs : (typeof k.refs === 'string' && k.refs) ? [k.refs] : f.refs,
+      cwe: nz(k.cwe) || f.cwe,
+      impact: nz(k.impact) || f.impact,
+      category: nz(k.category) || f.category,
+      cvss: kc > 0 ? kc : f.cvss,
+      cvss_vector: kc <= 0 ? f.cvss_vector : (nz(k.cvss_vector) || (kc === fc ? f.cvss_vector : null)),
+      updated_at: new Date().toISOString()
+    };
+    var r = await supabaseClient.from('findings').update(patch).eq('id', f.id);
+    if (r.error) failed++; else n++;
+  }
+  return { ok: !failed || !!n, updated: n, failed: failed };
+}
+window._e2eKbReapply = _e2eKbReapply;
+async function _e2ePasskeyAdded(credId, prfOut) {
+  if (!E2E.on || !prfOut || !credId) return false;
+  try {
+    var st = await _e2eStatus();
+    if ((st.wraps || []).some(function (w) { return w.method === 'passkey' && w.ref === credId; })) return true;
+    await _e2eFactorNew('passkey', credId, new Uint8Array(prfOut));
+    await _e2eGiveNeeded();
+    await _e2eStatus();
+    return true;
+  } catch (e) { console.debug('[e2e] the new passkey will open this person’s keys from its next sign-in'); return false; }
+}
+window._e2ePasskeyAdded = _e2ePasskeyAdded;
+async function _e2eApiKeyMade(keyId) {
+  if (!E2E.on || !keyId || E2E.waiting) return '';
+  var part = _e2eB64u(crypto.getRandomValues(new Uint8Array(32)));
+  var kek = await _e2eHkdfAes(_e2eTE.encode(part), 'pental e2e apikey v1');
+  var pair = await crypto.subtle.generateKey(_E2E_EC, true, ['deriveBits']);
+  var pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
+  var id = _e2eUuid(), pub = await _e2ePubExport(pair.publicKey);
+  var wrapped = 'pe2a1.' + _e2eB64u(await _e2eGcm(kek, pkcs8, 'pe2a1|' + id + '|apikey'));
+  var r = await supabaseClient.rpc('rpc_e2e_apikey_principal', { p_key: keyId, p_id: id, p_pub: pub, p_wrapped: wrapped });
+  if (r.error || !r.data || !r.data.ok || r.data.existing) return '';
+  await _e2eGiveNeeded();
+  return part;
+}
+window._e2eApiKeyMade = _e2eApiKeyMade;
+var _E2E_B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+function _e2eKitEncode(u8) {
+  var bits = 0, val = 0, out = '';
+  for (var i = 0; i < u8.length; i++) {
+    val = (val << 8) | u8[i]; bits += 8;
+    while (bits >= 5) { out += _E2E_B32[(val >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += _E2E_B32[(val << (5 - bits)) & 31];
+  return out.match(/.{1,4}/g).join('-');
+}
+function _e2eKitDecode(code) {
+  var s = String(code || '').toUpperCase().replace(/[IL]/g, '1').replace(/O/g, '0').replace(/[^0-9A-Z]/g, '');
+  if (s.length !== 52) return null;
+  var bits = 0, val = 0, out = [];
+  for (var i = 0; i < s.length; i++) {
+    var v = _E2E_B32.indexOf(s[i]);
+    if (v < 0) return null;
+    val = ((val << 5) | v) & 0xffff; bits += 5;
+    if (bits >= 8) { out.push((val >>> (bits - 8)) & 255); bits -= 8; }
+  }
+  return out.length >= 32 ? new Uint8Array(out.slice(0, 32)) : null;
+}
+async function _e2eKitMake() {
+  if (!E2E.on || E2E.waiting) throw new Error('This browser has to hold your keys first.');
+  var raw = crypto.getRandomValues(new Uint8Array(32));
+  await _e2eFactorNew('kit', '', raw);
+  await _e2eGiveNeeded();
+  await _e2eStatus();
+  return _e2eKitEncode(raw);
+}
+async function _e2eKitUse(code) {
+  var raw = _e2eKitDecode(code);
+  if (!raw) throw new Error('That is not a recovery kit’s code: it is 52 letters and numbers, in groups of four.');
+  var st = await _e2eStatus();
+  var w = (st.wraps || []).filter(function (x) { return x.method === 'kit'; })[0];
+  if (!w) throw new Error('Your account has no recovery kit.');
+  var priv;
+  try { priv = await _e2eFactorOpen(w, raw); } catch (e) { throw new Error('That code does not open your recovery kit.'); }
+  E2E.factors[w.principal_id] = { priv: priv, method: 'kit' };
+  await _e2eSelfGive();
+  await _e2eStatus();
+  E2E.waiting = _e2eHeld().length === 0 && !_e2eNoKeysToHold();
+  _e2eEvery();
+  _e2eShow();
+  return !E2E.waiting;
+}
+window._e2eKitMake = _e2eKitMake;
+window._e2eKitUse = _e2eKitUse;
+function _e2eLive() {
+  if (E2E.live || typeof supabaseClient === 'undefined' || !supabaseClient || typeof supabaseClient.channel !== 'function') return;
+  try {
+    E2E.live = supabaseClient.channel('pental-e2e')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'e2e_principals' }, function () { _e2eNudge(); })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'e2e_grants' }, function () { E2E.grantsDue = true; _e2eNudge(); })
+      .subscribe();
+  } catch (e) { E2E.live = null; }
+}
+var _E2E_LOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7.5a4 4 0 018 0V11"/></svg>';
+var _E2E_HOW = 'https://pental.io/security/end-to-end-encryption';
+function _e2eHoldsKid(kid) { return !!kid && (!!E2E.keys[kid] || _e2eHeld().some(function (g) { return g.key_id === kid; })); }
+function _e2eBadge(a) {
+  if (_e2eOff() || !E2E.on || !a || !a.id) return '';
+  var kid = a.client_id ? E2E.byClient[a.client_id] : null;
+  var waiting = E2E.waiting || (kid && !_e2eHoldsKid(kid));
+  return '<button type="button" class="e2e-badge' + (waiting ? ' is-waiting' : '') + '" onclick="_e2eBadgeOpen(event,\'' + esc(a.id) + '\')" aria-haspopup="dialog"'
+    + ' title="' + (waiting ? 'End-to-end encrypted: this browser is still being given its key' : 'End-to-end encrypted: what this is') + '">'
+    + _E2E_LOCK + '<span>' + (waiting ? 'Encrypted, opening soon' : 'End-to-end encrypted') + '</span></button>';
+}
+window._e2eBadge = _e2eBadge;
+var _e2eHoldersMemo = {};
+async function _e2eHolders(clientId) {
+  if (!clientId) return null;
+  var m = _e2eHoldersMemo[clientId];
+  if (m && Date.now() - m.at < 60000) return m.v;
+  var r = await supabaseClient.rpc('rpc_e2e_holders', { p_client: clientId });
+  var v = (!r.error && r.data && r.data.ok) ? r.data : null;
+  _e2eHoldersMemo[clientId] = { at: Date.now(), v: v };
+  return v;
+}
+function _e2ePeople(n) { n = Number(n) || 0; return n + (n === 1 ? ' person' : ' people'); }
+function _e2ePopHtml(a, h) {
+  var isClient = S.profile && S.profile.role === 'client';
+  var firm = ((S.data && S.data.settings) || {}).company_name || 'your firm';
+  var client = (typeof getClientName === 'function' && a.client_id) ? getClientName(a.client_id) : '';
+  var kid = a.client_id ? E2E.byClient[a.client_id] : null;
+  var waiting = E2E.waiting || (kid && !_e2eHoldsKid(kid));
+  var out = '<div class="e2e-pop-head">' + _E2E_LOCK + '<strong>End-to-end encrypted</strong></div>';
+  out += '<p>' + (isClient
+    ? 'Your findings, comments, files and credentials for this engagement are encrypted in the browser before they are saved, and opened only in the browsers of the people allowed to read them.'
+    : 'This engagement’s findings, notes, comments, files and the client’s credentials are encrypted in the browser before they are saved, and opened only in the browsers of the people allowed to read them.') + '</p>';
+  out += '<ul class="e2e-pop-facts"><li>The database they are kept in stores them encrypted and holds no key that opens them.</li>'
+    + '<li>Each person’s key stays in their own browser, and is given to a new one of theirs by their passkey, their password or a teammate’s portal.</li></ul>';
+  if (h) {
+    var total = (Number(h.firm) || 0) + (Number(h.client) || 0);
+    out += '<div class="e2e-pop-who">' + (isClient
+      ? 'Readable by ' + _e2ePeople(h.client) + ' at your organisation and ' + _e2ePeople(h.firm) + ' at ' + esc(firm) + '.'
+      : 'Readable by ' + _e2ePeople(total) + ': ' + (Number(h.firm) || 0) + ' at ' + esc(firm) + (client ? ' and ' + (Number(h.client) || 0) + ' at ' + esc(client) : '') + '.') + '</div>';
+    if (!isClient && Array.isArray(h.people) && h.people.length) {
+      out += '<div class="e2e-pop-names">' + h.people.slice(0, 12).map(function (p) { return esc(p.name || 'Someone') + (p.role === 'client' ? ' (' + esc(client || 'client') + ')' : ''); }).join(', ')
+        + (h.people.length > 12 ? ' and ' + (h.people.length - 12) + ' more' : '') + '</div>';
+    }
+  } else out += '<div class="e2e-pop-who is-quiet">Counting who can read it…</div>';
+  if (waiting) out += '<div class="e2e-pop-wait">This browser is still being given its key. It opens everything by itself as soon as another of your devices, or a teammate’s portal, is online.</div>';
+  out += '<a class="e2e-pop-link" href="' + _E2E_HOW + '" target="_blank" rel="noopener">How Pental’s encryption works</a>';
+  return out;
+}
+function _e2ePopClose() {
+  if (!E2E.pop) return;
+  try { E2E.pop.el.remove(); } catch (e) {}
+  try { if (E2E.pop.btn) E2E.pop.btn.setAttribute('aria-expanded', 'false'); } catch (e) {}
+  E2E.pop = null;
+  document.removeEventListener('mousedown', _e2ePopAway, true);
+  document.removeEventListener('keydown', _e2ePopKey, true);
+}
+function _e2ePopAway(ev) { if (E2E.pop && !E2E.pop.el.contains(ev.target) && !(E2E.pop.btn && E2E.pop.btn.contains(ev.target))) _e2ePopClose(); }
+function _e2ePopKey(ev) { if (ev.key === 'Escape' && E2E.pop) { var b = E2E.pop.btn; _e2ePopClose(); try { b.focus(); } catch (e) {} } }
+function _e2ePopPlace(pop, btn) {
+  var r = btn.getBoundingClientRect(), w = pop.offsetWidth, vw = document.documentElement.clientWidth;
+  var left = Math.max(12, Math.min(r.left + window.scrollX, window.scrollX + vw - w - 12));
+  pop.style.left = left + 'px';
+  pop.style.top = (r.bottom + window.scrollY + 8) + 'px';
+}
+async function _e2eBadgeOpen(ev, aid) {
+  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+  var btn = ev && ev.currentTarget;
+  if (E2E.pop && E2E.pop.btn === btn) { _e2ePopClose(); return; }
+  _e2ePopClose();
+  var a = _e2eStateRow('assessments', aid) || { id: aid };
+  var pop = document.createElement('div');
+  pop.className = 'e2e-pop';
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', 'End-to-end encrypted');
+  pop.innerHTML = _e2ePopHtml(a, null);
+  document.body.appendChild(pop);
+  if (btn) { btn.setAttribute('aria-expanded', 'true'); _e2ePopPlace(pop, btn); }
+  E2E.pop = { el: pop, btn: btn };
+  document.addEventListener('mousedown', _e2ePopAway, true);
+  document.addEventListener('keydown', _e2ePopKey, true);
+  var h = null;
+  try { h = await _e2eHolders(a.client_id); } catch (e) { h = null; }
+  if (E2E.pop && E2E.pop.el === pop) {
+    pop.innerHTML = _e2ePopHtml(a, h || { firm: 0, client: 0, unknown: true });
+    if (h === null) { var who = pop.querySelector('.e2e-pop-who'); if (who) { who.textContent = 'Who can read it could not be counted just now.'; who.classList.add('is-quiet'); } }
+    if (btn) _e2ePopPlace(pop, btn);
+  }
+}
+window._e2eBadgeOpen = _e2eBadgeOpen;
+function _e2eAdviceDue() {
+  var st = E2E.st;
+  if (!E2E.on || E2E.waiting || !st || st.role !== 'admin' || Number(st.holders) > 1) return false;
+  if ((st.wraps || []).length) return false;
+  var devices = (st.principals || []).filter(function (p) { return p.kind === 'device' && !p.revoked; }).length;
+  if (devices > 1) return false;
+  try { var until = Number(localStorage.getItem('pental_e2e_advice_' + _e2eSlot()) || 0); if (until > Date.now()) return false; } catch (e) {}
+  return true;
+}
+function _e2eBarHtml() {
+  if (_e2eOff() || !E2E.on || !S || !S.profile) return '';
+  if (E2E.waiting) {
+    var isClient = S.profile.role === 'client';
+    var hasKit = ((E2E.st && E2E.st.wraps) || []).some(function (w) { return w.method === 'kit'; });
+    return '<div class="e2e-bar" role="status" aria-live="polite"><span class="e2e-bar-icon is-pulse">' + _E2E_LOCK + '</span>'
+      + '<div class="e2e-bar-text"><strong>Getting this browser’s keys</strong><span>' + (isClient
+        ? 'Your engagement is end-to-end encrypted. It opens here as soon as your testing team’s portal is online, usually within a minute.'
+        : 'Your firm’s work is end-to-end encrypted. It opens here as soon as another of your devices, or a teammate’s portal, is online.') + '</span></div>'
+      + (hasKit ? '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitUseOpen()">Use your recovery kit</button>' : '')
+      + '<a class="e2e-bar-link" href="' + _E2E_HOW + '" target="_blank" rel="noopener">What is this?</a></div>';
+  }
+  if (_e2eAdviceDue()) {
+    return '<div class="e2e-bar is-advice" role="status"><span class="e2e-bar-icon">' + _E2E_LOCK + '</span>'
+      + '<div class="e2e-bar-text"><strong>Only this browser can open your firm’s encrypted work</strong><span>If it were lost, nothing could open that work again. Sign in once on a second device, add a passkey, or save a recovery kit.</span></div>'
+      + '<button type="button" class="btn btn-primary btn-sm" onclick="_e2eKitOpen()">Save a recovery kit</button>'
+      + '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eAdviceLater()">Not now</button></div>';
+  }
+  return '';
+}
+function _e2eAdviceLater() {
+  try { localStorage.setItem('pental_e2e_advice_' + _e2eSlot(), String(Date.now() + 7 * 86400000)); } catch (e) {}
+  _e2eShow();
+}
+window._e2eAdviceLater = _e2eAdviceLater;
+function _e2eShow() {
+  if (typeof document === 'undefined' || !document.getElementById) return;
+  var bar = document.getElementById('e2eBar');
+  if (bar) bar.innerHTML = _e2eBarHtml();
+
+  try {
+    document.querySelectorAll('.e2e-badge').forEach(function (b) {
+      var m = /_e2eBadgeOpen\(event,'([^']+)'\)/.exec(b.getAttribute('onclick') || '');
+      var a = m && _e2eStateRow('assessments', m[1]);
+      if (a) b.outerHTML = _e2eBadge(a);
+    });
+  } catch (e) {}
+  var my = document.querySelector('[data-e2e-mine]');
+  if (my) _e2eMyLoad(true);
+}
+window._e2eShow = _e2eShow;
+function _e2eKitOpen() { S.modal = { type: 'e2e-kit', extra: {} }; render(); }
+function _e2eKitUseOpen() { S.modal = { type: 'e2e-kit-use', extra: {} }; render(); }
+window._e2eKitOpen = _e2eKitOpen;
+window._e2eKitUseOpen = _e2eKitUseOpen;
+function renderE2eKitModal() {
+  var x = (S.modal && S.modal.extra) || {};
+  var had = ((E2E.st && E2E.st.wraps) || []).some(function (w) { return w.method === 'kit'; });
+  var h = '<div class="modal-header"><h2 class="modal-title">Recovery kit</h2><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div><div class="modal-body e2e-kit">';
+  if (!x.code) {
+    h += '<p class="e2e-kit-lead">A code that opens your encrypted work on a new browser, if every browser you have used and your passkey were ever lost. You never need it otherwise.</p>';
+    h += '<ul class="e2e-kit-points"><li>Made here, in your browser. Pental and your database never see it.</li><li>Keep it somewhere safe and offline, such as a password manager or a printed copy.</li>'
+      + (had ? '<li>Making a new kit stops your current one working.</li>' : '') + '</ul>';
+    h += '</div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM()">Cancel</button><button class="btn btn-primary" id="e2eKitGo" onclick="_e2eKitGo()">' + (had ? 'Make a new kit' : 'Make my kit') + '</button></div>';
+    return h;
+  }
+  h += '<p class="e2e-kit-lead">Your recovery kit. Save it now: it is shown once.</p>';
+  h += '<div class="e2e-kit-code" id="e2eKitCode" tabindex="0">' + esc(x.code) + '</div>';
+  h += '<div class="e2e-kit-acts"><button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitCopy()">' + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>' + ' Copy</button><button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitSave()">' + IC.dl + ' Download</button></div>';
+  h += '<p class="sub-text">To use it on a new browser, sign in as usual, then choose Use your recovery kit in the bar at the bottom of the page.</p>';
+  h += '</div><div class="modal-footer"><button class="btn btn-primary" onclick="_e2eKitDone()">I have saved it</button></div>';
+  return h;
+}
+function renderE2eKitUseModal() {
+  var x = (S.modal && S.modal.extra) || {};
+  var h = '<div class="modal-header"><h2 class="modal-title">Use your recovery kit</h2><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div><div class="modal-body e2e-kit">';
+  h += '<p class="e2e-kit-lead">Enter the 52 letters and numbers of your recovery kit. Spaces and dashes do not matter.</p>';
+  h += '<textarea class="form-input e2e-kit-in" id="e2eKitIn" rows="3" spellcheck="false" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX-XXXX-..."></textarea>';
+  if (x.error) h += '<div class="alert alert-warn" style="margin-top:0.6rem">' + esc(x.error) + '</div>';
+  h += '</div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM()">Cancel</button><button class="btn btn-primary" id="e2eKitUseGo" onclick="_e2eKitUseGo()">Open my work</button></div>';
+  return h;
+}
+async function _e2eKitGo() {
+  var b = document.getElementById('e2eKitGo');
+  if (b) { b.disabled = true; b.textContent = 'Making…'; }
+  try {
+    var code = await _e2eKitMake();
+    S.modal = { type: 'e2e-kit', extra: { code: code } };
+    render();
+  } catch (e) {
+    if (b) { b.disabled = false; b.textContent = 'Make my kit'; }
+    toast(_errMsg(e) || 'The kit could not be made.', 'error');
+  }
+}
+function _e2eKitText(code) {
+  var firm = ((S.data && S.data.settings) || {}).company_name || 'your firm';
+  return 'Pental recovery kit\n\nFor: ' + ((S.profile && S.profile.email) || '') + '\nPortal: ' + location.origin + '\nFirm: ' + firm + '\nMade: ' + new Date().toISOString().slice(0, 10)
+    + '\n\n' + code + '\n\nThis opens your end-to-end encrypted work on a new browser if every browser you have used and your passkey were lost.'
+    + '\nTo use it: sign in to the portal as usual, then choose Use your recovery kit in the bar at the bottom of the page.'
+    + '\nKeep it private. Anyone who has it and can sign in as you can open your work. Making a new kit stops this one working.\n';
+}
+function _e2eKitCopy() {
+  var x = (S.modal && S.modal.extra) || {};
+  try { navigator.clipboard.writeText(x.code || ''); toast('Copied', 'success'); } catch (e) { toast('Select the code and copy it', 'info'); }
+}
+function _e2eKitSave() {
+  var x = (S.modal && S.modal.extra) || {};
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([_e2eKitText(x.code || '')], { type: 'text/plain;charset=utf-8' }));
+  a.download = 'pental-recovery-kit.txt';
+  document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+function _e2eKitDone() { S.modal = null; render(); _e2eShow(); toast('Recovery kit saved to your account', 'success'); }
+async function _e2eKitUseGo() {
+  var b = document.getElementById('e2eKitUseGo'), v = ((document.getElementById('e2eKitIn') || {}).value || '');
+  if (b) { b.disabled = true; b.textContent = 'Opening…'; }
+  try {
+    var ok = await _e2eKitUse(v);
+    S.modal = null;
+    render();
+    if (ok) { toast('Your work is open on this browser', 'success'); try { if (typeof refreshAndStay === 'function') await refreshAndStay(); } catch (e) {} }
+  } catch (e) {
+    S.modal = { type: 'e2e-kit-use', extra: { error: _errMsg(e) || 'That did not open it.' } };
+    render();
+  }
+}
+Object.assign(window, { _e2eKitGo: _e2eKitGo, _e2eKitCopy: _e2eKitCopy, _e2eKitSave: _e2eKitSave, _e2eKitDone: _e2eKitDone, _e2eKitUseGo: _e2eKitUseGo });
+function _e2eMyCardShell() {
+  if (_e2eOff() || !E2E.avail || !E2E.on) return '';
+  setTimeout(function () { _e2eMyLoad(false); }, 0);
+  return '<div class="card mb-4" data-e2e-mine><div class="card-header"><span class="card-title">' + _E2E_LOCK.replace('<svg ', '<svg width="16" height="16" style="vertical-align:-3px;margin-right:4px" ')
+    + ' End-to-end encryption</span></div><div class="card-body" id="e2eMine">' + _e2eMyHtml(null) + '</div></div>';
+}
+window._e2eMyCardShell = _e2eMyCardShell;
+var _e2eMyMemo = null;
+async function _e2eMyLoad(force) {
+  var el = document.getElementById('e2eMine');
+  if (!el) return;
+  if (!force && _e2eMyMemo && Date.now() - _e2eMyMemo.at < 30000) { el.innerHTML = _e2eMyHtml(_e2eMyMemo.v); return; }
+  var r = await supabaseClient.rpc('rpc_e2e_people');
+  var mine = (!r.error && Array.isArray(r.data)) ? r.data.filter(function (p) { return p.profile_id === (S.profile && S.profile.id); }) : [];
+  _e2eMyMemo = { at: Date.now(), v: mine };
+  el = document.getElementById('e2eMine');
+  if (el) el.innerHTML = _e2eMyHtml(mine);
+}
+function _e2eWhenWords(t) { return t ? (typeof fmtDate === 'function' ? fmtDate(t) : String(t).slice(0, 10)) : ''; }
+function _e2eMyHtml(list) {
+  var st = E2E.st || {}, h = '';
+  h += '<p class="set-p">Your engagements’ work is encrypted in your browser before it is saved. Each browser you sign in on keeps its own key, which never leaves it; your passkey or password opens your work on a new one, with nothing else to do.</p>';
+  h += '<div class="e2e-me-now' + (E2E.waiting ? ' is-waiting' : '') + '">' + _E2E_LOCK + '<span>' + (E2E.waiting
+    ? 'This browser (' + esc(_e2eDeviceLabel()) + ') is being given your keys.'
+    : 'This browser (' + esc(_e2eDeviceLabel()) + ') holds your keys.') + '</span></div>';
+  if (!list) return h + '<p class="sub-text">Loading your browsers…</p>';
+  var dev = list.filter(function (p) { return p.kind === 'device'; });
+  var acc = list.filter(function (p) { return p.kind === 'account'; });
+  var api = list.filter(function (p) { return p.kind === 'apikey'; });
+  var meId = E2E.device && E2E.device.id;
+  h += '<div class="e2e-list-h">Your browsers</div><div class="e2e-list">';
+  dev.forEach(function (p) {
+    h += '<div class="e2e-row"><div class="e2e-row-main"><strong>' + esc(p.label || 'A browser') + '</strong>' + (p.id === meId ? ' <span class="e2e-tag">This one</span>' : '')
+      + '<span class="e2e-row-sub">Added ' + esc(_e2eWhenWords(p.created_at)) + (p.last_seen_at ? ', last used ' + esc(_e2eWhenWords(p.last_seen_at)) : '') + '</span></div>'
+      + (p.id === meId ? '' : '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eRemove(\'' + esc(p.id) + '\')">Remove</button>') + '</div>';
+  });
+  if (!dev.length) h += '<div class="e2e-row"><span class="e2e-row-sub">None yet.</span></div>';
+  h += '</div>';
+  var methods = {};
+  acc.forEach(function (p) { (p.methods || []).forEach(function (m) { methods[m] = (methods[m] || 0) + 1; }); });
+  h += '<div class="e2e-list-h">What opens your work on a new browser</div><div class="e2e-list">';
+  h += '<div class="e2e-row"><div class="e2e-row-main"><strong>Your passkey</strong><span class="e2e-row-sub">' + (methods.passkey
+    ? (methods.passkey === 1 ? 'Your passkey opens it as you sign in.' : methods.passkey + ' passkeys open it as you sign in.')
+    : 'Sign in once with a passkey that supports this (most do) and it opens your work on a new browser.') + '</span></div></div>';
+  h += '<div class="e2e-row"><div class="e2e-row-main"><strong>Your password</strong><span class="e2e-row-sub">' + (methods.password
+    ? 'Your password opens it as you sign in.'
+    : 'Sign in once with your password and it opens your work on a new browser.') + '</span></div></div>';
+  h += '<div class="e2e-row"><div class="e2e-row-main"><strong>Recovery kit</strong><span class="e2e-row-sub">' + (methods.kit
+    ? 'Saved. It opens your work if every browser you have and your passkey were lost.'
+    : 'Optional. A code you keep, for the case where every browser you have and your passkey were lost.') + '</span></div>'
+    + '<div class="e2e-row-acts">' + (methods.kit
+      ? '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitOpen()">Make a new kit</button><button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitRemove()">Remove</button>'
+      : '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitOpen()"' + (E2E.waiting ? ' disabled' : '') + '>Save a recovery kit</button>') + '</div></div>';
+  h += '</div>';
+  if (api.length) {
+    h += '<div class="e2e-list-h">Your API keys that open it</div><div class="e2e-list">';
+    api.forEach(function (p) { h += '<div class="e2e-row"><div class="e2e-row-main"><strong>' + esc(p.label || 'API key') + '</strong><span class="e2e-row-sub">Added ' + esc(_e2eWhenWords(p.created_at)) + '</span></div></div>'; });
+    h += '</div>';
+  }
+  h += '<p class="sub-text" style="margin-top:0.75rem">A teammate’s portal gives a new browser of yours its keys too, as soon as both are open. <a href="' + _E2E_HOW + '" target="_blank" rel="noopener">How it works</a></p>';
+  return h;
+}
+async function _e2eRemove(pid) {
+  if (!(await confirmAsync('This browser will no longer open your encrypted work. Signing in on it again gives it a new key.', { title: 'Remove this browser', confirmText: 'Remove' }))) return;
+  var r = await supabaseClient.rpc('rpc_e2e_revoke', { p_principal: pid });
+  if (r.error) { toast(_errMsg(r.error) || 'It could not be removed.', 'error'); return; }
+  toast('Removed', 'success');
+  _e2eMyMemo = null; _e2eSetMemo = null;
+  _e2eMyLoad(true);
+  var s = document.getElementById('e2eFirm'); if (s) _e2eSetLoad(true);
+}
+async function _e2eKitRemove() {
+  if (!(await confirmAsync('Your recovery kit will no longer open your work. Your browsers, passkey and password still do.', { title: 'Remove recovery kit', confirmText: 'Remove' }))) return;
+  var r = await supabaseClient.rpc('rpc_e2e_drop_wrap', { p_method: 'kit', p_ref: '' });
+  if (r.error) { toast(_errMsg(r.error) || 'It could not be removed.', 'error'); return; }
+  await _e2eStatus();
+  toast('Recovery kit removed', 'success');
+  _e2eMyMemo = null;
+  _e2eMyLoad(true);
+}
+Object.assign(window, { _e2eRemove: _e2eRemove, _e2eKitRemove: _e2eKitRemove });
+var _e2eSetMemo = null;
+function _e2eSettingsHtml() {
+  if (_e2eOff() || !E2E.avail) return '';
+  setTimeout(function () { _e2eSetLoad(false); }, 0);
+  return '<div class="card mt-4" id="e2eFirmCard"><div class="card-header"><span class="card-title">' + _E2E_LOCK.replace('<svg ', '<svg width="16" height="16" style="vertical-align:-3px;margin-right:4px" ')
+    + ' End-to-end encryption</span></div><div class="card-body" id="e2eFirm">' + _e2eSetHtml(null) + '</div></div>';
+}
+window._e2eSettingsHtml = _e2eSettingsHtml;
+async function _e2eSetLoad(force) {
+  if (!document.getElementById('e2eFirm')) return;
+  if (force || !_e2eSetMemo || Date.now() - _e2eSetMemo.at > 30000) {
+    var res = await Promise.all([
+      supabaseClient.rpc('rpc_e2e_people'),
+      supabaseClient.rpc('rpc_e2e_events', { p_limit: 30 }),
+      supabaseClient.rpc('rpc_e2e_plain_count')
+    ]);
+    _e2eSetMemo = { at: Date.now(), people: Array.isArray(res[0].data) ? res[0].data : [], events: Array.isArray(res[1].data) ? res[1].data : [],
+                    left: (res[2] && !res[2].error && res[2].data) || {} };
+    try { await _e2eStatus(); } catch (e) {}
+  }
+  var el = document.getElementById('e2eFirm');
+  if (el) el.innerHTML = _e2eSetHtml(_e2eSetMemo);
+}
+var _E2E_EVENT_WORDS = {
+  activated: 'turned encryption on', device_added: 'signed in on a new browser', account_key: 'made a key their sign-in opens',
+  granted: 'was given keys', removed: 'had a key removed', kit_made: 'saved a recovery kit', client_key: 'made a client’s key', apikey_key: 'made an API key that opens it'
+};
+function _e2eSetHtml(m) {
+  var st = E2E.st || {}, h = '';
+  if (!st.active) {
+    h += '<p class="set-p">End-to-end encryption turns on by itself the first time an administrator signs in after the update, and encrypts the work already here in the background.</p>';
+    return h;
+  }
+  h += '<div class="e2e-status"><span class="e2e-status-dot"></span><div><strong>On since ' + esc(_e2eWhenWords(st.activated_at)) + '</strong>'
+    + '<span>Findings, notes, comments, the QA review, the timeline, scan results, the asset inventory, tickets, credentials and every engagement file are encrypted in each browser before they are saved. Client and engagement names, dates, statuses, severities, proposals and invoices stay readable, so billing, the calendar and counts keep working.</span></div></div>';
+  if (!m) return h + '<p class="sub-text">Loading…</p>';
+  var left = 0;
+  Object.keys(m.left || {}).forEach(function (k) { left += Number(m.left[k]) || 0; });
+  var mig = st.migration || {};
+  h += '<div class="e2e-progress">' + (left
+    ? '<strong>' + left.toLocaleString() + ' item' + (left === 1 ? '' : 's') + ' saved before still to encrypt.</strong> This happens in the background in an administrator’s or a senior’s browser while the portal is open.'
+    : '<strong>Everything here is encrypted.</strong>' + (mig.sealed_rows || mig.sealed_files ? ' The work saved before encryption was turned on has been encrypted too.' : '')) + '</div>';
+  var byPerson = {};
+  (m.people || []).forEach(function (p) {
+    var k = p.profile_id;
+    if (!byPerson[k]) byPerson[k] = { name: p.name || p.email || 'Someone', role: p.role, devices: [], methods: {}, api: 0 };
+    if (p.kind === 'device') byPerson[k].devices.push(p);
+    else if (p.kind === 'account') (p.methods || []).forEach(function (x) { byPerson[k].methods[x] = 1; });
+    else if (p.kind === 'apikey') byPerson[k].api++;
+  });
+  var people = Object.keys(byPerson).map(function (k) { return byPerson[k]; }).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+  h += '<div class="e2e-list-h">People and their browsers</div><div class="e2e-list">';
+  people.forEach(function (p) {
+    var ms = [];
+    if (p.methods.passkey) ms.push('passkey'); if (p.methods.password) ms.push('password'); if (p.methods.kit) ms.push('recovery kit');
+    h += '<div class="e2e-row"><div class="e2e-row-main"><strong>' + esc(p.name) + '</strong> <span class="e2e-tag">' + esc(_roleWord(p.role)) + '</span>'
+      + '<span class="e2e-row-sub">' + p.devices.length + (p.devices.length === 1 ? ' browser' : ' browsers') + (ms.length ? '; opened on a new one by their ' + ms.join(', ') : '') + (p.api ? '; ' + p.api + ' API key' + (p.api === 1 ? '' : 's') : '') + '</span>'
+      + (p.devices.length ? '<span class="e2e-row-devs">' + p.devices.map(function (d) {
+        return '<span class="e2e-dev">' + esc(d.label || 'A browser') + (d.last_seen_at ? ', ' + esc(_e2eWhenWords(d.last_seen_at)) : '')
+          + ' <button type="button" class="e2e-x" title="Remove this browser" aria-label="Remove ' + esc(d.label || 'this browser') + '" onclick="_e2eRemove(\'' + esc(d.id) + '\')">&times;</button></span>';
+      }).join('') + '</span>' : '') + '</div></div>';
+  });
+  if (!people.length) h += '<div class="e2e-row"><span class="e2e-row-sub">Nobody yet.</span></div>';
+  h += '</div>';
+  if (Number(st.holders) <= 1) h += '<div class="alert alert-info" style="margin-top:0.75rem">Only one person holds your firm’s keys. Sign in on a second device, add a passkey, or save a recovery kit on My Profile, so a lost browser never locks the firm out.</div>';
+  if ((m.events || []).length) {
+    h += '<div class="e2e-list-h">Recent activity</div><div class="e2e-events">';
+    m.events.slice(0, 15).forEach(function (e) {
+      var who = e.subject || e.actor || 'Someone', what = _E2E_EVENT_WORDS[e.kind] || e.kind;
+      if (e.kind === 'granted' && e.actor && e.actor !== e.subject) what = 'was given keys by ' + e.actor;
+      if (e.kind === 'activated') who = e.actor || 'An administrator';
+      h += '<div class="e2e-ev"><span>' + esc(who) + ' ' + esc(what) + ((e.detail && e.detail.label) ? ' (' + esc(e.detail.label) + ')' : '') + '</span><time>' + esc(typeof fmtDateTime === 'function' ? fmtDateTime(e.at) : String(e.at)) + '</time></div>';
+    });
+    h += '</div>';
+  }
+  return h;
+}
+function _e2eForget() {
+  if (E2E.loops && E2E.loops.t) clearInterval(E2E.loops.t);
+  if (E2E.watch) { clearInterval(E2E.watch); E2E.watch = null; }
+  if (E2E.live) { try { supabaseClient.removeChannel(E2E.live); } catch (e) {} E2E.live = null; }
+  E2E.loops = null; E2E.ready = null; E2E.on = false; E2E.waiting = false; E2E.st = null;
+  E2E.device = null; E2E.factors = {}; E2E.keys = {}; E2E.keyP = {}; E2E.pubs = {}; E2E.byClient = {};
+  E2E.firmKid = null; E2E.grants = []; E2E.cache = new Map(); E2E.cacheBytes = 0; E2E.stash = null;
+  Object.keys(E2E.clientOf).forEach(function (t) { E2E.clientOf[t] = {}; });
+}
+window._e2eForget = _e2eForget;
+var _e2eRtChain = Promise.resolve();
+function _e2eRtWrap(fn) {
+  return function (payload) {
+    var self = this, args = Array.prototype.slice.call(arguments);
+    if (!E2E.on && !(E2E.avail && payload && JSON.stringify(payload).search(/"pe2[ejst]1\./) >= 0)) return fn.apply(self, args);
+    _e2eRtChain = _e2eRtChain.then(function () {
+      return _e2eOpenDeep(payload).then(function (p) { args[0] = p; return fn.apply(self, args); });
+    }).catch(function (e) { console.warn('[e2e] a live change did not open:', (e && e.message) || e); });
+    return undefined;
+  };
+}
 function _mInstallWriteWatch(client) {
   if (!client || client.__mWatchInstalled) return client;
   try {
@@ -30310,7 +31493,7 @@ function renderAssessmentDetail() {
 
   if (canEdit()) h += '<button type="button" onclick="_renameAssessment(\'' + a.id + '\')" title="Rename this assessment" style="border:none;background:transparent;cursor:pointer;color:var(--gray);padding:0.15rem;display:inline-flex;align-items:center">' + IC.edit + '</button>';
   h += '</h1>';
-  h += '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">' + renderMergedStatus(a, isClient) + (isClient ? '' : _coInSlot(a.id)) + '</div>';
+  h += '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">' + renderMergedStatus(a, isClient) + _e2eBadge(a) + (isClient ? '' : _coInSlot(a.id)) + '</div>';
   h += '</div>';
 
   if (!isClient && canEdit()) {
@@ -32125,6 +33308,8 @@ function renderFindingDetail() {
   if (f.retest_status === 'requested') h += badge('medium', 'Retest Requested');
 
   h += _retestOutcomeBadge(f);
+
+  h += _e2eBadge(_e2eStateRow('assessments', f.assessment_id) || { id: f.assessment_id, client_id: f.client_id });
 
   if (!isClient && f.source === 'migration') {
     h += '<span class="badge badge-gray" title="Brought in from another platform">Imported</span>';
@@ -34723,6 +35908,10 @@ async function _apiKeyMake(draft) {
   if (btn) { btn.disabled = true; btn.textContent = 'Making...'; }
   var r = await _apiCall('rpc_api_key_create', { p_name: d.name, p_scope: d.scope, p_days: d.days });
   if (btn) { btn.disabled = false; btn.textContent = 'Make the key'; }
+
+  if (r.ok && r.key && r.id && typeof E2E !== 'undefined' && E2E.on) {
+    try { var _kp = await _e2eApiKeyMade(r.id); if (_kp) { r.key = r.key + '.' + _kp; r.e2e = true; } } catch (e) { console.warn('[e2e] the key reads encrypted fields once a new one is made:', (e && e.message) || e); }
+  }
   if (r.ok) {
     try { sessionStorage.removeItem(_API_DRAFT); } catch (e) {}
     _apiSt().mine = null;
@@ -34942,6 +36131,8 @@ function renderMyProfile__portal() {
   h += ' Security &amp; MFA</span></div><div class="card-body" data-security-card>';
   h += _renderSecurityCardHtml();
   h += '</div></div>';
+
+  h += _e2eMyCardShell();
 
   h += _apiCardShell();
 
@@ -39891,7 +41082,8 @@ async function reapplyKBEntry(kbId) {
     { title: 'Apply to existing findings', confirmText: 'Apply' })) return;
   _showLoading();
   try {
-    var res = await _safeRpc('rpc_kb_reapply', { p_kb_id: kbId });
+
+    var res = (typeof E2E !== 'undefined' && E2E.on) ? { data: await _e2eKbReapply(k) } : await _safeRpc('rpc_kb_reapply', { p_kb_id: kbId });
     if (res && res.error) { toast(_errMsg(res.error), 'error'); return; }
     var out = res && res.data;
     if (!out || out.ok !== true) { toast((out && out.error) || 'Could not apply it', 'error'); return; }
@@ -41140,121 +42332,21 @@ function renderSettings__portal() {
   h += '</div>';
   h += '<div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end;margin-top:0.6rem">';
   h += '<div style="flex:1;min-width:200px"><label class="form-label" style="margin-bottom:0.3rem;font-size:0.8rem">Login Subtitle</label><input type="text" class="form-input" id="set_login_subtitle" value="' + esc(s.login_subtitle || '') + '" placeholder="Contact support@... for any issues" style="height:34px;font-size:0.85rem"></div>';
-  h += '<div style="flex:0 1 160px"><label class="form-label" style="margin-bottom:0.3rem;font-size:0.8rem">Button Text</label><input type="text" class="form-input" id="set_login_button_text" value="' + esc(s.login_button_text || '') + '" placeholder="Send Sign In Email" style="height:34px;font-size:0.85rem"></div>';
   h += '</div>';
   h += '<div style="margin-top:0.6rem"><label class="form-label" style="margin-bottom:0.3rem;font-size:0.8rem">Custom Footer Text <span style="font-weight:400;color:var(--gray)">(HTML allowed)</span></label><input type="text" class="form-input" id="set_login_custom_text" value="' + esc(s.login_custom_text || '') + '" placeholder="e.g. Powered by Pental · Terms apply" style="height:34px;font-size:0.85rem"></div>';
   h += '<div style="display:flex;gap:1rem;margin-top:0.75rem;flex-wrap:wrap">';
 
-  var _pwCol = Object.prototype.hasOwnProperty.call(s, 'password_login_enabled');
-  var _pwOn = s.password_login_enabled === true;
-  var _pwTip = 'On by default: everyone signs in with email and password, then MFA. Unchecking switches the sign-in page to emailed one-time codes instead. Passwords are hashed and stored only in your own database, and anyone without one can request a setup link from the sign-in page.';
-  h += '<div style="flex:1 1 100%;margin:0.75rem 0 0.25rem;padding:0.9rem;border:1px solid ' + (_pwOn ? 'rgba(var(--accent-rgb),0.35)' : 'var(--border)') + ';border-radius:9px;background:' + (_pwOn ? 'rgba(var(--accent-rgb),0.04)' : 'transparent') + '">';
-  h += '<label style="display:flex;align-items:center;gap:0.6rem;cursor:' + (_pwCol ? 'pointer' : 'not-allowed') + '">';
-  h += '<input type="checkbox" id="set_password_login_enabled"' + (_pwOn ? ' checked' : '') + (_pwCol ? '' : ' disabled') + ' onchange="_loginWarnRefresh();savePasswordLoginEnabled(this.checked)" style="accent-color:var(--accent);width:15px;height:15px;cursor:inherit;flex-shrink:0">';
-  h += '<span style="font-size:0.84rem;font-weight:700;color:var(--text)">Use passwords instead of emailed codes</span>';
-  h += '<span title="' + esc(_pwTip) + '" style="display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1px solid var(--gray);color:var(--gray);font-size:9px;cursor:help;font-weight:700;flex-shrink:0">i</span>';
-  if (!_pwCol) h += '<span style="font-size:0.7rem;color:#eab308;font-weight:600;margin-left:auto">Needs a database update</span>';
-  h += '</label>';
-  if (_pwOn) {
-    h += '<div id="pwAdoptionInline" style="font-size:0.74rem;color:var(--gray);line-height:1.55;margin:0.6rem 0 0.5rem">Checking who has set a password...</div>';
-    h += '<button class="btn btn-secondary btn-sm" onclick="sendPasswordInvites()" style="font-size:0.74rem">Email everyone who still needs a password</button>';
-    h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.45rem;line-height:1.5">Anyone can also request a link themselves from the sign-in page, so nobody is locked out.</div>';
-  }
-
-  h += '<div id="loginCodeWarn" style="display:' + (_pwOn ? 'none' : 'block') + ';margin-top:0.7rem;padding:0.6rem 0.75rem;border:1px solid rgba(234,179,8,0.35);border-left:3px solid var(--yellow);border-radius:6px;background:rgba(234,179,8,0.06)">';
-  h += '<div style="font-size:0.76rem;font-weight:700;color:var(--text);margin-bottom:0.25rem">Why sign-in is a code, not a link</div>';
-  h += '<div style="font-size:0.72rem;color:var(--gray);line-height:1.55">A sign-in email carries a one-time <b>code</b> and nothing else. Corporate mail security (Microsoft Safe Links, Proofpoint, Mimecast) opens every link in a message before the recipient does, which spends a single-use sign-in link and leaves your client looking at an expired page. A code cannot be spent by a scanner because it has to be typed in.<br><br>If you edit the sign-in email under <b>Settings &rarr; Email Templates</b>, keep <b>{{code}}</b> in it and do not add a sign-in button.</div>';
-  h += '</div>';
+  h += '<div style="flex:1 1 100%;margin:0.75rem 0 0.25rem;padding:0.9rem;border:1px solid rgba(var(--accent-rgb),0.35);border-radius:9px;background:rgba(var(--accent-rgb),0.04)">';
+  h += '<div style="font-size:0.84rem;font-weight:700;color:var(--text)">Everyone signs in with a password, then TOTP or a passkey</div>';
+  h += '<div style="font-size:0.74rem;color:var(--gray);line-height:1.55;margin-top:0.35rem">That is what opens a person\u2019s end-to-end encrypted work on a new browser, straight away. Passwords are hashed and kept only in your own database.</div>';
+  h += '<div id="pwAdoptionInline" style="font-size:0.74rem;color:var(--gray);line-height:1.55;margin:0.6rem 0 0.5rem">Checking who has set a password...</div>';
+  h += '<button class="btn btn-secondary btn-sm" onclick="sendPasswordInvites()" style="font-size:0.74rem">Email everyone who still needs a password</button>';
+  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.45rem;line-height:1.5">Anyone can also ask for the link themselves from the sign-in page, so nobody is locked out.</div>';
   h += '</div>';
   h += '<label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.78rem;color:var(--text)"><input type="checkbox" id="set_login_show_logo"' + (s.login_show_logo !== false ? ' checked' : '') + ' style="accent-color:var(--accent);width:14px;height:14px;cursor:pointer"> Show Logo</label>';
   h += '<label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.78rem;color:var(--text)"><input type="checkbox" id="set_login_show_company_name"' + (s.login_show_company_name !== false ? ' checked' : '') + ' style="accent-color:var(--accent);width:14px;height:14px;cursor:pointer"> Show Company Name</label>';
   h += '<label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.78rem;color:var(--text)"><input type="checkbox" id="set_login_show_title"' + (s.login_show_title !== false ? ' checked' : '') + ' style="accent-color:var(--accent);width:14px;height:14px;cursor:pointer"> Show Heading</label>';
-  h += '<label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.78rem;color:var(--text)"><input type="checkbox" id="set_sso_google_enabled"' + (s.sso_google_enabled !== false ? ' checked' : '') + ' onchange="_loginWarnRefresh()" style="accent-color:var(--accent);width:14px;height:14px;cursor:pointer"> Google sign-in</label>';
-  h += '<label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;font-size:0.78rem;color:var(--text)"><input type="checkbox" id="set_sso_microsoft_enabled"' + (s.sso_microsoft_enabled !== false ? ' checked' : '') + ' onchange="_loginWarnRefresh()" style="accent-color:var(--accent);width:14px;height:14px;cursor:pointer"> Microsoft sign-in</label>';
-
-  var _wlSec = S._secretFlags || {};
-  var _wlRow = function (id, label, val, ph, hint) {
-    return '<div style="grid-column:1/-1">'
-      + '<label style="display:block;font-size:0.74rem;font-weight:600;color:var(--text);margin-bottom:0.25rem">' + esc(label) + '</label>'
-      + '<input type="text" class="form-input" id="' + id + '" value="' + esc(val || '') + '" placeholder="' + esc(ph) + '" autocomplete="off" spellcheck="false">'
-      + (hint ? '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.2rem">' + hint + '</div>' : '')
-      + '</div>';
-  };
-  var _wlSecret = function (id, label, has) {
-    return '<div style="grid-column:1/-1">'
-      + '<label style="display:block;font-size:0.74rem;font-weight:600;color:var(--text);margin-bottom:0.25rem">' + esc(label)
-      + (has ? ' <span class="badge badge-ok" style="font-size:0.62rem">Stored</span>' : '') + '</label>'
-      + '<input type="password" class="form-input" id="' + id + '" value="" placeholder="' + (has ? 'Stored. Type a new one to replace it' : 'Paste the client secret') + '" autocomplete="new-password" spellcheck="false">'
-      + '</div>';
-  };
-
-  h += '<details style="flex:1 1 100%;align-self:flex-start;margin-top:0.85rem;border:1px solid var(--border);border-radius:10px;padding:0.55rem 0.8rem">';
-  h += '<summary style="cursor:pointer;font-size:0.78rem;font-weight:700;color:var(--text);padding:0.15rem 0">Use your own Google / Microsoft app (white-label sign-on)'
-    + '<span style="font-weight:400;color:var(--gray);margin-left:0.4rem">' + (_wlSec.has_sso_google_secret || _wlSec.has_sso_ms_secret ? 'configured' : 'optional') + '</span></summary>';
-
-  var _wlOrigin = (typeof window !== 'undefined' && window.location ? window.location.origin : '');
-  var _wlValue = function (label, value, note) {
-    var vid = 'wlv_' + label.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-    return '<div style="display:flex;align-items:flex-start;gap:0.6rem;padding:0.4rem 0;border-top:1px solid var(--border)">'
-      + '<div style="flex:0 0 11rem;font-size:0.72rem;font-weight:600;color:var(--text);padding-top:0.2rem">' + esc(label) + '</div>'
-      + '<div style="flex:1;min-width:0">'
-      + '<code id="' + vid + '" class="mono" style="display:block;font-size:0.72rem;word-break:break-all;color:var(--text)">' + esc(value) + '</code>'
-      + (note ? '<div style="font-size:0.66rem;color:var(--gray);margin-top:0.15rem">' + note + '</div>' : '')
-      + '</div>'
-      + '<button type="button" class="btn btn-ghost btn-sm" style="flex:none;font-size:0.68rem" onclick="_copyRunbookCmd(\'' + vid + '\', this)">Copy</button>'
-      + '</div>';
-  };
-  h += '<div style="font-size:0.72rem;color:var(--gray);line-height:1.55;margin:0.5rem 0 0.6rem">'
-    + 'Leave these empty and single sign-on works through the shared application, where the consent screen names Pental. '
-    + 'Register your own OAuth application and the screen names <b>you</b> instead. '
-    + 'The credentials are encrypted in your own database; Pental cannot read them back, only the sign-in itself can.'
-    + '</div>';
-  h += '<div style="margin:0 0 0.8rem">';
-  h += '<div style="font-size:0.72rem;font-weight:700;color:var(--text);margin-bottom:0.1rem">Enter these at Google and Microsoft</div>';
-  h += _wlValue('Redirect URI', _wlOrigin + '/api/sso',
-    'Google: Authorised redirect URIs. Microsoft: Redirect URI, platform <b>Web</b>. It must match exactly, so copy it.');
-  h += _wlValue('JavaScript origins', 'leave empty', 'Google asks for this; Pental does not use it.');
-  h += _wlValue('Scopes', 'openid, email, profile', 'Nothing else is requested, and nothing else needs admin consent.');
-  if (_wlOrigin) h += _wlValue('Home page URL', _wlOrigin, 'Optional, for the consent screen.');
-  h += '</div>';
-  h += '<div style="display:grid;gap:0.6rem">';
-  h += _wlRow('set_sso_google_client_id', 'Google client ID', s.sso_google_client_id, '000000000000-xxxxxxxx.apps.googleusercontent.com', 'From Google Cloud, APIs and Services, Credentials.');
-  h += _wlSecret('set_sso_google_client_secret', 'Google client secret', !!_wlSec.has_sso_google_secret);
-  h += _wlRow('set_sso_ms_client_id', 'Microsoft application (client) ID', s.sso_ms_client_id, '00000000-0000-0000-0000-000000000000', 'From Entra ID, App registrations.');
-  h += _wlSecret('set_sso_ms_client_secret', 'Microsoft client secret', !!_wlSec.has_sso_ms_secret);
-  h += _wlRow('set_sso_ms_tenant', 'Microsoft directory', s.sso_ms_tenant || 'common', 'common', 'Leave as <span class="mono">common</span> for any Microsoft account, <span class="mono">organizations</span> for work accounts, or your directory ID for your organisation only. A single-tenant app refuses <span class="mono">common</span>.');
-  h += '</div>';
-  h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.6rem">A provider only uses your application when BOTH its ID and its secret are stored. Clear the ID to go back to the shared one.</div>';
-
-  h += '<div style="margin-top:0.85rem;border-top:1px solid var(--border);padding-top:0.7rem">';
-  h += '<div style="font-size:0.74rem;font-weight:700;color:var(--text);margin-bottom:0.4rem">What to do at Google</div>';
-  h += '<ol style="margin:0 0 0.75rem 1.1rem;padding:0;font-size:0.72rem;color:var(--gray);line-height:1.6">'
-    + '<li>Google Cloud console, APIs and Services, <b>OAuth consent screen</b>. Choose External and set the application name to <b>your firm</b>. That name is what people read when they sign in.</li>'
-    + '<li>Scopes: <span class="mono">openid</span>, <span class="mono">email</span>, <span class="mono">profile</span>. Nothing else is asked for.</li>'
-    + '<li>Credentials, Create credentials, <b>OAuth client ID</b>, Web application.</li>'
-    + '<li>Authorised redirect URIs: paste the address above. Leave JavaScript origins empty.</li>'
-    + '<li>Copy the client ID and client secret into the fields here.</li>'
-    + '</ol>';
-  h += '<div style="font-size:0.74rem;font-weight:700;color:var(--text);margin-bottom:0.4rem">What to do at Microsoft</div>';
-  h += '<ol style="margin:0 0 0.75rem 1.1rem;padding:0;font-size:0.72rem;color:var(--gray);line-height:1.6">'
-    + '<li>Entra admin centre, <b>App registrations</b>, New registration. Name it after your firm.</li>'
-    + '<li>Supported account types must agree with the Directory field above: single tenant goes with your directory ID, any organisational directory with <span class="mono">organizations</span>, any Microsoft account with <span class="mono">common</span>.</li>'
-    + '<li>Redirect URI: platform <b>Web</b>, and the address above.</li>'
-    + '<li>Certificates and secrets, New client secret. Copy the <b>Value</b>, not the Secret ID: Microsoft shows it once.</li>'
-    + '<li>API permissions: the defaults (openid, email, profile) are enough and need no admin consent.</li>'
-    + '</ol>';
-  h += '<div style="font-size:0.7rem;color:var(--gray);line-height:1.55">'
-    + '<b>Two things that catch people out.</b> The redirect URI must match character for character, so copy it rather than typing it, and add the new one BEFORE you move to a custom domain. '
-    + 'A Microsoft secret expires, two years at most, and sign-in stops when it does: note the date, and paste a new secret here to fix it.'
-    + '</div>';
-  h += '</div>';
-  h += '</details>';
   if (S.profile && S.profile.role === 'admin') h += _signinStateHtml(s);
-  var _ssoOn = (s.sso_google_enabled !== false) || (s.sso_microsoft_enabled !== false);
-  h += '<div id="loginSsoWarn" style="grid-column:1/-1;display:' + (_ssoOn ? 'block' : 'none') + ';margin-top:0.5rem;padding:0.6rem 0.75rem;border:1px solid rgba(59,130,246,0.3);border-left:3px solid var(--accent);border-radius:6px;background:rgba(var(--accent-rgb),0.05)">';
-  h += '<div style="font-size:0.76rem;font-weight:700;color:var(--text);margin-bottom:0.25rem">Single sign-on may need a one-time approval</div>';
-  h += '<div style="font-size:0.72rem;color:var(--gray);line-height:1.55">The first person to use Google or Microsoft sign-in sees a consent screen. In many organisations that consent can only be granted by an <b>IT administrator</b>, not by the person signing in, and until it is granted they are told the app needs admin approval and cannot get in at all.<br><br>That applies to <b>your own admins</b> and to <b>your clients</b>, whose IT you do not control. Worth mentioning to a client before you point them at it, and worth leaving emailed codes or passwords switched on so nobody is locked out while they wait.</div>';
-  h += '</div>';
   h += '</div>';
   h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:1rem;margin-bottom:0.35rem">Saves the login page fields above.</div>';
   h += '<button class="btn btn-primary" onclick="saveBranding()" style="font-size:0.82rem">Save login page</button>';
@@ -42456,7 +43548,7 @@ function renderSettings__portal() {
 
   h += '<div class="card mt-4"><div class="card-header"><span class="card-title">' + IC.mail + ' Email Notifications</span></div><div class="card-body">';
   if (!_hasCustomSmtp) {
-    h += '<p style="color:var(--gray);margin-bottom:0.75rem;font-size:0.82rem">Emails are currently sent via the Pental platform. <strong style="color:var(--text)">Recommended:</strong> configure custom SMTP in your <a href="https://pental.io/manage" target="_blank" style="color:var(--accent);font-weight:600;text-decoration:none">pental.io dashboard</a> under Portal Configuration, so clients receive login codes and notifications from your own domain, fully branded and in your own wording. It\'s included on your plan.</p>';
+    h += '<p style="color:var(--gray);margin-bottom:0.75rem;font-size:0.82rem">Emails are currently sent via the Pental platform. <strong style="color:var(--text)">Recommended:</strong> configure custom SMTP in your <a href="https://pental.io/manage" target="_blank" style="color:var(--accent);font-weight:600;text-decoration:none">pental.io dashboard</a> under Portal Configuration, so clients receive password links and notifications from your own domain, fully branded and in your own wording. It\'s included on your plan.</p>';
   } else {
     h += '<p style="color:var(--gray);margin-bottom:0.75rem;font-size:0.82rem">Emails are sent from your own ' + (s.smtp_oauth_provider ? 'mailbox' : 'SMTP server') + '. Connection settings are managed in your <a href="https://pental.io/manage" target="_blank" style="color:var(--accent);font-weight:600;text-decoration:none">pental.io dashboard</a> under Portal Configuration.</p>';
   }
@@ -43670,6 +44762,8 @@ function renderSettings__portal() {
   if (_st === 'security') {
   h += '<div id="set_security_section">';
 
+  h += _e2eSettingsHtml();
+
   h += '<div class="card mt-4"><div class="card-header"><span class="card-title">' + IC.lock + ' Security</span></div><div class="card-body">';
 
   h += '<div class="form-group"><label class="form-label">Authenticator Re-verification</label>';
@@ -43705,7 +44799,7 @@ function renderSettings__portal() {
     var __required = s.mfa_methods_required || 'any';
     h += '<div style="margin-top:1.25rem;padding:0.85rem 1rem;border-radius:8px;background:var(--bg-soft,rgba(0,0,0,0.02));border:1px solid var(--border)">';
 
-    if ((S.data.settings || {}).password_login_enabled === true) {
+    {
       h += '<div style="margin-bottom:1rem;padding:0.85rem;border:1px solid var(--border);border-radius:8px;background:var(--hover)">';
       h += '<div style="font-size:0.86rem;font-weight:700;color:var(--text);margin-bottom:0.3rem">Password sign-in</div>';
       h += '<div id="pwAdoption" style="font-size:0.76rem;color:var(--gray);line-height:1.55;margin-bottom:0.6rem">Checking who has set a password...</div>';
@@ -46677,6 +47771,12 @@ var defaultTemplates = {
     att_disclaimer: 'This letter does not include detailed findings and is not a substitute for the full penetration test report.',
     att_closing_text: 'Should you require any further information or clarification, please do not hesitate to contact us',
     att_closing_sign: 'Yours faithfully,',
+
+    method_web: 'the OWASP Top 10',
+    method_infra: 'PTES (Penetration Testing Execution Standard)',
+    method_wireless: 'PTES (Penetration Testing Execution Standard) and OWISAM',
+    method_ad: 'PTES (Penetration Testing Execution Standard) and MITRE ATT&CK',
+    method_default: 'PTES (Penetration Testing Execution Standard)',
     header_color: '',
     banner_height: 90
   }
@@ -46778,21 +47878,36 @@ function _rdFileDesign(fileId) {
   if (!d || typeof d !== 'object' || Array.isArray(d) || !Object.keys(d).length) return null;
   return _rdMains()[fileId] ? null : d;
 }
-async function _tplSaveForVersion(fileId, tid, config) {
+function _docxFileOf(type, id) {
+  if (!id) return null;
+  if (type === 'report') return _rdFileById(id);
+  return _listDocxTemplates(_docxKeyOf(type)).filter(function (t) { return t.id === id; })[0] || null;
+}
+function _docxFileDesign(type, fileId) {
+  if (!fileId) return null;
+  if (type === 'report') return _rdFileDesign(fileId);
+  if (!_tplWordAny(type)) return null;
+  var f = _docxFileOf(type, fileId);
+  var d = f && f.design;
+  return (d && typeof d === 'object' && !Array.isArray(d) && Object.keys(d).length) ? d : null;
+}
+async function _tplSaveForVersion(fileId, tid, config, type) {
+  type = type || 'report';
+  var slot = _docxKeyOf(type);
   var eb = window._tplEditBase;
-  var shown = (eb && eb.type === 'report' && eb.ver === fileId && eb.shown) ? eb.shown : {};
+  var shown = (eb && eb.type === type && eb.ver === fileId && eb.shown) ? eb.shown : {};
   var chg = {};
   Object.keys(config).forEach(function (k) {
     if (_TPL_RT_SKIP[k] || config[k] === undefined) return;
     if (!_tplSame(config[k], shown[k])) chg[k] = _coCopy(config[k]);
   });
   if (eb && eb.vhShown && _coSame(config.vh_rows, eb.vhShown)) ['vh_rows', 'vh_src_v', 'vh_creation', 'vh_details', 'vh_qa_review', 'vh_release'].forEach(function (k) { delete chg[k]; });
-  var base = _rtWith(tid || '', function () { return getTemplate('report'); });
+  var base = type === 'report' ? _rtWith(tid || '', function () { return getTemplate('report'); }) : getTemplate(type);
   var found = false;
   _showLoading();
   try {
     await _tplPut(function (t) {
-      var arr = t.docx_templates_report;
+      var arr = t['docx_templates_' + slot];
       var f = Array.isArray(arr) ? arr.find(function (x) { return x && x.id === fileId; }) : null;
       if (!f) return false;
       found = true;
@@ -46801,7 +47916,7 @@ async function _tplSaveForVersion(fileId, tid, config) {
       if (Object.keys(d).length) f.design = d; else delete f.design;
     });
   } finally { _hideLoading(); }
-  if (!found) toast('That version is not there any more', 'error');
+  if (!found) toast(type === 'report' ? 'That version is not there any more' : 'That Word file is not there any more', 'error');
   return found;
 }
 function _tplSame(a, b) {
@@ -46906,7 +48021,7 @@ function getTemplate(type) {
   var _rtD = type === 'report' ? _rtDesign(_rtActiveId()) : null;
   if (_rtD) Object.keys(_rtD).forEach(function (k) { if (!_TPL_RT_SKIP[k] && _rtD[k] !== null && _rtD[k] !== undefined) base[k] = _coCopy(_rtD[k]); });
 
-  var _vD = (type === 'report' && _rdFileStack.length) ? _rdFileDesign(_rdFileStack[_rdFileStack.length - 1]) : null;
+  var _vD = _rdFileStack.length ? _docxFileDesign(type, _rdFileStack[_rdFileStack.length - 1]) : null;
   if (_vD) Object.keys(_vD).forEach(function (k) { if (!_TPL_RT_SKIP[k] && _vD[k] !== null && _vD[k] !== undefined) base[k] = _coCopy(_vD[k]); });
 
   var _rtB = (type === 'report' || type === 'attestation' || type === 'loa' || type === 'assessment') ? _rtBrand(_rtActiveId()) : null;
@@ -47146,6 +48261,27 @@ async function saveTemplateConfig(type, config, opts) {
 function resetTemplateConfig(type) {
 
   var _verR = (type === 'report' && S.modal && S.modal.type === 'templateeditor' && typeof S.modal.ver === 'string' && S.modal.ver) ? S.modal.ver : '';
+
+  var _verO = (type !== 'report' && S.modal && S.modal.type === 'templateeditor' && S.modal.editType === type && typeof S.modal.ver === 'string' && S.modal.ver) ? S.modal.ver : '';
+  if (_verO) {
+    var _oNm = ((_docxFileOf(type, _verO) || {}).name) || 'this Word file';
+    var _oSlot = _docxKeyOf(type);
+    confirmDialog('Forget its changes', 'Forget what ' + esc(_oNm) + ' changed here? It prints the ' + esc(_rdKeyLabel(_oSlot).toLowerCase()) + ' settings again.', function () {
+      var had = false;
+      _tplPut(function (t) {
+        var arr = t['docx_templates_' + _oSlot];
+        var f = Array.isArray(arr) ? arr.find(function (x) { return x && x.id === _verO; }) : null;
+        if (!f || !f.design) return false;
+        had = true;
+        delete f.design;
+      }).then(function () {
+        if (had) toast(_oNm + ' prints the shared settings again', 'success');
+        window._tplEdit = null;
+        openTemplateEditor(type, S.modal && S.modal._tab, undefined, _verO);
+      }).catch(function (e) { _settingsSaveFailed(e); });
+    });
+    return;
+  }
   if (_verR) {
     var _vRt = typeof S.modal.rt === 'string' ? S.modal.rt : '';
     var _vRn = _vRt ? _rtName(_vRt) : 'the Default';
@@ -47209,7 +48345,9 @@ async function openTemplateEditor(type, tab, rt, ver) {
 
     if (rt === undefined && S.modal && S.modal.type === 'templateeditor' && S.modal.editType === type) { rt = S.modal.rt; if (ver === undefined) ver = S.modal.ver; }
     var _rtFor = (type === 'report' && typeof rt === 'string' && (rt === '' || _rtById(rt))) ? rt : undefined;
-    var _verFor = (_rtFor !== undefined && typeof ver === 'string' && ver && _rdVersionsOf(_rtFor).some(function (f) { return f.id === ver; })) ? ver : undefined;
+    var _verFor = type === 'report'
+      ? ((_rtFor !== undefined && typeof ver === 'string' && ver && _rdVersionsOf(_rtFor).some(function (f) { return f.id === ver; })) ? ver : undefined)
+      : ((typeof ver === 'string' && ver && _tplWordAny(type) && _docxFileOf(type, ver)) ? ver : undefined);
     var _inRt = function (fn) {
       var g = _verFor ? function () { return _rdFileWith(_verFor, fn); } : fn;
       return _rtFor === undefined ? g() : _rtWith(_rtFor, g);
@@ -47281,7 +48419,7 @@ var _appendixMeta = {
   dos: { label: 'Denial of Service' },
   tc: { label: 'Terms & Conditions' }
 };
-var _TPL_WORD = { report: {}, proposal: {} };
+var _TPL_WORD = { report: {}, proposal: {}, attestation: {} };
 (function () {
   var r = _TPL_WORD.report;
   var same = function (pre, list) { list.forEach(function (k) { r[pre + k] = [pre + k]; }); };
@@ -47304,8 +48442,10 @@ var _TPL_WORD = { report: {}, proposal: {} };
     appendix_dos_title: ['dos_title'], appendix_dos_text: ['dos_text'],
     sev_desc_critical: ['severity_scale'], sev_desc_high: ['severity_scale'], sev_desc_medium: ['severity_scale'], sev_desc_low: ['severity_scale'], sev_desc_info: ['severity_scale'],
     show_exec_summary: ['show_executive_summary'], show_radar_chart: ['show_radar_chart', 'radar_chart_image'], vh_rows: ['version_history'],
-    accent_color: true, header_color: true, header_text_color: true,
-    heading_appendices: true, heading_additional_evidence: true, heading_exec_summary: true, heading_retest_summary: true,
+
+    header_color: ['radar_chart_image', 'show_radar_chart'],
+    heading_exec_summary: ['heading_exec_summary'], heading_retest_summary: ['heading_retest_summary'],
+    heading_additional_evidence: ['heading_engagement_appendices'],
   });
 
   var sev = function (t) { return Object.keys(t).some(function (k) { return /^severity/.test(k); }); };
@@ -47320,9 +48460,16 @@ var _TPL_WORD = { report: {}, proposal: {} };
     text_perspective_auth: ['perspective_text'], text_perspective_unauth: ['perspective_text'], text_process_steps: ['process_text'],
     currency_symbol: function (t) { return Object.keys(t).some(function (k) { return /cost|_rate$/.test(k); }); },
   });
+
+  ['att_body_intro', 'att_body_no_findings', 'att_body_all_remediated', 'att_body_no_critical_high', 'att_body_no_critical',
+    'att_body_all_ch_remediated', 'att_body_critical_remediated', 'att_body_default', 'att_disclaimer',
+    'method_web', 'method_infra', 'method_wireless', 'method_ad', 'method_default'].forEach(function (k) { _TPL_WORD.attestation[k] = ['loa_text']; });
 })();
 var _TPL_WORD_TITLE = 'What your Word template prints from Pental: the document controls, the headings and the other settings its placeholders use';
-function _tplWordMap(type) { return (type === 'report' || type === 'vuln_report') ? _TPL_WORD.report : (type === 'proposal' ? _TPL_WORD.proposal : {}); }
+function _tplWordMap(type) {
+  return (type === 'report' || type === 'vuln_report') ? _TPL_WORD.report : type === 'proposal' ? _TPL_WORD.proposal
+    : (type === 'attestation' || type === 'loa') ? _TPL_WORD.attestation : {};
+}
 function _pdfMakes(k, exportOnly) {
   var rts = (_rtSettingsOn() && _rtHasDb()) ? _rtList() : [];
   try {
@@ -47399,9 +48546,10 @@ function renderTemplateEditorModal() {
   var _rtE = (activeType === 'report' && typeof S.modal.rt === 'string') ? S.modal.rt : undefined;
   if (_rtE !== undefined && !_rtIsIn(_rtE)) return _rtWith(_rtE, renderTemplateEditorModal);
 
-  var _verE = (_rtE !== undefined && typeof S.modal.ver === 'string' && S.modal.ver) ? S.modal.ver : '';
+  var _verE = (typeof S.modal.ver === 'string' && S.modal.ver && (activeType !== 'report' || _rtE !== undefined)) ? S.modal.ver : '';
   if (_verE && _rdFileStack[_rdFileStack.length - 1] !== _verE) return _rdFileWith(_verE, renderTemplateEditorModal);
-  var _verF = _verE ? _rdFileById(_verE) : null;
+  var _verF = _verE ? _docxFileOf(activeType, _verE) : null;
+  var _verRep = _verE && activeType === 'report';
   var activeTab = S.modal._tab || 'cover';
   var tpl = getTemplate(activeType);
 
@@ -47413,14 +48561,14 @@ function renderTemplateEditorModal() {
 
   var _word = _verE ? true : (_rtE !== undefined ? !!_rtMain : _tplWordOnly(activeType));
   var _used = _word ? (_verE ? _tplWordTok(activeType, [_verF]) : _rtE !== undefined ? _tplWordTok(activeType, [_rtMain].concat(_rdVersionsOf(_rtE))) : _tplWordTok(activeType)) : null;
-  var _follows = _verE ? ' What you leave as it is follows ' + (_rtE ? _rtName(_rtE) + '’s' : 'the Default’s') + '.' : _rtE ? ' What you leave as it is follows the Default’s.' : '';
+  var _follows = _verRep ? ' What you leave as it is follows ' + (_rtE ? _rtName(_rtE) + '’s' : 'the Default’s') + '.' : _verE ? ' What you change here is this file’s alone.' : _rtE ? ' What you leave as it is follows the Default’s.' : '';
   var _verName = _verF ? (_verF.name || _verF.filename || 'Word template') : '';
 
   var h = '<div class="modal-header" style="padding-bottom:0">';
   h += '<div style="flex:1;min-width:0"><h2 class="modal-title" style="margin-bottom:0.4rem">' + IC.edit + ' ' + esc(_verE ? _verName + ' template editor' : _rtE !== undefined ? _rtName(_rtE) + ' template editor' : (_dt ? _dt.label + ' template editor' : 'Template Editor')) + '</h2>';
 
   if (!_word) h += '<p class="hint" style="margin:-0.15rem 0 0.75rem">The design of Pental’s own PDF' + (_rtE ? ' for this report' : '') + '. A Word template of yours keeps its own design, and takes from here only what it has a placeholder for, such as a heading’s {heading_scope}.' + _follows + '</p>';
-  else h += '<p class="hint" style="margin:-0.15rem 0 0.75rem">Made with ' + (_verE ? 'this version’s' : _rtE !== undefined ? 'its' : 'your') + ' Word template, which keeps its own design. '
+  else h += '<p class="hint" style="margin:-0.15rem 0 0.75rem">Made with ' + (_verRep ? 'this version’s Word template' : _verE ? 'this Word template' : _rtE !== undefined ? 'its Word template' : 'your Word template') + ', which keeps its own design. '
     + (_used === null ? 'Reading which placeholders it has…' : _used === false ? 'It could not be read just now, so everything a Word template can take from here is shown.' : 'Shown is only what it prints from here: the settings its placeholders use.')
     + _follows + '</p>';
   h += '</div>';
@@ -47428,7 +48576,8 @@ function renderTemplateEditorModal() {
 
   h += '<div class="modal-body" style="padding:0;max-height:72vh;overflow:hidden;display:flex;flex-direction:column">';
 
-  var _wordNone = '<p class="hint tpl-word-none">Your Word template takes none of these settings: everything here is the design of Pental’s own PDF, which none of your documents of this kind is made with.</p>';
+  var _wordNone = '<p class="hint tpl-word-none">' + (_verE ? 'This Word file prints none of these settings: its design and its words are its own.'
+    : 'Your Word template takes none of these settings: everything here is the design of Pental’s own PDF, which none of your documents of this kind is made with.') + '</p>';
   var _wordWait = '<p class="hint tpl-word-wait">Reading your Word template…</p>';
   var _bodyOf = function (html) {
     if (!_word) return html;
@@ -47441,7 +48590,7 @@ function renderTemplateEditorModal() {
     var subTabs = [{key:'cover',label:'Cover Page'},{key:'layout',label:'Sections & Order'},{key:'findings',label:'Findings'},{key:'appendices',label:'Appendices'},{key:'text',label:'Text & Labels'},{key:'style',label:'Style'}];
     var _tabHtml = function (k) {
       return k === 'cover' ? _renderCoverTab(tpl) : k === 'layout' ? _renderLayoutTab(tpl) : k === 'findings' ? _renderFindingsTab(tpl)
-        : k === 'appendices' ? _renderAppendicesTab(tpl) : k === 'text' ? _renderTextTab(tpl) : k === 'style' ? _renderStyleTab(tpl) : '';
+        : k === 'appendices' ? _renderAppendicesTab(tpl) : k === 'text' ? _renderTextTab(tpl) : k === 'style' ? _renderStyleTab(tpl, _word) : '';
     };
     var _wBodies = {};
 
@@ -47478,7 +48627,7 @@ function renderTemplateEditorModal() {
   }
 
   h += _mFooter('saveTemplateFromEditor(\'' + activeType + '\')', {
-    left: '<button class="btn btn-ghost btn-sm" data-mleft onclick="resetTemplateConfig(\'' + activeType + '\')" style="color:var(--red-text)">' + IC.trash + (_verE ? ' Follow ' + esc(_rtE ? _rtName(_rtE) : 'the Default') : _rtE ? ' Follow the Default' : ' Reset Defaults') + '</button>',
+    left: '<button class="btn btn-ghost btn-sm" data-mleft onclick="resetTemplateConfig(\'' + activeType + '\')" style="color:var(--red-text)">' + IC.trash + (_verRep ? ' Follow ' + esc(_rtE ? _rtName(_rtE) : 'the Default') : _verE ? ' Forget its changes' : _rtE ? ' Follow the Default' : ' Reset Defaults') + '</button>',
     style: 'flex-shrink:0' });
   h += '</div>';
 
@@ -47921,11 +49070,13 @@ function _renderTextTab(tpl) {
 
   return h;
 }
-function _renderStyleTab(tpl) {
+function _renderStyleTab(tpl, word) {
   var h = '';
-  h += _tplH('Banner / Header Colour', 'Used for the cover banner, page headers and section dividers');
+
+  if (word) h += _tplH('Chart Colour', 'The colour of the findings chart your Word file prints ({radar_chart_image}). Everything else keeps the Word file\u2019s own colours.');
+  else h += _tplH('Banner / Header Colour', 'Used for the cover banner, page headers and section dividers');
   h += '<div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end">';
-  h += _tplC('header_color', 'Banner / Header', tpl.header_color);
+  h += _tplC('header_color', word ? 'Chart' : 'Banner / Header', tpl.header_color);
   h += _tplC('header_text_color', 'Banner Text', tpl.header_text_color || '#ffffff');
   h += '</div>';
 
@@ -48398,11 +49549,11 @@ function saveTemplateFromEditor(type) {
     config.method_default = val('method_default');
   }
 
-  var _verSave = (type === 'report' && S.modal && S.modal.type === 'templateeditor' && typeof S.modal.ver === 'string' && S.modal.ver) ? S.modal.ver : '';
+  var _verSave = (S.modal && S.modal.type === 'templateeditor' && S.modal.editType === type && typeof S.modal.ver === 'string' && S.modal.ver) ? S.modal.ver : '';
   if (_verSave) {
     var _vStay = _mStaying();
-    var _vName = ((_rdFileById(_verSave) || {}).name) || 'the version';
-    return _tplSaveForVersion(_verSave, typeof S.modal.rt === 'string' ? S.modal.rt : '', config).then(function (ok) {
+    var _vName = ((_docxFileOf(type, _verSave) || {}).name) || (type === 'report' ? 'the version' : 'the Word file');
+    return _tplSaveForVersion(_verSave, typeof S.modal.rt === 'string' ? S.modal.rt : '', config, type).then(function (ok) {
       if (!ok) return;
       try {
         if (window._tplEditBase && window._tplEditBase.ver === _verSave) {
@@ -48767,6 +49918,9 @@ function renderModal() {
 
     case 'api-key-make': return '<div class="modal-overlay"><div class="modal-content">' + renderApiKeyMakeModal() + '</div></div>';
     case 'api-key-shown': return '<div class="modal-overlay"><div class="modal-content">' + renderApiKeyShownModal() + '</div></div>';
+
+    case 'e2e-kit': return '<div class="modal-overlay"><div class="modal-content" style="max-width:34rem">' + renderE2eKitModal() + '</div></div>';
+    case 'e2e-kit-use': return '<div class="modal-overlay"><div class="modal-content" style="max-width:34rem">' + renderE2eKitUseModal() + '</div></div>';
     case 'scan-targets': return '<div class="modal-overlay"><div class="modal-content">' + renderScanTargetsModal() + '</div></div>';
     case 'scan-provider': return '<div class="modal-overlay"><div class="modal-content">' + renderScanProviderModal() + '</div></div>';
     case 'scan-auth': return '<div class="modal-overlay"><div class="modal-content">' + renderScanAuthModal() + '</div></div>';
@@ -51144,7 +52298,7 @@ function _personSendHtml(id) {
   if (typeof _irvIsTool === 'function' && _irvIsTool()) return '';
   return '<label class="irv-chk inv-send"><input type="checkbox" id="' + id + '" checked onchange="_personSendSaid(this)">'
     + '<span><strong>Email them an invitation</strong> with a link to sign in.</span></label>'
-    + '<p class="pf-hint inv-send-hint">Untick to add them without an email. They can sign in from the sign-in page with their email address when they are ready, or you can send the invitation later with Resend invite.</p>';
+    + '<p class="pf-hint inv-send-hint">Untick to add them without an email. They can set their password from the sign-in page (Set or reset your password) when they are ready, or you can send the invitation later with Resend invite.</p>';
 }
 function _personSendSaid(cb) {
   var on = !!cb.checked;
@@ -55342,7 +56496,6 @@ function _rdRowHtml(dt) {
   var builtIn = !word || ((key === 'report' || key === 'loa') && _rtList().some(function (t) { return t.docs && t.docs[key] === 'builtin'; }));
   if (!fx && builtIn) h += '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + dt.editorKey + '\')" title="The design of Pental’s own PDF, where this document is made with it: its sections, finding fields, colours and labels. A Word template of yours has its own.">' + IC.edit + ' Customise</button>';
 
-  else if (!fx && _tplWordAny(dt.editorKey)) h += '<button class="btn btn-ghost btn-sm" onclick="openTemplateEditor(\'' + dt.editorKey + '\')" title="' + esc(_TPL_WORD_TITLE) + '">' + IC.edit + ' Customise</button>';
   h += '<button class="btn btn-ghost btn-sm" onclick="showDocxVariableRef(\'' + key + '\')" title="Every placeholder a Word template for it can hold, and a draft with them all">Placeholders</button>';
   if (list.length) h += '<button class="btn btn-ghost btn-sm" onclick="showStyleMapping(\'' + key + '\')" title="The styles used for code, headings, captions and lists">Styles</button>';
   h += '<button class="btn btn-secondary btn-sm" onclick="uploadDocxTemplate(\'' + key + '\')">' + IC.upload + ' ' + (list.length ? 'Add a Word template' : 'Upload a Word template') + '</button>';
@@ -55391,6 +56544,7 @@ function _rdRowHtml(dt) {
       h += '</div>';
     }
     h += '</div><div class="doc-tpl-acts">'
+      + _rdFileCustom(dt, key, t, name)
       + (key === 'report' ? '' : _rdMoveBtns(key, '', t.id, name, idx, list.length))
       + '<button class="btn btn-ghost btn-sm" onclick="downloadCustomDocxTemplate(\'' + key + '\',\'' + esc(t.id) + '\')" title="Download it" aria-label="Download ' + esc(name) + '">' + IC.dl + '</button>'
       + '<button class="btn btn-ghost btn-sm" onclick="renameDocxTemplate(\'' + key + '\',\'' + esc(t.id) + '\')" title="Rename it" aria-label="Rename ' + esc(name) + '">' + IC.edit + '</button>'
@@ -55399,6 +56553,24 @@ function _rdRowHtml(dt) {
   });
   h += '</div></div>';
   return h;
+}
+function _rdFileCustom(dt, key, t, name) {
+  if (!dt || dt.exportOnly || !t || !_tplWordAny(dt.editorKey)) return '';
+  var on, title;
+  if (key === 'report') {
+    var main = _rdMainOf('');
+    if (main && main.id === t.id) {
+      on = 'openTemplateEditor(\'report\',\'cover\',\'\')';
+      title = _TPL_WORD_TITLE + '. Its other Word files follow it, unless they change it.';
+    } else {
+      on = 'openTemplateEditor(\'report\',\'cover\',\'\',\'' + esc(t.id) + '\')';
+      title = 'What ' + name + ' prints from Pental: the document controls, the headings and the other settings its placeholders use. What you leave as it is follows the Default’s.';
+    }
+  } else {
+    on = 'openTemplateEditor(\'' + dt.editorKey + '\',undefined,undefined,\'' + esc(t.id) + '\')';
+    title = 'What ' + name + ' prints from Pental: the settings its placeholders use, for this Word file alone.';
+  }
+  return '<button class="btn btn-ghost btn-sm doc-custom" onclick="' + on + '" title="' + esc(title) + '" aria-label="Customise ' + esc(name) + '">' + IC.edit + ' Customise</button>';
 }
 function _pdfOwnDocs() {
   var out = [];
@@ -64644,7 +65816,7 @@ async function saveClient() {
               email: _people[_pi].email,
               name: _people[_pi].name,
               client_id: clientId,
-              password_login: (S.data.settings || {}).password_login_enabled === true
+              password_login: true
             });
           } catch (e) { _res = null; }
           if (_res && !_res.warning) { _sent++; if (_res.invite_job) _jobs.push({ job: _res.invite_job, email: _people[_pi].email }); }
@@ -65098,7 +66270,7 @@ async function inviteUser() {
   try {
     var _invTeam = role === 'contractor' ? ((document.getElementById('inv_team') || {}).value || '') : '';
     var result = _personSendOn('inv_send')
-      ? await adminApi('invite_user', { email: email, name: name, role: role, password_login: (S.data.settings || {}).password_login_enabled === true })
+      ? await adminApi('invite_user', { email: email, name: name, role: role, password_login: true })
       : await _personAddOnly(email, name, role, null);
     if (result) {
 
@@ -68771,33 +69943,6 @@ async function saveLogoVariant(column, value) {
     render();
   } catch (err) { _settingsSaveFailed((err.message || err)); }
 }
-function _loginWarnRefresh() {
-  try {
-    var pw = document.getElementById('set_password_login_enabled');
-    var codeWarn = document.getElementById('loginCodeWarn');
-    if (codeWarn) codeWarn.style.display = (pw && pw.checked) ? 'none' : 'block';
-    var g = document.getElementById('set_sso_google_enabled');
-    var m = document.getElementById('set_sso_microsoft_enabled');
-    var ssoWarn = document.getElementById('loginSsoWarn');
-    if (ssoWarn) ssoWarn.style.display = ((g && g.checked) || (m && m.checked)) ? 'block' : 'none';
-  } catch (e) {}
-}
-window._loginWarnRefresh = _loginWarnRefresh;
-async function savePasswordLoginEnabled(on) {
-  try {
-    var existing = S.data.settings;
-    if (!existing || !existing.id) { var _sid2 = await _ensureSettingsId(); if (!_sid2) { toast('Settings could not be loaded. Please refresh and try again.', 'error'); return; } existing = S.data.settings; }
-    var res = await _setPut({ password_login_enabled: !!on }, existing.id, 'password_login_enabled');
-    if (res.error) throw res.error;
-    S.data.settings.password_login_enabled = !!on;
-    if (window._dbBranding) window._dbBranding.password_login_enabled = !!on;
-    _reverseSync({ password_login_enabled: !!on });
-    toast(on
-      ? 'Password sign-in is on. The sign-in page now asks for a password instead of emailing a code.'
-      : 'Password sign-in is off. Everyone signs in with an emailed code again.', 'success');
-    render();
-  } catch (err) { toast('Could not save that: ' + (err.message || err), 'error'); }
-}
 async function removeLogo(variant) {
   var _isLight = variant === 'light';
   var _col = _isLight ? 'logo_url_light' : 'logo_url';
@@ -69075,24 +70220,11 @@ async function saveBranding() {
   _setIfBr('login_title', document.getElementById('set_login_title'));
   _setIfBr('login_subtitle', document.getElementById('set_login_subtitle'));
   _setIfBr('login_support_email', document.getElementById('set_login_support_email'));
-  _setIfBr('login_button_text', document.getElementById('set_login_button_text'));
   _setIfBr('login_custom_text', document.getElementById('set_login_custom_text'));
   _setBoolIf('login_show_logo', document.getElementById('set_login_show_logo'));
 
   _setBoolIf('login_show_company_name', document.getElementById('set_login_show_company_name'));
   _setBoolIf('login_show_title', document.getElementById('set_login_show_title'));
-  _setBoolIf('sso_google_enabled', document.getElementById('set_sso_google_enabled'));
-  _setBoolIf('sso_microsoft_enabled', document.getElementById('set_sso_microsoft_enabled'));
-
-  var _wlIds = { sso_google_client_id: 'set_sso_google_client_id', sso_ms_client_id: 'set_sso_ms_client_id', sso_ms_tenant: 'set_sso_ms_tenant' };
-  Object.keys(_wlIds).forEach(function (k) {
-    var el = document.getElementById(_wlIds[k]);
-    if (el) data[k] = String(el.value || '').trim();
-  });
-  ['sso_google_client_secret', 'sso_ms_client_secret'].forEach(function (k) {
-    var el = document.getElementById('set_' + k);
-    if (el && String(el.value || '').trim()) data[k] = String(el.value).trim();
-  });
 
   ['dark','light'].forEach(function(mode) {
     var defs = THEME_DEFAULTS[mode];
@@ -69534,7 +70666,7 @@ var EmailKit = (function () {
 
   var TEMPLATES = [
 
-    { key: 'login_code', group: 'account', label: 'Sign-in code',
+    { key: 'login_code', group: 'account', label: 'Sign-in code', hidden: true,
       description: 'Sent when someone asks for a code to sign in.',
       vars: ['code', 'company_name', 'email'],
       subject: 'Your sign-in code for {{company_name}}',
@@ -69542,7 +70674,7 @@ var EmailKit = (function () {
         + '<p>Enter this code on the {{company_name}} sign-in page to continue.</p>\n'
         + '<div class="code">{{code}}</div>\n'
         + '<p class="small">The code expires in 30 minutes and works once. If you did not try to sign in, you can ignore this email.</p>' },
-    { key: 'account_created', group: 'account', label: 'Account created (sign-in code)',
+    { key: 'account_created', group: 'account', label: 'Account created (sign-in code)', hidden: true,
       description: 'The first email someone receives when an account is made for them and your portal signs in with codes. Also sent by Resend invitation.',
       vars: ['code', 'company_name', 'email', 'portal_url'],
       subject: 'Your {{company_name}} account is ready',
@@ -70840,7 +71972,8 @@ function _emailTemplateSampleVars() { return EmailKit.sampleVars(S.data.settings
 function _getEmailTemplates() {
   var s = S.data.settings || {};
   return _emailTemplateDefs.filter(function (t) {
-    if (t.requires && s[t.requires] !== true) return false;
+
+    if (t.requires && t.requires !== 'password_login_enabled' && s[t.requires] !== true) return false;
     if (t.module && !_modOn(t.module)) return false;
     return true;
   });
@@ -89250,7 +90383,7 @@ async function genReportDOCX(assessmentId, templateId, _docType, _slotId) {
       return;
     }
 
-    var data = await buildReportData(assessmentId, _dxType, { fileId: templateId || '' });
+    var data = await buildReportData(assessmentId, _dxType, { fileId: templateId || (_dxType === 'vuln_report' ? ((_getDocxTemplateMeta('vuln_report') || {}).id || '') : '') });
 
     var fname = _reportFilename(assessmentId, 'docx');
     window._lastDocxAssessmentId = assessmentId;
@@ -90798,7 +91931,7 @@ function _irvHtml() {
     if (newN) {
       body += tool
         ? '<p class="irv-note"><strong>Add</strong> makes their account: each signs in with a password link, which the key beside their name on Team makes. <strong>Leave out</strong> makes no account, and what they did comes across in your name.</p>'
-        : '<p class="irv-note"><strong>Invite</strong> makes their account and emails them a link to sign in. <strong>Add only</strong> makes their account and emails nobody: they can sign in from the sign-in page with their email address, or you can invite them later from Users. <strong>Leave out</strong> makes no account, and what they did comes across in your name.</p>';
+        : '<p class="irv-note"><strong>Invite</strong> makes their account and emails them a link to set their password. <strong>Add only</strong> makes their account and emails nobody: they can set their password from the sign-in page (Set or reset your password), or you can invite them later from Users. <strong>Leave out</strong> makes no account, and what they did comes across in your name.</p>';
     }
     h += _irvRow(_IRV_IC.team, 'Your team', P.people.length === newN ? _irvN(newN, 'person', 'people') : _irvN(P.people.length, 'person', 'people') + ', ' + (P.people.length - newN) + ' already here',
       _irvSwitch('team', C.team), C.team ? body : '', !C.team);

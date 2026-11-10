@@ -40,6 +40,7 @@ function _docsEngineKick() { return; }
 function _dsBackCheck() { return; }
 function _dsPaintLive() { return; }
 function _dsTabHtml() { return ''; }
+async function _e2eTicketsDue() { return Promise.resolve(null); }
 function _emailSignatureHtml() { return ''; }
 function _findingTicketsHtml() { return ''; }
 async function _finishDocsConnect() { return; }
@@ -61,6 +62,7 @@ function _migPanelHtml() { return ''; }
 function _onScanFindingPage() { return false; }
 async function _patchProposalAuth() { return Promise.resolve(null); }
 async function _payReturned() { return; }
+function _pmArgon2Lib() { return Promise.resolve(null); }
 function _pmBarHtml() { return ''; }
 function _pmDests() { return; }
 function _pmHash() { return; }
