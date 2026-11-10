@@ -2936,6 +2936,9 @@ BEGIN
                                   (v_ass.credentials_data::jsonb)->>'enc' IS NOT NULL);
   v_meta := v_hist || public._cred_meta_of(v_list);
   UPDATE public.assessments SET credentials_data=jsonb_build_object('enc',v_enc,'meta',v_meta), credentials_meta=v_meta, credentials_status='pending', test_perspective='authenticated' WHERE id=p_assessment_id;
+  -- 2015: and kept to be sent to the firm's SharePoint or Google Drive, where
+  -- it keeps them there (_docs_cred_capture). Never in the way of sending.
+  BEGIN PERFORM public._docs_cred_capture(p_assessment_id, p_credential); EXCEPTION WHEN OTHERS THEN NULL; END;
   -- Add a timeline event server-side. Clients can't INSERT into
   -- timeline_events directly (RLS denies it), so the RPC does it under
   -- SECURITY DEFINER. Without this, the timeline showed nothing for
@@ -3025,6 +3028,9 @@ BEGIN
   v_key := public._get_cred_key();
   BEGIN v_list := extensions.pgp_sym_decrypt(decode((v_ass.credentials_data::jsonb)->>'enc','base64'),v_key)::jsonb; EXCEPTION WHEN OTHERS THEN RETURN jsonb_build_object('error','Could not decrypt'); END;
   IF p_index < 0 OR p_index >= jsonb_array_length(v_list) THEN RETURN jsonb_build_object('error','Invalid index'); END IF;
+  -- 2015: what was kept of it for the firm's SharePoint or Google Drive goes
+  -- with it (sent already, it is gone from here as any file: _docs_scan).
+  BEGIN DELETE FROM public._docs_creds WHERE assessment_id = p_assessment_id AND entry_at = (v_list -> p_index) ->> 'submitted_at'; EXCEPTION WHEN OTHERS THEN NULL; END;
   FOR v_el IN SELECT value FROM jsonb_array_elements(v_list) WITH ORDINALITY AS t(value,idx) WHERE t.idx-1 != p_index LOOP v_new := v_new || jsonb_build_array(v_el); END LOOP;
   -- 1721: p_index counts the entries still waiting (the encrypted list), and
   -- the entries already received are kept whatever is removed.
@@ -19304,6 +19310,35 @@ ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS qa_ai_prompt text;
 ALTER TABLE public.assessments ADD COLUMN IF NOT EXISTS qa_ticks jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE public.assessments ADD COLUMN IF NOT EXISTS qa_ai_review jsonb NOT NULL DEFAULT '{}'::jsonb;
 
+-- 2014: SUBMITTING FOR QA. [stated] Arian: "i want that in qa settings that you
+-- can make it enforced that the latest docx is uploaded if custom docx is used.
+-- and qa checklist must be ticked upon submitting for QA (any custom qa
+-- checklist etc)", then "actually by default on for both".
+-- settings.qa_submit_word: where an engagement's report is made from a Word
+-- template of the firm's, Submit for QA asks for the edited Word report
+-- uploaded on it, and after QA sent it back, uploaded since; qa_submit_ticks:
+-- whoever submits ticks every item on the QA checklist. Both on unless turned
+-- off. assessments.qa_returned_at: when QA last sent the report back, written
+-- by the trigger below as it goes back and by nothing else, so the portal can
+-- tell a Word report uploaded before then from one uploaded after.
+ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS qa_submit_word boolean NOT NULL DEFAULT true;
+ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS qa_submit_ticks boolean NOT NULL DEFAULT true;
+ALTER TABLE public.assessments ADD COLUMN IF NOT EXISTS qa_returned_at timestamptz;
+CREATE OR REPLACE FUNCTION public._tg_qa_returned_at()
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = public, pg_catalog, pg_temp AS $qaret$
+BEGIN
+  IF NEW.qa_status = 'revision' AND OLD.qa_status IS DISTINCT FROM 'revision' THEN
+    NEW.qa_returned_at := now();
+  ELSE
+    NEW.qa_returned_at := OLD.qa_returned_at;
+  END IF;
+  RETURN NEW;
+END $qaret$;
+DROP TRIGGER IF EXISTS tr_qa_returned_at ON public.assessments;
+CREATE TRIGGER tr_qa_returned_at BEFORE UPDATE OF qa_status, qa_returned_at ON public.assessments
+  FOR EACH ROW EXECUTE FUNCTION public._tg_qa_returned_at();
+
 CREATE OR REPLACE FUNCTION public.rpc_qa_tick(p_assessment_id uuid, p_item_ids text[], p_ticked boolean DEFAULT true)
 RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER
 SET search_path = public, pg_catalog, pg_temp AS $qatick$
@@ -34354,8 +34389,9 @@ BEGIN
   -- SIDE, below): the application's access, with its secret; then, with that
   -- access, the organiser's object ID and the meeting.
   ELSIF p_job.kind = 'teams_token' THEN
-    -- 1848: SharePoint reached with the firm's Microsoft sign-in application.
-    IF p_job.subject ->> 'app' = 'signin' THEN RETURN public._docs_ms_token_build(p_job); END IF;
+    -- 1848: SharePoint reached with the firm's Microsoft sign-in application
+    -- (2016: or the one kept for it in Settings, SharePoint & Drive).
+    IF p_job.subject ->> 'app' IN ('signin', 'docs') THEN RETURN public._docs_ms_token_build(p_job); END IF;
     c := public._teams_creds();
     IF c ->> 'tenant' IS NULL OR c ->> 'client' IS NULL OR c ->> 'secret' IS NULL THEN
       RETURN jsonb_build_object('error', 'Teams is not set up: its tenant, application or secret is not saved.', 'code', 'config');
@@ -35791,8 +35827,9 @@ CREATE OR REPLACE FUNCTION public._teams_token_answer(j public._net_jobs, p_stat
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $tmtokans$
 DECLARE o jsonb := public._tk_parse(p_content); v_fp text; v_secs integer; v_next uuid;
 BEGIN
-  -- 1848: the Microsoft sign-in application's own access, for SharePoint.
-  IF j.subject ->> 'app' = 'signin' THEN RETURN public._docs_ms_token_answer(j, p_status, p_content, p_error, p_transport); END IF;
+  -- 1848: the Microsoft sign-in application's own access, for SharePoint
+  -- (2016: or the application kept for it in Settings, SharePoint & Drive).
+  IF j.subject ->> 'app' IN ('signin', 'docs') THEN RETURN public._docs_ms_token_answer(j, p_status, p_content, p_error, p_transport); END IF;
   IF p_status = 200 AND jsonb_typeof(o) = 'object' AND COALESCE(o ->> 'access_token', '') ~ '^[A-Za-z0-9._~+/=-]+$'
      AND length(o ->> 'access_token') BETWEEN 20 AND 16000
      AND lower(COALESCE(o ->> 'token_type', 'bearer')) = 'bearer' THEN
@@ -41037,7 +41074,8 @@ REVOKE ALL ON FUNCTION public._cron_tidy(boolean) FROM PUBLIC, anon, authenticat
 -- Supabase, from the browser of a signed-in member of the firm's team who
 -- may read the file, while the portal is open. What arrived is checked from
 -- here before it counts. Off until the firm turns it on; nothing is removed
--- there unless it says so; nothing but files (no credentials).
+-- there unless it says so; nothing but files, and a client's credentials only
+-- where the firm switches that on (2015, below).
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- The firm's choices, in a table of their own: read and written only through
@@ -41056,7 +41094,8 @@ REVOKE ALL ON public._docs_config FROM PUBLIC, anon, authenticated;
 -- The kinds of file kept in step, in Settings' order: what each is called,
 -- whether it is kept until the firm says otherwise, the folder it goes in
 -- within its engagement's (or, for a client's own paperwork, its client's),
--- and its name ({file}: the name it has in the portal).
+-- and its name ({file}: the name it has in the portal). 2015: a client's
+-- credentials too, off until the firm switches them on.
 CREATE OR REPLACE FUNCTION public._docs_kinds() RETURNS jsonb
 LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $dskinds$
   SELECT '[
@@ -41066,6 +41105,7 @@ LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $dskinds$
     {"k":"paperwork","label":"Proposal and invoice documents","hint":"Proposal and invoice PDFs added to the engagement","on":true,"folder":"Paperwork","name":"{file}","level":"job"},
     {"k":"files","label":"Engagement files","hint":"Everything else the team adds to the engagement","on":true,"folder":"Files","name":"{file}","level":"job"},
     {"k":"client","label":"Files from the client","hint":"What the client uploads to the portal","on":true,"folder":"From the client","name":"{file}","level":"job"},
+    {"k":"credentials","label":"Credentials from the client","hint":"What the client sends under Credentials, as a text file you can read, with any file they attach (from when this is on)","on":false,"folder":"Credentials","name":"{file}","level":"job"},
     {"k":"scans","label":"Scans","hint":"Scan reports, and files attached to a scan of the engagement","on":true,"folder":"Scans","name":"{file}","level":"job"},
     {"k":"evidence","label":"Pictures in findings","hint":"Each picture pasted into a finding, as its own file","on":false,"folder":"Pictures","name":"{file}","level":"job"},
     {"k":"proposals","label":"Proposals","hint":"Each proposal''s PDF, in its client''s folder","on":false,"folder":"Proposals","name":"{file}","level":"client"},
@@ -41142,7 +41182,7 @@ REVOKE ALL ON FUNCTION public._docs_file_name(text, text) FROM PUBLIC, anon, aut
 
 -- ── The settings, as they are kept ─────────────────────────────────────────
 -- { v, on, provider: 'sharepoint' | 'gdrive' | null, sharepoint: { site_url,
--- library, base_path }, gdrive: { root_name }, client_folder, job_folder,
+-- site_name (2015), library, base_path }, gdrive: { root_name }, client_folder, job_folder,
 -- kinds: { <kind>: { on, folder, name } }, remove_remote }. On only with a
 -- provider. Whatever is saved is kept this way (rpc_docs_sync_save), and read
 -- this way too (_docs_cfg).
@@ -41153,13 +41193,21 @@ DECLARE c jsonb := CASE WHEN jsonb_typeof(p) = 'object' THEN p ELSE '{}'::jsonb 
   sp jsonb := CASE WHEN jsonb_typeof(c -> 'sharepoint') = 'object' THEN c -> 'sharepoint' ELSE '{}'::jsonb END;
   gd jsonb := CASE WHEN jsonb_typeof(c -> 'gdrive') = 'object' THEN c -> 'gdrive' ELSE '{}'::jsonb END;
   ks jsonb := CASE WHEN jsonb_typeof(c -> 'kinds') = 'object' THEN c -> 'kinds' ELSE '{}'::jsonb END;
-  k jsonb; one jsonb; v_kinds jsonb := '{}'::jsonb; v_site text; v_base text;
+  k jsonb; one jsonb; v_kinds jsonb := '{}'::jsonb; v_site text; v_base text; v_name text;
 BEGIN
   IF v_prov NOT IN ('sharepoint', 'gdrive') THEN v_prov := NULL; END IF;
   -- A SharePoint site's address, as the browser shows it on the site:
   -- https, its host, and the site's own path; nothing after a ? or #, and no
   -- page of it (/Shared Documents/..., /SitePages/...).
   v_site := btrim(COALESCE(sp ->> 'site_url', ''));
+  -- 2015: typed without its https://.
+  IF v_site ~* '^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.(sharepoint\.com|sharepoint\.us|sharepoint-mil\.us|sharepoint\.de|sharepoint\.cn)(/|$)' THEN v_site := 'https://' || v_site; END IF;
+  -- 2015: or the site's name, where that is all there is (a folder's path on
+  -- a computer names its site, not its address), typed where its address
+  -- goes or kept as its own: looked for by it (_docs_build). An address wins.
+  v_name := COALESCE(sp ->> 'site_name', '');
+  IF btrim(v_name) = '' AND v_site !~* '^[a-z][a-z0-9+.-]*:' AND v_site !~ '[/\\]' THEN v_name := v_site; END IF;
+  v_name := btrim(regexp_replace(regexp_replace(v_name, '[[:cntrl:]]+', ' ', 'g'), '[[:space:]]+', ' ', 'g'));
   v_site := regexp_replace(v_site, '[?#].*$', '');
   -- A library's own page (.../Engagements/Forms/AllItems.aspx, the library
   -- with it), the site's pages, its lists and its own Documents.
@@ -41174,6 +41222,7 @@ BEGIN
      OR v_site ~ '/\.\.?(/|$)' OR v_site ~* '%2e|%2f|%5c' THEN
     v_site := '';
   END IF;
+  IF v_site <> '' OR length(v_name) > 200 THEN v_name := ''; END IF;
   v_base := array_to_string(public._docs_segments(sp ->> 'base_path', '{}'::jsonb), '/');
   FOR k IN SELECT x FROM jsonb_array_elements(public._docs_kinds()) AS x LOOP
     one := CASE WHEN jsonb_typeof(ks -> (k ->> 'k')) = 'object' THEN ks -> (k ->> 'k') ELSE '{}'::jsonb END;
@@ -41185,7 +41234,7 @@ BEGIN
   RETURN jsonb_build_object('v', 1,
     'on', v_prov IS NOT NULL AND COALESCE(CASE WHEN jsonb_typeof(c -> 'on') = 'boolean' THEN (c ->> 'on')::boolean END, false),
     'provider', v_prov,
-    'sharepoint', jsonb_build_object('site_url', v_site,
+    'sharepoint', jsonb_build_object('site_url', v_site, 'site_name', v_name,
        'library', public._docs_safe(COALESCE(sp ->> 'library', ''), 120),
        'base_path', v_base),
     'gdrive', jsonb_build_object('root_name', public._docs_safe(COALESCE(gd ->> 'root_name', ''), 120)),
@@ -41377,6 +41426,57 @@ ALTER TABLE public._docs_state ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public._docs_state FROM PUBLIC, anon, authenticated;
 INSERT INTO public._docs_state (id) VALUES (true) ON CONFLICT (id) DO NOTHING;
 
+-- ── 2016: the firm's own application, set up where the files' place is ────
+-- [stated] Arian: "it should be easier to give sharepoint/drive access like
+-- seamless and on the same page if its needed". A firm with no Microsoft or
+-- Google application saved elsewhere in Settings (or one that would keep one
+-- for this alone) registers one with Microsoft or Google and pastes its IDs
+-- and secret into Settings, SharePoint & Drive (rpc_docs_app_save): kept here
+-- for SharePoint or Drive alone, so single sign-on and Teams links go on as
+-- they are; the secret sealed as Settings' secrets are, never read back.
+-- Nothing passes through Pental.
+CREATE TABLE IF NOT EXISTS public._docs_apps (
+  provider text PRIMARY KEY CHECK (provider IN ('microsoft', 'google')),
+  client text NOT NULL,
+  tenant text,
+  secret_enc bytea NOT NULL,
+  saved_at timestamptz NOT NULL DEFAULT now(),
+  saved_by uuid,
+  saved_by_name text
+);
+ALTER TABLE public._docs_apps ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public._docs_apps FROM PUBLIC, anon, authenticated;
+
+-- The one kept for a provider: { via: 'docs', client, tenant, secret,
+-- undecryptable }, NULL where none is.
+CREATE OR REPLACE FUNCTION public._docs_own_app(p_provider text) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $dsownapp$
+DECLARE r public._docs_apps; v text;
+BEGIN
+  SELECT * INTO r FROM public._docs_apps WHERE provider = p_provider;
+  IF NOT FOUND THEN RETURN NULL; END IF;
+  v := NULLIF(public._settings_decrypt(r.secret_enc), '');
+  RETURN jsonb_build_object('via', 'docs', 'client', r.client, 'tenant', r.tenant, 'secret', v, 'undecryptable', v IS NULL);
+END $dsownapp$;
+REVOKE ALL ON FUNCTION public._docs_own_app(text) FROM PUBLIC, anon, authenticated;
+
+-- Google Drive's application: the one kept for it here, otherwise the
+-- firm's own Google sign-in application (as 1847 had it): { via ('docs' |
+-- 'signin'), client, secret, undecryptable }, NULL where neither is saved.
+CREATE OR REPLACE FUNCTION public._docs_google_app() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $dsgapp$
+DECLARE o jsonb := public._docs_own_app('google'); r record; v text;
+BEGIN
+  IF o IS NOT NULL THEN RETURN o - 'tenant'; END IF;
+  SELECT btrim(s.sso_google_client_id) AS client, s.sso_google_client_secret AS plain, s.sso_google_client_secret_enc AS enc INTO r
+    FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1;
+  IF NOT FOUND OR COALESCE(r.client, '') = '' OR (COALESCE(r.plain, '') = '' AND r.enc IS NULL) THEN RETURN NULL; END IF;
+  v := NULLIF(public._settings_decrypt(r.enc), '');
+  RETURN jsonb_build_object('via', 'signin', 'client', r.client, 'secret', COALESCE(v, NULLIF(r.plain, '')),
+    'undecryptable', v IS NULL AND COALESCE(r.plain, '') = '');
+END $dsgapp$;
+REVOKE ALL ON FUNCTION public._docs_google_app() FROM PUBLIC, anon, authenticated;
+
 -- ── Google's access ────────────────────────────────────────────────────────
 -- The Drive's lasting access as sealed here, opened only to be sent to
 -- Google's token address.
@@ -41386,11 +41486,12 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, extensions, pg_ca
 $dsgref$;
 REVOKE ALL ON FUNCTION public._docs_google_refresh() FROM PUBLIC, anon, authenticated;
 
--- Which lasting access and application an hour's access came from.
+-- Which lasting access and application an hour's access came from (2016:
+-- the application Drive is reached with, wherever it is kept).
 CREATE OR REPLACE FUNCTION public._docs_google_fp() RETURNS text
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $dsgfp$
   SELECT encode(extensions.digest(COALESCE(public._docs_google_refresh(), '') || chr(31)
-    || COALESCE((SELECT btrim(s.sso_google_client_id) FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1), ''), 'sha256'), 'hex');
+    || COALESCE(public._docs_google_app() ->> 'client', ''), 'sha256'), 'hex');
 $dsgfp$;
 REVOKE ALL ON FUNCTION public._docs_google_fp() FROM PUBLIC, anon, authenticated;
 
@@ -41402,12 +41503,13 @@ $dsgtok$;
 REVOKE ALL ON FUNCTION public._docs_drive_token_now() FROM PUBLIC, anon, authenticated;
 
 -- Whether Google Drive is connected (an account, its lasting access readable
--- here, for the sign-in application saved now).
+-- here, for the application Drive is reached with now: 2016, wherever it is
+-- kept, so another application saved is connected afresh).
 CREATE OR REPLACE FUNCTION public._docs_google_connected() RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $dsgcon$
   SELECT EXISTS (SELECT 1 FROM public._docs_google g
                   WHERE g.id AND g.broken_at IS NULL AND g.refresh_enc IS NOT NULL AND COALESCE(g.account, '') <> ''
-                    AND g.client_hash = encode(extensions.digest(COALESCE((SELECT btrim(s.sso_google_client_id) FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1), ''), 'sha256'), 'hex'));
+                    AND g.client_hash = encode(extensions.digest(COALESCE(public._docs_google_app() ->> 'client', ''), 'sha256'), 'hex'));
 $dsgcon$;
 REVOKE ALL ON FUNCTION public._docs_google_connected() FROM PUBLIC, anon, authenticated;
 
@@ -41418,9 +41520,12 @@ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, extensions, p
 DECLARE v_acct text;
 BEGIN
   IF c ->> 'provider' = 'sharepoint' THEN
-    IF COALESCE(c #>> '{sharepoint,site_url}', '') = '' THEN RETURN NULL; END IF;
-    RETURN encode(extensions.digest('sp' || chr(31) || lower(c #>> '{sharepoint,site_url}') || chr(31) || lower(COALESCE(c #>> '{sharepoint,library}', ''))
-      || chr(31) || lower(COALESCE(c #>> '{sharepoint,base_path}', '')), 'sha256'), 'hex');
+    -- 2015: a site named rather than addressed is a target of its own (an
+    -- address keeps the key it always had).
+    IF COALESCE(c #>> '{sharepoint,site_url}', '') = '' AND COALESCE(c #>> '{sharepoint,site_name}', '') = '' THEN RETURN NULL; END IF;
+    RETURN encode(extensions.digest('sp' || chr(31) || CASE WHEN COALESCE(c #>> '{sharepoint,site_url}', '') <> '' THEN lower(c #>> '{sharepoint,site_url}')
+                                                           ELSE 'name' || chr(30) || lower(c #>> '{sharepoint,site_name}') END
+      || chr(31) || lower(COALESCE(c #>> '{sharepoint,library}', '')) || chr(31) || lower(COALESCE(c #>> '{sharepoint,base_path}', '')), 'sha256'), 'hex');
   ELSIF c ->> 'provider' = 'gdrive' THEN
     IF NOT public._docs_google_connected() THEN RETURN NULL; END IF;
     SELECT lower(g.account) INTO v_acct FROM public._docs_google g WHERE g.id;
@@ -41455,25 +41560,34 @@ BEGIN
     RETURN jsonb_build_object('code', 'not_set_up', 'error', 'Choose SharePoint or Google Drive first.');
   END IF;
   IF c ->> 'provider' = 'sharepoint' THEN
-    -- 1848: with whichever of the firm's Microsoft applications reaches it.
+    -- 1848: with whichever of the firm's Microsoft applications reaches it
+    -- (2016: one may be set up here, on the page that says so).
     t := public._docs_ms_app();
     IF t IS NULL THEN
-      RETURN jsonb_build_object('code', 'no_app', 'error', 'SharePoint is reached with a Microsoft application of your firm''s own: save your Teams application (Settings, Integrations, Microsoft Teams) or your own Microsoft sign-in (Settings, Login Page, Single sign-on).');
+      RETURN jsonb_build_object('code', 'no_app', 'error', 'SharePoint is reached with a Microsoft application of your firm''s own: set one up in Settings, SharePoint & Drive, Your Microsoft application.');
     END IF;
     IF COALESCE((t ->> 'undecryptable')::boolean, false) THEN
-      RETURN jsonb_build_object('code', 'config', 'error', CASE WHEN t ->> 'via' = 'teams'
-        THEN 'The saved Teams secret cannot be read here (it was sealed with another key). Enter it again in Settings, Integrations, Microsoft Teams.'
+      RETURN jsonb_build_object('code', 'config', 'error', CASE t ->> 'via'
+        WHEN 'teams' THEN 'The saved Teams secret cannot be read here (it was sealed with another key). Enter it again in Settings, Integrations, Microsoft Teams.'
+        WHEN 'docs' THEN 'The saved secret of your SharePoint application cannot be read here (it was sealed with another key). Enter it again in Settings, SharePoint & Drive, Your Microsoft application.'
         ELSE 'The saved Microsoft sign-in secret cannot be read here (it was sealed with another key). Enter it again in Settings, Login Page, Single sign-on.' END);
     END IF;
     IF t ->> 'tenant' IS NULL THEN
       RETURN jsonb_build_object('code', 'needs_access', 'error', 'Give your Microsoft sign-in application access to SharePoint first: an administrator of your Microsoft 365 signs in once, from here.');
     END IF;
-    IF COALESCE(c #>> '{sharepoint,site_url}', '') = '' THEN
-      RETURN jsonb_build_object('code', 'not_set_up', 'error', 'Enter the address of the SharePoint site the files go to.');
+    IF COALESCE(c #>> '{sharepoint,site_url}', '') = '' AND COALESCE(c #>> '{sharepoint,site_name}', '') = '' THEN
+      RETURN jsonb_build_object('code', 'not_set_up', 'error', 'Paste a link to the SharePoint folder the files go to, or enter its site''s address.');
     END IF;
   ELSE
-    IF NOT public._sso_own('google') THEN
-      RETURN jsonb_build_object('code', 'no_app', 'error', 'Google Drive is reached with your Google sign-in application: save its client ID and secret in Settings, Login Page, Single sign-on.');
+    -- 2016: the application kept for Drive here, or the Google sign-in one.
+    t := public._docs_google_app();
+    IF t IS NULL THEN
+      RETURN jsonb_build_object('code', 'no_app', 'error', 'Google Drive is reached with a Google application of your firm''s own: set one up in Settings, SharePoint & Drive, Your Google application.');
+    END IF;
+    IF COALESCE((t ->> 'undecryptable')::boolean, false) THEN
+      RETURN jsonb_build_object('code', 'config', 'error', CASE WHEN t ->> 'via' = 'docs'
+        THEN 'The saved secret of your Google application for Drive cannot be read here (it was sealed with another key). Enter it again in Settings, SharePoint & Drive, Your Google application.'
+        ELSE 'The saved Google sign-in secret cannot be read here (it was sealed with another key). Enter it again in Settings, Login Page, Single sign-on.' END);
     END IF;
     IF NOT public._docs_google_connected() THEN
       RETURN jsonb_build_object('code', 'not_connected', 'error',
@@ -41556,12 +41670,19 @@ REVOKE ALL ON FUNCTION public._docs_place(jsonb, text, jsonb) FROM PUBLIC, anon,
 -- ── What there is to keep in step ──────────────────────────────────────────
 -- Every file of every kind in the portal's own storage, with its engagement
 -- or client, the name it has in the portal, its size and its version. Never
--- credentials (they are not files), avatars, templates or branding.
+-- avatars, templates or branding; a client's credentials only as the firm
+-- keeps them for this (2015: _docs_cred_capture), each until it has been
+-- sent, then for where it went only.
 CREATE OR REPLACE FUNCTION public._docs_sources()
 RETURNS TABLE (r_source text, r_kind text, r_assessment uuid, r_client uuid, r_name text, r_size bigint, r_version text, r_at timestamptz)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dssrc$
-DECLARE v_names jsonb;
+DECLARE v_names jsonb; v_key text;
 BEGIN
+  v_key := public._docs_target_key(public._docs_cfg());
+  RETURN QUERY
+    SELECT 'cred:' || dc.id::text, 'credentials'::text, dc.assessment_id, a.client_id, dc.file_name, dc.size, 'cred|' || dc.id::text, dc.created_at
+      FROM public._docs_creds dc JOIN public.assessments a ON a.id = dc.assessment_id
+     WHERE dc.enc IS NOT NULL OR (v_key IS NOT NULL AND dc.sent_key = v_key);
   IF to_regclass('storage.objects') IS NULL THEN RETURN; END IF;
   -- A final PDF's name, as the portal keeps it: { name, size } by
   -- "<type>_<id>", or a bare name from before 762 (and the whole map kept as
@@ -41729,10 +41850,14 @@ REVOKE ALL ON FUNCTION public._docs_scan() FROM PUBLIC, anon, authenticated;
 -- _teams_after_token).
 CREATE OR REPLACE FUNCTION public._docs_graph_plan(p jsonb) RETURNS uuid
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsgplan$
+DECLARE v_via text;
 BEGIN
-  -- 1848: with whichever of the firm's Microsoft applications reaches it.
+  -- 1848: with whichever of the firm's Microsoft applications reaches it
+  -- (2016: the one kept here for SharePoint asks with its own secret, as the
+  -- sign-in application does).
   IF public._docs_ms_token_now() IS NULL THEN
-    RETURN public._net_plan('teams_token', p || CASE WHEN public._docs_ms_app() ->> 'via' = 'signin' THEN jsonb_build_object('app', 'signin') ELSE '{}'::jsonb END);
+    v_via := public._docs_ms_app() ->> 'via';
+    RETURN public._net_plan('teams_token', p || CASE WHEN v_via IN ('signin', 'docs') THEN jsonb_build_object('app', v_via) ELSE '{}'::jsonb END);
   END IF;
   RETURN public._net_plan('docs_graph', p);
 END $dsgplan$;
@@ -41760,7 +41885,7 @@ BEGIN
   IF COALESCE(v ->> 'item', '') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
     UPDATE public._docs_items SET job = p_job, updated_at = now() WHERE id = (v ->> 'item')::uuid AND state IN ('linking', 'verifying', 'removing');
   END IF;
-  IF COALESCE((v ->> 'base')::boolean, false) OR v ->> 'docs' IN ('site', 'drive', 'root') THEN
+  IF COALESCE((v ->> 'base')::boolean, false) OR v ->> 'docs' IN ('site', 'drive', 'root', 'libfolder') THEN
     UPDATE public._docs_target SET job = p_job, updated_at = now() WHERE id AND target_key IS NOT DISTINCT FROM v ->> 'target';
   END IF;
   RETURN p_job;
@@ -41799,7 +41924,8 @@ REVOKE ALL ON FUNCTION public._docs_q(text) FROM PUBLIC, anon, authenticated;
 -- What a docs call asks now (as _net_build answers): { method, url, headers,
 -- body } or { error, code }. p_job.subject.docs says which step:
 --   Graph (docs_graph): site, drive, root, folder (made), find (a folder by
---   its path), session (an upload address), verify, remove.
+--   its path), session (an upload address), verify, remove; share and
+--   share_drive (2015: a link pasted in Settings, looked up).
 --   Drive (drive): find (a folder by name in its parent), folder (made),
 --   session, verify, remove; Google's token address (drive_token): code
 --   (the consent's one-time code exchanged) or refresh.
@@ -41812,10 +41938,12 @@ BEGIN
   -- 1848: the giving of SharePoint's access makes calls of its own.
   IF p_job.kind = 'sso_exchange' OR (p_job.kind = 'docs_graph' AND COALESCE(v_step, '') LIKE 'ms\_%') THEN RETURN public._docs_ms_build(p_job); END IF;
   IF p_job.kind = 'drive_token' THEN
-    v_client := (SELECT btrim(st.sso_google_client_id) FROM public.settings st ORDER BY st.created_at ASC NULLS LAST, st.id LIMIT 1);
-    v_secret := public._sso_client_secret('google');
+    -- 2016: the application Drive is reached with, wherever it is kept.
+    h := public._docs_google_app();
+    v_client := h ->> 'client';
+    v_secret := h ->> 'secret';
     IF COALESCE(v_client, '') = '' OR v_secret IS NULL THEN
-      RETURN jsonb_build_object('error', 'The Google sign-in application''s client ID and secret are not saved here.', 'code', 'config');
+      RETURN jsonb_build_object('error', 'The Google application''s client ID and secret are not saved here.', 'code', 'config');
     END IF;
     IF v_step = 'code' THEN
       SELECT * INTO pd FROM public._docs_pending WHERE state = s ->> 'state';
@@ -41842,6 +41970,12 @@ BEGIN
     IF v_tok IS NULL THEN RETURN jsonb_build_object('error', 'The access Microsoft gave ran out before the next step. It is asked for again.', 'code', 'config'); END IF;
     h := jsonb_build_object('Authorization', 'Bearer ' || v_tok, 'Accept', 'application/json');
     IF v_step = 'site' THEN
+      -- 2015: a site named rather than addressed, looked for by its name
+      -- (Graph's site search; the one called that is taken, _docs_graph_answer).
+      IF COALESCE(c #>> '{sharepoint,site_url}', '') = '' AND COALESCE(c #>> '{sharepoint,site_name}', '') <> '' THEN
+        RETURN jsonb_build_object('method', 'GET', 'url', v_gb || '/sites?search=' || public._tk_uri(c #>> '{sharepoint,site_name}')
+          || '&$select=id,webUrl,displayName,name', 'headers', h);
+      END IF;
       v_host := substring(c #>> '{sharepoint,site_url}' FROM '^https://([^/:]+)');
       v_path := COALESCE(substring(c #>> '{sharepoint,site_url}' FROM '^https://[^/]+(/.*)$'), '');
       IF v_host IS NULL THEN RETURN jsonb_build_object('error', 'The SharePoint site''s address is not one Microsoft names.', 'code', 'gone'); END IF;
@@ -41856,6 +41990,11 @@ BEGIN
         'headers', h);
     ELSIF v_step = 'root' THEN
       RETURN jsonb_build_object('method', 'GET', 'url', v_gb || '/drives/' || public._tk_uri(t.drive_id) || '/root?$select=id,webUrl', 'headers', h);
+    -- 2015: a folder at the top of the site's own Documents, by name.
+    ELSIF v_step = 'libfolder' THEN
+      IF NOT public._docs_id_ok(s ->> 'drive') OR COALESCE(s ->> 'name', '') = '' THEN RETURN jsonb_build_object('error', 'Not a folder to look for.', 'code', 'gone'); END IF;
+      RETURN jsonb_build_object('method', 'GET', 'url', v_gb || '/drives/' || public._tk_uri(s ->> 'drive') || '/root:/' || public._tk_uri(s ->> 'name')
+        || ':?$select=id,name,webUrl,folder', 'headers', h);
     ELSIF v_step = 'folder' THEN
       -- Made where it is not there yet; refused (409) where it is.
       RETURN jsonb_build_object('method', 'POST', 'url', v_gb || '/drives/' || public._tk_uri(t.drive_id) || '/items/' || public._tk_uri(s ->> 'parent') || '/children',
@@ -41898,6 +42037,16 @@ BEGIN
         'headers', h || jsonb_build_object('Content-Type', 'application/json'),
         'body', jsonb_build_object('requests', jsonb_build_array(jsonb_build_object('id', '1', 'method', 'DELETE',
           'url', '/drives/' || public._tk_uri(COALESCE(s ->> 'drive', t.drive_id)) || '/items/' || public._tk_uri(v_rem))))::text);
+    -- 2015: a link to a folder pasted in Settings (rpc_docs_sync_resolve):
+    -- what it points at, by Graph's shares (the link as Microsoft encodes it,
+    -- u! and unpadded base64url), then the library it is in.
+    ELSIF v_step = 'share' THEN
+      IF COALESCE(s ->> 'url', '') !~* '^https://' THEN RETURN jsonb_build_object('error', 'Not a link to look up.', 'code', 'gone'); END IF;
+      RETURN jsonb_build_object('method', 'GET', 'url', v_gb || '/shares/u!' || rtrim(translate(public._tk_b64(s ->> 'url'), '+/', '-_'), '=')
+        || '/driveItem?$select=id,name,webUrl,parentReference,folder,root', 'headers', h);
+    ELSIF v_step = 'share_drive' THEN
+      IF NOT public._docs_id_ok(s ->> 'drive') THEN RETURN jsonb_build_object('error', 'Not a library to look up.', 'code', 'gone'); END IF;
+      RETURN jsonb_build_object('method', 'GET', 'url', v_gb || '/drives/' || public._tk_uri(s ->> 'drive') || '?$select=id,name,webUrl', 'headers', h);
     END IF;
     RETURN jsonb_build_object('error', 'Not a step this database takes.', 'code', 'gone');
   END IF;
@@ -42019,7 +42168,7 @@ BEGIN
      WHERE id = v_item AND state = 'removing';
     PERFORM public._docs_fail(v_item, v_err);
   END IF;
-  IF COALESCE((v ->> 'base')::boolean, false) OR v ->> 'docs' IN ('site', 'drive', 'root') THEN
+  IF COALESCE((v ->> 'base')::boolean, false) OR v ->> 'docs' IN ('site', 'drive', 'root', 'libfolder') THEN
     PERFORM public._docs_target_fail(v ->> 'target', v_err);
   END IF;
 END $dstokfail$;
@@ -42061,7 +42210,7 @@ BEGIN
          site_id = CASE WHEN target_key IS NOT DISTINCT FROM v_key THEN site_id END,
          site_url = CASE WHEN target_key IS NOT DISTINCT FROM v_key THEN site_url END,
          site_name = CASE WHEN target_key IS NOT DISTINCT FROM v_key THEN site_name END,
-         drive_id = NULL, drive_name = NULL, base_id = NULL, base_url = NULL
+         drive_id = NULL, drive_name = NULL, base_id = NULL, base_url = NULL, lib_folder = NULL
    WHERE id;
   IF c ->> 'provider' = 'sharepoint' THEN
     v_job := public._docs_graph_plan(jsonb_build_object('docs', 'site', 'target', v_key, 'asked_by', p_asked_by));
@@ -42084,7 +42233,10 @@ BEGIN
     IF COALESCE(t.site_id, '') = '' THEN v_job := public._docs_graph_plan(jsonb_build_object('docs', 'site', 'target', p_key, 'asked_by', p_asked_by));
     ELSIF COALESCE(t.drive_id, '') = '' THEN v_job := public._docs_graph_plan(jsonb_build_object('docs', 'drive', 'target', p_key, 'asked_by', p_asked_by));
     ELSE
-      v_segs := string_to_array(NULLIF(c #>> '{sharepoint,base_path}', ''), '/');
+      -- 2015: a folder the library's name was found to be (a folder synced
+      -- on its own, named as a library is: _docs_graph_answer), first.
+      v_segs := CASE WHEN COALESCE(t.lib_folder, '') <> '' THEN ARRAY[t.lib_folder] ELSE ARRAY[]::text[] END
+             || COALESCE(string_to_array(NULLIF(c #>> '{sharepoint,base_path}', ''), '/'), ARRAY[]::text[]);
       SELECT f.remote_id, f.web_url INTO v_parent, v_url FROM public._docs_folders f WHERE f.target_key = p_key AND f.path = '#root';
       IF v_parent IS NULL THEN
         v_job := public._docs_graph_plan(jsonb_build_object('docs', 'root', 'target', p_key, 'asked_by', p_asked_by));
@@ -42236,6 +42388,7 @@ CREATE OR REPLACE FUNCTION public._docs_graph_answer(j public._net_jobs, p_statu
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsgans$
 DECLARE o jsonb := public._tk_parse(p_content); s jsonb := j.subject; v_step text := s ->> 'docs'; v_key text := s ->> 'target';
   c jsonb := public._docs_cfg(); v_err text; v_lib text; d jsonb; v_item uuid; it public._docs_items; r jsonb; v_in integer; t public._docs_target;
+  v_name text; v_dw text; v_iw text; v_path text;
 BEGIN
   -- 1848: the giving of SharePoint's access has answers of its own.
   IF COALESCE(v_step, '') LIKE 'ms\_%' THEN RETURN public._docs_ms_answer(j, p_status, p_content, p_error, p_transport); END IF;
@@ -42252,10 +42405,29 @@ BEGIN
   IF p_status = 403 OR (p_status = 401 AND COALESCE(o #>> '{error,message}', '') ~* 'roles|scp') THEN
     v_err := v_err || ' Y' || substr(public._docs_ms_words(public._docs_ms_app() ->> 'via'), 2)
       || ' needs access to SharePoint''s sites (Sites.ReadWrite.All): give it with Microsoft in Settings, SharePoint & Drive (an administrator of your Microsoft 365 signs in once).';
-    IF v_step IN ('site', 'drive', 'root') OR COALESCE((s ->> 'base')::boolean, false) THEN PERFORM public._docs_target_need(v_key, 'access', NULL); END IF;
+    IF v_step IN ('site', 'drive', 'root', 'libfolder') OR COALESCE((s ->> 'base')::boolean, false) THEN PERFORM public._docs_target_need(v_key, 'access', NULL); END IF;
   END IF;
 
   IF v_step = 'site' THEN
+    -- 2015: a site looked for by its name: the one called that (its title,
+    -- else the name in its address), and only where there is one.
+    IF p_status = 200 AND jsonb_typeof(o -> 'value') = 'array' THEN
+      v_name := btrim(COALESCE(c #>> '{sharepoint,site_name}', ''));
+      SELECT count(DISTINCT x ->> 'id'), (array_agg(x))[1] INTO v_in, d FROM jsonb_array_elements(o -> 'value') AS x
+       WHERE public._docs_id_ok(x ->> 'id') AND lower(btrim(COALESCE(x ->> 'displayName', ''))) = lower(v_name);
+      IF v_in = 0 THEN
+        SELECT count(DISTINCT x ->> 'id'), (array_agg(x))[1] INTO v_in, d FROM jsonb_array_elements(o -> 'value') AS x
+         WHERE public._docs_id_ok(x ->> 'id') AND lower(btrim(COALESCE(x ->> 'name', ''))) = lower(v_name);
+      END IF;
+      IF v_in = 1 THEN
+        o := d;
+      ELSE
+        PERFORM public._docs_target_fail(v_key, CASE WHEN v_in = 0
+          THEN 'Microsoft found no SharePoint site called ' || v_name || '. Paste a link to the folder copied in SharePoint itself, or the site''s address (https://…sharepoint.com/sites/…).'
+          ELSE 'Microsoft found ' || v_in || ' SharePoint sites called ' || v_name || '. Paste a link to the folder copied in SharePoint itself, or the address of the site you mean.' END);
+        RETURN jsonb_build_object('ok', false, 'error', CASE WHEN v_in = 0 THEN 'no site by that name' ELSE 'several sites by that name' END);
+      END IF;
+    END IF;
     IF p_status = 200 AND public._docs_id_ok(o ->> 'id') THEN
       UPDATE public._docs_target SET site_id = o ->> 'id', site_url = left(o ->> 'webUrl', 2000), site_name = left(o ->> 'displayName', 300), updated_at = now()
        WHERE id AND target_key IS NOT DISTINCT FROM v_key;
@@ -42270,14 +42442,32 @@ BEGIN
       IF v_lib = '' AND public._docs_id_ok(o ->> 'id') THEN
         d := o;
       ELSIF jsonb_typeof(o -> 'value') = 'array' THEN
+        -- (2015: or the name in its address, however it is written there: a
+        -- link pasted names "Shared Documents" for the site's Documents.)
         SELECT x INTO d FROM jsonb_array_elements(o -> 'value') AS x
-         WHERE lower(x ->> 'name') = v_lib OR lower(regexp_replace(COALESCE(x ->> 'webUrl', ''), '^.*/', '')) = replace(v_lib, ' ', '%20') LIMIT 1;
+         WHERE lower(x ->> 'name') = v_lib OR lower(regexp_replace(COALESCE(x ->> 'webUrl', ''), '^.*/', '')) = replace(v_lib, ' ', '%20')
+            OR lower(public._docs_pct_decode(regexp_replace(COALESCE(x ->> 'webUrl', ''), '^.*/', ''))) = v_lib
+         ORDER BY (lower(x ->> 'name') = v_lib) DESC NULLS LAST LIMIT 1;
       END IF;
       IF d IS NOT NULL AND public._docs_id_ok(d ->> 'id') THEN
         UPDATE public._docs_target SET drive_id = d ->> 'id', drive_name = left(d ->> 'name', 300), base_url = left(d ->> 'webUrl', 2000), updated_at = now()
          WHERE id AND target_key IS NOT DISTINCT FROM v_key;
         PERFORM public._docs_target_step(c, v_key, (s ->> 'asked_by')::uuid);
         RETURN jsonb_build_object('ok', true);
+      END IF;
+      -- 2015: a site named rather than addressed came from a folder's path on
+      -- a computer, where "Site - Delivery" is the library Delivery or a
+      -- folder called Delivery synced on its own (OneDrive names both so).
+      -- With no library of that name, a folder of it at the top of the
+      -- site's own Documents is looked for (libfolder), and never made.
+      IF COALESCE(c #>> '{sharepoint,site_url}', '') = '' AND v_lib <> '' AND jsonb_typeof(o -> 'value') = 'array' THEN
+        SELECT x INTO d FROM jsonb_array_elements(o -> 'value') AS x
+         WHERE public._docs_id_ok(x ->> 'id') AND lower(COALESCE(x ->> 'webUrl', '')) ~ '/shared%20documents$' LIMIT 1;
+        IF d IS NOT NULL THEN
+          PERFORM public._docs_track(jsonb_build_object('docs', 'libfolder', 'target', v_key), public._docs_graph_plan(jsonb_build_object('docs', 'libfolder',
+            'target', v_key, 'asked_by', s ->> 'asked_by', 'drive', d ->> 'id', 'drive_name', d ->> 'name', 'drive_url', d ->> 'webUrl', 'name', c #>> '{sharepoint,library}')));
+          RETURN jsonb_build_object('ok', true, 'library_as_folder', true);
+        END IF;
       END IF;
       PERFORM public._docs_target_fail(v_key, 'The site has no document library called ' || COALESCE(c #>> '{sharepoint,library}', '') || '. Leave the library blank for the site''s own Documents.');
       RETURN jsonb_build_object('ok', false, 'error', 'no such library');
@@ -42291,6 +42481,23 @@ BEGIN
     END IF;
     PERFORM public._docs_target_fail(v_key, v_err);
     RETURN jsonb_build_object('ok', false, 'error', v_err);
+  -- 2015: the library's name found to be a folder in the site's own
+  -- Documents: that folder, kept, first of the base's folders.
+  ELSIF v_step = 'libfolder' THEN
+    IF p_status = 200 AND public._docs_id_ok(o ->> 'id') AND jsonb_typeof(o -> 'folder') = 'object' THEN
+      v_name := left(COALESCE(NULLIF(o ->> 'name', ''), s ->> 'name'), 120);
+      UPDATE public._docs_target SET drive_id = s ->> 'drive', drive_name = left(s ->> 'drive_name', 300), base_url = left(s ->> 'drive_url', 2000),
+             lib_folder = v_name, updated_at = now()
+       WHERE id AND target_key IS NOT DISTINCT FROM v_key;
+      INSERT INTO public._docs_folders (target_key, path, remote_id, web_url) VALUES (v_key, '#base/' || v_name, o ->> 'id', left(o ->> 'webUrl', 2000))
+      ON CONFLICT (target_key, path) DO UPDATE SET remote_id = EXCLUDED.remote_id, web_url = EXCLUDED.web_url, made_at = now();
+      PERFORM public._docs_target_step(c, v_key, (s ->> 'asked_by')::uuid);
+      RETURN jsonb_build_object('ok', true);
+    END IF;
+    PERFORM public._docs_target_fail(v_key, CASE WHEN p_status IN (200, 404)
+      THEN 'The site has no document library called ' || COALESCE(s ->> 'name', '') || ', nor a folder of that name in its Documents. If it is a folder you keep on your computer on its own, paste its link from SharePoint instead (open it there, then Copy link).'
+      ELSE v_err END);
+    RETURN jsonb_build_object('ok', false, 'error', 'no such library or folder');
   ELSIF v_step IN ('folder', 'find') THEN
     IF p_status IN (200, 201) AND public._docs_id_ok(o ->> 'id') AND (v_step = 'folder' OR jsonb_typeof(o -> 'folder') = 'object') THEN
       PERFORM public._docs_folder_kept(v_key, s ->> 'path', o ->> 'id', o ->> 'webUrl', COALESCE((s ->> 'base')::boolean, false));
@@ -42370,6 +42577,40 @@ BEGIN
              next_at = now() + interval '20 minutes', updated_at = now() WHERE id = v_item AND state = 'removing';
     END IF;
     RETURN jsonb_build_object('ok', false, 'error', v_err);
+  -- 2015: a link pasted in Settings. What it points at: a folder (or a
+  -- library's top), then the library it is in, whose address less its own
+  -- name is the site's; the folder is the rest of the folder's address. The
+  -- answer is kept with the call, for rpc_docs_sync_resolved.
+  ELSIF v_step = 'share' THEN
+    IF p_status = 200 AND public._docs_id_ok(o #>> '{parentReference,driveId}') THEN
+      IF jsonb_typeof(o -> 'folder') IS DISTINCT FROM 'object' AND jsonb_typeof(o -> 'root') IS DISTINCT FROM 'object' THEN
+        RETURN jsonb_build_object('ok', false, 'code', 'file', 'error', 'That is a link to a file, not a folder. Copy the link of the folder the files go in.');
+      END IF;
+      RETURN jsonb_build_object('ok', true, 'next', public._docs_graph_plan(jsonb_build_object('docs', 'share_drive', 'asked_by', s ->> 'asked_by',
+        'drive', o #>> '{parentReference,driveId}', 'web', left(COALESCE(o ->> 'webUrl', ''), 2000),
+        'path', CASE WHEN jsonb_typeof(o -> 'root') = 'object' THEN ''
+                     ELSE btrim(COALESCE(public._docs_pct_decode(substring(o #>> '{parentReference,path}' FROM 'root:(.*)$')), '') || '/' || COALESCE(o ->> 'name', ''), '/') END)));
+    END IF;
+    -- 2016: refused for want of SharePoint's access, said so (code access),
+    -- which Settings offers to give there and then.
+    IF p_status = 403 OR (p_status = 401 AND COALESCE(o #>> '{error,message}', '') ~* 'roles|scp') THEN
+      RETURN jsonb_build_object('ok', false, 'code', 'access', 'error', v_err);
+    END IF;
+    RETURN jsonb_build_object('ok', false, 'error', CASE WHEN p_status IN (400, 404)
+      THEN 'Microsoft did not say where that link goes (' || rtrim(v_err, '.') || '). Open the link in your browser, and paste the address your browser shows instead.'
+      ELSE v_err END);
+  ELSIF v_step = 'share_drive' THEN
+    IF p_status = 200 AND public._docs_id_ok(o ->> 'id') AND COALESCE(o ->> 'webUrl', '') ~* '^https://[^/]+' THEN
+      v_dw := rtrim(o ->> 'webUrl', '/');
+      v_iw := rtrim(COALESCE(s ->> 'web', ''), '/');
+      IF v_iw <> '' AND lower(left(v_iw, length(v_dw))) = lower(v_dw) AND (length(v_iw) = length(v_dw) OR substr(v_iw, length(v_dw) + 1, 1) = '/') THEN
+        v_path := btrim(public._docs_pct_decode(substr(v_iw, length(v_dw) + 1)), '/');
+      ELSE
+        v_path := COALESCE(s ->> 'path', '');
+      END IF;
+      RETURN jsonb_build_object('ok', true, 'site_url', regexp_replace(v_dw, '/[^/]*$', ''), 'library', left(COALESCE(o ->> 'name', ''), 300), 'base_path', left(v_path, 1000));
+    END IF;
+    RETURN jsonb_build_object('ok', false, 'error', v_err);
   END IF;
   RETURN jsonb_build_object('ok', false, 'error', 'Not a step this database takes.');
 END $dsgans$;
@@ -42431,6 +42672,11 @@ BEGIN
            synced_version = it.taken_version, synced_at = now(), attempts = 0, last_error = NULL,
            lease_by = NULL, lease_worker = NULL, lease_until = NULL, job = NULL, next_at = now(), updated_at = now()
      WHERE id = it.id;
+    -- 2015: a client's credentials, there now: nothing of them is kept here
+    -- any more but that they went, and where.
+    IF it.kind = 'credentials' AND COALESCE(it.source, '') ~ '^cred:[0-9a-f-]{36}$' AND it.version IS NOT DISTINCT FROM it.taken_version THEN
+      UPDATE public._docs_creds SET enc = NULL, sent_key = it.target_key, sent_at = now() WHERE id = substr(it.source, 6)::uuid;
+    END IF;
     RETURN jsonb_build_object('ok', true);
   END IF;
   IF p_status = 200 THEN
@@ -42668,6 +42914,10 @@ BEGIN
    WHERE step NOT IN ('done', 'failed') AND updated_at < now() - interval '10 minutes';
   UPDATE public._docs_ms_grant SET token = NULL, token_until = NULL WHERE token IS NOT NULL AND (token_until IS NULL OR token_until < now());
   DELETE FROM public._docs_ms_grant WHERE created_at < now() - interval '1 hour';
+  -- 2015: a client's credentials kept to be sent are kept a fortnight at
+  -- most, and not once the firm stops keeping them.
+  DELETE FROM public._docs_creds
+   WHERE enc IS NOT NULL AND (created_at < now() - interval '14 days' OR NOT COALESCE((c -> 'kinds' -> 'credentials' ->> 'on')::boolean, false));
   IF NOT COALESCE((c ->> 'on')::boolean, false) THEN RETURN jsonb_build_object('on', false); END IF;
   v_key := public._docs_target_key(c);
   IF v_key IS NULL THEN RETURN jsonb_build_object('on', true, 'target', false); END IF;
@@ -42718,10 +42968,11 @@ BEGIN
   IF (SELECT scanned_at IS NULL OR scanned_at < now() - interval '2 minutes' FROM public._docs_state WHERE id) THEN
     v_scan := public._docs_scan();
   END IF;
-  -- Behind a gateway, its worker sends them: told when something waits.
+  -- Behind a gateway, its worker sends them: told when something waits
+  -- (2015: not for a client's credentials, which a browser sends).
   IF v_no IS NULL AND public._net_sender() = 'gateway'
      AND EXISTS (SELECT 1 FROM public._docs_items WHERE target_key = v_key AND state IN ('pending', 'failed') AND next_at <= now()
-                    AND (lease_until IS NULL OR lease_until < now())) THEN
+                    AND (lease_until IS NULL OR lease_until < now()) AND kind <> 'credentials') THEN
     PERFORM pg_notify('pental_docs', '');
   END IF;
   RETURN jsonb_build_object('on', true, 'changed', v_scan);
@@ -42744,11 +42995,14 @@ REVOKE ALL ON FUNCTION public._docs_need_admin() FROM PUBLIC, anon, authenticate
 CREATE OR REPLACE FUNCTION public.rpc_docs_sync_get() RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsget$
 DECLARE c jsonb; v_key text; t public._docs_target; g public._docs_google; v_counts jsonb; v_fail jsonb; v_recent jsonb; st public._docs_state; v_tm jsonb;
-  v_app jsonb; v_door jsonb; acc record; gr record;
+  v_app jsonb; v_door jsonb; acc record; gr record; v_gapp jsonb; moa public._docs_apps; goa public._docs_apps;
 BEGIN
   PERFORM public._docs_need_admin();
   IF pg_try_advisory_xact_lock(hashtext('pental_net_tick')) THEN PERFORM public._net_settle(); END IF;
   c := public._docs_cfg();
+  v_gapp := public._docs_google_app();
+  SELECT * INTO moa FROM public._docs_apps WHERE provider = 'microsoft';
+  SELECT * INTO goa FROM public._docs_apps WHERE provider = 'google';
   v_key := public._docs_target_key(c);
   SELECT * INTO t FROM public._docs_target WHERE id;
   SELECT * INTO g FROM public._docs_google WHERE id;
@@ -42771,13 +43025,19 @@ BEGIN
     'cannot', public._docs_cannot(c),
     'by', public._docs_by(),
     'teams_ready', v_tm ->> 'tenant' IS NOT NULL AND v_tm ->> 'client' IS NOT NULL AND v_tm ->> 'secret' IS NOT NULL,
-    'google_app_ready', public._sso_own('google'),
+    -- 2016: Drive's application wherever it is kept, and which; each
+    -- application kept here for this alone (no secret); and that one may be.
+    'google_app_ready', v_gapp IS NOT NULL,
+    'google_app', v_gapp ->> 'via',
+    'own_apps', true,
+    'google_own', CASE WHEN goa.provider IS NOT NULL THEN jsonb_build_object('client', goa.client, 'saved_at', goa.saved_at, 'by', goa.saved_by_name,
+      'undecryptable', NULLIF(public._settings_decrypt(goa.secret_enc), '') IS NULL) END,
     'google', jsonb_build_object('connected', public._docs_google_connected(), 'account', g.account, 'connected_at', g.connected_at,
                                  'broken', g.broken_at IS NOT NULL, 'broken_reason', g.broken_reason),
     'root_name', public._docs_root_name(c),
     'target', CASE WHEN t.target_key IS NOT DISTINCT FROM v_key AND v_key IS NOT NULL THEN jsonb_build_object(
         'ready', t.ready, 'checking', t.checking, 'error', t.error, 'checked_at', t.checked_at,
-        'site_name', t.site_name, 'site_url', t.site_url, 'drive_name', t.drive_name, 'base_url', t.base_url,
+        'site_name', t.site_name, 'site_url', t.site_url, 'drive_name', t.drive_name, 'base_url', t.base_url, 'lib_folder', t.lib_folder,
         'need', CASE WHEN t.error IS NOT NULL THEN t.need END, 'need_url', CASE WHEN t.error IS NOT NULL THEN t.need_url END) END,
     -- 1848: which Microsoft application reaches SharePoint and which an
     -- administrator signs in through to give it access (their IDs, for
@@ -42785,12 +43045,18 @@ BEGIN
     -- this person's giving under way.
     'ms', jsonb_build_object('app', v_app ->> 'via', 'door', v_door ->> 'via', 'app_id', v_app ->> 'client', 'door_app_id', v_door ->> 'client',
       'signin_ready', public._docs_ms_signin() IS NOT NULL,
+      'own', CASE WHEN moa.provider IS NOT NULL THEN jsonb_build_object('client', moa.client, 'tenant', moa.tenant, 'saved_at', moa.saved_at, 'by', moa.saved_by_name,
+        'undecryptable', NULLIF(public._settings_decrypt(moa.secret_enc), '') IS NULL) END,
       'access', CASE WHEN acc.app_id IS NOT NULL AND lower(acc.app_id) = lower(COALESCE(v_app ->> 'client', '')) THEN jsonb_build_object(
         'given_at', acc.given_at, 'by', acc.given_by_name, 'tidied', acc.tidied, 'tidy_error', acc.tidy_error) END,
       'grant', CASE WHEN gr.state IS NOT NULL AND gr.created_at > now() - interval '30 minutes' THEN jsonb_build_object(
         'step', gr.step, 'ok', gr.ok, 'error', gr.error, 'admin', gr.admin, 'at', gr.updated_at) END),
     'google_project', public._docs_google_project(),
     'counts', v_counts, 'failures', v_fail, 'recent', v_recent,
+    -- 2015: a client's credentials waiting to be sent (behind a gateway, a
+    -- browser of the team sends them).
+    'creds_waiting', (SELECT count(*) FROM public._docs_items WHERE target_key = v_key AND kind = 'credentials'
+                        AND state IN ('pending', 'failed', 'linking', 'uploading', 'verifying')),
     'scanned_at', st.scanned_at, 'scanned', st.scanned, 'scan_error', st.scan_error,
     'last_synced_at', (SELECT max(synced_at) FROM public._docs_items WHERE target_key = v_key));
 END $dsget$;
@@ -42846,6 +43112,8 @@ DECLARE c jsonb := public._docs_norm(p_cfg); a record; k jsonb; v_items jsonb :=
     "files":"Scope.xlsx","client":"Network diagram.pdf","scans":"External scan.pdf","evidence":"screenshot.png","proposals":"Proposal.pdf","invoices":"Invoice INV-104.pdf"}'::jsonb;
 BEGIN
   PERFORM public._docs_need_admin();
+  -- 2015: a client's credentials, named as they are kept (_docs_cred_capture).
+  v_examples := v_examples || jsonb_build_object('credentials', 'Credentials ' || to_char(now() AT TIME ZONE public._docs_tz(), 'YYYY-MM-DD') || ' 0930 Admin portal.txt');
   FOR a IN SELECT x.id, x.client_id FROM public.assessments x WHERE x.archived_at IS NULL ORDER BY x.created_at DESC NULLS LAST LIMIT 2 LOOP
     n := n + 1;
     FOR k IN SELECT y FROM jsonb_array_elements(public._docs_kinds()) AS y LOOP
@@ -42913,14 +43181,20 @@ GRANT EXECUTE ON FUNCTION public.rpc_docs_sync_retry(uuid) TO authenticated;
 -- code to the portal at its own address (#docs_state).
 CREATE OR REPLACE FUNCTION public.rpc_docs_google_begin(p_origin text) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $dsgbeg$
-DECLARE v_origin text := public._sso_origin(p_origin); v_client text; v_state text; v_verifier text; v_redirect text; v_wire text; v_q jsonb; v_no jsonb;
+DECLARE v_origin text := public._sso_origin(p_origin); v_client text; v_state text; v_verifier text; v_redirect text; v_wire text; v_q jsonb; v_no jsonb; v_app jsonb;
 BEGIN
   PERFORM public._docs_need_admin();
   IF public._xero_stood_down() IS NOT NULL THEN
     RETURN jsonb_build_object('ok', false, 'code', 'unavailable', 'error', 'Nothing is sent while this portal''s database is being moved.');
   END IF;
-  IF NOT public._sso_own('google') THEN
-    RETURN jsonb_build_object('ok', false, 'code', 'no_app', 'error', 'Google Drive is reached with your Google sign-in application: save its client ID and secret in Settings, Login Page, Single sign-on first.');
+  -- 2016: the application kept for Drive here, or the Google sign-in one.
+  v_app := public._docs_google_app();
+  IF v_app IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'no_app', 'error', 'Google Drive is reached with a Google application of your firm''s own: set one up in Settings, SharePoint & Drive, Your Google application, first.');
+  END IF;
+  IF COALESCE((v_app ->> 'undecryptable')::boolean, false) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'config', 'error', 'The saved secret of your Google application cannot be read here (it was sealed with another key). Enter it again in Settings, '
+      || CASE WHEN v_app ->> 'via' = 'docs' THEN 'SharePoint & Drive, Your Google application.' ELSE 'Login Page, Single sign-on.' END);
   END IF;
   IF v_origin IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'This page''s address could not be read. Reload it and try again.'); END IF;
   IF public._net_sender() IS NULL THEN
@@ -42932,7 +43206,7 @@ BEGIN
   IF (SELECT count(*) FROM public._docs_pending WHERE created_at > now() - interval '10 minutes') > 30 THEN
     RETURN jsonb_build_object('ok', false, 'code', 'throttled', 'error', 'Too many tries at once. Try again in a few minutes.');
   END IF;
-  v_client := (SELECT btrim(s.sso_google_client_id) FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1);
+  v_client := v_app ->> 'client';
   v_state := encode(extensions.gen_random_bytes(24), 'hex');
   v_verifier := public._signin_b64u(extensions.gen_random_bytes(32));
   v_redirect := v_origin || '/api/sso';
@@ -43020,19 +43294,27 @@ REVOKE ALL ON FUNCTION public._docs_holds(public._docs_items, uuid, text) FROM P
 -- A few files taken to send (not already being sent; for a person, only
 -- those they may read), each held for ten minutes and its upload address
 -- asked for at once. p_origin is the portal's address in that browser, which
--- Drive's upload address answers. { on, ready, by, cannot, items: [{ id,
+-- Drive's upload address answers. { on, ready, by, cannot, creds (2015: a
+-- browser behind a gateway sends the client's credentials), items: [{ id,
 -- source, kind, file, size, provider }] }.
 CREATE OR REPLACE FUNCTION public._docs_take(p_limit integer, p_user uuid, p_worker text, p_origin text) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dstake$
 DECLARE c jsonb := public._docs_cfg(); v_key text; v_no jsonb; r record; v_items jsonb := '[]'::jsonb; v_origin text; v_by text;
-  v_limit integer := GREATEST(1, LEAST(COALESCE(p_limit, 2), 4)); v_n integer := 0;
+  v_limit integer := GREATEST(1, LEAST(COALESCE(p_limit, 2), 4)); v_n integer := 0; v_creds boolean := false;
 BEGIN
   IF NOT COALESCE((c ->> 'on')::boolean, false) THEN RETURN jsonb_build_object('on', false); END IF;
   v_no := public._docs_cannot(c);
   IF v_no IS NOT NULL THEN RETURN jsonb_build_object('on', true, 'ready', false, 'cannot', v_no); END IF;
   v_by := public._docs_by();
   IF v_by IS DISTINCT FROM (CASE WHEN p_worker IS NOT NULL THEN 'gateway' ELSE 'browser' END) THEN
-    RETURN jsonb_build_object('on', true, 'ready', true, 'by', v_by, 'items', '[]'::jsonb);
+    -- 2015: behind a gateway, a client's credentials are sent from a browser
+    -- of the firm's team all the same: the gateway reads only what is in the
+    -- portal's storage, and they never are.
+    IF p_worker IS NULL AND v_by = 'gateway' AND public._docs_creds_kept(c) THEN
+      v_creds := true;
+    ELSE
+      RETURN jsonb_build_object('on', true, 'ready', true, 'by', v_by, 'items', '[]'::jsonb);
+    END IF;
   END IF;
   v_key := public._docs_target_key(c);
   IF pg_try_advisory_xact_lock(hashtext('pental_net_tick')) THEN PERFORM public._net_settle(); END IF;
@@ -43041,20 +43323,24 @@ BEGIN
   IF (SELECT scanned_at IS NULL OR scanned_at < now() - interval '15 seconds' FROM public._docs_state WHERE id) THEN
     PERFORM public._docs_scan();
   END IF;
-  IF NOT public._docs_target_ready(c, NULL) THEN RETURN jsonb_build_object('on', true, 'ready', false, 'by', v_by, 'items', '[]'::jsonb); END IF;
+  IF NOT public._docs_target_ready(c, NULL) THEN RETURN jsonb_build_object('on', true, 'ready', false, 'by', v_by, 'creds', v_creds, 'items', '[]'::jsonb); END IF;
   IF p_user IS NOT NULL THEN
     v_origin := CASE WHEN lower(rtrim(btrim(COALESCE(p_origin, '')), '/')) ~ '^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{2,5})?$'
                      THEN lower(rtrim(btrim(p_origin), '/')) END;
   END IF;
   -- The next few due, oldest first; for a person, only those they may read
-  -- (asked of the few looked at, never of every file waiting).
-  FOR r IN SELECT i.id, i.source FROM public._docs_items i
+  -- (asked of the few looked at, never of every file waiting). 2015: never
+  -- credentials for a gateway; behind one, only credentials for a person,
+  -- and those of an engagement they may open.
+  FOR r IN SELECT i.id, i.source, i.kind, i.assessment_id FROM public._docs_items i
             WHERE i.target_key = v_key AND i.state IN ('pending', 'failed') AND i.next_at <= now()
               AND (i.lease_until IS NULL OR i.lease_until < now())
+              AND (p_worker IS NULL OR i.kind <> 'credentials') AND (NOT v_creds OR i.kind = 'credentials')
             ORDER BY i.state = 'failed', i.next_at, i.file_at NULLS LAST
             LIMIT v_limit * 5 FOR UPDATE SKIP LOCKED LOOP
     EXIT WHEN v_n >= v_limit;
-    CONTINUE WHEN p_worker IS NULL AND NOT public.can_access_assessment_file(r.source);
+    CONTINUE WHEN p_worker IS NULL AND NOT CASE WHEN r.kind = 'credentials' THEN public.can_access_assessment(r.assessment_id)
+                                                ELSE public.can_access_assessment_file(r.source) END;
     -- What arrived for it before and is still to be checked keeps its place
     -- (and the version it was), to be checked rather than sent again.
     UPDATE public._docs_items
@@ -43071,7 +43357,7 @@ BEGIN
                                                                        'size', i.size, 'provider', i.provider))
                              FROM public._docs_items i WHERE i.id = r.id);
   END LOOP;
-  RETURN jsonb_build_object('on', true, 'ready', true, 'by', v_by, 'items', v_items);
+  RETURN jsonb_build_object('on', true, 'ready', true, 'by', v_by, 'creds', v_creds, 'items', v_items);
 END $dstake$;
 REVOKE ALL ON FUNCTION public._docs_take(integer, uuid, text, text) FROM PUBLIC, anon, authenticated;
 
@@ -43389,16 +43675,21 @@ BEGIN
 END $dsmssign$;
 REVOKE ALL ON FUNCTION public._docs_ms_signin() FROM PUBLIC, anon, authenticated;
 
--- The application SharePoint is reached with: { via ('teams' | 'signin'),
--- tenant, client, secret, undecryptable }, NULL where the firm has neither.
--- The one given the access from here while it is still saved; otherwise the
--- Teams application (as 1847 had it); otherwise the Microsoft sign-in
--- application, in the directory its access was given in (or the one Settings
--- names for it, where that is a directory's ID or domain).
+-- The application SharePoint is reached with: { via ('docs' | 'teams' |
+-- 'signin'), tenant, client, secret, undecryptable }, NULL where the firm has
+-- none. 2016: the one kept for it in Settings, SharePoint & Drive, wherever
+-- it is saved. Otherwise the one given the access from here while it is still
+-- saved; otherwise the Teams application (as 1847 had it); otherwise the
+-- Microsoft sign-in application, in the directory its access was given in
+-- (or the one Settings names for it, where that is a directory's ID or
+-- domain).
 CREATE OR REPLACE FUNCTION public._docs_ms_app() RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsmsapp$
-DECLARE t jsonb := public._teams_creds(); si jsonb := public._docs_ms_signin(); a public._docs_ms_access; v_teams boolean; v_tenant text;
+DECLARE o jsonb := public._docs_own_app('microsoft'); t jsonb; si jsonb; a public._docs_ms_access; v_teams boolean; v_tenant text;
 BEGIN
+  IF o IS NOT NULL THEN RETURN o; END IF;
+  t := public._teams_creds();
+  si := public._docs_ms_signin();
   SELECT * INTO a FROM public._docs_ms_access WHERE id;
   v_teams := t ->> 'tenant' IS NOT NULL AND t ->> 'client' IS NOT NULL AND (t ->> 'secret' IS NOT NULL OR COALESCE((t ->> 'undecryptable')::boolean, false));
   IF si IS NOT NULL AND (NOT v_teams OR (a.via = 'signin' AND lower(COALESCE(a.app_id, '')) = lower(si ->> 'client'))) THEN
@@ -43415,15 +43706,19 @@ BEGIN
 END $dsmsapp$;
 REVOKE ALL ON FUNCTION public._docs_ms_app() FROM PUBLIC, anon, authenticated;
 
--- The application an administrator signs in through to give the access: the
--- Microsoft sign-in application where it is saved (Microsoft sends people
--- back to the portal's address, which is registered with it for sign-in);
--- otherwise the Teams application, whose registration must list the portal's
--- address too (Settings says so, with the address).
+-- The application an administrator signs in through to give the access:
+-- 2016: the one kept for SharePoint in Settings, SharePoint & Drive (set up
+-- with the portal's address, as that page says), and given the access itself;
+-- otherwise the Microsoft sign-in application where it is saved (Microsoft
+-- sends people back to the portal's address, which is registered with it for
+-- sign-in); otherwise the Teams application, whose registration must list the
+-- portal's address too (Settings says so, with the address).
 CREATE OR REPLACE FUNCTION public._docs_ms_door() RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsmsdoor$
-DECLARE si jsonb := public._docs_ms_signin(); t jsonb;
+DECLARE o jsonb := public._docs_own_app('microsoft'); si jsonb; t jsonb;
 BEGIN
+  IF o IS NOT NULL THEN RETURN o; END IF;
+  si := public._docs_ms_signin();
   IF si IS NOT NULL THEN RETURN si; END IF;
   t := public._teams_creds();
   IF t ->> 'client' IS NULL OR t ->> 'tenant' IS NULL OR (t ->> 'secret' IS NULL AND NOT COALESCE((t ->> 'undecryptable')::boolean, false)) THEN RETURN NULL; END IF;
@@ -43435,7 +43730,8 @@ REVOKE ALL ON FUNCTION public._docs_ms_door() FROM PUBLIC, anon, authenticated;
 -- The application's name, as Settings calls it.
 CREATE OR REPLACE FUNCTION public._docs_ms_words(p_via text) RETURNS text
 LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $dsmswords$
-  SELECT CASE p_via WHEN 'teams' THEN 'your Teams application' WHEN 'signin' THEN 'your Microsoft sign-in application' ELSE 'your Microsoft application' END;
+  SELECT CASE p_via WHEN 'teams' THEN 'your Teams application' WHEN 'signin' THEN 'your Microsoft sign-in application'
+                     WHEN 'docs' THEN 'your SharePoint application' ELSE 'your Microsoft application' END;
 $dsmswords$;
 REVOKE ALL ON FUNCTION public._docs_ms_words(text) FROM PUBLIC, anon, authenticated;
 
@@ -43454,7 +43750,7 @@ CREATE OR REPLACE FUNCTION public._docs_ms_token_now() RETURNS text
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsmstok$
 DECLARE a jsonb := public._docs_ms_app();
 BEGIN
-  IF a ->> 'via' = 'signin' THEN
+  IF a ->> 'via' IN ('signin', 'docs') THEN
     RETURN (SELECT c.token FROM public._docs_ms_cache c
              WHERE c.id AND c.token IS NOT NULL AND c.expires_at > now() + interval '1 minute' AND c.fp = public._docs_ms_fp(a));
   END IF;
@@ -43468,10 +43764,13 @@ CREATE OR REPLACE FUNCTION public._docs_ms_token_build(p_job public._net_jobs) R
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsmstb$
 DECLARE a jsonb := public._docs_ms_app();
 BEGIN
-  IF a ->> 'via' IS DISTINCT FROM 'signin' THEN
-    RETURN jsonb_build_object('error', 'SharePoint is not reached with the Microsoft sign-in application here.', 'code', 'gone');
+  IF COALESCE(a ->> 'via', '') NOT IN ('signin', 'docs') THEN
+    RETURN jsonb_build_object('error', 'SharePoint is not reached with that Microsoft application here any more.', 'code', 'gone');
   END IF;
-  IF a ->> 'secret' IS NULL THEN RETURN jsonb_build_object('error', 'The Microsoft sign-in application has no secret saved here.', 'code', 'config'); END IF;
+  IF a ->> 'secret' IS NULL THEN
+    RETURN jsonb_build_object('error', 'The secret of ' || public._docs_ms_words(a ->> 'via') || ' cannot be read here: enter it again in Settings, '
+      || CASE WHEN a ->> 'via' = 'docs' THEN 'SharePoint & Drive.' ELSE 'Login Page, Single sign-on.' END, 'code', 'config');
+  END IF;
   IF a ->> 'tenant' IS NULL OR public._docs_ms_dir(a ->> 'tenant') = 'organizations' THEN
     RETURN jsonb_build_object('error', 'Which Microsoft 365 the sign-in application reaches SharePoint in is not known yet: give it access to SharePoint first.', 'code', 'config');
   END IF;
@@ -43537,11 +43836,11 @@ BEGIN
   a := public._docs_ms_app();
   d := public._docs_ms_door();
   IF a IS NULL OR d IS NULL THEN
-    RETURN jsonb_build_object('ok', false, 'code', 'no_app', 'error', 'SharePoint is reached with a Microsoft application of your firm''s own: save your Teams application (Settings, Integrations, Microsoft Teams) or your own Microsoft sign-in (Settings, Login Page, Single sign-on) first.');
+    RETURN jsonb_build_object('ok', false, 'code', 'no_app', 'error', 'SharePoint is reached with a Microsoft application of your firm''s own: set one up in Settings, SharePoint & Drive, Your Microsoft application, first.');
   END IF;
   IF COALESCE((d ->> 'undecryptable')::boolean, false) OR d ->> 'secret' IS NULL THEN
     RETURN jsonb_build_object('ok', false, 'code', 'config', 'error', 'The saved secret of ' || public._docs_ms_words(d ->> 'via') || ' cannot be read here (it was sealed with another key). Enter it again in Settings, '
-      || CASE WHEN d ->> 'via' = 'teams' THEN 'Integrations, Microsoft Teams.' ELSE 'Login Page, Single sign-on.' END);
+      || CASE d ->> 'via' WHEN 'teams' THEN 'Integrations, Microsoft Teams.' WHEN 'docs' THEN 'SharePoint & Drive, Your Microsoft application.' ELSE 'Login Page, Single sign-on.' END);
   END IF;
   IF NOT public._teams_is_object_id(a ->> 'client') OR NOT public._teams_is_object_id(d ->> 'client') THEN
     RETURN jsonb_build_object('ok', false, 'code', 'config', 'error', 'The saved application ID is not one Microsoft gives (it looks like 00000000-0000-0000-0000-000000000000).');
@@ -43915,12 +44214,11 @@ END $dsmsans$;
 REVOKE ALL ON FUNCTION public._docs_ms_answer(public._net_jobs, integer, text, text, text) FROM PUBLIC, anon, authenticated;
 
 -- ── Google's Drive API switched off ────────────────────────────────────────
--- The project of the firm's Google sign-in application, as its client ID
--- begins (Google's own numbering), NULL where it does not.
+-- The project of the firm's Google application (2016: wherever it is kept),
+-- as its client ID begins (Google's own numbering), NULL where it does not.
 CREATE OR REPLACE FUNCTION public._docs_google_project() RETURNS text
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsgproj$
-  SELECT substring(btrim(COALESCE(s.sso_google_client_id, '')) FROM '^([0-9]{4,30})-[A-Za-z0-9_]+\.apps\.googleusercontent\.com$')
-    FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1;
+  SELECT substring(btrim(COALESCE(public._docs_google_app() ->> 'client', '')) FROM '^([0-9]{4,30})-[A-Za-z0-9_]+\.apps\.googleusercontent\.com$');
 $dsgproj$;
 REVOKE ALL ON FUNCTION public._docs_google_project() FROM PUBLIC, anon, authenticated;
 
@@ -43945,6 +44243,478 @@ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $
   UPDATE public._docs_target SET need = p_need, need_url = left(p_url, 1000), updated_at = now() WHERE id AND target_key IS NOT DISTINCT FROM p_key;
 $dstneed$;
 REVOKE ALL ON FUNCTION public._docs_target_need(text, text, text) FROM PUBLIC, anon, authenticated;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 2015: A CLIENT'S CREDENTIALS IN SHAREPOINT OR DRIVE, AND WHERE THE FILES GO
+-- FROM A LINK.
+--
+-- [stated] Arian: "also an option on the credential capture to send creds
+-- here as well if its enabled in a nice readable file"; "make it as seamless
+-- as possible for vendors to enable and set this up it looks a bit
+-- complicated".
+--
+-- Credentials from the client, a kind of its own (_docs_kinds), off until the
+-- firm switches it on. While it is on, each set a client sends under
+-- Credentials (rpc_credentials_submit) is kept here a second time for it,
+-- sealed with the credentials' own key as the client's list is: as a text
+-- file a person can read (the engagement, who sent it and when, each field by
+-- the name the portal gives it, each login, the notes, the files sent with
+-- it), and each file sent with it as itself. Each is sent once, as any file
+-- is, from the browser of a member of the firm's team who may open the
+-- engagement: behind a gateway too, which reads only what is in the portal's
+-- storage, and these never are. Once one has arrived, nothing of it is kept
+-- here but that it went, and where. One the client removes before it is
+-- collected goes with it (sent already: left there, or removed there where
+-- the firm says so, as any file). Kept to be sent a fortnight at most, and
+-- not at all once the firm stops keeping them. The client is told a copy is
+-- kept (rpc_credentials_copied). Nothing passes through Pental.
+--
+-- And where the files go, from a link: the SharePoint site may be named
+-- rather than addressed (the folder's path on a computer that keeps
+-- SharePoint's files names its site and library, not their addresses), and
+-- is found by its name (_docs_build, _docs_graph_answer); a link to a folder
+-- copied in SharePoint is looked up with Microsoft (rpc_docs_sync_resolve),
+-- and what it points at fills in the site, the library and the folder.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- What is kept to be sent: the text (part 0) and each file sent with it (1
+-- on), by the engagement and the set's own time of sending as the client's
+-- list keeps it; sealed until sent, then only where it went (sent_key).
+CREATE TABLE IF NOT EXISTS public._docs_creds (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  assessment_id uuid NOT NULL REFERENCES public.assessments(id) ON DELETE CASCADE,
+  entry_at text NOT NULL,
+  part integer NOT NULL DEFAULT 0,
+  file_name text NOT NULL,
+  mime text NOT NULL DEFAULT 'text/plain',
+  size bigint,
+  enc bytea,
+  sent_key text,
+  sent_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT _docs_creds_one UNIQUE (assessment_id, entry_at, part)
+);
+ALTER TABLE public._docs_creds ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public._docs_creds FROM PUBLIC, anon, authenticated;
+
+-- Where the files go: a site named, whose "library" turned out to be a
+-- folder at the top of its Documents (_docs_graph_answer, libfolder).
+ALTER TABLE public._docs_target ADD COLUMN IF NOT EXISTS lib_folder text;
+
+-- An address's %XX read back as the text it stands for (a name with a space
+-- or an accent in it); the text as it came where it is not one.
+CREATE OR REPLACE FUNCTION public._docs_pct_decode(p text) RETURNS text
+LANGUAGE plpgsql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $dspct$
+DECLARE b bytea := ''::bytea; i integer := 1; n integer := length(COALESCE(p, '')); ch text;
+BEGIN
+  IF p IS NULL OR strpos(p, '%') = 0 THEN RETURN p; END IF;
+  WHILE i <= n LOOP
+    ch := substr(p, i, 1);
+    IF ch = '%' AND substr(p, i + 1, 2) ~ '^[0-9A-Fa-f]{2}$' THEN
+      b := b || decode(substr(p, i + 1, 2), 'hex');
+      i := i + 3;
+    ELSE
+      b := b || convert_to(ch, 'UTF8');
+      i := i + 1;
+    END IF;
+  END LOOP;
+  RETURN convert_from(b, 'UTF8');
+EXCEPTION WHEN OTHERS THEN
+  RETURN p;
+END $dspct$;
+REVOKE ALL ON FUNCTION public._docs_pct_decode(text) FROM PUBLIC, anon, authenticated;
+
+-- The firm's own time zone (Settings, Automation), for the times a person
+-- reads; London where it names none this database knows.
+CREATE OR REPLACE FUNCTION public._docs_tz() RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dstz$
+  SELECT COALESCE((SELECT z.name FROM pg_catalog.pg_timezone_names z
+                    WHERE z.name = (SELECT NULLIF(btrim(s.automation_timezone), '') FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1) LIMIT 1),
+                  'Europe/London');
+$dstz$;
+REVOKE ALL ON FUNCTION public._docs_tz() FROM PUBLIC, anon, authenticated;
+
+-- Whether a client's credentials are kept for SharePoint or Drive now: kept
+-- in step, the kind switched on, and somewhere named for them to go.
+CREATE OR REPLACE FUNCTION public._docs_creds_kept(c jsonb) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dscredkept$
+  SELECT COALESCE((c ->> 'on')::boolean, false) AND COALESCE((c -> 'kinds' -> 'credentials' ->> 'on')::boolean, false)
+     AND public._docs_target_key(c) IS NOT NULL;
+$dscredkept$;
+REVOKE ALL ON FUNCTION public._docs_creds_kept(jsonb) FROM PUBLIC, anon, authenticated;
+
+-- What the portal calls each kind of credentials and each of their fields
+-- (_CRED_TYPE_LABELS and _credFieldDefs in the portal), in its order.
+CREATE OR REPLACE FUNCTION public._docs_cred_fields() RETURNS jsonb
+LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $dscredfld$
+  SELECT '{
+    "names": {"credentials":"Username & Password","api_key":"API Key / Token","vpn":"VPN Access","certificate":"Client Certificate","ssh":"SSH Key","file":"File","other":"Other"},
+    "fields": {
+      "credentials": [["username","Username"],["password","Password"],["url","Login URL"],["mfa","MFA / 2FA"]],
+      "api_key": [["api_key","API Key / Token"],["endpoint","API Endpoint"],["auth_header","Auth Header"]],
+      "vpn": [["server","VPN Server"],["vpn_type","VPN Type"],["username","Username"],["password","Password / PSK"],["config","VPN Config"]],
+      "ssh": [["hostname","Hostname / IP"],["port","Port"],["username","Username"],["key","Private Key / Password"]],
+      "certificate": [["certificate","Certificate"],["private_key","Private Key"],["passphrase","Passphrase"],["target_url","Target URL"]],
+      "file": [],
+      "other": [["details","Details"]]},
+    "labels": {"username":"Username","password":"Password","url":"Login URL","mfa":"MFA / 2FA","api_key":"API Key / Token","endpoint":"API Endpoint",
+      "auth_header":"Auth Header","server":"VPN Server","vpn_type":"VPN Type","config":"VPN Config","hostname":"Hostname / IP","port":"Port",
+      "key":"Private Key / Password","certificate":"Certificate","private_key":"Private Key","passphrase":"Passphrase","target_url":"Target URL","details":"Details"}
+  }'::jsonb;
+$dscredfld$;
+REVOKE ALL ON FUNCTION public._docs_cred_fields() FROM PUBLIC, anon, authenticated;
+
+-- Names and values, one to a line, the values lined up: [[name, value], ...].
+-- A value of several lines goes below its name from the line's start, as it
+-- was sent, so a key or a profile copied from it still works.
+CREATE OR REPLACE FUNCTION public._docs_cred_block(p_pairs jsonb, p_indent text DEFAULT '') RETURNS text
+LANGUAGE plpgsql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $dscredblk$
+DECLARE w integer; x jsonb; v_out text := ''; v_v text;
+BEGIN
+  SELECT COALESCE(max(length(y ->> 0)), 0) INTO w FROM jsonb_array_elements(p_pairs) AS y WHERE COALESCE(y ->> 1, '') !~ '[\r\n]';
+  FOR x IN SELECT y FROM jsonb_array_elements(p_pairs) AS y LOOP
+    v_v := COALESCE(x ->> 1, '');
+    IF v_v ~ '[\r\n]' THEN
+      v_out := v_out || p_indent || (x ->> 0) || ':' || E'\n' || rtrim(v_v, E'\r\n') || E'\n';
+    ELSE
+      v_out := v_out || p_indent || rpad((x ->> 0) || ':', w + 2) || v_v || E'\n';
+    END IF;
+  END LOOP;
+  RETURN v_out;
+END $dscredblk$;
+REVOKE ALL ON FUNCTION public._docs_cred_block(jsonb, text) FROM PUBLIC, anon, authenticated;
+
+-- One set of credentials as a person reads it: from whom, for which
+-- engagement, who sent it and when, what kind it is, each field by the name
+-- the portal gives it (any other field sent by its own name, so nothing sent
+-- is left out), each login, the notes, and the files sent with it (p_files:
+-- their names as they are kept beside it). UTF-8 with its mark, so a browser
+-- shows an accented name or a pound sign as it is.
+CREATE OR REPLACE FUNCTION public._docs_cred_text(p jsonb, p_assessment uuid, p_files text[] DEFAULT ARRAY[]::text[]) RETURNS text
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dscredtxt$
+DECLARE e jsonb := CASE WHEN jsonb_typeof(p) = 'object' THEN p ELSE '{}'::jsonb END; d jsonb := public._docs_cred_fields();
+  v_type text; v_defs jsonb; f jsonb; k record; a jsonb; n integer := 0; v_pairs jsonb; v_out text; v_title text;
+  v_name text; v_job text; v_client text; v_at timestamptz; v_tz text := public._docs_tz(); v_b text; v_w integer;
+BEGIN
+  v_type := COALESCE(NULLIF(btrim(e ->> 'auth_type'), ''), 'other');
+  v_defs := COALESCE(d -> 'fields' -> v_type, d -> 'fields' -> 'other');
+  SELECT x.name, x.job_code, y.name INTO v_name, v_job, v_client FROM public.assessments x LEFT JOIN public.clients y ON y.id = x.client_id WHERE x.id = p_assessment;
+  BEGIN v_at := (e ->> 'submitted_at')::timestamptz; EXCEPTION WHEN OTHERS THEN v_at := NULL; END;
+  v_title := 'Credentials from ' || COALESCE(NULLIF(btrim(v_client), ''), 'the client');
+  v_out := chr(65279) || v_title || E'\n' || repeat('=', length(v_title)) || E'\n\n';
+  v_pairs := jsonb_build_array(jsonb_build_array('Engagement', COALESCE(NULLIF(btrim(v_name), ''), 'The engagement')
+    || CASE WHEN NULLIF(btrim(v_job), '') IS NOT NULL THEN ' (' || btrim(v_job) || ')' ELSE '' END));
+  IF NULLIF(btrim(e ->> 'submitted_by'), '') IS NOT NULL THEN v_pairs := v_pairs || jsonb_build_array(jsonb_build_array('Sent by', btrim(e ->> 'submitted_by'))); END IF;
+  IF v_at IS NOT NULL THEN v_pairs := v_pairs || jsonb_build_array(jsonb_build_array('Sent', to_char(v_at AT TIME ZONE v_tz, 'FMDD Mon YYYY "at" HH24:MI') || ' (' || v_tz || ')')); END IF;
+  v_pairs := v_pairs || jsonb_build_array(jsonb_build_array('Type', COALESCE(d -> 'names' ->> v_type, initcap(replace(v_type, '_', ' ')))));
+  IF NULLIF(btrim(e ->> 'label'), '') IS NOT NULL THEN v_pairs := v_pairs || jsonb_build_array(jsonb_build_array('Label', btrim(e ->> 'label'))); END IF;
+  v_out := v_out || public._docs_cred_block(v_pairs);
+  v_pairs := '[]'::jsonb;
+  FOR f IN SELECT y FROM jsonb_array_elements(v_defs) AS y LOOP
+    IF NULLIF(e ->> (f ->> 0), '') IS NOT NULL THEN v_pairs := v_pairs || jsonb_build_array(jsonb_build_array(f ->> 1, e ->> (f ->> 0))); END IF;
+  END LOOP;
+  FOR k IN SELECT x.key, x.value FROM jsonb_each(e) AS x
+            WHERE x.key NOT IN ('auth_type', 'label', 'files', 'accounts', 'notes', 'submitted_by', 'submitted_at')
+              AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_defs) AS y WHERE y ->> 0 = x.key)
+              AND NULLIF(btrim(COALESCE(x.value #>> '{}', '')), '') IS NOT NULL
+            ORDER BY x.key LOOP
+    v_pairs := v_pairs || jsonb_build_array(jsonb_build_array(COALESCE(d -> 'labels' ->> k.key, initcap(replace(k.key, '_', ' '))), k.value #>> '{}'));
+  END LOOP;
+  IF jsonb_array_length(v_pairs) > 0 THEN v_out := v_out || E'\n' || public._docs_cred_block(v_pairs); END IF;
+  IF jsonb_typeof(e -> 'accounts') = 'array' AND jsonb_array_length(e -> 'accounts') > 0 THEN
+    v_out := v_out || E'\nLogins\n------\n';
+    -- Numbered, each login's lines under its first ("1. ", or "10. " where
+    -- there are ten or more).
+    v_w := length(jsonb_array_length(e -> 'accounts')::text) + 2;
+    FOR a IN SELECT y FROM jsonb_array_elements(e -> 'accounts') AS y LOOP
+      CONTINUE WHEN jsonb_typeof(a) IS DISTINCT FROM 'object';
+      v_pairs := '[]'::jsonb;
+      FOR f IN SELECT y FROM jsonb_array_elements('[["role","Role"],["username","Username"],["password","Password"],["mfa","MFA"],["notes","Notes"]]'::jsonb) AS y LOOP
+        IF NULLIF(a ->> (f ->> 0), '') IS NOT NULL THEN v_pairs := v_pairs || jsonb_build_array(jsonb_build_array(f ->> 1, a ->> (f ->> 0))); END IF;
+      END LOOP;
+      CONTINUE WHEN jsonb_array_length(v_pairs) = 0;
+      n := n + 1;
+      v_b := public._docs_cred_block(v_pairs, repeat(' ', v_w));
+      v_out := v_out || CASE WHEN n > 1 THEN E'\n' ELSE '' END || rpad(n || '.', v_w) || substr(v_b, v_w + 1);
+    END LOOP;
+  END IF;
+  IF NULLIF(btrim(COALESCE(e ->> 'notes', '')), '') IS NOT NULL THEN
+    v_out := v_out || E'\nNotes\n-----\n' || rtrim(e ->> 'notes', E'\r\n') || E'\n';
+  END IF;
+  IF COALESCE(cardinality(p_files), 0) > 0 THEN
+    v_out := v_out || E'\nFiles sent with them, kept beside this one\n------------------------------------------\n' || array_to_string(p_files, E'\n') || E'\n';
+  END IF;
+  RETURN v_out || E'\nCopied here from your portal when the client sent them.\n';
+END $dscredtxt$;
+REVOKE ALL ON FUNCTION public._docs_cred_text(jsonb, uuid, text[]) FROM PUBLIC, anon, authenticated;
+
+-- A set the client has just sent (rpc_credentials_submit, with who sent it
+-- and when), kept to be sent where the firm keeps them: its text, then each
+-- file sent with it, named by when it was sent so a set's files sit beside
+-- its text there. Nothing where the firm does not keep them. How many kept.
+CREATE OR REPLACE FUNCTION public._docs_cred_capture(p_assessment uuid, p_entry jsonb) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $dscredcap$
+DECLARE v_key text; v_at text := p_entry ->> 'submitted_at'; v_ts timestamptz; v_stamp text; v_label text; v_type text;
+  v_shown text[] := ARRAY[]::text[]; v_names text[] := ARRAY[]::text[]; f jsonb; i integer; v_text text; v_n integer := 0; v_one integer;
+  v_bytes bigint; v_files jsonb;
+BEGIN
+  IF p_assessment IS NULL OR jsonb_typeof(p_entry) IS DISTINCT FROM 'object' OR COALESCE(v_at, '') = '' OR NOT public._docs_creds_kept(public._docs_cfg()) THEN
+    RETURN 0;
+  END IF;
+  v_key := public._get_cred_key();
+  IF COALESCE(v_key, '') = '' THEN RETURN 0; END IF;
+  BEGIN v_ts := v_at::timestamptz; EXCEPTION WHEN OTHERS THEN v_ts := now(); END;
+  v_stamp := 'Credentials ' || to_char(v_ts AT TIME ZONE public._docs_tz(), 'YYYY-MM-DD HH24MI');
+  v_label := NULLIF(btrim(regexp_replace(COALESCE(p_entry ->> 'label', ''), '[[:cntrl:]]+', ' ', 'g')), '');
+  v_type := COALESCE(public._docs_cred_fields() -> 'names' ->> (p_entry ->> 'auth_type'), 'Credentials');
+  v_files := CASE WHEN jsonb_typeof(p_entry -> 'files') = 'array' THEN p_entry -> 'files' ELSE '[]'::jsonb END;
+  FOR f, i IN SELECT y, o FROM jsonb_array_elements(v_files) WITH ORDINALITY AS t(y, o) LOOP
+    v_names := v_names || (v_stamp || ' ' || COALESCE(NULLIF(btrim(f ->> 'name'), ''), 'file'));
+    v_bytes := CASE WHEN jsonb_typeof(f -> 'b64') = 'string' THEN octet_length(decode(f ->> 'b64', 'base64')) ELSE 0 END;
+    v_shown := v_shown || (v_names[i] || ' (' || CASE WHEN v_bytes < 1024 THEN v_bytes || ' bytes' WHEN v_bytes < 1048576 THEN round(v_bytes / 1024.0) || ' KB'
+                                                    ELSE to_char(v_bytes / 1048576.0, 'FM990.0') || ' MB' END || ')');
+  END LOOP;
+  v_text := public._docs_cred_text(p_entry, p_assessment, v_shown);
+  INSERT INTO public._docs_creds (assessment_id, entry_at, part, file_name, mime, size, enc)
+  VALUES (p_assessment, v_at, 0, left(v_stamp || ' ' || COALESCE(v_label, v_type), 180) || '.txt', 'text/plain; charset=utf-8',
+          octet_length(convert_to(v_text, 'UTF8')), extensions.pgp_sym_encrypt(v_text, v_key))
+  ON CONFLICT (assessment_id, entry_at, part) DO NOTHING;
+  GET DIAGNOSTICS v_one = ROW_COUNT;
+  v_n := v_n + v_one;
+  FOR f, i IN SELECT y, o FROM jsonb_array_elements(v_files) WITH ORDINALITY AS t(y, o) LOOP
+    CONTINUE WHEN jsonb_typeof(f -> 'b64') IS DISTINCT FROM 'string';
+    INSERT INTO public._docs_creds (assessment_id, entry_at, part, file_name, mime, size, enc)
+    VALUES (p_assessment, v_at, i, v_names[i], COALESCE(NULLIF(f ->> 'type', ''), 'application/octet-stream'),
+            octet_length(decode(f ->> 'b64', 'base64')), extensions.pgp_sym_encrypt(f ->> 'b64', v_key))
+    ON CONFLICT (assessment_id, entry_at, part) DO NOTHING;
+    GET DIAGNOSTICS v_one = ROW_COUNT;
+    v_n := v_n + v_one;
+  END LOOP;
+  -- Found at the next sender's ask, not the clock's next look.
+  IF v_n > 0 THEN UPDATE public._docs_state SET scanned_at = NULL WHERE id; END IF;
+  RETURN v_n;
+END $dscredcap$;
+REVOKE ALL ON FUNCTION public._docs_cred_capture(uuid, jsonb) FROM PUBLIC, anon, authenticated;
+
+-- What is being sent, for the browser sending it and nobody else: { ok,
+-- name, type, b64 } (the text as UTF-8, or the file as the client sent it).
+-- Only the item this person took, while its upload address is theirs, by a
+-- member of the firm's team who may open the engagement, with a fresh second
+-- factor, as the credentials are read in the portal (1841).
+CREATE OR REPLACE FUNCTION public.rpc_docs_sync_cred_file(p_item uuid) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $dscredfile$
+DECLARE i public._docs_items; dc public._docs_creds; v text;
+BEGIN
+  IF auth.uid() IS NULL OR public.current_user_role() NOT IN ('admin', 'senior', 'standard') THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
+  PERFORM public._need_fresh_mfa();
+  SELECT * INTO i FROM public._docs_items WHERE id = p_item;
+  IF NOT FOUND OR i.kind <> 'credentials' OR i.state <> 'uploading' OR COALESCE(i.source, '') !~ '^cred:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     OR NOT public._docs_holds(i, auth.uid(), NULL) OR NOT public.can_access_assessment(i.assessment_id) THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'Not credentials this browser is sending.');
+  END IF;
+  SELECT * INTO dc FROM public._docs_creds WHERE id = substr(i.source, 6)::uuid;
+  IF NOT FOUND OR dc.enc IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'They are no longer kept here to be sent.'); END IF;
+  BEGIN
+    v := extensions.pgp_sym_decrypt(dc.enc, public._get_cred_key());
+  EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'They could not be opened here.');
+  END;
+  RETURN jsonb_build_object('ok', true, 'name', i.name, 'type', dc.mime, 'b64', CASE WHEN dc.part = 0 THEN public._tk_b64(v) ELSE v END);
+END $dscredfile$;
+REVOKE ALL ON FUNCTION public.rpc_docs_sync_cred_file(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_docs_sync_cred_file(uuid) TO authenticated;
+
+-- Whether the firm keeps a copy of a client's credentials with its own files
+-- now, for what the portal tells a client before they send any: true or
+-- false, and nothing of where.
+CREATE OR REPLACE FUNCTION public.rpc_credentials_copied() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $credcopied$
+  SELECT auth.uid() IS NOT NULL AND public._docs_creds_kept(public._docs_cfg());
+$credcopied$;
+REVOKE ALL ON FUNCTION public.rpc_credentials_copied() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_credentials_copied() TO authenticated;
+
+-- A link to a SharePoint folder pasted in Settings, looked up with Microsoft
+-- (_docs_build's share, then share_drive): { ok, job } for
+-- rpc_docs_sync_resolved, or why it cannot be. With the firm's own Microsoft
+-- application, as everything else here is.
+CREATE OR REPLACE FUNCTION public.rpc_docs_sync_resolve(p_url text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsresolve$
+DECLARE v_url text := btrim(COALESCE(p_url, '')); t jsonb; v_sender text;
+BEGIN
+  PERFORM public._docs_need_admin();
+  IF length(v_url) > 2000 OR v_url !~* '^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?\.(sharepoint\.com|sharepoint\.us|sharepoint-mil\.us|sharepoint\.de|sharepoint\.cn)(:443)?/[^[:space:][:cntrl:]"<>\\^`{|}]*$' THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'not_sharepoint', 'error', 'That is not a link to SharePoint (https://…sharepoint.com/…).');
+  END IF;
+  t := public._docs_ms_app();
+  v_sender := public._net_sender();
+  -- 2016: what stands in the way said, where Settings puts it right on the
+  -- same page: no application (set one up there), or one without SharePoint's
+  -- access yet (given with Microsoft there); the link looked up afterwards.
+  IF t IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'no_app', 'error', 'The link is looked up with your firm''s own Microsoft application, and none is set up yet.');
+  END IF;
+  IF COALESCE((t ->> 'undecryptable')::boolean, false) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'config', 'error', 'The saved secret of ' || public._docs_ms_words(t ->> 'via') || ' cannot be read here (it was sealed with another key), so the link cannot be looked up.');
+  END IF;
+  IF t ->> 'tenant' IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'access', 'error', 'Y' || substr(public._docs_ms_words(t ->> 'via'), 2) || ' needs access to SharePoint before it can look the link up.');
+  END IF;
+  IF v_sender IS NULL OR (v_sender = 'gateway' AND NOT public._net_gateway_can('docs_graph')) OR public._xero_stood_down() IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'cannot', 'error', 'Your portal cannot ask Microsoft where that link goes yet. Open the link in your browser, and paste the address your browser shows instead.');
+  END IF;
+  IF (SELECT count(*) FROM public._net_jobs WHERE kind IN ('docs_graph', 'teams_token') AND subject ->> 'docs' IN ('share', 'share_drive')
+        AND subject ->> 'asked_by' = auth.uid()::text AND created_at > now() - interval '10 minutes') >= 20 THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'throttled', 'error', 'Too many links looked up at once. Try again in a few minutes.');
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'job', public._docs_graph_plan(jsonb_build_object('docs', 'share', 'url', v_url, 'asked_by', auth.uid()::text)));
+END $dsresolve$;
+REVOKE ALL ON FUNCTION public.rpc_docs_sync_resolve(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_docs_sync_resolve(text) TO authenticated;
+
+-- What a link looked up came to, for the person who asked (their page asks
+-- every second or so), each call followed to the one its answer planned:
+-- { state: 'pending' }, or { state, ok, site_url, library, base_path, error,
+-- unreached }. pg_net's answers are applied here as they land.
+CREATE OR REPLACE FUNCTION public.rpc_docs_sync_resolved(p_job uuid) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsresolved$
+DECLARE j public._net_jobs; o jsonb; v_id uuid := p_job; i integer;
+BEGIN
+  PERFORM public._docs_need_admin();
+  IF pg_try_advisory_xact_lock(hashtext('pental_net_tick')) THEN PERFORM public._net_settle(); END IF;
+  FOR i IN 1 .. 5 LOOP
+    SELECT * INTO j FROM public._net_jobs
+     WHERE id = v_id AND kind IN ('docs_graph', 'teams_token') AND subject ->> 'docs' IN ('share', 'share_drive') AND subject ->> 'asked_by' = auth.uid()::text;
+    IF NOT FOUND THEN RETURN jsonb_build_object('state', 'gone'); END IF;
+    IF j.state IN ('planned', 'queued', 'sending') THEN RETURN jsonb_build_object('state', 'pending'); END IF;
+    o := COALESCE(j.outcome, '{}'::jsonb);
+    IF j.state = 'done' AND COALESCE(o ->> 'next', '') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+      v_id := (o ->> 'next')::uuid;
+      CONTINUE;
+    END IF;
+    RETURN jsonb_build_object('state', j.state, 'ok', j.state = 'done' AND COALESCE((o ->> 'ok')::boolean, false),
+           'unreached', j.state = 'skipped' OR (j.state = 'failed' AND o ->> 'status' IS NULL AND COALESCE(o ->> 'transport', '') IN ('failed', 'unsent', 'none')))
+      || jsonb_strip_nulls(jsonb_build_object('site_url', o ->> 'site_url', 'library', o ->> 'library', 'base_path', o ->> 'base_path', 'code', o ->> 'code',
+           'error', CASE WHEN j.state = 'done' AND COALESCE((o ->> 'ok')::boolean, false) THEN NULL
+                         ELSE COALESCE(o ->> 'error', o ->> 'skipped', 'Microsoft could not be asked from here just now.') END));
+  END LOOP;
+  RETURN jsonb_build_object('state', 'failed', 'ok', false, 'error', 'Looking the link up took more steps than it needs.');
+END $dsresolved$;
+REVOKE ALL ON FUNCTION public.rpc_docs_sync_resolved(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_docs_sync_resolved(uuid) TO authenticated;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 2016: THE FIRM'S OWN APPLICATION FOR SHAREPOINT OR GOOGLE DRIVE, SET UP ON
+-- THE PAGE THAT NEEDS IT.
+--
+-- [stated] Arian: "it should be easier to give sharepoint/drive access like
+-- seamless and on the same page if its needed". Settings, SharePoint & Drive
+-- takes the application's IDs and secret as Microsoft or Google gives them
+-- (_docs_apps, above): Microsoft's application (client) ID and directory
+-- (tenant) ID, or Google's client ID, each as those consoles show them, and
+-- the secret, sealed as Settings' secrets are and never read back. A secret
+-- left blank keeps the one saved for the same application. What was asked
+-- with the application before is asked afresh, and where the files go looked
+-- for again. Settings as it is now, or why not (with the box it is about).
+-- ═══════════════════════════════════════════════════════════════════════════
+CREATE OR REPLACE FUNCTION public._docs_apps_changed(p_provider text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsappsch$
+DECLARE c jsonb := public._docs_cfg();
+BEGIN
+  -- What is still out with the application before is not taken in when it
+  -- answers (its access kept as this one's, or its refusal said of this one):
+  -- asked afresh, a file's step by the next round. The giving of SharePoint's
+  -- access goes on with its own steps.
+  UPDATE public._net_jobs SET state = 'skipped', finished_at = now(), subject = subject - 'code',
+         outcome = jsonb_build_object('skipped', 'The application ' || CASE WHEN p_provider = 'microsoft' THEN 'SharePoint' ELSE 'Google Drive' END
+           || ' is reached with changed while this was out. Try again.')
+   WHERE state IN ('planned', 'queued', 'sending') AND subject ? 'docs'
+     AND CASE WHEN p_provider = 'microsoft' THEN kind = 'teams_token' OR (kind = 'docs_graph' AND COALESCE(subject ->> 'docs', '') NOT LIKE 'ms\_%')
+              ELSE kind IN ('drive', 'drive_token') END;
+  IF p_provider = 'microsoft' THEN
+    DELETE FROM public._docs_ms_cache WHERE id;
+    IF c ->> 'provider' = 'sharepoint' THEN
+      UPDATE public._docs_target SET ready = false, checking = false, job = NULL, error = NULL, need = NULL, need_url = NULL, target_key = NULL WHERE id;
+      DELETE FROM public._docs_folders WHERE target_key = public._docs_target_key(c) AND path LIKE '#%';
+      IF COALESCE((c ->> 'on')::boolean, false) AND public._docs_cannot(c) IS NULL THEN PERFORM public._docs_target_ready(c, auth.uid()); END IF;
+    END IF;
+  ELSE
+    DELETE FROM public._docs_google_cache WHERE id;
+    UPDATE public._docs_target SET ready = false, checking = false, job = NULL WHERE id AND provider = 'gdrive';
+  END IF;
+END $dsappsch$;
+REVOKE ALL ON FUNCTION public._docs_apps_changed(text) FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.rpc_docs_app_save(p_provider text, p_client text, p_tenant text, p_secret text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $dsappsave$
+DECLARE v_client text := btrim(COALESCE(p_client, '')); v_tenant text := lower(btrim(COALESCE(p_tenant, ''))); v_secret text := btrim(COALESCE(p_secret, ''));
+  r public._docs_apps; v_enc bytea; v_who text; v_ms boolean := p_provider = 'microsoft';
+BEGIN
+  PERFORM public._docs_need_admin();
+  IF p_provider IS NULL OR p_provider NOT IN ('microsoft', 'google') THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'An application is kept here for SharePoint (Microsoft) or Google Drive (Google) only.');
+  END IF;
+  SELECT * INTO r FROM public._docs_apps WHERE provider = p_provider FOR UPDATE;
+  IF v_ms THEN
+    IF NOT public._teams_is_object_id(v_client) THEN
+      RETURN jsonb_build_object('ok', false, 'field', 'client', 'error', 'The application (client) ID is the one Microsoft Entra shows on the application''s Overview: it looks like 00000000-0000-0000-0000-000000000000.');
+    END IF;
+    IF public._docs_ms_dir(v_tenant) = 'organizations' THEN
+      RETURN jsonb_build_object('ok', false, 'field', 'tenant', 'error', 'The directory (tenant) ID is on the application''s Overview too, below its application ID: it looks like 00000000-0000-0000-0000-000000000000.');
+    END IF;
+    v_client := lower(v_client);
+    v_tenant := public._docs_ms_dir(v_tenant);
+  ELSE
+    IF v_client !~ '^[0-9]{4,30}-[A-Za-z0-9_]+\.apps\.googleusercontent\.com$' THEN
+      RETURN jsonb_build_object('ok', false, 'field', 'client', 'error', 'The client ID is the one Google shows for the OAuth client: it ends in .apps.googleusercontent.com.');
+    END IF;
+    v_tenant := NULL;
+  END IF;
+  IF v_secret = '' THEN
+    IF r.provider IS NULL OR r.client IS DISTINCT FROM v_client THEN
+      RETURN jsonb_build_object('ok', false, 'field', 'secret', 'error', CASE WHEN v_ms
+        THEN 'Paste the client secret''s Value too (Certificates & secrets, New client secret).'
+        ELSE 'Paste the client secret too (Google shows it beside the client ID).' END);
+    END IF;
+  ELSE
+    IF length(v_secret) > 1000 OR v_secret ~ '[[:space:][:cntrl:]]' THEN
+      RETURN jsonb_build_object('ok', false, 'field', 'secret', 'error', 'That is not a secret ' || CASE WHEN v_ms THEN 'Microsoft' ELSE 'Google' END || ' gives: it has a space or a line break in it.');
+    END IF;
+    IF v_ms AND public._teams_is_object_id(v_secret) THEN
+      RETURN jsonb_build_object('ok', false, 'field', 'secret', 'error', 'That is the secret''s ID. Copy its Value instead: Microsoft shows it once, beside the ID, when the secret is made (make another where it is gone).');
+    END IF;
+    IF v_secret ~* '\.apps\.googleusercontent\.com$' OR lower(v_secret) = lower(v_client) THEN
+      RETURN jsonb_build_object('ok', false, 'field', 'secret', 'error', 'That is the client ID. The client secret is shown beside it.');
+    END IF;
+    v_enc := public._settings_encrypt(v_secret);
+    IF v_enc IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'The secret could not be sealed here. Try again in a moment.'); END IF;
+  END IF;
+  SELECT COALESCE(NULLIF(btrim(p.name), ''), p.email) INTO v_who FROM public.profiles p WHERE p.auth_user_id = auth.uid() LIMIT 1;
+  INSERT INTO public._docs_apps AS x (provider, client, tenant, secret_enc, saved_at, saved_by, saved_by_name)
+  VALUES (p_provider, v_client, v_tenant, COALESCE(v_enc, r.secret_enc), now(), auth.uid(), left(v_who, 200))
+  ON CONFLICT (provider) DO UPDATE SET client = EXCLUDED.client, tenant = EXCLUDED.tenant, secret_enc = EXCLUDED.secret_enc,
+    saved_at = now(), saved_by = EXCLUDED.saved_by, saved_by_name = EXCLUDED.saved_by_name;
+  PERFORM public._docs_apps_changed(p_provider);
+  RETURN jsonb_build_object('ok', true, 'data', public.rpc_docs_sync_get());
+END $dsappsave$;
+REVOKE ALL ON FUNCTION public.rpc_docs_app_save(text, text, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_docs_app_save(text, text, text, text) TO authenticated;
+
+-- The application kept here forgotten: SharePoint or Drive is reached with
+-- the firm's Teams or sign-in application again, where one is saved.
+CREATE OR REPLACE FUNCTION public.rpc_docs_app_forget(p_provider text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $dsappforget$
+BEGIN
+  PERFORM public._docs_need_admin();
+  IF p_provider IS NULL OR p_provider NOT IN ('microsoft', 'google') THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'An application is kept here for SharePoint (Microsoft) or Google Drive (Google) only.');
+  END IF;
+  DELETE FROM public._docs_apps WHERE provider = p_provider;
+  PERFORM public._docs_apps_changed(p_provider);
+  RETURN jsonb_build_object('ok', true, 'data', public.rpc_docs_sync_get());
+END $dsappforget$;
+REVOKE ALL ON FUNCTION public.rpc_docs_app_forget(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_docs_app_forget(text) TO authenticated;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 1851: THE PASSWORD MANAGERS A TESTER MAY SEND A CLIENT'S CREDENTIALS TO.
@@ -46212,9 +46982,9 @@ END $rls_once$;
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: fe81e5cb33651115 @ 2025110802
+-- schema-fingerprint: 8e6344feae248cef @ 2025110903
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025110802, now())
+VALUES (1, 2025110903, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 
