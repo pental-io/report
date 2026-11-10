@@ -47450,7 +47450,7 @@ CREATE OR REPLACE FUNCTION public._e2e_columns(p_table text) RETURNS text[]
     WHEN 'qa_comments' THEN ARRAY['comment', 'highlight']
     WHEN 'timeline_events' THEN ARRAY['title', 'details', 'event']
     WHEN 'tickets' THEN ARRAY['subject', 'message', 'responses']
-    WHEN 'assets' THEN ARRAY['name', 'label', 'notes', 'details']
+    WHEN 'assets' THEN ARRAY['name', 'label', 'notes', 'details', 'owner_name', 'owner_email', 'owner_team', 'tags']   -- 2021: and its owners and tags
     WHEN 'scan_results' THEN ARRAY['title', 'description', 'impact', 'remediation', 'evidence', 'refs', 'cwe', 'category',
                                    'raw', 'asset', 'cve', 'plugin_id', 'service', 'protocol']
     WHEN 'scan_runs' THEN ARRAY['exec_summary', 'summary_html']
@@ -47472,6 +47472,33 @@ CREATE OR REPLACE FUNCTION public._e2e_sealed_text(v text) RETURNS boolean
   LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $eest$
   SELECT v IS NULL OR btrim(v) = '' OR v ~ '^pe2[ejst]1\.[0-9a-f]{32}\.[A-Za-z0-9_-]{16,}$';
 $eest$;
+-- 2021: [stated] Arian: "is there anything else that can be encrypted at
+-- rest with no consequence? if so do it". Each phase's scope, its targets, is
+-- sealed inside the phases list, as the engagement's own scope already was:
+-- each phase's kind, days and dates stay readable for the schedule, the
+-- invoice and the calendar, and nothing in the database reads a phase's scope
+-- (a scan's phase is found by its kind).
+CREATE OR REPLACE FUNCTION public._e2e_phases_plain(p jsonb) RETURNS boolean
+  LANGUAGE sql IMMUTABLE SET search_path = public, pg_catalog, pg_temp AS $eephp$
+  SELECT jsonb_typeof(p) = 'array' AND EXISTS (
+    SELECT 1 FROM jsonb_array_elements(p) e(v)
+     WHERE jsonb_typeof(e.v) = 'object' AND jsonb_typeof(e.v -> 'scope') = 'string' AND NOT public._e2e_sealed_json(e.v -> 'scope'));
+$eephp$;
+-- The phases as a browser sealed them: the same phases in the same order, each
+-- as it was but for its scope, which is sealed (or empty).
+CREATE OR REPLACE FUNCTION public._e2e_phases_only_sealed(p_new jsonb, p_old jsonb) RETURNS boolean
+  LANGUAGE sql IMMUTABLE SET search_path = public, pg_catalog, pg_temp AS $eephs$
+  SELECT jsonb_typeof(p_new) = 'array' AND jsonb_typeof(p_old) = 'array'
+     AND jsonb_array_length(p_new) = jsonb_array_length(p_old)
+     AND NOT EXISTS (
+       SELECT 1 FROM jsonb_array_elements(p_new) WITH ORDINALITY n(v, i)
+         JOIN jsonb_array_elements(p_old) WITH ORDINALITY o(v, i) ON o.i = n.i
+        WHERE jsonb_typeof(n.v) IS DISTINCT FROM jsonb_typeof(o.v)
+           OR (jsonb_typeof(n.v) = 'object' AND ((n.v - 'scope') IS DISTINCT FROM (o.v - 'scope') OR NOT public._e2e_sealed_json(n.v -> 'scope')))
+           OR (jsonb_typeof(n.v) <> 'object' AND n.v IS DISTINCT FROM o.v));
+$eephs$;
+GRANT EXECUTE ON FUNCTION public._e2e_phases_plain(jsonb) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._e2e_phases_only_sealed(jsonb, jsonb) TO authenticated, service_role;
 -- The key a sealed value is under, or NULL.
 CREATE OR REPLACE FUNCTION public._e2e_kid(v text) RETURNS uuid
   LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $eekid$
@@ -48333,6 +48360,20 @@ DROP TRIGGER IF EXISTS zz_e2e_mail_settled ON public.email_notifications;
 CREATE TRIGGER zz_e2e_mail_settled BEFORE INSERT OR UPDATE ON public.email_notifications
   FOR EACH ROW EXECUTE FUNCTION public._e2e_mail_settled();
 
+-- 2021: what a ticket was sent with (a finding's words, opened by the browser
+-- that raised it) let go as soon as it is sent, has failed or was skipped,
+-- rather than kept until the finished job is cleared away (30 minutes).
+-- Nothing reads a job's input once it is built and sent (_ticket_build).
+CREATE OR REPLACE FUNCTION public._ticket_job_settled() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = public, pg_catalog, pg_temp AS $tkjs$
+BEGIN
+  IF NEW.state IN ('done', 'failed', 'skipped') THEN NEW.input := NULL; END IF;
+  RETURN NEW;
+END $tkjs$;
+DROP TRIGGER IF EXISTS zz_ticket_job_settled ON public._ticket_jobs;
+CREATE TRIGGER zz_ticket_job_settled BEFORE INSERT OR UPDATE ON public._ticket_jobs
+  FOR EACH ROW EXECUTE FUNCTION public._ticket_job_settled();
+
 -- ── A ticket raised on its own, for a sealed finding ──────────────────────
 -- A tracker that raises tickets on its own (auto_raise) is sent a sealed
 -- finding's words by the firm's next browser to be open, which raises it as
@@ -48645,6 +48686,8 @@ BEGIN
   IF p_table = 'co_live' THEN v_cols := ARRAY['value']; END IF;
   IF cardinality(v_cols) = 0 THEN RAISE EXCEPTION 'Not a table with sealed words.' USING ERRCODE = '22023'; END IF;
   v_cond := (SELECT string_agg(format('NOT public._e2e_sealed_json(to_jsonb(t.%I))', x), ' OR ') FROM unnest(v_cols) x);
+  -- 2021: and an engagement whose phases have a scope in the clear.
+  IF p_table = 'assessments' THEN v_cond := v_cond || ' OR public._e2e_phases_plain(t.phases)'; END IF;
   IF p_client IS NULL AND p_table = 'findings' THEN
     v_busy := 'AND NOT ((t.scan_fingerprint IS NOT NULL OR t.scan_run_id IS NOT NULL) AND EXISTS (SELECT 1 FROM public.scan_runs br WHERE br.client_id = '
               || public._e2e_client_expr('findings') || ' AND br.status IN (''starting'', ''running'', ''importing'') AND br.updated_at > now() - interval ''30 minutes''))';
@@ -48655,7 +48698,8 @@ BEGIN
   v_client := public._e2e_client_expr(p_table);
   v_sql := format('SELECT COALESCE(jsonb_agg(r ORDER BY r->>''id''), ''[]''::jsonb) FROM (SELECT jsonb_build_object(''id'', t.id, ''client_id'', %s, ''cols'', jsonb_strip_nulls(jsonb_build_object(%s))) AS r FROM public.%I t WHERE (%s) %s %s %s ORDER BY t.id LIMIT %s) q',
     v_client,
-    (SELECT string_agg(format('%L, CASE WHEN public._e2e_sealed_json(to_jsonb(t.%I)) THEN NULL ELSE jsonb_build_object(''v'', to_jsonb(t.%I), ''md5'', md5(t.%I::text)) END', x, x, x, x), ', ') FROM unnest(v_cols) x),
+    (SELECT string_agg(format('%L, CASE WHEN public._e2e_sealed_json(to_jsonb(t.%I)) THEN NULL ELSE jsonb_build_object(''v'', to_jsonb(t.%I), ''md5'', md5(t.%I::text)) END', x, x, x, x), ', ') FROM unnest(v_cols) x)
+      || CASE WHEN p_table = 'assessments' THEN ', ''phases'', CASE WHEN public._e2e_phases_plain(t.phases) THEN jsonb_build_object(''v'', t.phases, ''md5'', md5(t.phases::text)) END' ELSE '' END,
     p_table, v_cond,
     CASE WHEN p_after IS NOT NULL THEN format('AND t.id > %L::uuid', p_after) ELSE '' END,
     CASE WHEN p_table = 'co_live' THEN 'AND t.rec_table IN (''findings'', ''assessments'')' ELSE '' END,
@@ -48677,7 +48721,8 @@ BEGIN
                            'tickets', 'assets', 'scan_results', 'scan_runs'] LOOP
     v_cols := public._e2e_columns(t);
     EXECUTE format('SELECT count(*) FROM public.%I t WHERE %s', t,
-      (SELECT string_agg(format('NOT public._e2e_sealed_json(to_jsonb(t.%I))', x), ' OR ') FROM unnest(v_cols) x)) INTO v_n;
+      (SELECT string_agg(format('NOT public._e2e_sealed_json(to_jsonb(t.%I))', x), ' OR ') FROM unnest(v_cols) x)
+        || CASE WHEN t = 'assessments' THEN ' OR public._e2e_phases_plain(t.phases)' ELSE '' END) INTO v_n;   -- 2021
     IF v_n > 0 THEN v_out := v_out || jsonb_build_object(t, v_n); END IF;
   END LOOP;
   SELECT count(*) INTO v_n FROM storage.objects o
@@ -48711,6 +48756,14 @@ BEGIN
   PERFORM set_config('pental.e2e_seal', 'on', true);
   FOR v_r IN SELECT * FROM jsonb_array_elements(p_rows) LOOP
     FOR c IN SELECT * FROM jsonb_object_keys(COALESCE(v_r->'cols', '{}'::jsonb)) LOOP
+      -- 2021: the phases with their scopes sealed, written only over exactly
+      -- what was read, and only where nothing but the scopes changed.
+      IF p_table = 'assessments' AND c = 'phases' THEN
+        EXECUTE format('UPDATE public.assessments t SET phases = $3 WHERE t.id = $1 AND md5(t.phases::text) IS NOT DISTINCT FROM $2 AND public._e2e_phases_only_sealed($3, t.phases)%s', v_only)
+          USING (v_r->>'id')::uuid, v_r->'cols'->c->>'md5', v_r->'cols'->c->'value';
+        IF FOUND THEN v_n := v_n + 1; ELSE v_skipped := v_skipped + 1; END IF;
+        CONTINUE;
+      END IF;
       IF NOT (c = ANY (v_cols)) THEN CONTINUE; END IF;
       v_val := v_r->'cols'->c->'value';
       IF jsonb_typeof(v_val) <> 'string' OR NOT public._e2e_sealed_json(v_val) THEN CONTINUE; END IF;
@@ -48760,7 +48813,10 @@ END $rowby$;
 -- which stay readable as proposals and invoices do.
 CREATE OR REPLACE FUNCTION public._e2e_file_open(p_name text) RETURNS boolean
   LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $eefo$
-  SELECT split_part(p_name, '/', 2) = 'final-pdfs' AND split_part(p_name, '/', 3) ~ '^(proposal|invoice)_';
+  -- 2021: and an appliance, the image of a scanning machine a client
+  -- downloads by its link (_applianceLink), never opened by a browser's keys.
+  SELECT (split_part(p_name, '/', 2) = 'final-pdfs' AND split_part(p_name, '/', 3) ~ '^(proposal|invoice)_')
+      OR split_part(p_name, '/', 1) = 'appliances';
 $eefo$;
 GRANT EXECUTE ON FUNCTION public._e2e_file_open(text) TO authenticated, service_role;
 
@@ -48860,9 +48916,9 @@ UPDATE public.settings SET password_login_enabled = true, sso_google_enabled = f
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: eb9d6285e6eef9bd @ 2025111004
+-- schema-fingerprint: 48c345b8f723a11b @ 2025111005
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025111004, now())
+VALUES (1, 2025111005, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 

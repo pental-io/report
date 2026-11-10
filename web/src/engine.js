@@ -27450,7 +27450,7 @@ var _E2E_COLS = {
   qa_comments: ['comment', 'highlight'],
   timeline_events: ['title', 'details', 'event'],
   tickets: ['subject', 'message', 'responses'],
-  assets: ['name', 'label', 'notes', 'details'],
+  assets: ['name', 'label', 'notes', 'details', 'owner_name', 'owner_email', 'owner_team', 'tags'],
   scan_results: ['title', 'description', 'impact', 'remediation', 'evidence', 'refs', 'cwe', 'category',
                  'raw', 'asset', 'cve', 'plugin_id', 'service', 'protocol'],
   scan_runs: ['exec_summary', 'summary_html']
@@ -27459,10 +27459,10 @@ var _E2E_JSON = {
   findings: { evidence: 'a', assets: 'a', refs: 'a', custom_fields: 'o', qa_comments: 'a' },
   assessments: { artifacts: 'a', appendices: 'a', qa_comments: 'a', summary_sections: 'o', section_drafts: 'o', qa_ai_review: 'o' },
   tickets: { responses: 'a' },
-  assets: { details: 'o' },
+  assets: { details: 'o', tags: 'a' },
   scan_results: { refs: 'a', raw: 'o' }
 };
-var _E2E_EMPTY_LIST = { evidence: 1, assets: 1, refs: 1, qa_comments: 1, artifacts: 1, appendices: 1, responses: 1 };
+var _E2E_EMPTY_LIST = { evidence: 1, assets: 1, refs: 1, qa_comments: 1, artifacts: 1, appendices: 1, responses: 1, tags: 1 };
 var _E2E_REFS = { findings: 1, assessments: 1, qa_comments: 1, assessment_comments: 1 };
 var _E2E_LOCKED = '\u2063Encrypted\u2063';
 var _E2E_RE = /^pe2([ejst])1\.([0-9a-f]{32})\.([A-Za-z0-9_-]{16,})$/;
@@ -28083,20 +28083,27 @@ async function _e2eHealed(v) {
   if (!_e2eHasSealIn(v)) return v;
   return _e2eOpenDeep(v && typeof v === 'object' ? _e2eClone(v) : v);
 }
+function _e2ePhasesPlain(v) {
+  return Array.isArray(v) ? v.filter(function (p) { return p && typeof p === 'object' && typeof p.scope === 'string' && p.scope.trim() !== '' && !_e2eIsSeal(p.scope); }) : [];
+}
 async function _e2eSealRows(table, rows, isInsert, ids) {
   var cols = _E2E_COLS[table], json = _E2E_JSON[table] || {};
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
     if (!row || typeof row !== 'object') continue;
     var todo = cols.filter(function (c) { return c in row && !_e2eEmpty(row[c]) && !_e2eIsSeal(row[c]); });
-    if (!todo.length) continue;
+    var ph = table === 'assessments' ? _e2ePhasesPlain(row.phases) : [];
+    if (!todo.length && !ph.length) continue;
     for (var t0 = 0; t0 < todo.length; t0++) row[todo[t0]] = await _e2eHealed(row[todo[t0]]);
+    for (var p0 = 0; p0 < ph.length; p0++) ph[p0].scope = await _e2eHealed(ph[p0].scope);
     for (var t = 0; t < todo.length; t++) if (_e2eHasLocked(row[todo[t]])) throw _e2eRefusal('This was not saved: some of it is still encrypted on this browser, which is waiting to be given its key. It will be in a moment.');
+    if (ph.some(function (p) { return _e2eHasLocked(p.scope); })) throw _e2eRefusal('This was not saved: some of it is still encrypted on this browser, which is waiting to be given its key. It will be in a moment.');
     var clientId = await _e2eRowClient(table, row, ids);
     var k = await _e2eKeyForClient(clientId);
     if (!k) throw _e2eRefusal('This was not saved: its key could not be found. Reload the page and try again.');
     if (!k.key && !isInsert) throw _e2eRefusal('This was not saved: this browser is still waiting to be given the key it needs, which takes a moment while a teammate\u2019s portal is open.');
     var pub = k.key ? null : await k.pub;
+    for (var p1 = 0; p1 < ph.length; p1++) ph[p1].scope = k.key ? await _e2eSeal(k.kid, k.key, ph[p1].scope, false) : await _e2eSealToKey(k.kid, pub, ph[p1].scope, false);
     var refs = {};
     for (var j = 0; j < todo.length; j++) {
       var c = todo[j], v = row[c], isJson = !!json[c];
@@ -28284,7 +28291,7 @@ function _e2eRefused(msg) {
 }
 var _E2E_FILE_MAGIC = [80, 69, 50, 69, 70, 49];
 var _E2E_FILE_MAGIC_PUB = [80, 69, 50, 69, 71, 49];
-function _e2eFileOpen(path) { var p = String(path).split('/'); return p[1] === 'final-pdfs' && /^(proposal|invoice)_/.test(p[2] || ''); }
+function _e2eFileOpen(path) { var p = String(path).split('/'); return (p[1] === 'final-pdfs' && /^(proposal|invoice)_/.test(p[2] || '')) || p[0] === 'appliances'; }
 function _e2eIsSealedFile(u8) {
   if (!u8 || u8.length < 34) return 0;
   var a = true, b = true;
@@ -28507,6 +28514,17 @@ async function _e2eSealPlain(table, rows) {
     for (var c in (row.cols || {})) {
       var v = row.cols[c].v;
       if (_e2eEmpty(v)) continue;
+
+      if (table === 'assessments' && c === 'phases') {
+        if (!Array.isArray(v) || _e2eHasLocked(v)) continue;
+        var arr = _e2eClone(v);
+        for (var pi = 0; pi < arr.length; pi++) {
+          var pp = arr[pi];
+          if (pp && typeof pp === 'object' && typeof pp.scope === 'string' && pp.scope.trim() !== '' && !_e2eIsSeal(pp.scope)) pp.scope = await _e2eSeal(k.kid, k.key, pp.scope, false);
+        }
+        cols[c] = { md5: row.cols[c].md5, value: arr };
+        continue;
+      }
 
       if (_e2eHasLocked(v)) continue;
       _e2eRefsCols(table, c, v, refs);
@@ -33374,8 +33392,6 @@ function renderFindingDetail() {
 
   h += _retestOutcomeBadge(f);
 
-  h += _e2eBadge(_e2eStateRow('assessments', f.assessment_id) || { id: f.assessment_id, client_id: f.client_id });
-
   if (!isClient && f.source === 'migration') {
     h += '<span class="badge badge-gray" title="Brought in from another platform">Imported</span>';
   }
@@ -33429,8 +33445,9 @@ function renderFindingDetail() {
   h += '</div>';
   h += '</div>';
 
-  h += '<div style="padding:1.25rem 1.5rem">';
+  h += '<div class="fd-title-row" style="padding:1.25rem 1.5rem;display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;row-gap:0.5rem">';
   h += '<h1 style="font-family:var(--font-display);font-size:1.15rem;font-weight:700;margin:0;letter-spacing:0.02em">' + _findingTitleHtml(f) + '</h1>';
+  h += _e2eBadge(_e2eStateRow('assessments', f.assessment_id) || { id: f.assessment_id, client_id: f.client_id });
   h += '</div>';
 
   h += '</div>';
@@ -48487,42 +48504,19 @@ var _appendixMeta = {
 var _TPL_WORD = { report: {}, proposal: {}, attestation: {} };
 (function () {
   var r = _TPL_WORD.report;
-  var same = function (pre, list) { list.forEach(function (k) { r[pre + k] = [pre + k]; }); };
-  same('show_', ['affected_hosts', 'appendices', 'artifacts', 'assessment_info', 'caveats', 'cvss', 'cwe', 'description', 'evidence', 'executive_summary',
-    'findings', 'findings_summary', 'findings_table', 'overview', 'references', 'remediation', 'retest_results', 'retest_summary', 'scope', 'severity_boxes',
-    'severity_scale', 'source_ip', 'testing_perspective', 'toc', 'version_history']);
-  same('heading_', ['artifacts', 'assessment_details', 'caveats', 'findings', 'findings_summary', 'overview', 'perspective', 'scope', 'severity_scale',
-    'source_ip', 'toc', 'version_history']);
-  same('col_', ['id', 'finding', 'severity', 'cvss', 'status', 'category']);
-  same('appendix_', ['qa', 'methodology', 'dos', 'tc']);
   Object.assign(r, {
-    cover_title: ['document_title'], cover_subtitle: ['cover_subtitle'], cover_label_client: ['cover_label_client'], cover_label_type: ['cover_label_type'],
-    cover_label_reference: ['cover_label_reference'], cover_label_period: ['cover_label_period'],
-    cover_classification: ['classification', 'has_classification'], classification_text: ['classification', 'has_classification'],
+    vh_rows: ['version_history'],
     text_perspective_auth: ['test_perspective_description'], text_perspective_unauth: ['test_perspective_description'],
-    intro_caveats: ['caveats', 'has_caveats'], text_no_artifacts: ['artifacts_text'], intro_scope: ['intro_scope_text'],
-    intro_exec_summary: ['intro_exec_summary_text'], intro_findings_summary: ['intro_findings_summary_text'], intro_artifacts: ['intro_artifacts_text'],
-    appendix_methodology_title: ['methodology_title'], appendix_methodology_text: ['methodology_text'], appendix_methodology_links: ['methodology_links'],
-    appendix_tc_title: ['testing_conditions_title'], appendix_tc_text: ['testing_conditions_text'], appendix_qa_title: ['qa_title'], appendix_qa_text: ['qa_text'],
-    appendix_dos_title: ['dos_title'], appendix_dos_text: ['dos_text'],
-    sev_desc_critical: ['severity_scale'], sev_desc_high: ['severity_scale'], sev_desc_medium: ['severity_scale'], sev_desc_low: ['severity_scale'], sev_desc_info: ['severity_scale'],
-    show_exec_summary: ['show_executive_summary'], show_radar_chart: ['show_radar_chart', 'radar_chart_image'], vh_rows: ['version_history'],
+    text_no_artifacts: ['artifacts_text'],
 
     header_color: ['radar_chart_image', 'show_radar_chart'],
-    heading_exec_summary: ['heading_exec_summary'], heading_retest_summary: ['heading_retest_summary'],
-    heading_additional_evidence: ['heading_engagement_appendices'],
   });
 
   var sev = function (t) { return Object.keys(t).some(function (k) { return /^severity/.test(k); }); };
   ['critical', 'high', 'medium', 'low', 'info'].forEach(function (k) { r['sev_' + k] = sev; });
   ['bold', 'case', 'colour', 'fillhex', 'filltext', 'hex'].forEach(function (k) { r['sev_style_' + k] = sev; });
-  r.severity_colors = sev;
   Object.assign(_TPL_WORD.proposal, {
-    title: ['document_title'], text_terms: ['terms_text'], text_terms_link_url: ['terms_link_url'], text_terms_link_label: ['terms_link_label'],
-    text_prerequisites: ['prerequisites_text'], heading_client_info: ['heading_client'], heading_perspective: ['heading_perspective'],
-    heading_process: ['heading_process'], heading_terms: ['heading_terms'], heading_signed: ['heading_signed'], heading_prerequisites: ['heading_prerequisites'],
-    label_start_date: ['label_start_date'], label_end_date: ['label_end_date'], label_cost: ['label_cost'], label_client: ['label_client'], label_contact: ['label_contact'],
-    text_perspective_auth: ['perspective_text'], text_perspective_unauth: ['perspective_text'], text_process_steps: ['process_text'],
+    text_perspective_auth: ['perspective_text'], text_perspective_unauth: ['perspective_text'],
     currency_symbol: function (t) { return Object.keys(t).some(function (k) { return /cost|_rate$/.test(k); }); },
   });
 
@@ -48530,7 +48524,7 @@ var _TPL_WORD = { report: {}, proposal: {}, attestation: {} };
     'att_body_all_ch_remediated', 'att_body_critical_remediated', 'att_body_default', 'att_disclaimer',
     'method_web', 'method_infra', 'method_wireless', 'method_ad', 'method_default'].forEach(function (k) { _TPL_WORD.attestation[k] = ['loa_text']; });
 })();
-var _TPL_WORD_TITLE = 'What your Word template prints from Pental: the document controls, the headings and the other settings its placeholders use';
+var _TPL_WORD_TITLE = 'What Pental makes for your Word template that the file cannot: its document controls, the colours of what Pental writes into it, and the words chosen for each engagement';
 function _tplWordMap(type) {
   return (type === 'report' || type === 'vuln_report') ? _TPL_WORD.report : type === 'proposal' ? _TPL_WORD.proposal
     : (type === 'attestation' || type === 'loa') ? _TPL_WORD.attestation : {};
@@ -48546,24 +48540,40 @@ function _pdfMakes(k, exportOnly) {
 function _tplWordOnly(type) { return !_pdfMakes(_docxKeyOf(type)); }
 function _tplWordAny(type) { return Object.keys(_tplWordMap(type)).length > 0; }
 var _tplWordTokMemo = {};
-function _tplWordTok(type, only) {
+function _tplWordTok(type, only, redraw) {
   var slot = _docxKeyOf(type);
 
   var files = Array.isArray(only) ? only.filter(Boolean) : _listDocxTemplates(slot);
   var key = slot + '|' + files.map(function (f) { return f.id + ':' + (f.updated_at || f.uploaded_at || f.created_at || '') + ':' + (f.size || ''); }).join(',');
   var m = _tplWordTokMemo[key];
   if (m && m.done) return m.used;
-  if (!m) {
-    m = _tplWordTokMemo[key] = { done: false, used: null };
-    Promise.all(files.map(function (f) { return _rtTokensOfWord(slot, f.id); })).then(function (all) {
-      var used = {}, any = false;
-      all.forEach(function (u) { if (u) { any = true; Object.keys(u).forEach(function (k) { used[k] = true; }); } });
-      m.used = any ? used : false;
-      m.done = true;
-      if (S.modal && S.modal.type === 'templateeditor' && S.modal.editType === type) render();
-    }, function () { m.used = false; m.done = true; });
-  }
+  if (m) { if (redraw) m.redraw = true; return null; }
+  m = _tplWordTokMemo[key] = { done: false, used: null, redraw: !!redraw };
+
+  var after = function () { if (m.redraw || (S.modal && S.modal.type === 'templateeditor' && S.modal.editType === type)) render(); };
+
+  var one = function (f) {
+    var fk = 'file|' + slot + '|' + f.id + ':' + (f.updated_at || f.uploaded_at || f.created_at || '') + ':' + (f.size || '');
+    if (!_tplWordTokMemo[fk]) _tplWordTokMemo[fk] = Promise.resolve().then(function () { return _rtTokensOfWord(slot, f.id); }).catch(function () { return null; });
+    return _tplWordTokMemo[fk];
+  };
+  Promise.all(files.map(one)).then(function (all) {
+    var used = {}, any = false;
+    all.forEach(function (u) { if (u) { any = true; Object.keys(u).forEach(function (k) { used[k] = true; }); } });
+    m.used = any ? used : false;
+    m.done = true;
+    after();
+  }, function () { m.used = false; m.done = true; after(); });
   return null;
+}
+function _tplWordHas(type, files, own) {
+  var used = _tplWordTok(type, files, true);
+  if (used === null) return null;
+  var map = _tplWordMap(type);
+  return Object.keys(map).some(function (k) {
+    if (own && /^sev_/.test(k)) return false;
+    return _tplShows(type, k, used);
+  });
 }
 function _tplShows(type, key, used) {
   var w = _tplWordMap(type)[key];
@@ -48634,15 +48644,16 @@ function renderTemplateEditorModal() {
 
   if (!_word) h += '<p class="hint" style="margin:-0.15rem 0 0.75rem">The design of Pental’s own PDF' + (_rtE ? ' for this report' : '') + '. A Word template of yours keeps its own design, and takes from here only what it has a placeholder for, such as a heading’s {heading_scope}.' + _follows + '</p>';
   else h += '<p class="hint" style="margin:-0.15rem 0 0.75rem">Made with ' + (_verRep ? 'this version’s Word template' : _verE ? 'this Word template' : _rtE !== undefined ? 'its Word template' : 'your Word template') + ', which keeps its own design. '
-    + (_used === null ? 'Reading which placeholders it has…' : _used === false ? 'It could not be read just now, so everything a Word template can take from here is shown.' : 'Shown is only what it prints from here: the settings its placeholders use.')
+    + (_used === null ? 'Reading which placeholders it has…' : _used === false ? 'It could not be read just now, so everything Pental can make for a Word template is shown.'
+      : 'Shown is only what Pental makes for it that the file cannot. Its sections, their order, its headings and its own words are set in the Word file.')
     + _follows + '</p>';
   h += '</div>';
   h += '<button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
 
   h += '<div class="modal-body" style="padding:0;max-height:72vh;overflow:hidden;display:flex;flex-direction:column">';
 
-  var _wordNone = '<p class="hint tpl-word-none">' + (_verE ? 'This Word file prints none of these settings: its design and its words are its own.'
-    : 'Your Word template takes none of these settings: everything here is the design of Pental’s own PDF, which none of your documents of this kind is made with.') + '</p>';
+  var _wordNone = '<p class="hint tpl-word-none">' + (_verE ? 'Nothing to customise: everything this Word file prints is set in the file itself.'
+    : 'Nothing to customise: everything your Word template prints is set in the file itself.') + '</p>';
   var _wordWait = '<p class="hint tpl-word-wait">Reading your Word template…</p>';
   var _bodyOf = function (html) {
     if (!_word) return html;
@@ -49163,7 +49174,7 @@ function _renderStyleTab(tpl, word) {
   var _verOwn = !!(S.modal && S.modal.type === 'templateeditor' && typeof S.modal.ver === 'string' && S.modal.ver);
   var _rtOwn = _verOwn || !!(S.modal && S.modal.type === 'templateeditor' && typeof S.modal.rt === 'string' && S.modal.rt);
 
-  if (_rtOwn) h += _tplH('Severity Colours and Wording', _verOwn ? 'Its severity colours and their wording are its report’s: the report’s own Severity, under its Edit, or else the firm’s, and the wording in the Default’s editor.' : 'Its severity colours are its own Severity’s, under its Edit, or else the firm’s; their wording is the firm’s, in the Default’s editor.')
+  if (_rtOwn && !word) h += _tplH('Severity Colours and Wording', _verOwn ? 'Its severity colours and their wording are its report’s: the report’s own Severity, under its Edit, or else the firm’s, and the wording in the Default’s editor.' : 'Its severity colours are its own Severity’s, under its Edit, or else the firm’s; their wording is the firm’s, in the Default’s editor.')
     + '<div data-tpl-key="severity_colors"></div>';
   if (!_rtOwn) {
   h += _tplH('Severity Colours', 'Customise the colour for each severity rating in PDF and DOCX reports');
@@ -54381,8 +54392,10 @@ function _rdBaseHtml(tid, main, auto, mgr, canTpl) {
 
     h += '<button class="btn btn-ghost btn-sm rp-edit" onclick="_rtOpenTpl(\'' + (tid ? idTxt : _RT_DEF) + '\')" aria-expanded="' + open + '">' + (open ? 'Close' : 'Edit') + '</button>';
 
-    h += '<button class="btn btn-ghost btn-sm rp-custom" onclick="openTemplateEditor(\'report\',\'cover\',\'' + idTxt + '\')" title="'
-      + esc(main || (tid && _rtWith(tid, function () { return !!_getDocxTemplateMeta('report'); })) ? _TPL_WORD_TITLE : 'The design of Pental’s own PDF for this report: its sections, finding fields, colours and labels')
+    var _wMain = main || (tid ? _rtWith(tid, function () { return _getDocxTemplateMeta('report'); }) : null);
+    var _wHas = _wMain ? _tplWordHas('report', [_wMain].concat(vers), !!tid) : true;
+    if (_wHas) h += '<button class="btn btn-ghost btn-sm rp-custom" onclick="openTemplateEditor(\'report\',\'cover\',\'' + idTxt + '\')" title="'
+      + esc(_wMain ? _TPL_WORD_TITLE : 'The design of Pental’s own PDF for this report: its sections, finding fields, colours and labels')
       + (tid ? '. What you leave as it is follows the Default’s.' : '') + '">' + IC.edit + ' Customise</button>';
   }
   h += '<span class="rp-icons">';
@@ -54406,8 +54419,8 @@ function _rdBaseHtml(tid, main, auto, mgr, canTpl) {
       if (auto) h += _rdConvHtml(v.id, false);
       h += '</div><span class="rp-icons">';
 
-      if (mgr) h += '<button class="btn btn-ghost btn-sm rp-custom rp-ver-custom" onclick="openTemplateEditor(\'report\',\'cover\',\'' + idTxt + '\',\'' + esc(v.id) + '\')" title="'
-        + esc('What ' + vn + ' prints from Pental: the document controls, the headings and the other settings its placeholders use. What you leave as it is follows ' + (tid ? name + '’s' : 'the Default’s') + '.')
+      if (mgr && _tplWordHas('report', [v], true)) h += '<button class="btn btn-ghost btn-sm rp-custom rp-ver-custom" onclick="openTemplateEditor(\'report\',\'cover\',\'' + idTxt + '\',\'' + esc(v.id) + '\')" title="'
+        + esc('What Pental makes for ' + vn + ' that the file cannot: its document controls, the chart’s colour and the words chosen for each engagement. What you leave as it is follows ' + (tid ? name + '’s' : 'the Default’s') + '.')
         + '" aria-label="Customise ' + esc(vn) + '">' + IC.edit + ' Customise</button>';
       if (mgr) h += _rdMoveBtns('report', tid, v.id, vn, vi, vers.length);
       if (mgr) h += '<button class="btn btn-ghost btn-sm" onclick="_rdMakeMain(\'' + idTxt + '\',\'' + esc(v.id) + '\')" title="Make it the one on the ' + esc(_rdBtnName()) + '" aria-label="Make ' + esc(vn) + ' the main Word file">' + IC.star + '</button>'
@@ -56622,19 +56635,25 @@ function _rdRowHtml(dt) {
 function _rdFileCustom(dt, key, t, name) {
   if (!dt || dt.exportOnly || !t || !_tplWordAny(dt.editorKey)) return '';
   var on, title;
+
+  var has;
   if (key === 'report') {
     var main = _rdMainOf('');
     if (main && main.id === t.id) {
+      has = _tplWordHas('report', [main].concat(_rdVersionsOf('')), false);
       on = 'openTemplateEditor(\'report\',\'cover\',\'\')';
       title = _TPL_WORD_TITLE + '. Its other Word files follow it, unless they change it.';
     } else {
+      has = _tplWordHas('report', [t], true);
       on = 'openTemplateEditor(\'report\',\'cover\',\'\',\'' + esc(t.id) + '\')';
-      title = 'What ' + name + ' prints from Pental: the document controls, the headings and the other settings its placeholders use. What you leave as it is follows the Default’s.';
+      title = 'What Pental makes for ' + name + ' that the file cannot: its document controls, the chart’s colour and the words chosen for each engagement. What you leave as it is follows the Default’s.';
     }
   } else {
+    has = _tplWordHas(dt.editorKey, [t], false);
     on = 'openTemplateEditor(\'' + dt.editorKey + '\',undefined,undefined,\'' + esc(t.id) + '\')';
-    title = 'What ' + name + ' prints from Pental: the settings its placeholders use, for this Word file alone.';
+    title = 'What Pental makes for ' + name + ' that the file cannot: the words it chooses for each document, for this Word file alone.';
   }
+  if (!has) return '';
   return '<button class="btn btn-ghost btn-sm doc-custom" onclick="' + on + '" title="' + esc(title) + '" aria-label="Customise ' + esc(name) + '">' + IC.edit + ' Customise</button>';
 }
 function _pdfOwnDocs() {
