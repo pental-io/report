@@ -5728,6 +5728,9 @@ body.afm-dragging,body.afm-dragging *{cursor:grabbing!important;-webkit-user-sel
 .rp-ver-main{flex:1;min-width:0}
 .rp-ver-name{font-size:0.84rem;font-weight:600;color:var(--text);display:flex;align-items:baseline;gap:0.5rem;flex-wrap:wrap;overflow-wrap:anywhere}
 .rp-ver-meta{font-size:0.72rem;font-weight:400;color:var(--gray)}
+/* 2016: a version's own Customise, first of its icons. */
+.rp-icons .rp-ver-custom{padding:0.3rem 0.55rem;margin-right:0.3rem;flex-shrink:0}
+.rp-icons .rp-ver-custom svg{width:14px;height:14px}
 .rp-ver-add{display:flex;align-items:center;gap:0.25rem 0.5rem;flex-wrap:wrap;width:100%;padding:0.45rem 0.55rem;border:1px dashed var(--border);border-radius:8px;background:none;color:var(--accent);font:inherit;font-size:0.82rem;font-weight:600;cursor:pointer;text-align:left}
 .rp-ver-add svg{width:15px;height:15px;flex-shrink:0}
 .rp-ver-add small{font-weight:400;font-size:0.74rem;color:var(--gray)}
@@ -5775,7 +5778,7 @@ body.afm-dragging,body.afm-dragging *{cursor:grabbing!important;-webkit-user-sel
   .rp-vers{padding-left:0.85rem}
   .rp-ver{flex-wrap:wrap;align-items:flex-start}
   .rp-ver-main{flex:1 1 calc(100% - 2rem)}
-  .rp-ver .rp-icons{width:100%;justify-content:flex-start;margin-left:1.6rem}
+  .rp-ver .rp-icons{width:calc(100% - 1.6rem);flex-wrap:wrap;justify-content:flex-start;margin-left:1.6rem}
   .rp-add-btns{width:100%}
   .rp-tools{padding-left:0.85rem}
   .rt-grid .rt-frow > .rt-pwrap{margin-left:0}
