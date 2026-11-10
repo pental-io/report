@@ -27966,7 +27966,8 @@ async function _e2eFactorKeep() {
     try { await _e2eFactorNew(todo[i].method, todo[i].ref, todo[i].material); }
     catch (e) { console.debug('[e2e] could not keep the ' + todo[i].method + ' able to open a new browser'); }
   }
-  if (todo.length) await _e2eGiveNeeded();
+
+  if (todo.length) { await _e2eGiveNeeded(); await _e2eStatus(true); _e2eShow(); }
 }
 function _e2eStateRow(list, id) {
   try { var a = (S && S.data && S.data[list]) || []; for (var i = 0; i < a.length; i++) if (a[i] && a[i].id === id) return a[i]; } catch (e) {}
@@ -28010,7 +28011,16 @@ async function _e2eKeyForClient(clientId) {
   if (!kid) return null;
   return { kid: kid, key: await _e2eKey(kid), pub: E2E.pubs[kid] && E2E.pubs[kid].pub };
 }
-async function _e2eMakeClientKey(clientId) {
+function _e2eMakeClientKey(clientId) {
+  E2E.making = E2E.making || {};
+  if (E2E.making[clientId]) return E2E.making[clientId];
+  var p = _e2eMakeClientKeyOnce(clientId);
+  E2E.making[clientId] = p;
+  var done = function () { if (E2E.making && E2E.making[clientId] === p) delete E2E.making[clientId]; };
+  p.then(done, done);
+  return p;
+}
+async function _e2eMakeClientKeyOnce(clientId) {
   var nk = await _e2eNewDataKey('client', clientId);
   var grants = [];
   var targets = [];
@@ -28744,15 +28754,6 @@ async function _e2eBadgeOpen(ev, aid) {
   }
 }
 window._e2eBadgeOpen = _e2eBadgeOpen;
-function _e2eAdviceDue() {
-  var st = E2E.st;
-  if (!E2E.on || E2E.waiting || !st || st.role !== 'admin' || Number(st.holders) > 1) return false;
-  if ((st.wraps || []).length) return false;
-  var devices = (st.principals || []).filter(function (p) { return p.kind === 'device' && !p.revoked; }).length;
-  if (devices > 1) return false;
-  try { var until = Number(localStorage.getItem('pental_e2e_advice_' + _e2eSlot()) || 0); if (until > Date.now()) return false; } catch (e) {}
-  return true;
-}
 function _e2eBarHtml() {
   if (_e2eOff() || !E2E.on || !S || !S.profile) return '';
   if (E2E.waiting) {
@@ -28765,19 +28766,8 @@ function _e2eBarHtml() {
       + (hasKit ? '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitUseOpen()">Use your recovery kit</button>' : '')
       + '<a class="e2e-bar-link" href="' + _E2E_HOW + '" target="_blank" rel="noopener">What is this?</a></div>';
   }
-  if (_e2eAdviceDue()) {
-    return '<div class="e2e-bar is-advice" role="status"><span class="e2e-bar-icon">' + _E2E_LOCK + '</span>'
-      + '<div class="e2e-bar-text"><strong>Only this browser can open your firm’s encrypted work</strong><span>If it were lost, nothing could open that work again. Sign in once on a second device, add a passkey, or save a recovery kit.</span></div>'
-      + '<button type="button" class="btn btn-primary btn-sm" onclick="_e2eKitOpen()">Save a recovery kit</button>'
-      + '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eAdviceLater()">Not now</button></div>';
-  }
   return '';
 }
-function _e2eAdviceLater() {
-  try { localStorage.setItem('pental_e2e_advice_' + _e2eSlot(), String(Date.now() + 7 * 86400000)); } catch (e) {}
-  _e2eShow();
-}
-window._e2eAdviceLater = _e2eAdviceLater;
 function _e2eShow() {
   if (typeof document === 'undefined' || !document.getElementById) return;
   var bar = document.getElementById('e2eBar');
@@ -29034,7 +29024,7 @@ function _e2eForget() {
   if (E2E.live) { try { supabaseClient.removeChannel(E2E.live); } catch (e) {} E2E.live = null; }
   E2E.loops = null; E2E.ready = null; E2E.on = false; E2E.waiting = false; E2E.st = null;
   E2E.device = null; E2E.factors = {}; E2E.keys = {}; E2E.keyP = {}; E2E.pubs = {}; E2E.byClient = {};
-  E2E.firmKid = null; E2E.grants = []; E2E.cache = new Map(); E2E.cacheBytes = 0; E2E.stash = null;
+  E2E.firmKid = null; E2E.grants = []; E2E.cache = new Map(); E2E.cacheBytes = 0; E2E.stash = null; E2E.making = {};
   Object.keys(E2E.clientOf).forEach(function (t) { E2E.clientOf[t] = {}; });
 }
 window._e2eForget = _e2eForget;
@@ -74094,6 +74084,19 @@ async function setTestPerspective(assessmentId, perspective) {
     toast('Error: ' + (e.message || 'Unknown error'), 'error');
   }
  finally { _hideLoading(); }
+}
+function _pmArgon2Lib() {
+  if (window.hashwasm && typeof window.hashwasm.argon2id === 'function') return Promise.resolve(window.hashwasm);
+  if (_pmArgon2Lib._p) return _pmArgon2Lib._p;
+  _pmArgon2Lib._p = new Promise(function (res, rej) {
+    var s = document.createElement('script');
+    s.src = _VENDOR.argon2;
+    s.async = true;
+    s.onload = function () { if (window.hashwasm && typeof window.hashwasm.argon2id === 'function') res(window.hashwasm); else rej(new Error('Argon2 did not start')); };
+    s.onerror = function () { _pmArgon2Lib._p = null; rej(new Error('Argon2 could not be loaded')); };
+    document.head.appendChild(s);
+  });
+  return _pmArgon2Lib._p;
 }
 var _SAFE_TAGS = {p:1,br:1,strong:1,b:1,em:1,i:1,u:1,s:1,ul:1,ol:1,li:1,pre:1,code:1,img:1,table:1,tr:1,td:1,th:1,thead:1,tbody:1,tfoot:1,div:1,span:1,h1:1,h2:1,h3:1,h4:1,h5:1,h6:1,a:1,blockquote:1,hr:1,sup:1,sub:1,font:1,mark:1,dl:1,dt:1,dd:1,figure:1,figcaption:1,caption:1,colgroup:1,col:1};
 var _DROP_TAGS = {script:1,style:1,title:1,head:1,meta:1,link:1,noscript:1,template:1,iframe:1,object:1,embed:1,svg:1};

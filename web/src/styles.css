@@ -5881,10 +5881,7 @@ body.afm-dragging,body.afm-dragging *{cursor:grabbing!important;-webkit-user-sel
 @keyframes e2ePopIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 #e2eBar:empty{display:none}
 .e2e-bar{position:fixed;left:50%;bottom:1.1rem;transform:translateX(-50%);z-index:1100;display:flex;align-items:center;gap:0.8rem;width:min(44rem,calc(100vw - 24px));padding:0.75rem 0.9rem;border:1px solid rgba(245,158,11,0.4);border-radius:12px;background:var(--card);color:var(--text);box-shadow:0 18px 44px rgba(0,0,0,0.38),0 2px 8px rgba(0,0,0,0.2);animation:e2eBarIn .22s ease-out}
-.e2e-bar.is-advice{border-color:rgba(34,197,94,0.4)}
 .e2e-bar-icon{position:relative;display:inline-flex;align-items:center;justify-content:center;width:2.1rem;height:2.1rem;flex-shrink:0;border-radius:50%;background:rgba(245,158,11,0.12);color:var(--amber)}
-.e2e-bar.is-advice .e2e-bar-icon{background:rgba(34,197,94,0.12);color:#4ade80}
-[data-theme="light"] .e2e-bar.is-advice .e2e-bar-icon{color:#15803d}
 .e2e-bar-icon svg{width:16px;height:16px}
 .e2e-bar-icon.is-pulse::after{content:'';position:absolute;inset:-3px;border-radius:50%;border:2px solid rgba(245,158,11,0.45);animation:e2ePulse 1.8s ease-out infinite}
 .e2e-bar-text{display:flex;flex-direction:column;gap:0.1rem;flex:1;min-width:0;font-size:0.82rem;line-height:1.45}

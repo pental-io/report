@@ -62,7 +62,6 @@ function _migPanelHtml() { return ''; }
 function _onScanFindingPage() { return false; }
 async function _patchProposalAuth() { return Promise.resolve(null); }
 async function _payReturned() { return; }
-function _pmArgon2Lib() { return Promise.resolve(null); }
 function _pmBarHtml() { return ''; }
 function _pmDests() { return; }
 function _pmHash() { return; }
