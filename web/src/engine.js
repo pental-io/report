@@ -10146,6 +10146,7 @@ window.addEventListener('online', function() { _isOnline = true; toast('Connecti
 window.addEventListener('offline', function() { _isOnline = false; toast('Connection lost - changes may not save', 'warning'); _teardownRealtime(); });
 var _realtimeChannel = null;
 var _rtFails = 0;
+var _rtCatchUpT = null;
 var _rtRenderTimer = null;
 var _rtLastClose = null;
 function _rtWatchSocket(client) {
@@ -10494,6 +10495,16 @@ async function _setupRealtime() {
 
       _rtFails = 0;
       console.debug('[Realtime] connected (' + channelName + ', ' + tables.length + ' tables)');
+
+      if (!_rtMine.__caughtUp) {
+        _rtMine.__caughtUp = true;
+        if (_rtCatchUpT) clearTimeout(_rtCatchUpT);
+        _rtCatchUpT = setTimeout(function () {
+          _rtCatchUpT = null;
+          if (_realtimeChannel !== _rtMine || !S.profile) return;
+          try { if (typeof refreshAndStay === 'function') refreshAndStay(); } catch (e) {}
+        }, 300);
+      }
     } else if (status === 'CHANNEL_ERROR') {
 
       setTimeout(function () {
@@ -27459,6 +27470,7 @@ var _E2E_EC = { name: 'ECDH', namedCurve: 'P-256' };
 var _E2E_PW_COST = { m: 65536, t: 3, p: 1 };
 var E2E = {
   avail: false,
+  availKnown: false,
   on: false,
   waiting: false,
   st: null,
@@ -27484,6 +27496,11 @@ var _e2eTE = (typeof TextEncoder !== 'undefined') ? new TextEncoder() : null;
 var _e2eTD = (typeof TextDecoder !== 'undefined') ? new TextDecoder() : null;
 function _e2eOff() {
   return !(typeof crypto !== 'undefined' && crypto && crypto.subtle && _e2eTE);
+}
+function _e2eBlindWhy() {
+  return (typeof window !== 'undefined' && window.isSecureContext === false)
+    ? 'Your firm’s work is end-to-end encrypted, and this browser can only open or encrypt it on a secure address. Open this page at its https:// address, or at localhost on the computer it runs on.'
+    : 'Your firm’s work is end-to-end encrypted, and this browser cannot open or encrypt it: it has no Web Crypto. Use a current version of Chrome, Edge, Firefox or Safari.';
 }
 var _E2E_B64 = typeof Uint8Array.fromBase64 === 'function' && typeof Uint8Array.prototype.toBase64 === 'function';
 function _e2eB64u(u8) {
@@ -27793,10 +27810,10 @@ async function _e2eStart() {
     try { var pre = await _e2eIdbDo('readonly', function (o) { return o.get(_e2eSlot()); }); if (pre && pre.id) E2E.devicePre = { id: pre.id }; } catch (e) {}
   }
   try { st = await _e2eStatus(); } catch (e) {
-    if (typeof _isMissingRpc === 'function' && _isMissingRpc(e)) { E2E.avail = false; return; }
+    if (typeof _isMissingRpc === 'function' && _isMissingRpc(e)) { E2E.avail = false; E2E.availKnown = true; return; }
     throw e;
   }
-  E2E.avail = true;
+  E2E.avail = true; E2E.availKnown = true;
   if (!st.signed_in || !st.fresh) return false;
   if (!st.active) {
 
@@ -28062,6 +28079,10 @@ function _e2eHasLocked(v) {
 function _e2eRefusal(msg) {
   var e = new Error(msg); e.e2eRefused = true; return e;
 }
+async function _e2eHealed(v) {
+  if (!_e2eHasSealIn(v)) return v;
+  return _e2eOpenDeep(v && typeof v === 'object' ? _e2eClone(v) : v);
+}
 async function _e2eSealRows(table, rows, isInsert, ids) {
   var cols = _E2E_COLS[table], json = _E2E_JSON[table] || {};
   for (var i = 0; i < rows.length; i++) {
@@ -28069,6 +28090,7 @@ async function _e2eSealRows(table, rows, isInsert, ids) {
     if (!row || typeof row !== 'object') continue;
     var todo = cols.filter(function (c) { return c in row && !_e2eEmpty(row[c]) && !_e2eIsSeal(row[c]); });
     if (!todo.length) continue;
+    for (var t0 = 0; t0 < todo.length; t0++) row[todo[t0]] = await _e2eHealed(row[todo[t0]]);
     for (var t = 0; t < todo.length; t++) if (_e2eHasLocked(row[todo[t]])) throw _e2eRefusal('This was not saved: some of it is still encrypted on this browser, which is waiting to be given its key. It will be in a moment.');
     var clientId = await _e2eRowClient(table, row, ids);
     var k = await _e2eKeyForClient(clientId);
@@ -28092,6 +28114,7 @@ async function _e2eSealRows(table, rows, isInsert, ids) {
 }
 async function _e2eSealCoLive(args) {
   if (!args || (args.p_table !== 'findings' && args.p_table !== 'assessments') || _e2eEmpty(args.p_value) || _e2eIsSeal(args.p_value)) return;
+  args.p_value = await _e2eHealed(args.p_value);
   if (_e2eHasLocked(args.p_value)) throw _e2eRefusal('locked');
   var k = await _e2eKeyForClient(await _e2eClientOf(args.p_table, args.p_id));
   if (!k || !k.key) throw _e2eRefusal('This browser is still waiting to be given its key.');
@@ -28102,19 +28125,31 @@ var _E2E_RPC = {
   rpc_mail_submit: function (args) { return _e2eSealMailArgs(args); },
   rpc_credentials_submit: function (args) { return _e2eSealCred(args); }
 };
-async function _e2eOpenDeep(root) {
-  var found = [];
+var _E2E_RE_IN = /pe2([ejst])1\.([0-9a-f]{32})\.([A-Za-z0-9_-]{16,})/;
+function _e2eHasSealIn(v) {
+  var s = typeof v === 'string' ? v : (v && typeof v === 'object') ? (function () { try { return JSON.stringify(v); } catch (e) { return ''; } })() : '';
+  return s.length > 50 && s.indexOf('pe2') >= 0 && _E2E_RE_IN.test(s);
+}
+async function _e2eOpenDeep(root, depth) {
+  depth = depth || 0;
+  var found = [], inner = [];
   var walk = function (o, parent, key) {
-    if (typeof o === 'string') { if (_e2eIsSeal(o)) found.push([parent, key, o]); return; }
+    if (typeof o === 'string') {
+      if (_e2eIsSeal(o)) found.push([parent, key, o]);
+      else if (o.length > 50 && o.indexOf('pe2') >= 0 && _E2E_RE_IN.test(o)) inner.push([parent, key, o]);
+      return;
+    }
     if (!o || typeof o !== 'object') return;
     if (Array.isArray(o)) { for (var i = 0; i < o.length; i++) walk(o[i], o, i); return; }
     for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) walk(o[k], o, k);
   };
   var box = { v: root };
   walk(root, box, 'v');
-  if (!found.length) return root;
+  if (!found.length && !inner.length) return root;
   var uniq = {}, list = [];
-  found.forEach(function (f) { if (!uniq[f[2]]) { uniq[f[2]] = 1; list.push(f[2]); } });
+  var add = function (s) { if (!uniq[s]) { uniq[s] = 1; list.push(s); } };
+  found.forEach(function (f) { add(f[2]); });
+  inner.forEach(function (f) { var re = new RegExp(_E2E_RE_IN.source, 'g'), mm; while ((mm = re.exec(f[2]))) add(mm[0]); });
   var opened = {};
   for (var i = 0; i < list.length; i += 200) {
     await Promise.all(list.slice(i, i + 200).map(function (seal) {
@@ -28122,8 +28157,14 @@ async function _e2eOpenDeep(root) {
       return _e2eOpen(seal).then(function (v) {
         opened[seal] = { v: v };
         _e2eRemember(seal, v);
-      }, function (e) { opened[seal] = { locked: true }; if (!(e && e.locked)) console.warn('[e2e] a sealed value did not open', e && e.message); });
+      }, function (e) { opened[seal] = { locked: true, key: !!(e && e.locked) }; if (!(e && e.locked)) console.warn('[e2e] a sealed value did not open', e && e.message); });
     }));
+  }
+  if (depth < 3) {
+    for (var s in opened) {
+      var oo = opened[s];
+      if (oo && !oo.locked && _e2eHasSealIn(oo.v)) oo.v = await _e2eOpenDeep(_e2eClone(oo.v), depth + 1);
+    }
   }
   found.forEach(function (f) {
     var o = opened[f[2]];
@@ -28131,6 +28172,14 @@ async function _e2eOpenDeep(root) {
     E2E.lockedN = (E2E.lockedN || 0) + 1;
     var t = f[2].charAt(3);
     f[0][f[1]] = (t === 'j' || t === 't') ? (_E2E_EMPTY_LIST[f[1]] ? [] : {}) : _E2E_LOCKED;
+  });
+  inner.forEach(function (f) {
+    f[0][f[1]] = f[2].replace(new RegExp(_E2E_RE_IN.source, 'g'), function (m) {
+      var o = opened[m];
+      if (o && !o.locked) return typeof o.v === 'string' ? o.v : JSON.stringify(o.v);
+      if (o && o.key) { E2E.lockedN = (E2E.lockedN || 0) + 1; return _E2E_LOCKED; }
+      return m;
+    });
   });
   return box.v;
 }
@@ -28158,7 +28207,6 @@ function _e2eLearn(table, data) {
   }
 }
 function _e2eInstallFetch(opts) {
-  if (_e2eOff()) return opts;
   opts.global = opts.global || {};
   var base = opts.global.fetch || (typeof fetch === 'function' ? fetch.bind(window) : null);
   if (!base) return opts;
@@ -28205,17 +28253,25 @@ async function _e2eFetch(base, input, init) {
     throw e;
   }
   var res = await base(input, init);
-  if (!E2E.avail || method === 'HEAD' || res.status === 204 || res.status === 205 || res.status === 304) return res;
+
+  if ((E2E.availKnown && !E2E.avail) || method === 'HEAD' || res.status === 204 || res.status === 205 || res.status === 304) return res;
   var ct = res.headers.get('content-type') || '';
   if (ct.indexOf('json') < 0) return res;
   var text = await res.text();
   var headers = new Headers(res.headers);
   headers.delete('content-length'); headers.delete('content-encoding');
 
-  if (res.status >= 400 && !E2E.on && text.indexOf('"55E2E"') >= 0) _e2eRecheck();
-  if (_E2E_RAW[m[2]] || !/"pe2[ejst]1\./.test(text)) return new Response(text, { status: res.status, statusText: res.statusText, headers: headers });
+  if (res.status >= 400 && text.indexOf('"55E2E"') >= 0) {
+    if (_e2eOff()) return _e2eRefused(_e2eBlindWhy());
+    if (!E2E.on) _e2eRecheck();
+  }
 
-  if (E2E.ready && m[2].indexOf('rpc/rpc_e2e_') !== 0) { try { await E2E.ready; } catch (e) {} }
+  if (_E2E_RAW[m[2]] || text.indexOf('pe2') < 0 || !_E2E_RE_IN.test(text)) return new Response(text, { status: res.status, statusText: res.statusText, headers: headers });
+
+  if (m[2].indexOf('rpc/rpc_e2e_') !== 0) {
+    var rd = E2E.ready || (E2E.availKnown ? null : _e2eReady());
+    if (rd) { try { await rd; } catch (e) {} }
+  }
   var data;
   try { data = JSON.parse(text); } catch (e) { return new Response(text, { status: res.status, statusText: res.statusText, headers: headers }); }
   data = await _e2eOpenDeep(data);
@@ -28311,18 +28367,20 @@ async function _e2eStorage(base, input, init, method, rest) {
     return res;
   }
   var res2 = await base(input, init);
-  if (!down || method !== 'GET' || !res2.ok || !E2E.avail) return res2;
+
+  if (!down || method !== 'GET' || !res2.ok || (E2E.availKnown && !E2E.avail)) return res2;
   var buf = new Uint8Array(await res2.arrayBuffer());
   var h = new Headers(res2.headers);
   h.delete('content-length'); h.delete('content-encoding');
   if (!_e2eIsSealedFile(buf)) return new Response(buf, { status: res2.status, statusText: res2.statusText, headers: h });
-  if (E2E.ready) { try { await E2E.ready; } catch (e) {} }
+  var rdf = E2E.ready || (E2E.availKnown ? null : _e2eReady());
+  if (rdf) { try { await rdf; } catch (e) {} }
   try {
     var f = await _e2eOpenFile(buf);
     h.set('content-type', f.mime || 'application/octet-stream');
     return new Response(f.bytes, { status: res2.status, statusText: res2.statusText, headers: h });
   } catch (e) {
-    return new Response(JSON.stringify({ statusCode: '423', error: 'Locked', message: 'This file is encrypted, and this browser has not been given its key yet.' }),
+    return new Response(JSON.stringify({ statusCode: '423', error: 'Locked', message: _e2eOff() ? _e2eBlindWhy() : 'This file is encrypted, and this browser has not been given its key yet.' }),
       { status: 423, statusText: 'Locked', headers: { 'content-type': 'application/json' } });
   }
 }
@@ -28449,6 +28507,8 @@ async function _e2eSealPlain(table, rows) {
     for (var c in (row.cols || {})) {
       var v = row.cols[c].v;
       if (_e2eEmpty(v)) continue;
+
+      if (_e2eHasLocked(v)) continue;
       _e2eRefsCols(table, c, v, refs);
       cols[c] = { md5: row.cols[c].md5, value: await _e2eSeal(k.kid, k.key, v, !!json[c] || (v !== null && typeof v === 'object')) };
     }
@@ -28513,6 +28573,9 @@ async function _e2eMailSeal(subject, body) {
 }
 function _e2eMailDetail(type) { return typeof _MAIL_DETAIL !== 'undefined' && !!_MAIL_DETAIL[type]; }
 async function _e2eSealMailArgs(args) {
+
+  if (args && typeof args.p_subject === 'string') args.p_subject = await _e2eHealed(args.p_subject);
+  if (args && typeof args.p_body === 'string') args.p_body = await _e2eHealed(args.p_body);
   if (!args || !_e2eMailDetail(args.p_type) || !args.p_subject || !args.p_body) return;
   var m = await _e2eMailSeal(String(args.p_subject), String(args.p_body));
   if (m) { args.p_subject_sealed = m.subject; args.p_body_sealed = m.body; }
@@ -28520,6 +28583,8 @@ async function _e2eSealMailArgs(args) {
 async function _e2eSealMailRows(rows) {
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
+    if (r && typeof r.subject === 'string') r.subject = await _e2eHealed(r.subject);
+    if (r && typeof r.body === 'string') r.body = await _e2eHealed(r.body);
     if (!r || !_e2eMailDetail(r.notification_type) || !r.subject || !r.body || r.subject_sealed) continue;
     var m = await _e2eMailSeal(String(r.subject), String(r.body));
     if (m) { r.subject_sealed = m.subject; r.body_sealed = m.body; }
@@ -28755,7 +28820,14 @@ async function _e2eBadgeOpen(ev, aid) {
 }
 window._e2eBadgeOpen = _e2eBadgeOpen;
 function _e2eBarHtml() {
-  if (_e2eOff() || !E2E.on || !S || !S.profile) return '';
+
+  if (_e2eOff()) {
+    if (!E2E.lockedN || !S || !S.profile) return '';
+    return '<div class="e2e-bar" role="status" aria-live="polite"><span class="e2e-bar-icon">' + _E2E_LOCK + '</span>'
+      + '<div class="e2e-bar-text"><strong>Encrypted work cannot open here</strong><span>' + esc(_e2eBlindWhy()) + '</span></div>'
+      + '<a class="e2e-bar-link" href="' + _E2E_HOW + '" target="_blank" rel="noopener">What is this?</a></div>';
+  }
+  if (!E2E.on || !S || !S.profile) return '';
   if (E2E.waiting) {
     var isClient = S.profile.role === 'client';
     var hasKit = ((E2E.st && E2E.st.wraps) || []).some(function (w) { return w.method === 'kit'; });
@@ -29032,9 +29104,12 @@ var _e2eRtChain = Promise.resolve();
 function _e2eRtWrap(fn) {
   return function (payload) {
     var self = this, args = Array.prototype.slice.call(arguments);
-    if (!E2E.on && !(E2E.avail && payload && JSON.stringify(payload).search(/"pe2[ejst]1\./) >= 0)) return fn.apply(self, args);
+
+    if (!E2E.on && !(payload && _e2eHasSealIn(payload))) return fn.apply(self, args);
     _e2eRtChain = _e2eRtChain.then(function () {
-      return _e2eOpenDeep(payload).then(function (p) { args[0] = p; return fn.apply(self, args); });
+      var rd = E2E.ready || (E2E.availKnown ? null : _e2eReady());
+      return Promise.resolve(rd).catch(function () {}).then(function () { return _e2eOpenDeep(payload); })
+        .then(function (p) { args[0] = p; return fn.apply(self, args); });
     }).catch(function (e) { console.warn('[e2e] a live change did not open:', (e && e.message) || e); });
     return undefined;
   };
