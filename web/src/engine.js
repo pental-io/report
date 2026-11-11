@@ -27699,14 +27699,15 @@ async function _e2eDeviceUp() {
   return rec;
 }
 function _e2eKeepStorage() {
+  try { localStorage.removeItem('pental_keep_storage_asked'); } catch (e) {}
   try {
     var st = navigator.storage;
-    if (!st || !st.persist) return;
-    var asked = 'pental_keep_storage_asked';
+    if (!st || !st.persist || !(E2E.stash && E2E.stash.pw)) return;
     var ask = function () {
-      try { if (localStorage.getItem(asked)) return; localStorage.setItem(asked, '1'); } catch (e) { return; }
-      var p = st.persist();
-      if (p && typeof p.catch === 'function') p.catch(function () {});
+      try {
+        var p = st.persist();
+        if (p && typeof p.catch === 'function') p.catch(function () {});
+      } catch (e) {}
     };
     if (!st.persisted) { ask(); return; }
     st.persisted().then(function (kept) { if (!kept) ask(); }, function () {});
@@ -28967,7 +28968,7 @@ async function _e2eKitGo() {
 }
 function _e2eKitText(code) {
   var firm = ((S.data && S.data.settings) || {}).company_name || 'your firm';
-  return 'Pental recovery kit\n\nFor: ' + ((S.profile && S.profile.email) || '') + '\nPortal: ' + location.origin + '\nFirm: ' + firm + '\nMade: ' + new Date().toISOString().slice(0, 10)
+  return 'Pental recovery kit\n\nFor: ' + ((S.profile && S.profile.email) || '') + '\nPortal: ' + location.origin + '\nFirm: ' + firm + '\nMade: ' + today()
     + '\n\n' + code + '\n\nThis opens your end-to-end encrypted work on a new browser if every browser you have used and your passkey were lost.'
     + '\nTo use it: sign in to the portal as usual, then choose Use your recovery kit in the bar at the bottom of the page.'
     + '\nKeep it private. Anyone who has it and can sign in as you can open your work. Making a new kit stops this one working.\n';
