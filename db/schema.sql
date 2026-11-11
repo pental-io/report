@@ -47098,125 +47098,6 @@ BEGIN
   END IF;
 END $assets_rt$;
 
--- 2007: AFTER THE LAST POLICY THE FILE MAKES. The assets table's policies
--- (1979) came after this block, so they were the only ones still asking
--- their helpers once a row (test_rls_speed_1958, test_row_scope_1841).
--- 1958: ROW SECURITY ASKS ONCE PER QUERY, NOT ONCE PER ROW.
---
--- [stated] Arian: "also sometimes the portal lags when too many people use it
--- why? fix it"; asked what it looks like, "Pages slow for everyone".
---
--- Measured on a real PostgreSQL with this file applied and a busy firm's
--- history (300 engagements, 6,000 findings, 12,000 timeline entries): one
--- person signing in took 2.9 seconds, twenty at once 38 seconds each, a client
--- 10.7 seconds. Nearly all of it was the policies above asking the same thing
--- once for every row read: whether this person may see the row's engagement
--- or client (can_access_assessment, can_access_client, can_see_client, a query
--- each), and who the person is and whether their sign-in is fresh
--- (mfa_is_fresh, is_staff, current_user_role and the rest, which PostgreSQL
--- cannot fold into the query, so each ran per row). With a firm reading at
--- once, the database answered one question tens of thousands of times and
--- every page waited for it.
---
--- So each is asked once per query. A function of no arguments that gives one
--- answer for a statement (STABLE) is put in a sub-select, which PostgreSQL
--- works out once; and a read that asked of each row's engagement or client
--- asks once for the set this person may see (the three functions below, the
--- same rule as the ones they stand for) and looks each row up in it. A write
--- names its own row, and keeps the look-up it has. Nothing anybody may see or
--- do changes: verification/test_rls_speed_1958.mjs holds every kind of person,
--- every table and every write to what they were, and measured one person
--- signing in 14 times quicker, twenty at once 7 times, a client 200 times.
---
--- It runs last, over every policy the file has made (one made after it would
--- not be asked once). Run again, it finds nothing left to change. A policy it
--- cannot rewrite keeps what it had, and the setup says so.
-
--- The engagements this person may see: can_access_assessment's rule, as a set.
--- (1970: the firm's working staff, is_delivery_staff, as can_access_assessment.)
-CREATE OR REPLACE FUNCTION public._pental_my_assessments() RETURNS SETOF uuid
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
-  SELECT a.id FROM public.assessments a
-   WHERE (SELECT public.is_delivery_staff())
-      OR ((SELECT public.current_user_role()) = 'contractor'
-          AND (a.lead_id = (SELECT public.current_profile_id())
-               OR (a.contractor_team_id IS NOT NULL AND a.contractor_team_id = (SELECT public.current_contractor_team_id()))))
-      OR ((SELECT public.current_user_role()) = 'client' AND a.client_id = (SELECT public.current_user_client_id()))
-$$;
--- The clients this person may work with: can_access_client's rule, as a set.
-CREATE OR REPLACE FUNCTION public._pental_my_clients() RETURNS SETOF uuid
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
-  SELECT c.id FROM public.clients c
-   WHERE (SELECT public.is_staff())
-      OR ((SELECT public.current_user_role()) = 'contractor' AND c.created_by = (SELECT public.current_profile_id()))
-      OR ((SELECT public.current_user_role()) = 'client' AND c.id = (SELECT public.current_user_client_id()))
-$$;
--- And the clients they may see: can_see_client's (those, and a contractor's
--- engagements' clients).
-CREATE OR REPLACE FUNCTION public._pental_seen_clients() RETURNS SETOF uuid
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
-  SELECT m FROM public._pental_my_clients() m
-  UNION
-  SELECT a.client_id FROM public.assessments a
-   WHERE (SELECT public.current_user_role()) = 'contractor'
-     AND (a.lead_id = (SELECT public.current_profile_id())
-          OR (a.contractor_team_id IS NOT NULL AND a.contractor_team_id = (SELECT public.current_contractor_team_id())))
-$$;
-REVOKE ALL ON FUNCTION public._pental_my_assessments() FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public._pental_my_clients() FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public._pental_seen_clients() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public._pental_my_assessments() TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public._pental_my_clients() TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public._pental_seen_clients() TO authenticated, service_role;
-
-DO $rls_once$
-DECLARE
-  r record; f record; nq text; nw text; tok text; stmt text;
-BEGIN
-  -- Printed with every name in full, so what is written back reads the same
-  -- whatever the search path of whoever runs the file.
-  PERFORM set_config('search_path', 'pg_catalog', true);
-  FOR r IN SELECT pol.polname, pol.polcmd, n.nspname AS sch, c.relname AS tbl,
-                  pg_get_expr(pol.polqual, pol.polrelid) AS q, pg_get_expr(pol.polwithcheck, pol.polrelid) AS w
-             FROM pg_policy pol JOIN pg_class c ON c.oid = pol.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = 'public' LOOP
-    nq := r.q; nw := r.w;
-    -- Reads only: whether this row's engagement or client may be seen.
-    IF nq IS NOT NULL AND r.polcmd IN ('r', '*') THEN
-      nq := regexp_replace(nq, 'public\.can_access_assessment\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_my_assessments() AS _pental_my_assessments))', 'g');
-      nq := regexp_replace(nq, 'public\.can_access_client\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_my_clients() AS _pental_my_clients))', 'g');
-      nq := regexp_replace(nq, 'public\.can_see_client\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_seen_clients() AS _pental_seen_clients))', 'g');
-    END IF;
-    -- Everywhere: who the person is, asked once. A call already asked once is
-    -- set aside first, so nothing is wrapped twice.
-    FOR f IN SELECT DISTINCT p.proname, ns.nspname FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
-              WHERE ns.nspname IN ('public', 'auth') AND p.pronargs = 0 AND p.provolatile IN ('s', 'i')
-                AND p.prokind = 'f' AND NOT p.proretset LOOP
-      tok := f.nspname || '.' || f.proname || '()';
-      IF nq IS NOT NULL AND position(tok IN nq) > 0 THEN
-        nq := replace(nq, 'SELECT ' || tok, chr(1) || f.proname || chr(2));
-        nq := replace(nq, tok, '(SELECT ' || tok || ')');
-        nq := replace(nq, chr(1) || f.proname || chr(2), 'SELECT ' || tok);
-      END IF;
-      IF nw IS NOT NULL AND position(tok IN nw) > 0 THEN
-        nw := replace(nw, 'SELECT ' || tok, chr(1) || f.proname || chr(2));
-        nw := replace(nw, tok, '(SELECT ' || tok || ')');
-        nw := replace(nw, chr(1) || f.proname || chr(2), 'SELECT ' || tok);
-      END IF;
-    END LOOP;
-    IF nq IS DISTINCT FROM r.q OR nw IS DISTINCT FROM r.w THEN
-      stmt := format('ALTER POLICY %I ON %I.%I', r.polname, r.sch, r.tbl);
-      IF nq IS NOT NULL THEN stmt := stmt || ' USING (' || nq || ')'; END IF;
-      IF nw IS NOT NULL THEN stmt := stmt || ' WITH CHECK (' || nw || ')'; END IF;
-      BEGIN
-        EXECUTE stmt;
-      EXCEPTION WHEN OTHERS THEN
-        RAISE WARNING 'Pental setup: the policy % on % could not be made quicker, so it stays as it was (%)', r.polname, r.tbl, SQLERRM;
-      END;
-    END IF;
-  END LOOP;
-END $rls_once$;
--- 1958: END
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 2017: THE KEYS IN THE VAULT, AND THE AUTHENTICATOR SECRETS SEALED
@@ -47634,6 +47515,130 @@ CREATE POLICY e2e_grants_own ON public.e2e_grants FOR SELECT TO authenticated
 DROP POLICY IF EXISTS e2e_principals_seen ON public.e2e_principals;
 CREATE POLICY e2e_principals_seen ON public.e2e_principals FOR SELECT TO authenticated
   USING (profile_id = public.current_profile_id() OR public.is_delivery_staff());
+
+-- 2021: AND AFTER THE ENCRYPTION'S TWO. 2018 made e2e_grants_own and
+-- e2e_principals_seen below where this block then stood, so they were the
+-- only rules still asking who the person is once a row
+-- (test_rls_speed_1958, test_row_scope_1841, in the sweep of every suite).
+-- 2007: AFTER THE LAST POLICY THE FILE MAKES. The assets table's policies
+-- (1979) came after this block, so they were the only ones still asking
+-- their helpers once a row (test_rls_speed_1958, test_row_scope_1841).
+-- 1958: ROW SECURITY ASKS ONCE PER QUERY, NOT ONCE PER ROW.
+--
+-- [stated] Arian: "also sometimes the portal lags when too many people use it
+-- why? fix it"; asked what it looks like, "Pages slow for everyone".
+--
+-- Measured on a real PostgreSQL with this file applied and a busy firm's
+-- history (300 engagements, 6,000 findings, 12,000 timeline entries): one
+-- person signing in took 2.9 seconds, twenty at once 38 seconds each, a client
+-- 10.7 seconds. Nearly all of it was the policies above asking the same thing
+-- once for every row read: whether this person may see the row's engagement
+-- or client (can_access_assessment, can_access_client, can_see_client, a query
+-- each), and who the person is and whether their sign-in is fresh
+-- (mfa_is_fresh, is_staff, current_user_role and the rest, which PostgreSQL
+-- cannot fold into the query, so each ran per row). With a firm reading at
+-- once, the database answered one question tens of thousands of times and
+-- every page waited for it.
+--
+-- So each is asked once per query. A function of no arguments that gives one
+-- answer for a statement (STABLE) is put in a sub-select, which PostgreSQL
+-- works out once; and a read that asked of each row's engagement or client
+-- asks once for the set this person may see (the three functions below, the
+-- same rule as the ones they stand for) and looks each row up in it. A write
+-- names its own row, and keeps the look-up it has. Nothing anybody may see or
+-- do changes: verification/test_rls_speed_1958.mjs holds every kind of person,
+-- every table and every write to what they were, and measured one person
+-- signing in 14 times quicker, twenty at once 7 times, a client 200 times.
+--
+-- It runs last, over every policy the file has made (one made after it would
+-- not be asked once). Run again, it finds nothing left to change. A policy it
+-- cannot rewrite keeps what it had, and the setup says so.
+
+-- The engagements this person may see: can_access_assessment's rule, as a set.
+-- (1970: the firm's working staff, is_delivery_staff, as can_access_assessment.)
+CREATE OR REPLACE FUNCTION public._pental_my_assessments() RETURNS SETOF uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
+  SELECT a.id FROM public.assessments a
+   WHERE (SELECT public.is_delivery_staff())
+      OR ((SELECT public.current_user_role()) = 'contractor'
+          AND (a.lead_id = (SELECT public.current_profile_id())
+               OR (a.contractor_team_id IS NOT NULL AND a.contractor_team_id = (SELECT public.current_contractor_team_id()))))
+      OR ((SELECT public.current_user_role()) = 'client' AND a.client_id = (SELECT public.current_user_client_id()))
+$$;
+-- The clients this person may work with: can_access_client's rule, as a set.
+CREATE OR REPLACE FUNCTION public._pental_my_clients() RETURNS SETOF uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
+  SELECT c.id FROM public.clients c
+   WHERE (SELECT public.is_staff())
+      OR ((SELECT public.current_user_role()) = 'contractor' AND c.created_by = (SELECT public.current_profile_id()))
+      OR ((SELECT public.current_user_role()) = 'client' AND c.id = (SELECT public.current_user_client_id()))
+$$;
+-- And the clients they may see: can_see_client's (those, and a contractor's
+-- engagements' clients).
+CREATE OR REPLACE FUNCTION public._pental_seen_clients() RETURNS SETOF uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
+  SELECT m FROM public._pental_my_clients() m
+  UNION
+  SELECT a.client_id FROM public.assessments a
+   WHERE (SELECT public.current_user_role()) = 'contractor'
+     AND (a.lead_id = (SELECT public.current_profile_id())
+          OR (a.contractor_team_id IS NOT NULL AND a.contractor_team_id = (SELECT public.current_contractor_team_id())))
+$$;
+REVOKE ALL ON FUNCTION public._pental_my_assessments() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public._pental_my_clients() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public._pental_seen_clients() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._pental_my_assessments() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._pental_my_clients() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._pental_seen_clients() TO authenticated, service_role;
+
+DO $rls_once$
+DECLARE
+  r record; f record; nq text; nw text; tok text; stmt text;
+BEGIN
+  -- Printed with every name in full, so what is written back reads the same
+  -- whatever the search path of whoever runs the file.
+  PERFORM set_config('search_path', 'pg_catalog', true);
+  FOR r IN SELECT pol.polname, pol.polcmd, n.nspname AS sch, c.relname AS tbl,
+                  pg_get_expr(pol.polqual, pol.polrelid) AS q, pg_get_expr(pol.polwithcheck, pol.polrelid) AS w
+             FROM pg_policy pol JOIN pg_class c ON c.oid = pol.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' LOOP
+    nq := r.q; nw := r.w;
+    -- Reads only: whether this row's engagement or client may be seen.
+    IF nq IS NOT NULL AND r.polcmd IN ('r', '*') THEN
+      nq := regexp_replace(nq, 'public\.can_access_assessment\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_my_assessments() AS _pental_my_assessments))', 'g');
+      nq := regexp_replace(nq, 'public\.can_access_client\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_my_clients() AS _pental_my_clients))', 'g');
+      nq := regexp_replace(nq, 'public\.can_see_client\(([A-Za-z_][A-Za-z_0-9.]*)\)', '(\1 IN ( SELECT public._pental_seen_clients() AS _pental_seen_clients))', 'g');
+    END IF;
+    -- Everywhere: who the person is, asked once. A call already asked once is
+    -- set aside first, so nothing is wrapped twice.
+    FOR f IN SELECT DISTINCT p.proname, ns.nspname FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+              WHERE ns.nspname IN ('public', 'auth') AND p.pronargs = 0 AND p.provolatile IN ('s', 'i')
+                AND p.prokind = 'f' AND NOT p.proretset LOOP
+      tok := f.nspname || '.' || f.proname || '()';
+      IF nq IS NOT NULL AND position(tok IN nq) > 0 THEN
+        nq := replace(nq, 'SELECT ' || tok, chr(1) || f.proname || chr(2));
+        nq := replace(nq, tok, '(SELECT ' || tok || ')');
+        nq := replace(nq, chr(1) || f.proname || chr(2), 'SELECT ' || tok);
+      END IF;
+      IF nw IS NOT NULL AND position(tok IN nw) > 0 THEN
+        nw := replace(nw, 'SELECT ' || tok, chr(1) || f.proname || chr(2));
+        nw := replace(nw, tok, '(SELECT ' || tok || ')');
+        nw := replace(nw, chr(1) || f.proname || chr(2), 'SELECT ' || tok);
+      END IF;
+    END LOOP;
+    IF nq IS DISTINCT FROM r.q OR nw IS DISTINCT FROM r.w THEN
+      stmt := format('ALTER POLICY %I ON %I.%I', r.polname, r.sch, r.tbl);
+      IF nq IS NOT NULL THEN stmt := stmt || ' USING (' || nq || ')'; END IF;
+      IF nw IS NOT NULL THEN stmt := stmt || ' WITH CHECK (' || nw || ')'; END IF;
+      BEGIN
+        EXECUTE stmt;
+      EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING 'Pental setup: the policy % on % could not be made quicker, so it stays as it was (%)', r.polname, r.tbl, SQLERRM;
+      END;
+    END IF;
+  END LOOP;
+END $rls_once$;
+-- 1958: END
 
 -- ── Who may open a key ─────────────────────────────────────────────────────
 -- Asked of any person, not the caller: whether their browsers may be given
@@ -48370,6 +48375,7 @@ BEGIN
   IF NEW.state IN ('done', 'failed', 'skipped') THEN NEW.input := NULL; END IF;
   RETURN NEW;
 END $tkjs$;
+REVOKE ALL ON FUNCTION public._ticket_job_settled() FROM PUBLIC, anon, authenticated;
 DROP TRIGGER IF EXISTS zz_ticket_job_settled ON public._ticket_jobs;
 CREATE TRIGGER zz_ticket_job_settled BEFORE INSERT OR UPDATE ON public._ticket_jobs
   FOR EACH ROW EXECUTE FUNCTION public._ticket_job_settled();
@@ -48916,7 +48922,7 @@ UPDATE public.settings SET password_login_enabled = true, sso_google_enabled = f
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: 48c345b8f723a11b @ 2025111005
+-- schema-fingerprint: db3225db8116eead @ 2025111005
 INSERT INTO public._pental_schema_version (id, version, applied_at)
 VALUES (1, 2025111005, now())
 ON CONFLICT (id) DO UPDATE

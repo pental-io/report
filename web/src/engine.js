@@ -35610,7 +35610,8 @@ function _flibMoveImpactSoon() {
   var has = function (x) { return !!String(x || '').replace(/<[^>]*>/g, '').trim(); };
   var want = (S.data.library || []).some(function (k) { return k && k.library_key && has(k.impact); })
     || S.data.findings.some(function (f) { return f && has(f.impact) && String(f.created_at || '') >= '2026-11-03T16:30'; });
-  if (want) _flibLoad().catch(function () {});
+
+  if (want && !_flibErr) _flibLoad().catch(function () {});
 }
 function _flibWant(then) {
   if (_flibWhole || _flibAsk || _flibErr) return;
@@ -92293,8 +92294,8 @@ function _irvHtml() {
   var useKeep = [['replace', 'Use ' + (P.fromReport ? 'Pental Report’s' : 'the backup’s')], ['keep', 'Keep the ones here']];
   if (P.has.branding) {
     var b = P.branding;
-    var prev = '<div class="irv-brand">' + (b.logo ? '<span class="irv-logo irv-logo--d"><img src="' + esc(b.logo) + '" alt="The logo for dark pages"></span>' : '')
-      + (b.logoLight ? '<span class="irv-logo irv-logo--l"><img src="' + esc(b.logoLight) + '" alt="The logo for light pages"></span>' : '')
+    var prev = '<div class="irv-brand">' + (b.logo ? '<span class="irv-logo irv-logo--d"><img loading="eager" decoding="sync" fetchpriority="high" src="' + esc(b.logo) + '" alt="The logo for dark pages"></span>' : '')
+      + (b.logoLight ? '<span class="irv-logo irv-logo--l"><img loading="eager" decoding="sync" fetchpriority="high" src="' + esc(b.logoLight) + '" alt="The logo for light pages"></span>' : '')
       + (b.accent ? '<span class="irv-swatch" style="background:' + esc(/^#[0-9a-f]{3,8}$/i.test(b.accent) ? b.accent : '#888') + '"></span><span class="irv-mono">' + esc(b.accent) + '</span>' : '')
       + (b.font ? '<span class="irv-mono">' + esc(b.font) + '</span>' : '') + '</div>';
     h += _irvRow(_IRV_IC.branding, 'Branding', 'Logos, colours, fonts and the sign-in page', _irvSeg('branding', C.branding, useKeep), C.branding !== 'keep' ? prev : '', C.branding === 'keep');
