@@ -4281,7 +4281,41 @@ function applyThemeColors(){
   _sevRefreshTextVars();
 }
 var _SEV_STYLE_DEFAULT = { case: 'upper', bold: true, colour: 'severity', fillText: 'auto' };
+var _docxSevNow = null;
+function _sevStyleOwnOf(raw) {
+  if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (e) { raw = null; } }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  var o = {};
+  ['case', 'bold', 'colour', 'fillText'].forEach(function (k) { if (raw[k] !== undefined && raw[k] !== null) o[k] = raw[k]; });
+  return o;
+}
+function _sevStyleNorm(c) {
+  c = Object.assign({}, _SEV_STYLE_DEFAULT, c || {});
+  if (['upper', 'title', 'lower', 'stored'].indexOf(c.case) < 0) c.case = 'upper';
+  c.bold = c.bold !== false;
+  if (['severity', 'inherit'].indexOf(c.colour) < 0 && !/^#[0-9a-fA-F]{6}$/.test(c.colour || '')) c.colour = 'severity';
+  if (['auto', 'white', 'black'].indexOf(c.fillText) < 0 && !/^#[0-9a-fA-F]{6}$/.test(c.fillText || '')) c.fillText = 'auto';
+  return c;
+}
+function _sevStyleLayered() {
+  var c = _sevStyleOwnOf((S.data.settings || {}).severity_style);
+  try {
+    var rd = (typeof _rtDesign === 'function' && typeof _rtActiveId === 'function') ? _rtDesign(_rtActiveId()) : null;
+    if (rd && rd.severity_style) Object.assign(c, _sevStyleOwnOf(rd.severity_style));
+    var fs = (typeof _rdFileStack !== 'undefined' && Array.isArray(_rdFileStack)) ? _rdFileStack : [];
+    var fid = fs.length ? fs[fs.length - 1] : '';
+    var fd = (fid && typeof _rdFileDesign === 'function') ? _rdFileDesign(fid) : null;
+
+    if (!fd && fid && typeof _docxFileDesign === 'function') fd = _docxFileDesign('vuln_report', fid);
+    if (fd && fd.severity_style) Object.assign(c, _sevStyleOwnOf(fd.severity_style));
+  } catch (e) {}
+  return _sevStyleNorm(c);
+}
 function _sevStyleCfg() {
+  var now = (typeof _docxSevNow !== 'undefined') ? _docxSevNow : null;
+  if (now && now.style) return Object.assign({}, now.style);
+  if (typeof _sevStyleLayered === 'function') return _sevStyleLayered();
+
   var raw = (S.data.settings || {}).severity_style;
   if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (e) { raw = null; } }
   var c = Object.assign({}, _SEV_STYLE_DEFAULT, (raw && typeof raw === 'object') ? raw : {});
@@ -27535,7 +27569,7 @@ function _e2eUuid() {
 }
 function _e2eKidBytes(kid) {
   var h = _e2eK32(kid), u = new Uint8Array(16);
-  for (var i = 0; i < 16; i++) u[i] = parseInt(h.substr(i * 2, 2), 16);
+  for (var i = 0; i < 16; i++) u[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
   return u;
 }
 function _e2eKidFromBytes(u) {
@@ -27661,8 +27695,22 @@ async function _e2eDeviceUp() {
   var r = await supabaseClient.rpc('rpc_e2e_register_principal', { p_id: rec.id, p_kind: 'device', p_pub: rec.pub, p_label: _e2eDeviceLabel() });
   if (r.error) throw r.error;
   E2E.device = rec;
-  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+  _e2eKeepStorage();
   return rec;
+}
+function _e2eKeepStorage() {
+  try {
+    var st = navigator.storage;
+    if (!st || !st.persist) return;
+    var asked = 'pental_keep_storage_asked';
+    var ask = function () {
+      try { if (localStorage.getItem(asked)) return; localStorage.setItem(asked, '1'); } catch (e) { return; }
+      var p = st.persist();
+      if (p && typeof p.catch === 'function') p.catch(function () {});
+    };
+    if (!st.persisted) { ask(); return; }
+    st.persisted().then(function (kept) { if (!kept) ask(); }, function () {});
+  } catch (e) {}
 }
 function _e2ePrfSalt() {
   return crypto.subtle.digest('SHA-256', _e2eTE.encode('pental e2e prf v1|' + String(TENANT_ID || location.host) + '|' + ((S && S.profile && S.profile.id) || '')))
@@ -47942,6 +47990,24 @@ async function _ensurePdfTemplates() {
 function _rtBrand(tid) { return null; }
 function _rtBranded(tid, s) { return s; }
 var _TPL_RT_SKIP = { severity_colors: 1, front_cover_image: 1, back_cover_image: 1, header_image: 1, footer_image: 1 };
+var _TPL_VH_KEYS = ['vh_rows', 'vh_src_v', 'vh_creation', 'vh_details', 'vh_qa_review', 'vh_release'];
+function _sevColorsOwnOf(sc) {
+  var o = {};
+  if (!sc || typeof sc !== 'object' || Array.isArray(sc)) return o;
+  _RT_SEV_KEYS.forEach(function (k) { var c = sc[k]; if (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c.trim())) o[k] = c.trim(); });
+  return o;
+}
+function _tplSevSave(own, edited, shown, base, all) {
+  var out = _sevColorsOwnOf(own);
+  if (!edited || typeof edited !== 'object') return out;
+  _RT_SEV_KEYS.forEach(function (k) {
+    var e = typeof edited[k] === 'string' ? edited[k].trim() : '';
+    if (!/^#[0-9a-f]{6}$/i.test(e)) return;
+    if (!all && _tplSame(e, (shown || {})[k])) return;
+    if (_tplSame(e, (base || {})[k])) delete out[k]; else out[k] = e;
+  });
+  return out;
+}
 function _rtDesign(tid) {
   if (!tid || tid === '*') return null;
   var t = _rtById(tid);
@@ -47977,14 +48043,27 @@ async function _tplSaveForVersion(fileId, tid, config, type) {
   type = type || 'report';
   var slot = _docxKeyOf(type);
   var eb = window._tplEditBase;
-  var shown = (eb && eb.type === type && eb.ver === fileId && eb.shown) ? eb.shown : {};
+  var mine = !!(eb && eb.type === type && eb.ver === fileId);
+  var shown = (mine && eb.shown) ? eb.shown : {};
+
+  var follow = (mine && eb.follow) ? eb.follow : {};
   var chg = {};
   Object.keys(config).forEach(function (k) {
-    if (_TPL_RT_SKIP[k] || config[k] === undefined) return;
-    if (!_tplSame(config[k], shown[k])) chg[k] = _coCopy(config[k]);
+    if (_TPL_RT_SKIP[k] || k === 'severity_style' || config[k] === undefined) return;
+    if (follow[k] || !_tplSame(config[k], shown[k])) chg[k] = _coCopy(config[k]);
   });
-  if (eb && eb.vhShown && _coSame(config.vh_rows, eb.vhShown)) ['vh_rows', 'vh_src_v', 'vh_creation', 'vh_details', 'vh_qa_review', 'vh_release'].forEach(function (k) { delete chg[k]; });
-  var base = type === 'report' ? _rtWith(tid || '', function () { return getTemplate('report'); }) : getTemplate(type);
+  if (!follow.vh_rows && eb && eb.vhShown && _coSame(config.vh_rows, eb.vhShown)) _TPL_VH_KEYS.forEach(function (k) { delete chg[k]; });
+
+  var base = type === 'report' ? _rtWith(tid || '', function () { return _rdFileWith('', function () { return getTemplate('report'); }); }) : _rdFileWith('', function () { return getTemplate(type); });
+
+  var vhBack = !!(follow.vh_rows && eb && eb.vhBase && _coSame(config.vh_rows, eb.vhBase));
+
+  var sevAsk = config.severity_colors && typeof config.severity_colors === 'object';
+  var styleNow = (config.severity_style && typeof config.severity_style === 'object') ? _sevStyleNorm(config.severity_style) : null;
+  var styleWas = (mine && eb.shownStyle) ? eb.shownStyle : null;
+  var styleAsk = !!styleNow && (!!follow.severity_style || !styleWas || !_coSame(styleNow, _sevStyleNorm(styleWas)));
+  var styleBase = type === 'report' ? _rtWith(tid || '', function () { return _rdFileWith('', _sevStyleLayered); })
+    : type === 'vuln_report' ? _rdFileWith('', _sevStyleLayered) : null;
   var found = false;
   _showLoading();
   try {
@@ -47995,6 +48074,14 @@ async function _tplSaveForVersion(fileId, tid, config, type) {
       found = true;
       var d = (f.design && typeof f.design === 'object' && !Array.isArray(f.design)) ? f.design : {};
       Object.keys(chg).forEach(function (k) { if (_tplSame(chg[k], base[k])) delete d[k]; else d[k] = chg[k]; });
+      if (vhBack) _TPL_VH_KEYS.forEach(function (k) { delete d[k]; });
+      if (sevAsk && (type === 'report' || type === 'vuln_report')) {
+        var sc = _tplSevSave(d.severity_colors, config.severity_colors, shown.severity_colors, base.severity_colors, !!follow.severity_colors);
+        if (Object.keys(sc).length) d.severity_colors = sc; else delete d.severity_colors;
+      }
+      if (styleAsk && styleBase) {
+        if (_coSame(styleNow, _sevStyleNorm(styleBase))) delete d.severity_style; else d.severity_style = styleNow;
+      }
       if (Object.keys(d).length) f.design = d; else delete f.design;
     });
   } finally { _hideLoading(); }
@@ -48008,15 +48095,25 @@ function _tplSame(a, b) {
 }
 async function _tplSaveForReport(tid, config) {
   var eb = window._tplEditBase;
-  var shown = (eb && eb.type === 'report' && eb.rt === tid && eb.shown) ? eb.shown : {};
+  var mine = !!(eb && eb.type === 'report' && eb.rt === tid && !eb.ver);
+  var shown = (mine && eb.shown) ? eb.shown : {};
+
+  var follow = (mine && eb.follow) ? eb.follow : {};
   var chg = {};
   Object.keys(config).forEach(function (k) {
-    if (_TPL_RT_SKIP[k] || config[k] === undefined) return;
-    if (!_tplSame(config[k], shown[k])) chg[k] = _coCopy(config[k]);
+    if (_TPL_RT_SKIP[k] || k === 'severity_style' || config[k] === undefined) return;
+    if (follow[k] || !_tplSame(config[k], shown[k])) chg[k] = _coCopy(config[k]);
   });
 
-  if (eb && eb.vhShown && _coSame(config.vh_rows, eb.vhShown)) ['vh_rows', 'vh_src_v', 'vh_creation', 'vh_details', 'vh_qa_review', 'vh_release'].forEach(function (k) { delete chg[k]; });
-  var def = _rtWith('', function () { return getTemplate('report'); });
+  if (!follow.vh_rows && eb && eb.vhShown && _coSame(config.vh_rows, eb.vhShown)) _TPL_VH_KEYS.forEach(function (k) { delete chg[k]; });
+  var def = _rtWith('', function () { return _rdFileWith('', function () { return getTemplate('report'); }); });
+  var vhBack = !!(follow.vh_rows && eb && eb.vhBase && _coSame(config.vh_rows, eb.vhBase));
+
+  var sevAsk = config.severity_colors && typeof config.severity_colors === 'object';
+  var styleNow = (config.severity_style && typeof config.severity_style === 'object') ? _sevStyleNorm(config.severity_style) : null;
+  var styleWas = (mine && eb.shownStyle) ? eb.shownStyle : null;
+  var styleAsk = !!styleNow && (!!follow.severity_style || !styleWas || !_coSame(styleNow, _sevStyleNorm(styleWas)));
+  var styleBase = _rtWith('', function () { return _rdFileWith('', _sevStyleLayered); });
   _showLoading();
   try {
     return await _rtPut(function (v) {
@@ -48024,7 +48121,15 @@ async function _tplSaveForReport(tid, config) {
       if (!t) return false;
       var d = (t.design && typeof t.design === 'object' && !Array.isArray(t.design)) ? t.design : {};
       Object.keys(chg).forEach(function (k) { if (_tplSame(chg[k], def[k])) delete d[k]; else d[k] = chg[k]; });
+      if (vhBack) _TPL_VH_KEYS.forEach(function (k) { delete d[k]; });
+      if (styleAsk) { if (_coSame(styleNow, _sevStyleNorm(styleBase))) delete d.severity_style; else d.severity_style = styleNow; }
       if (Object.keys(d).length) t.design = d; else delete t.design;
+      if (sevAsk) {
+        var sv = (t.severity && typeof t.severity === 'object' && !Array.isArray(t.severity)) ? t.severity : {};
+        var sc = _tplSevSave(sv.colors, config.severity_colors, shown.severity_colors, _sevColors(), !!follow.severity_colors);
+        if (Object.keys(sc).length) sv.colors = sc; else delete sv.colors;
+        if (Object.keys(sv).length) t.severity = sv; else delete t.severity;
+      }
     });
   } finally { _hideLoading(); }
 }
@@ -48123,6 +48228,12 @@ function getTemplate(type) {
   if (_rtSv && _rtSv.colors && typeof _rtSv.colors === 'object') {
     dashSev = Object.assign({}, dashSev);
     _RT_SEV_KEYS.forEach(function (k) { var c = _rtSv.colors[k]; if (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c.trim())) dashSev[k] = c.trim(); });
+  }
+
+  var _vSc = _vD && _vD.severity_colors;
+  if (_vSc && typeof _vSc === 'object' && !Array.isArray(_vSc)) {
+    dashSev = Object.assign({}, dashSev);
+    _RT_SEV_KEYS.forEach(function (k) { var c = _vSc[k]; if (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c.trim())) dashSev[k] = c.trim(); });
   }
   base.severity_colors = {
     critical: dashSev.critical || SEV_DEFAULTS.critical,
@@ -48366,9 +48477,10 @@ function resetTemplateConfig(type) {
   }
   if (_verR) {
     var _vRt = typeof S.modal.rt === 'string' ? S.modal.rt : '';
-    var _vRn = _vRt ? _rtName(_vRt) : 'the Default';
+    var _vRn = _rtName(_vRt);
     var _vNm = ((_rdFileById(_verR) || {}).name) || 'this version';
-    confirmDialog('Follow ' + _vRn, 'Forget what ' + esc(_vNm) + ' changed here? Its design is ' + esc(_vRn) + '’s again.', function () {
+
+    confirmDialog('Match everything to the main report', 'Forget everything ' + esc(_vNm) + ' changed here? It follows the main report, ' + esc(_vRn) + ', again in all of it, its severities too.', function () {
       var had = false;
       _tplPut(function (t) {
         var arr = t.docx_templates_report;
@@ -48377,7 +48489,7 @@ function resetTemplateConfig(type) {
         had = true;
         delete f.design;
       }).then(function () {
-        if (had) toast(_vNm + ' follows ' + _vRn + '’s design', 'success');
+        if (had) toast(_vNm + ' follows the main report again', 'success');
         window._tplEdit = null;
         openTemplateEditor('report', S.modal._tab || 'cover', _vRt, _verR);
       }).catch(function (e) { _settingsSaveFailed(e); });
@@ -48387,14 +48499,17 @@ function resetTemplateConfig(type) {
 
   var _rtR = (type === 'report' && S.modal && S.modal.type === 'templateeditor' && typeof S.modal.rt === 'string' && S.modal.rt) ? S.modal.rt : '';
   if (_rtR) {
-    confirmDialog('Follow the Default', 'Forget what ' + esc(_rtName(_rtR)) + ' changed here? Its design is the Default’s again.', function () {
+    confirmDialog('Match everything to the Default', 'Forget everything ' + esc(_rtName(_rtR)) + ' changed here? It follows the Default again in all of it, its severity colours (its Severity’s, under its Edit) and their wording too.', function () {
       _rtPut(function (v) {
         var t = v.list.find(function (x) { return x && x.id === _rtR; });
-        if (!t || !t.design) return false;
+        var sc = t && t.severity && typeof t.severity === 'object' && t.severity.colors;
+        if (!t || (!t.design && !sc)) return false;
         delete t.design;
+
+        if (sc) { delete t.severity.colors; if (!Object.keys(t.severity).length) delete t.severity; }
       }).then(function (ok) {
         if (!ok) return;
-        toast(_rtName(_rtR) + ' follows the Default’s design', 'success');
+        toast(_rtName(_rtR) + ' follows the Default again', 'success');
         window._tplEdit = null;
         openTemplateEditor('report', S.modal._tab || 'cover', _rtR);
       });
@@ -48439,10 +48554,21 @@ async function openTemplateEditor(type, tab, rt, ver) {
     var _sameEditorOpen = !!(S.modal && S.modal.type === 'templateeditor' && S.modal.editType === type && S.modal.rt === _rtFor && S.modal.ver === _verFor && window._tplEdit && window._tplEdit.finding_fields);
     if (!_sameEditorOpen) {
 
+      var _ownV = !!_verFor, _ownR = !_verFor && type === 'report' && !!_rtFor;
+      var _inBase = function (fn) {
+        if (_ownV) return type === 'report' ? _rtWith(_rtFor || '', function () { return _rdFileWith('', fn); }) : _rdFileWith('', fn);
+        return _rtWith('', function () { return _rdFileWith('', fn); });
+      };
+      var _base = (_ownV || _ownR) ? _inBase(function () { return getTemplate(type); }) : null;
+      if (_base && _ownR) _base.severity_colors = _sevColors();
+
       window._tplEditBase = { type: type, cfg: _coCopy(_getSavedTemplateConfig(type) || {}),
 
         raw: _coCopy(((S.data.settings || {}).pdf_templates || {})['_config_' + type] || {}),
         shown: (function () { var x = _coCopy(tpl || {}); ['front_cover_image', 'back_cover_image', 'header_image', 'footer_image'].forEach(function (f) { delete x[f]; }); return x; })(),
+
+        shownStyle: _inRt(_sevStyleLayered),
+        base: _base, baseStyle: _base ? _inBase(_sevStyleLayered) : null, follow: {},
         rt: _rtFor, ver: _verFor };
       window._tplEdit = {
         section_order: (tpl.section_order || []).slice(),
@@ -48619,6 +48745,12 @@ function renderTemplateEditorModal() {
   var activeTab = S.modal._tab || 'cover';
   var tpl = getTemplate(activeType);
 
+  var _ebM = window._tplEditBase;
+  if (_ebM && _ebM.base && _ebM.follow && _ebM.type === activeType) Object.keys(_ebM.follow).forEach(function (k) {
+    if (k === 'severity_style') return;
+    (k === 'vh_rows' ? _TPL_VH_KEYS : [k]).forEach(function (x) { if (_ebM.base[x] === undefined) delete tpl[x]; else tpl[x] = _coCopy(_ebM.base[x]); });
+  });
+
   var _ts = 'padding:0.55rem 0.85rem;font-size:0.8rem;font-weight:500;border-bottom:2px solid transparent;margin-bottom:-2px;border-radius:0;white-space:nowrap;flex-shrink:0;min-width:0';
 
   var _dt = _docTemplateTypes().filter(function (t) { return t.editorKey === activeType; })[0];
@@ -48626,8 +48758,10 @@ function renderTemplateEditorModal() {
   var _rtMain = _rtE !== undefined ? _getDocxTemplateMeta('report') : null;
 
   var _word = _verE ? true : (_rtE !== undefined ? !!_rtMain : _tplWordOnly(activeType));
+  if (_ebM && _ebM.type === activeType) _ebM.word = _word;
   var _used = _word ? (_verE ? _tplWordTok(activeType, [_verF]) : _rtE !== undefined ? _tplWordTok(activeType, [_rtMain].concat(_rdVersionsOf(_rtE))) : _tplWordTok(activeType)) : null;
-  var _follows = _verRep ? ' What you leave as it is follows ' + (_rtE ? _rtName(_rtE) + '’s' : 'the Default’s') + '.' : _verE ? ' What you change here is this file’s alone.' : _rtE ? ' What you leave as it is follows the Default’s.' : '';
+
+  var _follows = _verRep ? ' Until you change it here it follows the main report, ' + esc(_rtName(_rtE || '')) + ', and a change here is this file’s alone.' : _verE ? ' What you change here is this file’s alone.' : _rtE ? ' What you leave as it is follows the Default’s.' : '';
   var _verName = _verF ? (_verF.name || _verF.filename || 'Word template') : '';
 
   var h = '<div class="modal-header" style="padding-bottom:0">';
@@ -48694,15 +48828,110 @@ function renderTemplateEditorModal() {
   }
 
   h += _mFooter('saveTemplateFromEditor(\'' + activeType + '\')', {
-    left: '<button class="btn btn-ghost btn-sm" data-mleft onclick="resetTemplateConfig(\'' + activeType + '\')" style="color:var(--red-text)">' + IC.trash + (_verRep ? ' Follow ' + esc(_rtE ? _rtName(_rtE) : 'the Default') : _verE ? ' Forget its changes' : _rtE ? ' Follow the Default' : ' Reset Defaults') + '</button>',
+    left: '<button class="btn btn-ghost btn-sm" data-mleft onclick="resetTemplateConfig(\'' + activeType + '\')" style="color:var(--red-text)"'
+      + (_verRep ? ' title="Forget everything this file changed: it follows the main report again, in all of it"' : '') + '>'
+      + (_verRep ? 'Match everything to the main report' : _verE ? IC.trash + ' Forget its changes' : _rtE ? 'Match everything to the Default' : IC.trash + ' Reset Defaults') + '</button>',
     style: 'flex-shrink:0' });
   h += '</div>';
 
   if (_rtE || _verE) { try { requestAnimationFrame(_tplVhCapture); } catch (e) {} }
   return h;
 }
-function _tplH(title, desc) {
-  return '<div class="tpl-h" style="margin-bottom:0.5rem;margin-top:1.25rem"><div style="font-weight:700;font-size:0.88rem;color:var(--text)">' + title + '</div>' + (desc ? '<div style="font-size:0.72rem;color:var(--gray);margin-top:1px">' + desc + '</div>' : '') + '</div>';
+function _tplH(title, desc, extra) {
+
+  return '<div class="tpl-h" style="margin-bottom:0.5rem;margin-top:1.25rem' + (extra ? ';display:flex;flex-wrap:wrap;align-items:center;column-gap:0.5rem' : '') + '">'
+    + '<div style="font-weight:700;font-size:0.88rem;color:var(--text)">' + title + '</div>'
+    + (extra ? '<span class="tpl-h-ctl" style="margin-left:auto">' + extra + '</span>' : '')
+    + (desc ? '<div style="font-size:0.72rem;color:var(--gray);margin-top:1px' + (extra ? ';flex-basis:100%' : '') + '">' + desc + '</div>' : '') + '</div>';
+}
+function _tplMatchWhat(eb) { return eb && eb.ver ? 'the main report' : 'the Default'; }
+function _tplOwnHas(keys) {
+  var eb = window._tplEditBase;
+  if (!eb || !eb.base) return false;
+  var d = null, sc = null;
+  if (eb.ver) { var f = _docxFileOf(eb.type, eb.ver); d = f && f.design; sc = d && d.severity_colors; }
+  else if (eb.rt) { var t = _rtById(eb.rt); d = t && t.design; sc = t && t.severity && t.severity.colors; }
+  d = (d && typeof d === 'object' && !Array.isArray(d)) ? d : {};
+  return keys.some(function (k) {
+    if (k === 'severity_colors') return Object.keys(_sevColorsOwnOf(sc)).length > 0;
+    if (k === 'vh_rows') return _TPL_VH_KEYS.some(function (v) { return d[v] !== undefined && d[v] !== null; });
+    return d[k] !== undefined && d[k] !== null;
+  });
+}
+function _tplMatchCtl(keys) {
+  var eb = window._tplEditBase;
+  if (!eb || !eb.base || !eb.word || eb.type !== 'report' || !(eb.ver || eb.rt)) return '';
+  var list = String(keys || '').split(',').filter(Boolean);
+  var what = _tplMatchWhat(eb);
+  var st = 'font-size:0.7rem;color:var(--gray);white-space:nowrap';
+  if (list.some(function (k) { return eb.follow && eb.follow[k]; })) return '<span class="tpl-match-as" style="' + st + '">Matches ' + what + ' once saved</span>';
+  if (!_tplOwnHas(list)) return '<span class="tpl-match-as" style="' + st + '">As ' + what + '</span>';
+  return '<button type="button" class="btn btn-ghost btn-sm tpl-match" data-match="' + esc(list.join(',')) + '" onclick="_tplMatch(this)"'
+    + ' style="font-size:0.7rem;padding:0.15rem 0.5rem;border:1px solid var(--border);border-radius:4px;color:var(--accent);white-space:nowrap"'
+    + ' title="' + esc('Put back ' + what + '’s here. Saved, this follows ' + what + ' again, including any change made to it later.') + '">Match ' + what + '</button>';
+}
+function _tplMatch(btn) {
+  var eb = window._tplEditBase;
+  if (!eb || !eb.base || !btn) return;
+  var keys = String(btn.getAttribute('data-match') || '').split(',').filter(Boolean);
+  eb.follow = eb.follow || {};
+  keys.forEach(function (k) { eb.follow[k] = true; _tplSetFromBase(k); });
+  var note = document.createElement('span');
+  note.className = 'tpl-match-as';
+  note.setAttribute('style', 'font-size:0.7rem;color:var(--gray);white-space:nowrap');
+  note.textContent = 'Matches ' + _tplMatchWhat(eb) + ' once saved';
+  btn.replaceWith(note);
+}
+window._tplMatch = _tplMatch;
+function _tplSetFromBase(k) {
+  var eb = window._tplEditBase;
+  var b = (eb && eb.base) || {};
+  var byId = function (id) { return document.getElementById('tpl_' + id); };
+  var setC = function (id, v) {
+    var el = byId(id);
+    if (!el || typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v.trim())) return;
+    el.value = v.trim().toLowerCase();
+    var tx = el.nextElementSibling;
+    if (tx && tx.tagName === 'INPUT') tx.value = v.trim();
+  };
+  var setV = function (id, v) { var el = byId(id); if (el) el.value = v; };
+  if (k === 'severity_colors') { _RT_SEV_KEYS.forEach(function (lv) { setC('sev_' + lv, (b.severity_colors || {})[lv]); }); return; }
+  if (k === 'severity_style') {
+    var s = _sevStyleNorm(eb && eb.baseStyle);
+    var fx = /^#/.test(s.colour || ''), ff = /^#/.test(s.fillText || '');
+    setV('sev_style_case', s.case);
+    setV('sev_style_bold', s.bold ? 'bold' : 'normal');
+    setV('sev_style_colour', fx ? 'fixed' : s.colour);
+    if (fx) setC('sev_style_hex', s.colour);
+    setV('sev_style_filltext', ff ? 'fixedf' : s.fillText);
+    if (ff) setC('sev_style_fillhex', s.fillText);
+    if (typeof _tplSevWire === 'function') _tplSevWire();
+    return;
+  }
+  if (k === 'vh_rows') {
+    var box = document.getElementById('vhRows');
+    if (box) { box.innerHTML = _vhEditorRows(b).map(function (r, i) { return _vhRowHtml(r, i); }).join(''); eb.vhBase = _vhCollect(); }
+    return;
+  }
+  var el = byId(k);
+  if (!el) return;
+  var v = b[k];
+  if (el.type === 'checkbox') el.checked = !!v;
+  else if (el.type === 'color') setC(k, v);
+  else el.value = v == null ? '' : String(v);
+}
+function _tplEditSaved(config) {
+  var eb = window._tplEditBase;
+  if (!eb) return;
+  var x = _coCopy(config);
+  Object.keys(_TPL_RT_SKIP).forEach(function (k) { delete x[k]; });
+  delete x.severity_style;
+  eb.shown = Object.assign({}, eb.shown || {}, x);
+  if (Array.isArray(x.vh_rows)) eb.vhShown = x.vh_rows;
+  if (config.severity_colors && typeof config.severity_colors === 'object') eb.shown.severity_colors = Object.assign({}, eb.shown.severity_colors || {}, _sevColorsOwnOf(config.severity_colors));
+  if (config.severity_style && typeof config.severity_style === 'object') eb.shownStyle = _sevStyleNorm(config.severity_style);
+  eb.follow = {};
+  eb.vhBase = null;
 }
 function _tplC(id, label, value) {
   return '<div style="flex-shrink:0"><label class="form-label" style="margin-bottom:0.2rem;font-size:0.75rem">' + label + '</label><div style="display:flex;align-items:center;gap:0.25rem"><input type="color" id="tpl_' + id + '" value="' + esc(value) + '" style="width:30px;height:30px;padding:1px;cursor:pointer;border-radius:5px;border:1px solid var(--border)" oninput="this.nextElementSibling.value=this.value"><input type="text" class="form-input mono" value="' + esc(value) + '" style="width:78px;height:30px;font-size:0.72rem;padding:0 0.3rem" maxlength="7" oninput="var c=this.value.trim();if(c.match(/^#[0-9a-fA-F]{6}$/)){this.previousElementSibling.value=c}"></div></div>';
@@ -48805,6 +49034,15 @@ function _vhRowHtml(r, idx) {
 
   if (r.k === 'retest') h += '<div class="vh-note" style="flex:1 1 100%;font-size:0.7rem;color:var(--gray);padding:0 0 0.2rem 1.6rem">Printed once a finding has been retested, dated the day the first one was.</div>';
   return h + '</div>';
+}
+function _vhEditorRows(tpl) {
+  tpl = tpl || {};
+  var all = (Array.isArray(tpl.vh_rows) && tpl.vh_rows.length)
+    ? tpl.vh_rows.map(function (r) { return r ? Object.assign({}, r, { ds: _vhRowDs(r, tpl) }) : r; })
+    : _vhRows(tpl);
+
+  if (!all.some(function (r) { return r && r.k === 'retest'; })) all = all.concat([{ k: 'retest', v: '1.1', l: 'Re-test', on: true, ds: 'retest', as: 'lead' }]);
+  return all.filter(Boolean);
 }
 function _vhAddRow() {
   var box = document.getElementById('vhRows');
@@ -49058,19 +49296,13 @@ function _renderTextTab(tpl) {
   h += _tplT('show_col_category', 'Show a Category column in the findings table', tpl.show_col_category === true);
   h += '</div>';
 
-  h += _tplH('Document Controls', 'The rows of the document history table. Untick one to leave it out, rename it, renumber it, or add your own.');
+  h += _tplH('Document Controls', 'The rows of the document history table. Untick one to leave it out, rename it, renumber it, or add your own.', _tplMatchCtl('vh_rows'));
   h += '<div id="vhRows" data-tpl-key="vh_rows">';
-
-  var _vhAll = (Array.isArray(tpl.vh_rows) && tpl.vh_rows.length)
-    ? tpl.vh_rows.map(function (r) { return r ? Object.assign({}, r, { ds: _vhRowDs(r, tpl) }) : r; })
-    : _vhRows(tpl);
-
-  if (!_vhAll.some(function (r) { return r && r.k === 'retest'; })) _vhAll = _vhAll.concat([{ k: 'retest', v: '1.1', l: 'Re-test', on: true, ds: 'retest', as: 'lead' }]);
-  _vhAll.forEach(function (r, idx) { h += _vhRowHtml(r, idx); });
+  _vhEditorRows(tpl).forEach(function (r, idx) { h += _vhRowHtml(r, idx); });
   h += '</div>';
   h += '<button type="button" class="btn btn-secondary btn-sm" style="margin-top:0.4rem" onclick="_vhAddRow()">+ Add row</button>';
 
-  h += _tplH('Testing Perspective Text', 'Default paragraphs for authenticated and unauthenticated perspectives');
+  h += _tplH('Testing Perspective Text', 'Default paragraphs for authenticated and unauthenticated perspectives', _tplMatchCtl('text_perspective_auth,text_perspective_unauth'));
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem 1rem;margin-bottom:0.5rem">';
   h += _tplI('text_perspective_badge_auth', 'Auth Badge Label', tpl.text_perspective_badge_auth, _d.text_perspective_badge_auth);
   h += _tplI('text_perspective_badge_unauth', 'Unauth Badge Label', tpl.text_perspective_badge_unauth, _d.text_perspective_badge_unauth);
@@ -49082,7 +49314,7 @@ function _renderTextTab(tpl) {
   h += _tplTA('text_ip_intro', 'IP Introduction', tpl.text_ip_intro, _d.text_ip_intro, 2);
   h += _tplTA('text_ip_whitelisting', 'IP Whitelisting Note', tpl.text_ip_whitelisting, _d.text_ip_whitelisting, 2);
 
-  h += _tplH('Default Placeholder Text', 'Shown when sections have no content');
+  h += _tplH('Default Placeholder Text', 'Shown when sections have no content', _tplMatchCtl('text_no_artifacts'));
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem 1rem">';
   h += _tplI('text_no_artifacts', 'No Artifacts', tpl.text_no_artifacts, _d.text_no_artifacts);
   h += _tplI('text_no_caveats', 'No Caveats', tpl.text_no_caveats, _d.text_no_caveats);
@@ -49140,7 +49372,7 @@ function _renderTextTab(tpl) {
 function _renderStyleTab(tpl, word) {
   var h = '';
 
-  if (word) h += _tplH('Chart Colour', 'The colour of the findings chart your Word file prints ({radar_chart_image}). Everything else keeps the Word file\u2019s own colours.');
+  if (word) h += _tplH('Chart Colour', 'The colour of the findings chart your Word file prints ({radar_chart_image}). Everything else keeps the Word file\u2019s own colours.', _tplMatchCtl('header_color'));
   else h += _tplH('Banner / Header Colour', 'Used for the cover banner, page headers and section dividers');
   h += '<div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end">';
   h += _tplC('header_color', word ? 'Chart' : 'Banner / Header', tpl.header_color);
@@ -49164,14 +49396,12 @@ function _renderStyleTab(tpl, word) {
 
   var _verOwn = !!(S.modal && S.modal.type === 'templateeditor' && typeof S.modal.ver === 'string' && S.modal.ver);
   var _rtOwn = _verOwn || !!(S.modal && S.modal.type === 'templateeditor' && typeof S.modal.rt === 'string' && S.modal.rt);
-
-  if (_rtOwn && !word) h += _tplH('Severity Colours and Wording', _verOwn ? 'Its severity colours and their wording are its report’s: the report’s own Severity, under its Edit, or else the firm’s, and the wording in the Default’s editor.' : 'Its severity colours are its own Severity’s, under its Edit, or else the firm’s; their wording is the firm’s, in the Default’s editor.')
-    + '<div data-tpl-key="severity_colors"></div>';
-
-  if (!_rtOwn || word) {
-  h += _tplH('Severity Colours', _rtOwn ? 'Your firm\u2019s colour for each severity, in every report that prints them. A report that gives a level a colour of its own, under its Edit, Severity, prints that one.' : 'Customise the colour for each severity rating in PDF and DOCX reports');
-
-  var sc = (_rtOwn && typeof _sevColors === 'function') ? _sevColors() : (tpl.severity_colors || {});
+  var _vulnOwn = _verOwn && S.modal.editType === 'vuln_report';
+  h += _tplH('Severity Colours', _vulnOwn ? 'The colour of each severity in this Word file: the vulnerability report’s until you change it here, and a change here is this file’s alone.'
+    : _verOwn ? 'The colour of each severity in this Word file: the main report’s until you change it here, and a change here is this file’s alone.'
+    : _rtOwn ? 'The colour of each severity in this report, the same as its Severity under its Edit: the Default’s until you change it here.'
+    : 'Customise the colour for each severity rating in PDF and DOCX reports', _tplMatchCtl('severity_colors'));
+  var sc = tpl.severity_colors || {};
   h += '<div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end">';
   h += _tplC('sev_critical', 'Critical', sc.critical);
   h += _tplC('sev_high', 'High', sc.high);
@@ -49179,10 +49409,13 @@ function _renderStyleTab(tpl, word) {
   h += _tplC('sev_low', 'Low', sc.low);
   h += _tplC('sev_info', 'Info', sc.info);
   h += '</div>';
-  h += '<div style="margin-top:0.4rem"><button class="btn btn-ghost" onclick="syncSevFromDashboard()" style="font-size:0.65rem;padding:0.15rem 0.4rem;border:1px solid var(--border);border-radius:4px;color:var(--accent)" title="Copy the severity colours from Settings, Branding">↻ Sync from Branding</button></div>';
 
-  h += _tplH('Severity Wording', (_rtOwn ? 'Your firm\u2019s, in every report. ' : '') + 'How a severity READS in a generated report: CRITICAL, Critical or critical, bold or not, in colour or in the template\'s own text colour');
-  var _svs = (typeof _sevStyleCfg === 'function') ? _sevStyleCfg() : { case: 'upper', bold: true, colour: 'severity' };
+  if (!_rtOwn) h += '<div style="margin-top:0.4rem"><button class="btn btn-ghost" onclick="syncSevFromDashboard()" style="font-size:0.65rem;padding:0.15rem 0.4rem;border:1px solid var(--border);border-radius:4px;color:var(--accent)" title="Copy the severity colours from Settings, Branding">↻ Sync from Branding</button></div>';
+
+  h += _tplH('Severity Wording', (_vulnOwn ? 'This Word file’s: the vulnerability report’s until you change it here. ' : _verOwn ? 'This Word file’s: the main report’s until you change it here. ' : _rtOwn ? 'This report’s: the Default’s until you change it here. ' : '') + 'How a severity READS in a generated report: CRITICAL, Critical or critical, bold or not, in colour or in the template\'s own text colour', _tplMatchCtl('severity_style'));
+
+  var _ebS = window._tplEditBase;
+  var _svs = (_ebS && _ebS.follow && _ebS.follow.severity_style && _ebS.baseStyle) ? _ebS.baseStyle : ((typeof _sevStyleCfg === 'function') ? _sevStyleCfg() : { case: 'upper', bold: true, colour: 'severity' });
   h += '<div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end">';
   h += _tplS('sev_style_case', 'Case', _svs.case, [
     { v: 'upper',  l: 'ALL CAPS' },
@@ -49209,7 +49442,6 @@ function _renderStyleTab(tpl, word) {
   h += '</span>';
   h += '</div>';
   h += '<div style="font-size:0.7rem;color:var(--gray);margin-top:0.35rem">Applies to the PDF <b>and</b> the DOCX. In the DOCX, <code>{severity}</code> is plain text and takes the case, weight and colour; <code>{severity_title}</code> is always Title Case for a template that wants one spot fixed. In the PDF the same case is used everywhere, and the last two settings decide the colour of a severity word drawn ON a coloured chip, where white on a pale amber is the unreadable case.</div>';
-  }
 
   h += _tplH('Page Layout', 'Margins and page decoration');
   h += '<div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end">';
@@ -49308,11 +49540,31 @@ function saveTemplateFromEditor(type) {
       low: val('sev_low') || '',
       info: val('sev_info') || ''
     };
+
+    var _sevOwnEd = !!(S.modal && S.modal.type === 'templateeditor' && S.modal.editType === type
+      && ((typeof S.modal.ver === 'string' && S.modal.ver) || (type === 'report' && typeof S.modal.rt === 'string' && S.modal.rt)));
     var _palette = (S.data.settings && S.data.settings.severity_colors && typeof S.data.settings.severity_colors === 'object') ? Object.assign({}, S.data.settings.severity_colors) : {};
     var _paletteChanged = false;
-    ['critical','high','medium','low','info'].forEach(function(k) {
-      if (_editedSev[k] && _editedSev[k] !== _palette[k]) { _palette[k] = _editedSev[k]; _paletteChanged = true; }
+
+    var _defSc = {};
+    try { var _dl = _rtDefLayer(); _defSc = _sevColorsOwnOf(_dl && _dl.severity && _dl.severity.colors); } catch (e) {}
+    var _defScNext = Object.assign({}, _defSc), _defScChanged = false;
+    if (_sevOwnEd) {
+      if (document.getElementById('tpl_sev_critical')) config.severity_colors = _editedSev;
+    } else ['critical','high','medium','low','info'].forEach(function(k) {
+      if (!_editedSev[k]) return;
+      if (_defSc[k]) { if (!_tplSame(_editedSev[k], _defSc[k])) { _defScNext[k] = _editedSev[k]; _defScChanged = true; } return; }
+      if (_editedSev[k] !== _palette[k]) { _palette[k] = _editedSev[k]; _paletteChanged = true; }
     });
+    if (_defScChanged && _rtHasDb()) {
+      _rtPut(function (v) {
+        var dd = (v.def && typeof v.def === 'object' && !Array.isArray(v.def)) ? v.def : {};
+        var se = (dd.severity && typeof dd.severity === 'object' && !Array.isArray(dd.severity)) ? dd.severity : {};
+        se.colors = Object.assign({}, _sevColorsOwnOf(se.colors), _defScNext);
+        dd.severity = se;
+        v.def = dd;
+      }).catch(function (e) { console.error('[settings] the Default’s severity colours not saved', e); });
+    }
     if (_paletteChanged) {
       if (!S.data.settings) S.data.settings = {};
       S.data.settings.severity_colors = _palette;
@@ -49324,7 +49576,8 @@ function saveTemplateFromEditor(type) {
         }
       } catch (_e) {}
     }
-    config.severity_colors = null;
+    if (!_sevOwnEd) config.severity_colors = null;
+    else if (!document.getElementById('tpl_sev_critical')) config.severity_colors = undefined;
 
     if (document.getElementById('tpl_sev_style_case')) {
       var _svCase = val('sev_style_case') || 'upper';
@@ -49337,7 +49590,9 @@ function saveTemplateFromEditor(type) {
         colour: _svColMode === 'fixed' ? (/^#[0-9a-fA-F]{6}$/.test(_svHex) ? _svHex : '#000000') : _svColMode,
         fillText: _svFillMode === 'fixedf' ? (/^#[0-9a-fA-F]{6}$/.test(_svFillHex) ? _svFillHex : '#000000') : _svFillMode };
       var _svPrev = JSON.stringify((S.data.settings && S.data.settings.severity_style) || null);
-      if (JSON.stringify(_svStyle) !== _svPrev) {
+
+      if (_sevOwnEd) config.severity_style = _svStyle;
+      else if (JSON.stringify(_svStyle) !== _svPrev) {
         if (!S.data.settings) S.data.settings = {};
         S.data.settings.severity_style = _svStyle;
         try {
@@ -49625,12 +49880,7 @@ function saveTemplateFromEditor(type) {
     return _tplSaveForVersion(_verSave, typeof S.modal.rt === 'string' ? S.modal.rt : '', config, type).then(function (ok) {
       if (!ok) return;
       try {
-        if (window._tplEditBase && window._tplEditBase.ver === _verSave) {
-          var _vx = _coCopy(config);
-          Object.keys(_TPL_RT_SKIP).forEach(function (k) { delete _vx[k]; });
-          window._tplEditBase.shown = Object.assign({}, window._tplEditBase.shown || {}, _vx);
-          if (Array.isArray(_vx.vh_rows)) window._tplEditBase.vhShown = _vx.vh_rows;
-        }
+        if (window._tplEditBase && window._tplEditBase.ver === _verSave) _tplEditSaved(config);
       } catch (e) {}
       if (!_vStay) toast('Saved for ' + _vName, 'success');
       if (_mStayDone()) return;
@@ -49645,12 +49895,7 @@ function saveTemplateFromEditor(type) {
       if (!ok) return;
 
       try {
-        if (window._tplEditBase && window._tplEditBase.rt === _rtSave) {
-          var _x = _coCopy(config);
-          Object.keys(_TPL_RT_SKIP).forEach(function (k) { delete _x[k]; });
-          window._tplEditBase.shown = Object.assign({}, window._tplEditBase.shown || {}, _x);
-          if (Array.isArray(_x.vh_rows)) window._tplEditBase.vhShown = _x.vh_rows;
-        }
+        if (window._tplEditBase && window._tplEditBase.rt === _rtSave && !window._tplEditBase.ver) _tplEditSaved(config);
       } catch (e) {}
       if (!_stay) toast('Saved for ' + _rtName(_rtSave), 'success');
       if (_mStayDone()) return;
@@ -54412,7 +54657,7 @@ function _rdBaseHtml(tid, main, auto, mgr, canTpl) {
       h += '</div><span class="rp-icons">';
 
       if (mgr) h += '<button class="btn btn-ghost btn-sm rp-custom rp-ver-custom" onclick="openTemplateEditor(\'report\',\'cover\',\'' + idTxt + '\',\'' + esc(v.id) + '\')" title="'
-        + esc('What Pental makes for ' + vn + ' that the file cannot: its document controls, the chart’s colour and the words chosen for each engagement. What you leave as it is follows ' + (tid ? name + '’s' : 'the Default’s') + '.')
+        + esc('What Pental makes for ' + vn + ' that the file cannot: its document controls, its severities’ colours and wording, the chart’s colour and the words chosen for each engagement. It follows the main report until you change it, and a change is this file’s alone.')
         + '" aria-label="Customise ' + esc(vn) + '">' + IC.edit + ' Customise</button>';
       if (mgr) h += _rdMoveBtns('report', tid, v.id, vn, vi, vers.length);
       if (mgr) h += '<button class="btn btn-ghost btn-sm" onclick="_rdMakeMain(\'' + idTxt + '\',\'' + esc(v.id) + '\')" title="Make it the one on the ' + esc(_rdBtnName()) + '" aria-label="Make ' + esc(vn) + ' the main Word file">' + IC.star + '</button>'
@@ -56635,7 +56880,7 @@ function _rdFileCustom(dt, key, t, name) {
       title = _TPL_WORD_TITLE + '. Its other Word files follow it, unless they change it.';
     } else {
       on = 'openTemplateEditor(\'report\',\'cover\',\'\',\'' + esc(t.id) + '\')';
-      title = 'What Pental makes for ' + name + ' that the file cannot: its document controls, the chart’s colour and the words chosen for each engagement. What you leave as it is follows the Default’s.';
+      title = 'What Pental makes for ' + name + ' that the file cannot: its document controls, its severities’ colours and wording, the chart’s colour and the words chosen for each engagement. It follows the main report until you change it, and a change is this file’s alone.';
     }
   } else {
     on = 'openTemplateEditor(\'' + dt.editorKey + '\',undefined,undefined,\'' + esc(t.id) + '\')';
@@ -63477,7 +63722,7 @@ function _pntlRefreshFromPortal(zip, a) {
 
   var edits = [];
 
-  var considerInline = function(name, value, label) {
+  var considerInline = function(name, value, label, keepCase) {
     if (!name || !(name in spans)) return;
     var inner = regions[name];
 
@@ -63494,6 +63739,11 @@ function _pntlRefreshFromPortal(zip, a) {
     if (!want && !_pntlInlineText(inner)) return;
     if (!want) { out.skipped++; return; }
     if (_pntlInlineText(inner) === want) return;
+    if (keepCase) {
+      var _have = String(_pntlInlineText(inner) || '').trim();
+      if (_have.toLowerCase() === want.toLowerCase()) return;
+      if (_have && /[a-z]/i.test(_have)) { if (_have === _have.toUpperCase()) want = want.toUpperCase(); else if (_have === _have.toLowerCase()) want = want.toLowerCase(); }
+    }
     if (_tSp) {
       var inPlace = _pntlTextInPlace(inner, want);
       if (!inPlace) { out.skipped++; return; }
@@ -63582,8 +63832,8 @@ function _pntlRefreshFromPortal(zip, a) {
     } catch (e) {  }
 
     try {
-      considerInline(_pntlRegionName(regions, f, 'sev'), _sevCased(f.severity), (f.title || 'Finding') + ' - Severity');
-      considerInline(_pntlRegionName(regions, f, 'sevt'), _sevCased(f.severity, { case: 'title' }), (f.title || 'Finding') + ' - Severity');
+      considerInline(_pntlRegionName(regions, f, 'sev'), _sevCased(f.severity), (f.title || 'Finding') + ' - Severity', true);
+      considerInline(_pntlRegionName(regions, f, 'sevt'), _sevCased(f.severity, { case: 'title' }), (f.title || 'Finding') + ' - Severity', true);
     } catch (e) {}
   });
   Object.keys(_PNTL_SECTION || {}).forEach(function(key) {
@@ -84909,7 +85159,9 @@ function _generateRadarChartDataUrl(findings, tpl) {
 }
 function _applySeverityColors(zip) {
   var tpl = (typeof getTemplate === 'function') ? getTemplate('report') : {};
-  var sc = tpl.severity_colors || {};
+
+  var _sevNow = (typeof _docxSevNow !== 'undefined') ? _docxSevNow : null;
+  var sc = (_sevNow && _sevNow.colors) || tpl.severity_colors || {};
   var dsc = (typeof _sevColors === 'function') ? _sevColors() : {};
   function _rh(k) { return (sc[k] || dsc[k] || '').replace(/^#/, '') || '6B7280'; }
   var sevHex = { critical: _rh('critical'), high: _rh('high'), medium: _rh('medium'), low: _rh('low'), info: _rh('info') };
@@ -90447,6 +90699,7 @@ async function buildReportData(assessmentId, docType, _opts) {
 }
 async function genReportDOCX(assessmentId, templateId, _docType, _slotId) {
   var _dxType = _docType === 'vuln_report' ? 'vuln_report' : 'report';
+  var _docxSevWas = _docxSevNow;
   _showLoading();
   try {
     await _ensurePdfTemplates();
@@ -90467,7 +90720,12 @@ async function genReportDOCX(assessmentId, templateId, _docType, _slotId) {
       return;
     }
 
-    var data = await buildReportData(assessmentId, _dxType, { fileId: templateId || (_dxType === 'vuln_report' ? ((_getDocxTemplateMeta('vuln_report') || {}).id || '') : '') });
+    var _dxFid = templateId || (_dxType === 'vuln_report' ? ((_getDocxTemplateMeta('vuln_report') || {}).id || '') : '');
+
+    _docxSevNow = _rtWith(assessmentId, function () { return _rdFileWith(_dxFid, function () {
+      return { colors: Object.assign({}, (getTemplate(_dxType) || {}).severity_colors || {}), style: _sevStyleLayered() };
+    }); });
+    var data = await buildReportData(assessmentId, _dxType, { fileId: _dxFid });
 
     var fname = _reportFilename(assessmentId, 'docx');
     window._lastDocxAssessmentId = assessmentId;
@@ -90488,7 +90746,7 @@ async function genReportDOCX(assessmentId, templateId, _docType, _slotId) {
       }
     }
     toast('DOCX generation failed: ' + (err.properties && err.properties.errors ? err.properties.errors.map(function(e) { return e.message; }).join(', ') : err.message), 'error');
-  } finally { _hideLoading(); }
+  } finally { _docxSevNow = _docxSevWas; _hideLoading(); }
 }
 var _uploadedPdfs = {};
 var _finalPdfListing = null;
