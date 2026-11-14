@@ -156,7 +156,27 @@ function _reporterShowLink(email, link, expires) {
 function renderLogin() {
   var was = window._dbBranding;
   window._dbBranding = Object.assign({}, was || {}, { password_login_enabled: true, sso_google_enabled: false, sso_microsoft_enabled: false });
-  try { return renderLogin__portal(); } finally { window._dbBranding = was; }
+  var h;
+  try { h = renderLogin__portal(); } finally { window._dbBranding = was; }
+  return _rpSignInBrand(h);
+}
+// The sign-in page itself draws its own logo, or the firm's name where the
+// firm has none. There too Pental's mark and name stand above the name (the
+// same piece the pages around it use, _authLogo below), once the brand is
+// known and says there is no logo. A firm that has switched the logo off on
+// its sign-in page is shown none. The page is handed back as words, so the
+// piece is put into them where the portal's own stood.
+function _rpSignInBrand(h) {
+  try {
+    var b = window._dbBranding || {};
+    if (typeof h !== 'string' || !Object.keys(b).length || b.login_show_logo === false) return h;
+    if (b.logo_url || b.logo_url_light || b.has_logo || _resolveLogoSrc()) return h;
+    var open = '<div class="login-header">', i = h.indexOf(open);
+    if (i < 0) return h;
+    var at = i + open.length;
+    var m = /^<div class="login-logo">(?:<span>[^<]*<\/span>)?<\/div>/.exec(h.slice(at));
+    return h.slice(0, at) + '<div class="login-logo">' + _authLogo() + '</div>' + h.slice(at + (m ? m[0].length : 0));
+  } catch (e) { return h; }
 }
 
 // ── The firm's name where it has no logo ─────────────────────────────────
@@ -165,13 +185,23 @@ function renderLogin() {
 // factor) showed the logo or nothing ([stated] Arian: "why is pw reset area
 // not using branding?"). Now they show what the sign-in page shows, in the
 // firm's colour, the brand loaded first when a link opens one of them.
+//
+// With no logo of the firm's own, Pental's stands there ([stated] Arian, 12
+// November 2026: "on pental report, if favicon not set, it should be pental
+// favicon (not on pental portal, just the report) and pental logo etc"): the
+// mark and the product's name, as the sidebar and the first page have them,
+// with the firm's name under it. A firm's own logo takes its place, and its
+// own favicon the tab's (the page's own is Pental's, assets/favicon.svg).
+// All of it sits inside the one element the page replaces when the brand
+// arrives, so nothing is left behind and nothing is drawn twice.
 function _authLogo() {
   var h = _authLogo__portal();
   if (_resolveLogoSrc()) return h;
   var b = window._dbBranding || {};
-  if (b.login_show_company_name === false) return h;
-  var name = b.company_name || (TENANT_INFO && TENANT_INFO.company_name) || '';
-  return name ? h + '<span class="rp-auth-name">' + esc(name) + '</span>' : h;
+  var name = b.login_show_company_name === false ? '' : (b.company_name || (TENANT_INFO && TENANT_INFO.company_name) || '');
+  return '<span data-auth-logo class="rp-auth-own">'
+    + '<span class="rp-auth-brand">' + _reporterLockup(30) + '</span>'
+    + (name ? '<span class="rp-auth-name">' + esc(name) + '</span>' : '') + '</span>';
 }
 function renderSetPassword(token) {
   renderSetPassword__portal(token);

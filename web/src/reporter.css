@@ -42,6 +42,14 @@ div:has(> label > input#ff_scanner_import),
    (shell/80-own-server.js, _authLogo), as the sign-in page shows it. */
 .rp-auth-name{display:block;font-family:var(--font-display);font-size:1.4rem;font-weight:800;color:var(--accent);margin:0 0 1rem;text-align:center}
 .login-logo .rp-auth-name{margin:0}
+/* And Pental's own mark and name above it, where the firm has no logo. */
+.rp-auth-own{display:block;text-align:center}
+.rp-auth-brand{display:flex;align-items:center;justify-content:center;gap:10px;margin:0 0 .85rem}
+.login-logo .rp-auth-brand .rp-word,.rp-auth-brand .rp-word{font-size:16px;font-weight:800;color:var(--text)}
+.login-logo .rp-auth-brand .rp-prod,.rp-auth-brand .rp-prod{font-size:15px;font-weight:600;color:var(--text-muted,var(--gray))}
+/* (the portal sizes any drawing in that place as an icon: the mark keeps its own shape) */
+.login-logo .rp-auth-brand svg.rp-mark{width:32px;height:29px}
+.login-logo .rp-auth-own{color:var(--text)}
 /* A comment is the team's own: no switch to show it to a client
    (shell/70-paid-parts.js and the manifest's patches). */
 label.tpl-toggle-row:has(input[id^="newCommentVisible_"]),

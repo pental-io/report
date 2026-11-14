@@ -220,6 +220,7 @@ function renderInvoices() { return ''; }
 function renderLibImportModal() { return ''; }
 function renderLoAColumn() { return ''; }
 function renderLoaEditorModal() { return ''; }
+function renderMailboxStoppedBanner() { return ''; }
 function renderMeetingModal() { return; }
 function renderMeetingsPage() { return ''; }
 function renderMigrateModal() { return ''; }

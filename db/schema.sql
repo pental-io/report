@@ -49,6 +49,113 @@ DO $clocks_stand_aside$ BEGIN
   PERFORM pg_advisory_xact_lock(hashtext(k))
      FROM unnest(ARRAY['pental_net_tick', 'pental_mail_tick', 'pental_tickets_tick', 'pental_scan_tick', 'pental_xero_tick']) AS k;
 END $clocks_stand_aside$;
+
+-- 2031: AND EVERY TABLE'S LOCK IS TAKEN BEFORE ANYTHING IS CHANGED.
+--
+-- The clocks standing aside (above) was one case of something wider. This
+-- file runs as one transaction on a database people are signed in to, and
+-- changes something on nearly every table, taking each table's lock as it
+-- came to it, top to bottom. A request that arrived meanwhile read the tables
+-- it needed in its own order: the check every signed-in request makes reads
+-- api_key_sessions, made near the end of this file, before settings, made at
+-- its top. It was given the first, waited for the second, which this run
+-- already held, and this run, on reaching api_key_sessions, waited for it.
+-- PostgreSQL ends such a pair by refusing whichever of the two looks first
+-- once it has waited a second; a request that had waited longer had looked
+-- already and seen nothing, so it was THIS RUN that was refused ("deadlock
+-- detected"), nothing of it applied, and a gateway left it until the next
+-- night. Seen on 13 November 2026, twice in an hour, with one portal open on
+-- the database being updated (verification/test_setup_locks_2031.mjs).
+--
+-- So the locks are taken first, all of them or none, and never waited for.
+-- Each is asked for with NOWAIT. Where one is held by a request in hand, the
+-- ones taken so far are let go at once (they were taken inside the block that
+-- failed), a moment passes, and it starts again. This run therefore never
+-- holds one lock while waiting for another, which is the only way it could be
+-- half of such a pair; and once it holds them all, a request waits at the
+-- first table it reads, holding none of them, until this run is done.
+--
+-- 2032: AND IT NEVER GOES ON WITHOUT THEM. It used to ask two hundred times
+-- (about ten seconds) and then go on as it did before 2031, taking each lock
+-- as it came to it: the very run a request in hand can have refused as a
+-- deadlock. It asks for longer now, with pauses that grow to half a second
+-- (three quarters of a minute in all; a database's own setting
+-- `pental.setup_lock_wait`, in seconds, says another), and where a table is
+-- still held at the end of that it STOPS, with an error of its own (55P03,
+-- "PENTAL SETUP BUSY") that names the table. Nothing has been changed by
+-- then, it is safe to run again, and a gateway (1.15.2 on) runs it again ten
+-- minutes later. A table this role cannot lock for a reason other than
+-- somebody holding it (one in a schema it may not enter) is left out, alone
+-- (v_skip; anything else it meets is raised as it is): before, any such
+-- table had the block take no lock at all.
+--
+-- AND ONE TABLE IS NOT ASKED FOR: public._pental_transfer. This file takes no
+-- lock on it where its columns are already there (1840, $transfer_columns$
+-- below), so that a clock, a worker or a page that has read it and is still
+-- at its work is never waited on. Asked for here with the rest, as it was
+-- when this block was first written, a session that had read it and stayed
+-- in its transaction held the whole update up: for ten seconds in 2031, and,
+-- once the block no longer went on without its locks, until it stopped as
+-- busy (verification/test_stripe_firm_side_1840.mjs, part 9, holds such a
+-- session open for as long as the setup runs). Nothing in this file changes
+-- that table on a database that has it, so this run cannot be half of a
+-- deadlock over it. A release that adds a column to it will take its lock
+-- when it comes to it, as before 2031.
+--
+-- A first setup has no tables and passes straight through. Run a statement at
+-- a time (psql without --single-transaction), the locks end with this block,
+-- which does no harm. A table of somebody else's in public that this role may
+-- not lock is left alone, as is storage.objects where it is not this role's
+-- to lock (this file changes its policies).
+DO $locks_first$
+DECLARE
+  r record;
+  v_pass int := 0;
+  v_held boolean := false;
+  v_skip oid[] := ARRAY[]::oid[];
+  v_cur oid := NULL;
+  v_last text := NULL;
+  v_wait numeric := 45;
+  v_t0 timestamptz := clock_timestamp();
+BEGIN
+  BEGIN
+    v_wait := least(600, greatest(1, coalesce(nullif(pg_catalog.current_setting('pental.setup_lock_wait', true), '')::numeric, 45)));
+  EXCEPTION WHEN OTHERS THEN
+    v_wait := 45;
+  END;
+  WHILE NOT v_held LOOP
+    v_pass := v_pass + 1;
+    v_cur := NULL;
+    BEGIN
+      FOR r IN
+        SELECT c.oid, n.nspname, c.relname
+          FROM pg_catalog.pg_class c
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE c.relkind IN ('r', 'p') AND c.relpersistence <> 't'
+           AND (n.nspname = 'public' OR (n.nspname = 'storage' AND c.relname = 'objects'))
+           AND pg_catalog.has_table_privilege(c.oid, 'UPDATE, DELETE, TRUNCATE')
+           AND NOT (n.nspname = 'public' AND c.relname = '_pental_transfer')
+           AND NOT (c.oid = ANY (v_skip))
+         ORDER BY c.oid
+      LOOP
+        v_cur := r.oid;
+        v_last := pg_catalog.format('%I.%I', r.nspname, r.relname);
+        EXECUTE pg_catalog.format('LOCK TABLE ONLY %I.%I IN ACCESS EXCLUSIVE MODE NOWAIT', r.nspname, r.relname);
+      END LOOP;
+      v_held := true;
+    EXCEPTION
+      WHEN lock_not_available THEN
+        IF extract(epoch FROM clock_timestamp() - v_t0) >= v_wait THEN
+          RAISE EXCEPTION 'PENTAL SETUP BUSY: % was in use each of the % times it was asked for in % seconds, so the update did not start and nothing was changed. It is safe to run again.', v_last, v_pass, round(v_wait)
+            USING ERRCODE = '55P03', HINT = 'Something is holding that table: a backup, a long report, or a session left open in the middle of its work. Run the setup again once it has finished.';
+        END IF;
+        PERFORM pg_catalog.pg_sleep(least(0.5, 0.02 * power(1.12, least(v_pass, 40))) + 0.06 * random());
+      WHEN OTHERS THEN
+        IF v_cur IS NULL OR v_cur = ANY (v_skip) THEN RAISE; END IF;
+        v_skip := v_skip || v_cur;
+    END;
+  END LOOP;
+END $locks_first$;
 DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'auth' AND table_name = 'config') THEN
     UPDATE auth.config SET enable_signup = false WHERE id = 1; RAISE NOTICE 'GoTrace signup disabled';
@@ -5563,14 +5670,26 @@ DECLARE
   v_rows jsonb := '[]'::jsonb;
   v_cancelled integer := 0;
   v_n integer;
+  v_watch jsonb := '{}'::jsonb;
 BEGIN
   v_mode := public._pental_authorise(p_auth, p_secret, 'rpc_mail_outbox_claim', true);
   IF v_mode IS DISTINCT FROM 'signed' THEN RAISE EXCEPTION 'Not authorised'; END IF;
+  -- 2023: and, with whatever it answers, what Pental's servers are to know of
+  -- the connected mailbox (_mail_watch): that its provider has ended it and
+  -- nobody has been told, or that it is due a renewal only they can make
+  -- (asked of them once an hour at most).
+  BEGIN
+    v_watch := COALESCE(public._mail_watch(), '{}'::jsonb);
+    IF v_watch ? 'mailbox_keep' THEN UPDATE public._mail_state SET keep_asked_at = now() WHERE id; END IF;
+    IF v_watch ? 'mailbox_stopped' THEN UPDATE public._mail_state SET told_asked_at = now() WHERE id; END IF;
+  EXCEPTION WHEN OTHERS THEN
+    v_watch := '{}'::jsonb;
+  END;
   -- 1841: NOTHING, ONCE THIS PORTAL SENDS ITS OWN EMAIL (_mail_locked): its
   -- own side sends what waits here itself (_mail_adopt), and keeps the window
   -- below as this drain kept it.
   IF public._mail_locked() THEN
-    RETURN jsonb_build_object('messages', '[]'::jsonb, 'locked', true);
+    RETURN jsonb_build_object('messages', '[]'::jsonb, 'locked', true) || v_watch;
   END IF;
 
   SELECT COALESCE(mail_outbox_enabled, true), mail_outbox_started_at
@@ -5578,13 +5697,13 @@ BEGIN
     FROM public.settings ORDER BY created_at ASC NULLS LAST, id ASC LIMIT 1;
 
   IF NOT COALESCE(v_on, true) THEN
-    RETURN jsonb_build_object('messages', '[]'::jsonb, 'off', true);
+    RETURN jsonb_build_object('messages', '[]'::jsonb, 'off', true) || v_watch;
   END IF;
   -- NO CUTOFF MEANS NO SENDING. A database that has not had the stamping pass
   -- applied has an unbounded backlog, and the safe answer to "how far back may
   -- I go" being unknown is "nowhere".
   IF v_since IS NULL THEN
-    RETURN jsonb_build_object('messages', '[]'::jsonb, 'no_cutoff', true);
+    RETURN jsonb_build_object('messages', '[]'::jsonb, 'no_cutoff', true) || v_watch;
   END IF;
 
   -- Past its window: cancelled with the reason, never sent.
@@ -5632,7 +5751,7 @@ BEGIN
   SELECT COALESCE(jsonb_agg(to_jsonb(c)), '[]'::jsonb) INTO v_rows FROM claimed c;
 
   SELECT jsonb_array_length(v_rows) INTO v_n;
-  RETURN jsonb_build_object('messages', v_rows, 'claimed', v_n, 'cancelled_stale', v_cancelled);
+  RETURN jsonb_build_object('messages', v_rows, 'claimed', v_n, 'cancelled_stale', v_cancelled) || v_watch;
 END;
 $obclaim$;
 
@@ -5776,6 +5895,12 @@ BEGIN
      CASE WHEN v_status = 'sent' THEN now() END,
      v_named ->> 'template', v_named -> 'data')
   RETURNING id INTO v_id;
+  -- 2023: the notice that the connected mailbox has stopped, sent by Pental's
+  -- mailbox (_mail_watch's mailbox_stopped): said once for a connection.
+  IF v_type = 'mailbox_stopped' AND v_status = 'sent' THEN
+    UPDATE public._mail_state SET told_fp = blocked_fp, told_at = now(), told_asked_at = NULL, updated_at = now()
+     WHERE id AND blocked IS NOT NULL AND blocked_kind = 'revoked';
+  END IF;
   RETURN v_id;
 END;
 $maillog$;
@@ -10298,6 +10423,30 @@ BEGIN
   v_sig_ok := public._verify_pental_auth(p_auth, 'rpc_update_settings_branding');
   IF NOT v_sig_ok THEN RAISE EXCEPTION 'Invalid signed envelope'; END IF;
 
+  -- 2023: A CONNECTION KEPT BY PENTAL'S SERVERS, where nothing on the firm's
+  -- own side can renew it (_mail_watch's mailbox_keep): the renewal they
+  -- made, said for the connection it was made for (mail_keep_fp, from
+  -- rpc_get_smtp_config's mail_fp). A key, with the provider's replacement
+  -- for the stored token where it handed one back, is kept as this
+  -- database's own side keeps one (_mail_keep); a connection the provider has
+  -- ended is said as stopped (mail_stopped: what it said). Never for a
+  -- portal that sends its own email, whose token Pental's servers are not
+  -- given to renew, and nothing else in the write is taken.
+  IF jsonb_typeof(p_data) = 'object' AND p_data ? 'mail_keep_fp' THEN
+    IF public._mail_locked() THEN RETURN jsonb_build_object('ok', false, 'code', 'mail_locked'); END IF;
+    IF public._mail_conn() ->> 'fp' IS DISTINCT FROM (p_data ->> 'mail_keep_fp') THEN
+      RETURN jsonb_build_object('ok', false, 'code', 'another_connection');
+    END IF;
+    IF p_data ->> 'mail_stopped' IS NOT NULL THEN
+      PERFORM public._mail_stop(p_data ->> 'mail_keep_fp', p_data ->> 'mail_stopped');
+      RETURN jsonb_build_object('ok', true, 'stopped', true);
+    END IF;
+    UPDATE public._mail_state SET blocked = NULL, blocked_fp = NULL, blocked_kind = NULL, updated_at = now()
+     WHERE id AND blocked_kind = 'revoked' AND blocked_fp IS NOT DISTINCT FROM (p_data ->> 'mail_keep_fp');
+    RETURN jsonb_build_object('ok', true,
+      'replaced', public._mail_keep(p_data ->> 'mail_keep_fp', NULLIF(p_data ->> 'smtp_oauth_refresh', '')) IS DISTINCT FROM (p_data ->> 'mail_keep_fp'));
+  END IF;
+
   FOR v_key IN SELECT jsonb_object_keys(p_data) LOOP
     IF v_key = ANY(v_allowed) THEN
       v_filtered := v_filtered || jsonb_build_object(v_key, p_data->v_key);
@@ -11030,6 +11179,10 @@ BEGIN
     'font_mono',               v_settings.font_mono,
     'logo_url_light',          NULLIF(v_settings.logo_url_light, ''),
     'favicon_data',            NULLIF(v_settings.favicon_data, ''),
+    -- 2031: Settings saves a firm's favicon as favicon_url (an address in the
+    -- public branding store), which this did not give: a browser showed the
+    -- firm's icon only once somebody had signed in on it.
+    'favicon_url',             COALESCE(NULLIF(v_settings.favicon_url, ''), NULLIF(v_settings.favicon_data, '')),
     'login_title',             COALESCE(v_settings.login_title, ''),
     'login_subtitle',          COALESCE(v_settings.login_subtitle, ''),
     'login_support_email',     COALESCE(v_settings.login_support_email, ''),
@@ -16311,7 +16464,15 @@ BEGIN
     'notify_mfa_changed', v_s.notify_mfa_changed,
     'notify_role_changed', v_s.notify_role_changed,
     'notify_user_created', v_s.notify_user_created,
-    'password_login_enabled', COALESCE(v_s.password_login_enabled, false)
+    'password_login_enabled', COALESCE(v_s.password_login_enabled, false),
+    -- 2023: which connection this is (its fingerprint, which a renewal Pental's
+    -- servers make is said for), and, where its provider has ended it, that
+    -- and why, so pental.io/manage says it needs connecting again rather than
+    -- Connected.
+    'mail_fp', public._mail_conn() ->> 'fp',
+    'mail_stopped', (SELECT ms.blocked FROM public._mail_state ms
+                      WHERE ms.id AND ms.blocked IS NOT NULL AND ms.blocked_kind = 'revoked'
+                        AND ms.blocked_fp IS NOT DISTINCT FROM (public._mail_conn() ->> 'fp'))
   );
 END;
 $$;
@@ -27147,6 +27308,33 @@ ALTER TABLE public._mail_state ADD COLUMN IF NOT EXISTS released_at timestamptz;
 -- A database whose own side was already sending is locked as it takes this.
 UPDATE public._mail_state SET locked_at = local_since, updated_at = now()
  WHERE id AND local_since IS NOT NULL AND locked_at IS NULL;
+-- 2023: A CONNECTION THAT IS KEPT. [stated] Arian, of a firm's Microsoft 365
+-- mailbox that stopped sending some three months after it was connected: "it
+-- should be set to never expire", and "yes i want the lasting fix". No
+-- setting does that: Microsoft's refresh token works for 90 days and every
+-- renewal hands back its replacement, and the one stored at Connect was used
+-- until Microsoft stopped taking it. Now the replacement is kept (_mail_keep:
+-- kept_fp, the connection it was last kept for, and kept_at, when), a renewal
+-- is asked for at least weekly whether or not any email is sent
+-- (keep_asked_at: when one was last asked for), and where a provider ends a
+-- connection all the same (blocked_kind 'revoked': a password reset by an
+-- administrator, every session signed out, a licence gone), the firm is told,
+-- once for that connection (told_fp, told_at; told_asked_at: when Pental's
+-- servers were last asked to tell it, which they are every six hours until
+-- the notice has gone). keepalive_at: when a gateway last asked whether the
+-- connection was due a renewal, which one from 1.15.0 does and an older one
+-- never does (_mail_gateway_keeps).
+ALTER TABLE public._mail_state ADD COLUMN IF NOT EXISTS kept_fp text;
+ALTER TABLE public._mail_state ADD COLUMN IF NOT EXISTS kept_at timestamptz;
+ALTER TABLE public._mail_state ADD COLUMN IF NOT EXISTS keep_asked_at timestamptz;
+ALTER TABLE public._mail_state ADD COLUMN IF NOT EXISTS blocked_kind text;
+ALTER TABLE public._mail_state ADD COLUMN IF NOT EXISTS told_fp text;
+ALTER TABLE public._mail_state ADD COLUMN IF NOT EXISTS told_at timestamptz;
+ALTER TABLE public._mail_state ADD COLUMN IF NOT EXISTS told_asked_at timestamptz;
+ALTER TABLE public._mail_state ADD COLUMN IF NOT EXISTS keepalive_at timestamptz;
+-- One marked before this setup said which in its words alone.
+UPDATE public._mail_state SET blocked_kind = 'revoked'
+ WHERE id AND blocked_kind IS NULL AND blocked LIKE 'The connected mailbox no longer lets this portal send%';
 
 CREATE OR REPLACE FUNCTION public._mail_locked() RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $mllocked$
@@ -27826,10 +28014,10 @@ BEGIN
   -- The state before the job: whether this side got through, and whether
   -- the mailbox refuses it.
   IF v_tok IS NOT NULL THEN
-    UPDATE public._mail_state SET blocked = NULL, blocked_fp = NULL, updated_at = now() WHERE id AND blocked_fp IS NOT DISTINCT FROM v_fp AND blocked IS NOT NULL;
+    UPDATE public._mail_state SET blocked = NULL, blocked_fp = NULL, blocked_kind = NULL, updated_at = now() WHERE id AND blocked_fp IS NOT DISTINCT FROM v_fp AND blocked IS NOT NULL;
     PERFORM public._mail_net_mark(v_fp, true, 'renew');
   ELSIF v_block IS NOT NULL THEN
-    UPDATE public._mail_state SET blocked = v_err, blocked_fp = v_fp, updated_at = now() WHERE id;
+    UPDATE public._mail_state SET blocked = v_err, blocked_fp = v_fp, blocked_kind = v_block, updated_at = now() WHERE id;
   ELSE
     PERFORM public._mail_net_mark(v_fp, false, 'renew');
   END IF;
@@ -27838,6 +28026,14 @@ BEGIN
   IF v_tok IS NOT NULL THEN
     v_exp := CASE WHEN jsonb_typeof(v -> 'expires_in') = 'number' AND (v ->> 'expires_in')::numeric < 1e9
                   THEN LEAST(86400, GREATEST(300, floor((v ->> 'expires_in')::numeric)::integer)) ELSE 3600 END;
+    -- 2023: and the provider's replacement for the stored refresh token, where
+    -- it handed one back, kept in its place (_mail_keep): the connection is
+    -- the same one, under the fingerprint it has from now.
+    BEGIN
+      v_fp := public._mail_keep(v_fp, CASE WHEN jsonb_typeof(v -> 'refresh_token') = 'string' THEN v ->> 'refresh_token' END);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'mail: the renewed connection could not be kept (%)', SQLERRM;
+    END;
     INSERT INTO public._mail_token (id, fp, access_token, expires_at, api, account_id, updated_at)
     VALUES (true, v_fp, v_tok, now() + make_interval(secs => v_exp - 60),
             CASE WHEN public._mail_endpoint('zoho', v ->> 'api') IS NOT NULL THEN v ->> 'api' END,
@@ -27845,8 +28041,10 @@ BEGIN
     ON CONFLICT (id) DO UPDATE SET fp = EXCLUDED.fp, access_token = EXCLUDED.access_token, expires_at = EXCLUDED.expires_at,
                                    api = EXCLUDED.api, account_id = EXCLUDED.account_id, updated_at = now();
     UPDATE public._mail_jobs SET state = 'done', finished_at = now(), outcome = jsonb_build_object('ok', true, 'transport', COALESCE(p_transport, 'answered')) WHERE id = j.id;
-    -- What was waiting for it goes now.
+    -- What was waiting for it goes now. (2023: not where a gateway sends: a
+    -- renewal made only to keep the connection leaves its email to it.)
     FOR v_w IN SELECT q.id FROM public._mail_jobs q WHERE q.kind = 'send' AND q.state = 'planned' AND (q.not_before IS NULL OR q.not_before <= now())
+                  AND NOT public._mail_gateway_alive()
                 ORDER BY q.created_at LIMIT 50 LOOP
       BEGIN
         PERFORM public._mail_dispatch(v_w.id, 'pg_net');
@@ -27868,6 +28066,186 @@ BEGIN
   END IF;
 END $mlrenewed$;
 REVOKE ALL ON FUNCTION public._mail_renewed(uuid, integer, text, text, text) FROM PUBLIC, anon, authenticated;
+
+-- ── 2023: THE CONNECTION KEPT ─────────────────────────────────────────────
+
+-- Whether a gateway here keeps the connection itself: one is there, and has
+-- asked whether a renewal is due (_mail_keepalive, which a gateway from
+-- 1.15.0 does on its clock) in the last twenty minutes. One from before that
+-- sends but never asks, and the connection is then kept by whoever else can.
+CREATE OR REPLACE FUNCTION public._mail_gateway_keeps() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $mlgkeeps$
+  SELECT public._mail_gateway_alive()
+     AND COALESCE((SELECT s.keepalive_at > now() - interval '20 minutes' FROM public._mail_state s WHERE s.id), false);
+$mlgkeeps$;
+REVOKE ALL ON FUNCTION public._mail_gateway_keeps() FROM PUBLIC, anon, authenticated;
+
+-- Whether this connection is due a renewal for its own sake: a connected
+-- mailbox whose key has not been renewed, and its replacement kept where the
+-- provider hands one back, in the last seven days. A refresh token runs out
+-- when it is not replaced (Microsoft: 90 days from the day it was issued) or
+-- not used (Google: six months), and a week leaves a database or a gateway
+-- that is away for a while a long way inside either. One its provider has
+-- ended is not due anything: it has to be connected again.
+CREATE OR REPLACE FUNCTION public._mail_keep_due() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $mlkdue$
+  SELECT COALESCE((x.c ->> 'oauth')::boolean, false)
+     AND x.c ->> 'provider' IN ('microsoft', 'google', 'zoho')
+     AND NOT EXISTS (SELECT 1 FROM public._mail_state s WHERE s.id AND s.kept_fp = x.c ->> 'fp' AND s.kept_at > now() - interval '7 days')
+     AND NOT EXISTS (SELECT 1 FROM public._mail_state s WHERE s.id AND s.blocked IS NOT NULL AND s.blocked_kind = 'revoked' AND s.blocked_fp = x.c ->> 'fp')
+    FROM (SELECT public._mail_conn() AS c) x;
+$mlkdue$;
+REVOKE ALL ON FUNCTION public._mail_keep_due() FROM PUBLIC, anon, authenticated;
+
+-- Whether this database could renew the connection itself: a Microsoft 365,
+-- Google or Zoho mailbox connected, pg_net serving this database, and the
+-- mailbox not refusing it. Whether email is switched on does not come into
+-- it: a connection is kept for the day it is switched on again.
+CREATE OR REPLACE FUNCTION public._mail_keep_net() RETURNS boolean
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $mlknet$
+DECLARE c jsonb := public._mail_conn();
+BEGIN
+  IF NOT COALESCE((c ->> 'oauth')::boolean, false) OR c ->> 'provider' NOT IN ('microsoft', 'google', 'zoho')
+     OR NOT public._mail_net_serving() THEN
+    RETURN false;
+  END IF;
+  RETURN NOT EXISTS (SELECT 1 FROM public._mail_state s WHERE s.id AND s.blocked IS NOT NULL AND s.blocked_fp IS NOT DISTINCT FROM (c ->> 'fp'));
+END $mlknet$;
+REVOKE ALL ON FUNCTION public._mail_keep_net() FROM PUBLIC, anon, authenticated;
+
+-- A renewal that got a key, kept: the provider's replacement for the stored
+-- refresh token put in its place (sealed as any settings secret is), where
+-- the connection is still the one that was renewed (p_fp) and it has not been
+-- kept in the last seven days (Microsoft hands a new one back with every
+-- renewal, and one a week is plenty). What is held under the connection's
+-- fingerprint moves with it: a replaced token is the same connection, not a
+-- new one, and nothing about it is asked of the firm again. A stored token
+-- this session cannot open is left as it is. Answers the connection's
+-- fingerprint from now (p_fp where nothing was put in its place).
+CREATE OR REPLACE FUNCTION public._mail_keep(p_fp text, p_new text DEFAULT NULL) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $mlkeep$
+DECLARE c jsonb := public._mail_conn(); v_fp text := p_fp; v_cur text; v_id uuid;
+BEGIN
+  IF p_fp IS NULL OR NOT COALESCE((c ->> 'oauth')::boolean, false) OR c ->> 'fp' IS DISTINCT FROM p_fp THEN RETURN p_fp; END IF;
+  PERFORM 1 FROM public._mail_state WHERE id FOR UPDATE;
+  IF EXISTS (SELECT 1 FROM public._mail_state s WHERE s.id AND s.kept_fp = p_fp AND s.kept_at > now() - interval '7 days') THEN RETURN p_fp; END IF;
+  IF p_new IS NOT NULL AND length(p_new) BETWEEN 16 AND 8192 AND p_new !~ '\s' THEN
+    v_cur := public._mail_settings() ->> 'refresh';
+    IF COALESCE(v_cur, '') <> '' AND v_cur <> p_new THEN
+      SELECT s.id INTO v_id FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id ASC LIMIT 1;
+      UPDATE public.settings SET smtp_oauth_refresh = p_new WHERE id = v_id;
+      v_fp := public._mail_conn() ->> 'fp';
+      UPDATE public._mail_token SET fp = v_fp WHERE fp = p_fp;
+      UPDATE public._mail_state
+         SET blocked_fp = CASE WHEN blocked_fp = p_fp THEN v_fp ELSE blocked_fp END,
+             net_fp = CASE WHEN net_fp = p_fp THEN v_fp ELSE net_fp END,
+             told_fp = CASE WHEN told_fp = p_fp THEN v_fp ELSE told_fp END
+       WHERE id;
+    END IF;
+  END IF;
+  UPDATE public._mail_state SET kept_fp = v_fp, kept_at = now(), updated_at = now() WHERE id;
+  RETURN v_fp;
+END $mlkeep$;
+REVOKE ALL ON FUNCTION public._mail_keep(text, text) FROM PUBLIC, anon, authenticated;
+
+-- A connection its provider has ended (a renewal refused as revoked), said
+-- as _mail_renewed says one: for the firm's own side behind a gateway
+-- (_mail_kept), and for Pental's servers where it is they who renew it
+-- (rpc_update_settings_branding's mail_keep_fp).
+CREATE OR REPLACE FUNCTION public._mail_stop(p_fp text, p_error text DEFAULT NULL) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $mlstop$
+BEGIN
+  IF p_fp IS NULL OR public._mail_conn() ->> 'fp' IS DISTINCT FROM p_fp THEN RETURN; END IF;
+  UPDATE public._mail_state
+     SET blocked = 'The connected mailbox no longer lets this portal send: its consent was withdrawn or has run out. Press Connect on pental.io/manage to connect it again.'
+                   || COALESCE(' The provider said: ' || NULLIF(left(btrim(regexp_replace(COALESCE(p_error, ''), '[[:cntrl:][:space:]]+', ' ', 'g')), 300), ''), ''),
+         blocked_fp = p_fp, blocked_kind = 'revoked', updated_at = now()
+   WHERE id;
+END $mlstop$;
+REVOKE ALL ON FUNCTION public._mail_stop(text, text) FROM PUBLIC, anon, authenticated;
+
+-- What Pental's servers are told of the connected mailbox as they ask for
+-- the outbox (rpc_mail_outbox_claim, every quarter of an hour, for every
+-- firm): that its provider has ended it and nobody has been told yet
+-- (mailbox_stopped: which mailbox, and this portal's administrators, whom
+-- they write to beside the account's owner on their own record; said every
+-- six hours until rpc_mail_log says the notice went, and never again for
+-- that connection); and that it is due a renewal they can make
+-- (mailbox_keep: the portal does not send its own email, so they are given
+-- its token, no gateway here keeps it, and nobody has asked for one in the
+-- last hour, this database's own clock included), which they then make as
+-- they would to send an email, and say (rpc_update_settings_branding's
+-- mail_keep_fp). Nothing secret is in it.
+CREATE OR REPLACE FUNCTION public._mail_watch() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $mlwatch$
+DECLARE c jsonb := public._mail_conn(); st public._mail_state; v jsonb := '{}'::jsonb; v_to jsonb; v_user text;
+BEGIN
+  IF NOT COALESCE((c ->> 'oauth')::boolean, false) THEN RETURN v; END IF;
+  SELECT * INTO st FROM public._mail_state WHERE id;
+  IF st.blocked IS NOT NULL AND st.blocked_kind = 'revoked' AND st.blocked_fp IS NOT DISTINCT FROM (c ->> 'fp')
+     AND st.told_fp IS DISTINCT FROM (c ->> 'fp')
+     AND (st.told_asked_at IS NULL OR st.told_asked_at < now() - interval '6 hours') THEN
+    SELECT COALESCE(jsonb_agg(x.email), '[]'::jsonb) INTO v_to
+      FROM (SELECT lower(btrim(p.email)) AS email FROM public.profiles p
+             WHERE p.role = 'admin' AND p.active = true AND COALESCE(btrim(p.email), '') <> ''
+             ORDER BY p.created_at ASC LIMIT 5) x;
+    SELECT s.smtp_oauth_user INTO v_user FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id ASC LIMIT 1;
+    v := v || jsonb_build_object('mailbox_stopped', jsonb_build_object(
+      'provider', c ->> 'provider', 'mailbox', COALESCE(v_user, ''), 'to', v_to));
+  END IF;
+  IF public._mail_keep_due() AND NOT public._mail_locked() AND NOT public._mail_gateway_keeps()
+     AND (st.keep_asked_at IS NULL OR st.keep_asked_at < now() - interval '1 hour') THEN
+    v := v || jsonb_build_object('mailbox_keep', jsonb_build_object('fp', c ->> 'fp'));
+  END IF;
+  RETURN v;
+END $mlwatch$;
+REVOKE ALL ON FUNCTION public._mail_watch() FROM PUBLIC, anon, authenticated;
+
+-- The gateway's half (1.15.0 on), on its own connection only. Asked on its
+-- clock by a worker that is there: the connection to renew now, where it is
+-- due one (an hour apart while none comes), with what it is renewed with,
+-- read as it is handed over and never kept here; NULL where none is due.
+-- That it asks at all is what says this gateway keeps the connection
+-- (keepalive_at, written every five minutes at most).
+CREATE OR REPLACE FUNCTION public._mail_keepalive(p_worker text DEFAULT NULL) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $mlkalive$
+DECLARE s jsonb; v_ok boolean;
+BEGIN
+  IF p_worker IS NULL OR NOT public._mail_gateway_alive(p_worker) THEN RETURN NULL; END IF;
+  UPDATE public._mail_state SET keepalive_at = now()
+   WHERE id AND (keepalive_at IS NULL OR keepalive_at < now() - interval '5 minutes');
+  IF public._xero_stood_down() IS NOT NULL OR NOT public._mail_keep_due() THEN RETURN NULL; END IF;
+  UPDATE public._mail_state SET keep_asked_at = now()
+   WHERE id AND (keep_asked_at IS NULL OR keep_asked_at < now() - interval '1 hour')
+  RETURNING true INTO v_ok;
+  IF NOT COALESCE(v_ok, false) THEN RETURN NULL; END IF;
+  s := public._mail_settings();
+  IF COALESCE(s ->> 'refresh', '') = '' THEN RETURN NULL; END IF;
+  RETURN jsonb_build_object('provider', s ->> 'provider', 'refresh', s ->> 'refresh');
+END $mlkalive$;
+REVOKE ALL ON FUNCTION public._mail_keepalive(text) FROM PUBLIC, anon, authenticated;
+
+-- And what came of a renewal the gateway made, for its clock or for an email:
+-- a key (p_ok, with the provider's replacement where it handed one back), or
+-- the connection ended by its provider (p_revoked, with what it said). Said
+-- for the token that was renewed (p_old): where another has been connected
+-- since, nothing is done.
+CREATE OR REPLACE FUNCTION public._mail_kept(p_old text, p_ok boolean, p_new text DEFAULT NULL, p_revoked boolean DEFAULT false, p_error text DEFAULT NULL)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $mlkept$
+DECLARE c jsonb := public._mail_conn(); v_cur text;
+BEGIN
+  IF NOT COALESCE((c ->> 'oauth')::boolean, false) OR COALESCE(p_old, '') = '' THEN RETURN; END IF;
+  v_cur := public._mail_settings() ->> 'refresh';
+  IF COALESCE(v_cur, '') = '' OR v_cur <> p_old THEN RETURN; END IF;
+  IF COALESCE(p_ok, false) THEN
+    UPDATE public._mail_state SET blocked = NULL, blocked_fp = NULL, blocked_kind = NULL, updated_at = now()
+     WHERE id AND blocked_kind = 'revoked' AND blocked_fp IS NOT DISTINCT FROM (c ->> 'fp');
+    PERFORM public._mail_keep(c ->> 'fp', p_new);
+  ELSIF COALESCE(p_revoked, false) THEN
+    PERFORM public._mail_stop(c ->> 'fp', p_error);
+  END IF;
+END $mlkept$;
+REVOKE ALL ON FUNCTION public._mail_kept(text, boolean, text, boolean, text) FROM PUBLIC, anon, authenticated;
 
 -- pg_net's answers to what this database posted, settled; each answer taken
 -- out of pg_net's table as soon as it is read (a renewal's carries the key),
@@ -28456,7 +28834,7 @@ REVOKE ALL ON FUNCTION public._mail_adopt() FROM PUBLIC, anon, authenticated;
 -- be answered is said, and what is waiting is sent. One at a time.
 CREATE OR REPLACE FUNCTION public._mail_tick(p_trigger text DEFAULT 'cron') RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $mltick$
-DECLARE v_side text; v_j record; v_purge boolean := false; v_poke boolean := false;
+DECLARE v_side text; v_j record; v_purge boolean := false; v_poke boolean := false; v_keep boolean := false;
 BEGIN
   IF NOT pg_try_advisory_xact_lock(hashtext('pental_mail_tick')) THEN RETURN jsonb_build_object('busy', true); END IF;
   -- 1840: nothing is sent from a database being moved, or moved away from
@@ -28495,6 +28873,27 @@ BEGIN
       PERFORM public._mail_renew(public._mail_conn() ->> 'fp', true);
     EXCEPTION WHEN OTHERS THEN NULL;  -- asked again on the next tick
     END;
+  END IF;
+  -- 2023: AND A CONNECTION IS RENEWED AT LEAST WEEKLY, WHETHER OR NOT IT
+  -- SENDS. [stated] Arian: "it should be set to never expire". A provider's
+  -- refresh token runs out when it is not replaced or not used, and a renewal
+  -- was only ever asked for by an email waiting to go. Where this database
+  -- can renew its own key (pg_net serving it), one is asked for from here
+  -- once the connection has gone a week without (_mail_keep_due), an hour
+  -- apart while none comes, and _mail_renewed keeps the replacement. A
+  -- gateway from 1.15.0 asks on its own clock instead (_mail_keepalive,
+  -- _mail_gateway_keeps), and Pental's servers are told as they ask for the
+  -- outbox where they can make one (_mail_watch).
+  IF public._mail_keep_due() AND public._mail_keep_net() AND NOT public._mail_gateway_keeps() THEN
+    UPDATE public._mail_state SET keep_asked_at = now()
+     WHERE id AND (keep_asked_at IS NULL OR keep_asked_at < now() - interval '1 hour')
+    RETURNING true INTO v_keep;
+    IF COALESCE(v_keep, false) THEN
+      BEGIN
+        PERFORM public._mail_renew(public._mail_conn() ->> 'fp', true);
+      EXCEPTION WHEN OTHERS THEN NULL;  -- asked again in an hour
+      END;
+    END IF;
   END IF;
   -- 1841: what waits for Pental's drain, taken here where this side sends.
   BEGIN
@@ -28571,8 +28970,11 @@ REVOKE ALL ON FUNCTION public._mail_tick(text) FROM PUBLIC, anon, authenticated;
 -- ── What the portal asks (a signed-in person, for themselves) ─────────────
 
 -- Whether this database sends the email the portal writes: { local, sender,
--- transport ('mailbox', 'smtp' or 'none'), since, blocked, failing, gateway,
--- locked, locked_at, waiting }.
+-- transport ('mailbox', 'smtp' or 'none'), since, blocked, stopped, failing,
+-- gateway, locked, locked_at, waiting }.
+-- 2023: stopped: the connected mailbox's provider has ended the connection
+-- (blocked says why), and it has to be connected again; the portal says so to
+-- its administrators on every page until it is.
 -- Where local is false, the portal sends through Pental, without the detail;
 -- where failing too (pg_net's last post for the mailbox did not get through),
 -- it still hands the next email over, which asks again whether it does.
@@ -28598,6 +29000,8 @@ BEGIN
     'enabled', COALESCE((c ->> 'enabled')::boolean, true),
     'since', v_st.local_since,
     'blocked', CASE WHEN v_st.blocked_fp IS NOT DISTINCT FROM (c ->> 'fp') THEN v_st.blocked END,
+    'stopped', COALESCE(v_st.blocked IS NOT NULL AND v_st.blocked_kind = 'revoked' AND v_st.blocked_fp IS NOT DISTINCT FROM (c ->> 'fp')
+                        AND COALESCE((c ->> 'oauth')::boolean, false), false),
     'failing', v_side IS NULL AND public._mail_net_could(),
     'gateway', v_gw,
     -- 1841: whether Pental's servers are out of this portal's email for good
@@ -47462,7 +47866,7 @@ CREATE INDEX IF NOT EXISTS e2e_grants_principal ON public.e2e_grants (principal_
 CREATE TABLE IF NOT EXISTS public.e2e_account_wraps (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   principal_id uuid NOT NULL REFERENCES public.e2e_principals(id) ON DELETE CASCADE,
-  method text NOT NULL CHECK (method IN ('passkey', 'password', 'kit', 'apikey')),
+  method text NOT NULL CHECK (method IN ('passkey', 'password', 'kit', 'apikey', 'invite')),
   -- The passkey's credential id; '' for a password or a kit; an API key's id
   -- for the key a tool opens it with (kind 'apikey').
   ref text NOT NULL DEFAULT '' CHECK (length(ref) <= 1024),
@@ -47472,6 +47876,21 @@ CREATE TABLE IF NOT EXISTS public.e2e_account_wraps (
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (principal_id, method, ref)
 );
+-- 2031: every person has a key kept for them here (method 'invite': it began
+-- as a first sign-in's; below: A person's first sign-in, and a forgotten
+-- password). What opens it is kept beside it, sealed under the Vault's
+-- settings key (secret_enc): the one secret of this table that is here at
+-- all, and no function but rpc_e2e_invite_take reads it. A database that had
+-- this table already is given the method and the column.
+ALTER TABLE public.e2e_account_wraps DROP CONSTRAINT IF EXISTS e2e_account_wraps_method_check;
+ALTER TABLE public.e2e_account_wraps ADD CONSTRAINT e2e_account_wraps_method_check
+  CHECK (method IN ('passkey', 'password', 'kit', 'apikey', 'invite'));
+ALTER TABLE public.e2e_account_wraps ADD COLUMN IF NOT EXISTS secret_enc bytea;
+-- 2031: and a ticket for Pental's half of the lock on such a key (below: Two
+-- locks): the hash of one handed to the key's own person with it, and when
+-- it lapses. rpc_e2e_invite_take makes it, rpc_e2e_invite_vouch spends it.
+ALTER TABLE public.e2e_account_wraps ADD COLUMN IF NOT EXISTS ticket_hash text;
+ALTER TABLE public.e2e_account_wraps ADD COLUMN IF NOT EXISTS ticket_until timestamptz;
 
 -- What happened to whose keys, for the firm's administrators: a browser added
 -- or taken away, keys given, encryption turned on, a kit made or used.
@@ -47916,7 +48335,9 @@ BEGIN
                     OR (p.kind = 'apikey' AND EXISTS (SELECT 1 FROM public.e2e_account_wraps w JOIN public.api_keys ak ON ak.id::text = w.ref
                                                         WHERE w.principal_id = p.id AND w.method = 'apikey'
                                                           AND ak.revoked_at IS NULL AND ak.expires_at > now())))
-             ORDER BY p.created_at DESC
+             -- (2031: a browser somebody is sitting at before a key that is
+             -- kept for later; the newest first, as before)
+             ORDER BY (p.kind = 'device') DESC, p.created_at DESC
              LIMIT GREATEST(1, LEAST(COALESCE(p_limit, 200), 1000))) x), '[]'::jsonb);
 END $eeneed$;
 REVOKE ALL ON FUNCTION public.rpc_e2e_needed(int) FROM PUBLIC, anon;
@@ -47961,13 +48382,21 @@ END $eedrop$;
 REVOKE ALL ON FUNCTION public.rpc_e2e_drop_grant(uuid, uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.rpc_e2e_drop_grant(uuid, uuid) TO authenticated;
 
--- ── An account key, opened by a passkey, a password or a recovery kit ──────
+-- ── An account key, opened by a password or a recovery kit ──────────────────
+-- 2031: NOT BY A PASSKEY ANY MORE. From 2018 a passkey with a PRF could have
+-- an account key of its own. [stated] Arian, 13 November 2026: "Isn't it a
+-- redundancy to have passkeys do it as well with passwords if passwords are
+-- already doing it and also enforced?", and, asked which of three he meant,
+-- "2": the password is the only thing a person signs in with that opens their
+-- work, and somebody with a passkey is treated exactly as somebody with an
+-- authenticator app. None is taken here, and every one a passkey had is let
+-- go below (its key, and everything given to it).
 CREATE OR REPLACE FUNCTION public.rpc_e2e_put_wrap(p_principal uuid, p_method text, p_ref text, p_params jsonb, p_wrapped text)
   RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eewrap$
 DECLARE v_me uuid := public.current_profile_id(); v_old uuid;
 BEGIN
   IF NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Confirm it is you first.' USING ERRCODE = '42501'; END IF;
-  IF p_method IS NULL OR p_method NOT IN ('passkey', 'password', 'kit') THEN RAISE EXCEPTION 'A passkey, a password or a kit.' USING ERRCODE = '22023'; END IF;
+  IF p_method IS NULL OR p_method NOT IN ('password', 'kit') THEN RAISE EXCEPTION 'A password or a kit.' USING ERRCODE = '22023'; END IF;
   IF NOT EXISTS (SELECT 1 FROM public.e2e_principals WHERE id = p_principal AND profile_id = v_me AND kind = 'account' AND revoked_at IS NULL) THEN
     RAISE EXCEPTION 'Not your account key.' USING ERRCODE = '42501';
   END IF;
@@ -47987,6 +48416,17 @@ END $eewrap$;
 REVOKE ALL ON FUNCTION public.rpc_e2e_put_wrap(uuid, text, text, jsonb, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.rpc_e2e_put_wrap(uuid, text, text, jsonb, text) TO authenticated;
 
+-- 2031: what a passkey held is let go, once (there is nothing to find the next
+-- time this file is run). The passkeys themselves are untouched: they are
+-- second factors as they were.
+DO $eenopk$
+DECLARE v_old uuid;
+BEGIN
+  FOR v_old IN SELECT DISTINCT w.principal_id FROM public.e2e_account_wraps w WHERE w.method = 'passkey' LOOP
+    PERFORM public._e2e_let_go(v_old, NULL, 'a passkey holds no keys (2031)');
+  END LOOP;
+END $eenopk$;
+
 -- A person's own passkey, password or kit no longer opening their keys (the
 -- kit removed in Settings): its key goes.
 CREATE OR REPLACE FUNCTION public.rpc_e2e_drop_wrap(p_method text, p_ref text DEFAULT '') RETURNS jsonb
@@ -47996,7 +48436,7 @@ BEGIN
   IF NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Confirm it is you first.' USING ERRCODE = '42501'; END IF;
   FOR v_old IN SELECT DISTINCT w.principal_id FROM public.e2e_account_wraps w JOIN public.e2e_principals p ON p.id = w.principal_id
                 WHERE p.profile_id = v_me AND w.method = p_method AND (p_method <> 'passkey' OR w.ref = COALESCE(p_ref, '')) LOOP
-    PERFORM public._e2e_let_go(v_old, v_me, CASE p_method WHEN 'kit' THEN 'kit removed' ELSE 'removed' END);
+    PERFORM public._e2e_let_go(v_old, v_me, CASE p_method WHEN 'kit' THEN 'kit removed' WHEN 'invite' THEN 'kept key let go' ELSE 'removed' END);
     v_n := v_n + 1;
   END LOOP;
   RETURN jsonb_build_object('ok', true, 'removed', v_n);
@@ -48004,8 +48444,238 @@ END $eedw$;
 REVOKE ALL ON FUNCTION public.rpc_e2e_drop_wrap(text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.rpc_e2e_drop_wrap(text, text) TO authenticated;
 
+-- ── A person's first sign-in, and a forgotten password, with nobody else's portal open (2031) ──
+-- [stated] Arian, 12 November 2026, of a person's first sign-in waiting for a
+-- browser that holds the keys to be open: "need a better more seamless
+-- solution for clients, if no one is signed in they should still be able to
+-- access the portal and their work even on first sign in"; and, offered a key
+-- kept half here and half by Pental: "it surely should be possible for their
+-- byo database to just be able to do it for end to end encryption". And, 13
+-- November 2026, of a password forgotten and reset: "Also what happens during
+-- a forgot password is that seamless? It needs to be seamless".
+--
+-- Somebody who has never opened their keys has nothing a key can be wrapped
+-- for: no browser of theirs, and a password that holds nothing yet. Somebody
+-- who has reset a forgotten password is in the same place on a browser that
+-- has not got their keys: what the old password opened went with it
+-- (_e2e_password_changed), and the new one holds nothing until a browser that
+-- holds the keys gives them to it. So every person has one more account key
+-- of the usual kind (kind 'account', method 'invite': it began as a first
+-- sign-in's), made by a browser that holds the keys, its private half sealed
+-- under a secret made for the purpose, and the secret is kept here sealed
+-- under the Vault's settings key (2017: a key that is not part of this
+-- database's data, so a copy of the database, a dump, a backup or an export,
+-- opens none of it). The key is given what its person may open as any account
+-- key is (rpc_e2e_needed). For its person, signed in with their second
+-- factor proved, this database opens the secret, and for nobody else
+-- (rpc_e2e_invite_take); their browser opens the key and gives what it holds
+-- to itself, and to the password they signed in with. The key stays, for
+-- the next time.
+--
+-- TWO LOCKS. [stated] Arian, 13 November 2026, told that this database with
+-- its Vault could then open anybody's key by itself: "Ok what if we use
+-- Pentals vault instead to encrypt", "That way it can be seamless and proper
+-- end to end encrypted"; and, told that Pental's lock alone would let Pental
+-- open a firm's work with a copy of its database, and offered both locks
+-- together: "2". So the secret a portal hands this database is sealed first
+-- to a public key of Pental's, in the browser that makes the key (pe2k1.),
+-- and this database seals that again under its Vault's key. Neither opens it
+-- alone:
+--   - this database, asked with its Vault, has what Pental sealed and no way
+--     to open it; a copy of the whole server, Vault key and all, has the same;
+--   - Pental holds the key to its seal and nothing it seals: no part of this
+--     database, and no session of anybody's. It opens one for whoever brings
+--     it with a ticket, and asks this database whether the ticket is one it
+--     handed the key's own person a moment ago (rpc_e2e_invite_vouch): one
+--     use, two minutes. Pental sees a key's id and a secret that opens
+--     nothing it can reach.
+-- What this database can still do: running, it could hand itself a ticket,
+-- and so ask Pental, one person at a time, where Pental can count it, limit
+-- it and stop it. The free tool (Pental Report) has no Pental beside it: its
+-- database's Vault is the one lock there, and the secret comes as it is.
+--
+-- A session that is signed in and verified is enough to open its person's
+-- work: their password is no longer a second lock on it.
+--
+-- WHEN A BROWSER ASKS FOR IT. Where it holds nothing and what it was signed
+-- in with opened nothing: a first sign-in; a password reset or changed since
+-- it last held the keys; a browser that has lost its own key while still
+-- signed in. [stated] Arian, told what that costs and that one case was left
+-- where a page signed its person out to have their password typed (2030):
+-- "I told you I wanted a seamless ideal solution". Nobody is signed out for
+-- their password any more where a key is kept for them.
+--
+-- WHO MAKES ONE, AND FOR WHOM. A person's own browser, for themselves; and
+-- somebody who may open everything the other may: the firm's admins, seniors
+-- and testers for anybody; a client's own person, or a contractor, for a
+-- person of a client whose key they hold. For anybody who has none kept here
+-- yet, whether they have signed in before or not.
+CREATE OR REPLACE FUNCTION public._e2e_invite_wanted() RETURNS SETOF uuid
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeinvw$
+  WITH me AS (SELECT public.current_profile_id() AS id, public.current_user_role() AS role),
+  held AS (
+    SELECT DISTINCT k.id, k.scope, k.client_id
+      FROM public.e2e_grants g
+      JOIN public.e2e_principals p ON p.id = g.principal_id AND p.revoked_at IS NULL
+      JOIN public.e2e_keys k ON k.id = g.key_id AND k.retired_at IS NULL
+     WHERE p.profile_id = (SELECT id FROM me)),
+  who AS (
+    -- The caller's own, by a browser of theirs that holds a key.
+    SELECT (SELECT id FROM me) AS id
+     WHERE (SELECT role FROM me) IN ('admin', 'senior', 'standard', 'contractor', 'client')
+       AND EXISTS (SELECT 1 FROM held)
+    UNION
+    -- The firm's own people, by one of them.
+    SELECT pr.id FROM public.profiles pr
+     WHERE (SELECT role FROM me) IN ('admin', 'senior', 'standard')
+       AND pr.active IS TRUE AND pr.role IN ('admin', 'senior', 'standard')
+       AND EXISTS (SELECT 1 FROM held)
+    UNION
+    -- A contractor (while contractors are on), by one of the firm's people who
+    -- holds the key of a client whose engagements the contractor works on.
+    SELECT pr.id FROM public.profiles pr
+      JOIN public.assessments a ON (a.lead_id = pr.id OR (a.contractor_team_id IS NOT NULL AND a.contractor_team_id = pr.contractor_team_id))
+      JOIN held h ON h.scope = 'client' AND h.client_id = a.client_id
+     WHERE (SELECT role FROM me) IN ('admin', 'senior', 'standard')
+       AND pr.active IS TRUE AND pr.role = 'contractor'
+       AND COALESCE((SELECT s.contractors_enabled FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1), false)
+    UNION
+    -- A client's own person, by whoever holds that client's key: the firm's
+    -- people, a contractor on its engagements, a colleague.
+    SELECT pr.id FROM public.profiles pr
+      JOIN held h ON h.scope = 'client' AND h.client_id = pr.client_id
+     WHERE (SELECT role FROM me) IN ('admin', 'senior', 'standard', 'contractor', 'client')
+       AND pr.active IS TRUE AND pr.role = 'client')
+  SELECT w.id FROM who w
+   WHERE w.id IS NOT NULL
+     -- Nobody who has one kept here already.
+     AND NOT EXISTS (SELECT 1 FROM public.e2e_principals p JOIN public.e2e_account_wraps x ON x.principal_id = p.id
+                      WHERE p.profile_id = w.id AND p.revoked_at IS NULL AND p.kind = 'account' AND x.method = 'invite');
+$eeinvw$;
+REVOKE ALL ON FUNCTION public._e2e_invite_wanted() FROM PUBLIC, anon, authenticated;
+
+-- Who the caller's browser could make a kept key for now: their ids and
+-- nothing else, the caller's own first.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_invite_wanted(p_limit int DEFAULT 40) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeinvl$
+DECLARE v_me uuid := public.current_profile_id();
+BEGIN
+  IF v_me IS NULL OR NOT public._e2e_active() OR NOT public.mfa_is_fresh() THEN RETURN '[]'::jsonb; END IF;
+  RETURN COALESCE((SELECT jsonb_agg(x.id ORDER BY x.own DESC)
+                     FROM (SELECT w AS id, (w = v_me) AS own FROM public._e2e_invite_wanted() w
+                            ORDER BY 2 DESC
+                            LIMIT GREATEST(1, LEAST(COALESCE(p_limit, 40), 200))) x), '[]'::jsonb);
+END $eeinvl$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_invite_wanted(int) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_invite_wanted(int) TO authenticated;
+
+-- The keys made, each with its secret, which is sealed here before it is
+-- kept: under the Vault's settings key or not at all. A database whose
+-- settings key is still in a table beside the data (one part-way through this
+-- file: _keys_seal, at its end, moves it into the Vault), or whose Vault this
+-- connection cannot open, keeps none, says so ('vault'), and its people's
+-- first sign-in, or a reset password on a browser without their keys, waits
+-- for an open portal as it did.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_invite_put(p_invites jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeinvp$
+DECLARE v_me uuid := public.current_profile_id(); v_i jsonb; v_ok uuid[]; v_made int := 0; v_enc bytea;
+        v_pid uuid; v_id uuid; v_secret text;
+BEGIN
+  IF v_me IS NULL OR public.current_user_role() = 'none' THEN RAISE EXCEPTION 'Sign in first.' USING ERRCODE = '42501'; END IF;
+  IF NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Confirm it is you first.' USING ERRCODE = '42501'; END IF;
+  IF NOT public._e2e_active() THEN RETURN jsonb_build_object('ok', false, 'why', 'off', 'made', 0); END IF;
+  IF jsonb_typeof(p_invites) <> 'array' OR jsonb_array_length(p_invites) > 200 THEN RAISE EXCEPTION 'A list of up to two hundred.' USING ERRCODE = '22023'; END IF;
+  IF EXISTS (SELECT 1 FROM public._encryption_keys WHERE key_name = 'credentials' AND COALESCE(key_value, '') <> '') THEN
+    RETURN jsonb_build_object('ok', false, 'why', 'vault', 'made', 0);
+  END IF;
+  -- One browser at a time a firm, and who still wants one asked inside the
+  -- wait: two browsers that both found the same person leave them one key.
+  PERFORM pg_advisory_xact_lock(hashtext('pental_e2e_invites'));
+  v_ok := ARRAY(SELECT public._e2e_invite_wanted());
+  FOR v_i IN SELECT * FROM jsonb_array_elements(p_invites) LOOP
+    v_pid := (v_i->>'profile_id')::uuid; v_id := (v_i->>'id')::uuid; v_secret := v_i->>'secret';
+    CONTINUE WHEN v_pid IS NULL OR v_id IS NULL OR NOT (v_pid = ANY (v_ok));
+    -- (sealed to Pental's key by the portal that made it, or the 32 bytes
+    -- themselves from the tool, which has no Pental beside it)
+    IF v_secret IS NULL OR (v_secret !~ '^pe2k1\.[A-Za-z0-9_-]{167}$' AND v_secret !~ '^[A-Za-z0-9_-]{43}$') THEN
+      RAISE EXCEPTION 'Not a kept key''s secret.' USING ERRCODE = '22023';
+    END IF;
+    v_enc := public._settings_encrypt(v_secret);
+    IF v_enc IS NULL THEN RETURN jsonb_build_object('ok', false, 'why', 'vault', 'made', v_made); END IF;
+    INSERT INTO public.e2e_principals (id, profile_id, kind, pub, label) VALUES (v_id, v_pid, 'account', v_i->>'pub', 'Kept by the database');
+    INSERT INTO public.e2e_account_wraps (principal_id, method, ref, params, wrapped, secret_enc)
+    VALUES (v_id, 'invite', '', '{}'::jsonb, v_i->>'wrapped', v_enc);
+    PERFORM public._e2e_event('invite_made', v_pid, v_id);
+    v_ok := array_remove(v_ok, v_pid);   -- one a person, however many the list names
+    v_made := v_made + 1;
+  END LOOP;
+  RETURN jsonb_build_object('ok', true, 'made', v_made);
+END $eeinvp$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_invite_put(jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_invite_put(jsonb) TO authenticated;
+
+-- What the Vault holds of the key kept for the caller, opened for them alone,
+-- signed in and with their second factor proved: the secret as Pental sealed
+-- it, with a ticket for Pental's half of the lock (or the secret itself,
+-- where the tool made the key). One this database can no longer open (its
+-- Vault's key replaced since) comes back empty, and the browser lets that
+-- key go. Its use is in the firm's record of its keys (once an hour at most,
+-- for a browser that asks at every visit).
+CREATE OR REPLACE FUNCTION public.rpc_e2e_invite_take() RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeinvt$
+DECLARE v_me uuid := public.current_profile_id(); v_out jsonb; v_w record; v_secret text; v_ticket text;
+BEGIN
+  IF v_me IS NULL OR public.current_user_role() = 'none' THEN RETURN jsonb_build_object('ok', false, 'why', 'signin'); END IF;
+  IF NOT public.mfa_is_fresh() THEN RETURN jsonb_build_object('ok', false, 'why', 'mfa'); END IF;
+  v_out := '[]'::jsonb;
+  FOR v_w IN SELECT w.id, w.principal_id, w.secret_enc
+               FROM public.e2e_account_wraps w JOIN public.e2e_principals p ON p.id = w.principal_id
+              WHERE p.profile_id = v_me AND p.revoked_at IS NULL AND p.kind = 'account' AND w.method = 'invite' LOOP
+    v_secret := public._settings_decrypt(v_w.secret_enc);
+    v_ticket := NULL;
+    IF v_secret LIKE 'pe2k1.%' THEN
+      v_ticket := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+      UPDATE public.e2e_account_wraps
+         SET ticket_hash = encode(pg_catalog.sha256(convert_to(v_ticket, 'UTF8')), 'hex'), ticket_until = now() + interval '2 minutes'
+       WHERE id = v_w.id;
+    END IF;
+    v_out := v_out || jsonb_build_object('principal_id', v_w.principal_id, 'secret', v_secret, 'ticket', v_ticket);
+    IF NOT EXISTS (SELECT 1 FROM public.e2e_events e WHERE e.kind = 'invite_used' AND e.principal_id = v_w.principal_id
+                      AND e.at > now() - interval '1 hour') THEN
+      PERFORM public._e2e_event('invite_used', v_me, v_w.principal_id);
+    END IF;
+  END LOOP;
+  RETURN jsonb_build_object('ok', true, 'keys', v_out);
+END $eeinvt$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_invite_take() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_invite_take() TO authenticated;
+
+-- Whether a ticket is one this database handed a kept key's own person a
+-- moment ago: asked by Pental's server before it opens its half of the lock,
+-- with nothing but the key's id and the ticket (no session: Pental is given
+-- none). A ticket is spent by the asking, lapses in two minutes, and a wrong
+-- one says nothing and spends nothing. Anybody can ask; only somebody handed
+-- a ticket by rpc_e2e_invite_take has one.
+CREATE OR REPLACE FUNCTION public.rpc_e2e_invite_vouch(p_principal uuid, p_ticket text) RETURNS boolean
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eeinvv$
+DECLARE v_n int;
+BEGIN
+  IF p_principal IS NULL OR p_ticket IS NULL OR p_ticket !~ '^[0-9a-f]{64}$' THEN RETURN false; END IF;
+  UPDATE public.e2e_account_wraps w SET ticket_hash = NULL, ticket_until = NULL
+    FROM public.e2e_principals p
+   WHERE p.id = w.principal_id AND p.revoked_at IS NULL AND p.kind = 'account'
+     AND w.principal_id = p_principal AND w.method = 'invite'
+     AND w.ticket_hash = encode(pg_catalog.sha256(convert_to(p_ticket, 'UTF8')), 'hex') AND w.ticket_until > now();
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n = 1;
+END $eeinvv$;
+REVOKE ALL ON FUNCTION public.rpc_e2e_invite_vouch(uuid, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.rpc_e2e_invite_vouch(uuid, text) TO anon, authenticated;
+
 -- A password changed or reset: what it opened cannot be opened by the new
--- one, so it goes (the next browser to hold the account key wraps it again).
+-- one, so it goes (the next browser to hold the account key wraps it again;
+-- 2031: and on a browser that holds none, the key kept here for its person
+-- opens their work at the new password's sign-in, rpc_e2e_invite_take).
 CREATE OR REPLACE FUNCTION public._e2e_password_changed() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $eepw$
 DECLARE v_pid uuid; v_old uuid;
@@ -48922,9 +49592,9 @@ UPDATE public.settings SET password_login_enabled = true, sso_google_enabled = f
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: db3225db8116eead @ 2025111005
+-- schema-fingerprint: 4d33c3a1c6dd7c6d @ 2025111301
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025111005, now())
+VALUES (1, 2025111301, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 

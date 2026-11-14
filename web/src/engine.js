@@ -364,6 +364,8 @@ async function uploadHtmlImages(html, assessmentId, findingId, field) {
     if (imgs[k].getAttribute('data-sp')) imgs[k].setAttribute('src', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
   }
   var _um = _imgUpMap();
+
+  var jobs = [];
   for (var i = 0; i < imgs.length; i++) {
     if (imgs[i].getAttribute('data-sp')) continue;
     var src = imgs[i].getAttribute('src') || '';
@@ -376,18 +378,32 @@ async function uploadHtmlImages(html, assessmentId, findingId, field) {
       imgs[i].setAttribute('data-sp', _um[_uk]);
       continue;
     }
-    try {
-      var parts = src.split(','); var mm = parts[0].match(/:(.*?);/); if (!mm) continue;
-      var mime = mm[1]; var ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/gif' ? 'gif' : 'png';
-      var bin = atob(parts[1]); var arr = new Uint8Array(bin.length); for (var j = 0; j < bin.length; j++) arr[j] = bin.charCodeAt(j);
-      var path = (assessmentId || 'tmp') + '/' + field + '/' + (findingId || 'tmp') + '/' + Date.now() + '_' + i + '.' + ext;
-      var r = await supabaseClient.storage.from('assessment-files').upload(path, new Blob([arr], {type: mime}), {contentType: mime, upsert: true});
-      if (r.error) throw r.error;
-      imgs[i].setAttribute('src', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
-      imgs[i].setAttribute('data-sp', path);
-      if (_um) _um[_uk] = path;
-    } catch(e) { }
+    jobs.push({ i: i, src: src, uk: _uk });
   }
+  var sent = {}, stamp = Date.now();
+  var send = function (job) {
+    var parts = job.src.split(','); var mm = parts[0].match(/:(.*?);/); if (!mm) return null;
+    var mime = mm[1]; var ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/gif' ? 'gif' : 'png';
+    var bin = atob(parts[1]); var arr = new Uint8Array(bin.length); for (var j = 0; j < bin.length; j++) arr[j] = bin.charCodeAt(j);
+    var path = (assessmentId || 'tmp') + '/' + field + '/' + (findingId || 'tmp') + '/' + stamp + '_' + job.i + '.' + ext;
+    return Promise.resolve(supabaseClient.storage.from('assessment-files').upload(path, new Blob([arr], {type: mime}), {contentType: mime, upsert: true}))
+      .then(function (r) { if (r.error) throw r.error; return path; });
+  };
+  var next = 0;
+  var lane = async function () {
+    while (next < jobs.length) {
+      var job = jobs[next++];
+      try {
+        if (!sent[job.src]) sent[job.src] = send(job);
+        var path = await sent[job.src];
+        if (!path) continue;
+        imgs[job.i].setAttribute('src', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
+        imgs[job.i].setAttribute('data-sp', path);
+        if (_um) _um[job.uk] = path;
+      } catch(e) { }
+    }
+  };
+  await Promise.all([lane(), lane(), lane(), lane()]);
   return el.innerHTML;
 }
 async function resolveStorageUrl(path) {
@@ -8718,12 +8734,17 @@ async function ensureFindingCode(finding) {
   }
   return code;
 }
+var _codesRun = { busy: false, again: false };
 async function generateMissingJobCodes() {
   if (!supabaseClient || !S.data.clients) return;
 
   if (!S.profile || !canEdit()) return;
 
   if (S.modal) { S._codesDue = true; return; }
+
+  if (_codesRun.busy) { _codesRun.again = true; return; }
+  _codesRun.busy = true;
+  try {
   var changed = false;
   var held = function () { if (S.modal) { S._codesDue = true; return true; } return false; };
 
@@ -8743,15 +8764,27 @@ async function generateMissingJobCodes() {
     }
   }
 
-  for (var k = 0; k < (S.data.findings || []).length; k++) {
-    var _f = S.data.findings[k], _was = _f && _f.finding_code;
-    if (_f && _f.finding_code === getFindingCode(_f, (S.data.assessments || []).find(function (a) { return a.id === _f.assessment_id; }))) continue;
+  var _aOf = function (f) { return (S.data.assessments || []).find(function (a) { return a.id === f.assessment_id; }); };
+  var k = 0;
+  for (var _guard = 0; _guard < 100000; _guard++) {
+    var _list = S.data.findings || [], _part = [];
+    for (; k < _list.length && _part.length < 6; k++) {
+      var _f = _list[k];
+      if (!_f || _f.finding_code === getFindingCode(_f, _aOf(_f))) continue;
+      _part.push(_f);
+    }
+    if (!_part.length) break;
     if (held()) return;
-    await ensureFindingCode(_f);
-    if (_f && _f.finding_code !== _was) changed = true;
+    var _wasCodes = _part.map(function (f) { return f.finding_code; });
+    await Promise.all(_part.map(function (f) { return ensureFindingCode(f).then(null, function () {}); }));
+    _part.forEach(function (f, i) { if (f.finding_code !== _wasCodes[i]) changed = true; });
   }
 
   if (changed && !S.modal) render();
+  } finally {
+    _codesRun.busy = false;
+    if (_codesRun.again) { _codesRun.again = false; setTimeout(function () { try { generateMissingJobCodes(); } catch (e) {} }, 0); }
+  }
 }
 function ensureToastContainer(){var c=document.getElementById("toastContainer");if(!c){c=document.createElement("div");c.id="toastContainer";c.className="toast-container";document.body.appendChild(c)}return c}
 function getVatRate() { var r = (S.data.settings || {}).vat_rate; return r != null && !isNaN(r) ? Number(r) : 20; }
@@ -8911,7 +8944,9 @@ function toast(message,type,titleOrDuration,clickHandler){
   var now = Date.now();
   if (message === _lastToast.msg && now - _lastToast.ts < 2000) return;
   _lastToast = { msg: message, ts: now };
-  if (_loadCount > 0) { _toastQueue.push({message:message,type:type||'info',title:title,duration:duration,clickHandler:clickHandler}); return; }
+
+  var _noSpin = !_loadVisible && typeof _mStayReq !== 'undefined' && !!_mStayReq && !!S && !!S.modal && _mStayReq.ref === S.modal;
+  if (_loadCount > 0 && !_noSpin) { _toastQueue.push({message:message,type:type||'info',title:title,duration:duration,clickHandler:clickHandler}); return; }
   _showToast(message,type,title,duration,clickHandler);
 }
 function _showToast(message,type,title,duration,clickHandler){
@@ -8977,6 +9012,12 @@ function showConfirm(message, title, onConfirm, onCancel, opts) {
       '</div>' +
     '</div>';
   document.body.appendChild(overlay);
+
+  var _cfAt = Date.now();
+  overlay.addEventListener('click', function (e) {
+    var soon = Date.now() - _cfAt;
+    if ((e.detail > 1 && soon < 700) || (e.target === overlay && soon < 350)) { e.stopPropagation(); e.preventDefault(); }
+  }, true);
 
   overlay.addEventListener('click', function(e) { if (_backdropPress(e, overlay)) closeConfirm(false); });
 
@@ -10315,6 +10356,8 @@ function _rtHandleChange(payload) {
     if (_rtR && _rtR.id && Date.now() - (_coRecentWrite[_coKey(table, _rtR.id)] || 0) > 6000) _rtDueTheirs = true;
   } catch (e) {}
 
+  if (_loadAllDataPromise && _rtInLoad.length < _RT_IN_LOAD_MAX) _rtInLoad.push(payload);
+
   if (table === 'assessment_files' || (table === 'assessments' && payload.eventType === 'UPDATE') || (table === 'settings' && payload.eventType === 'UPDATE')) {
     try { _docsEngineKick(); } catch (e) {}
   }
@@ -10434,6 +10477,60 @@ function _rtHandleChange(payload) {
   }
 
   _rtRender();
+}
+var _rtInLoad = [];
+var _RT_IN_LOAD_MAX = 5000;
+function _rtNewerThan(heard, have) {
+  if (!heard || !have) return false;
+  if (heard.row_version != null && have.row_version != null) {
+    var a = Number(heard.row_version), b = Number(have.row_version);
+    if (isFinite(a) && isFinite(b)) return a > b;
+  }
+  var x = _whenMicros(heard.updated_at), y = _whenMicros(have.updated_at);
+  return x != null && y != null && x > y;
+}
+function _rtPutBack(p) {
+  var table = p && p.table, type = p && p.eventType;
+  if (!table || table === 'settings' || !S.data) return false;
+  var row = type === 'DELETE' ? p.old : p.new;
+  if (!row || row.id == null) return false;
+  if (table === 'timeline_events') {
+    if (!row.assessment_id) return false;
+    var a = (S.data.assessments || []).find(function (x) { return x && x.id === row.assessment_id; });
+    if (!a) return false;
+    var at = (a._timeline || []).findIndex(function (t) { return t && t.id === row.id; });
+    if (type === 'INSERT' && at < 0) { if (!a._timeline) a._timeline = []; a._timeline.push(row); return true; }
+    if (type === 'DELETE' && at >= 0) { a._timeline = a._timeline.filter(function (t) { return !t || t.id !== row.id; }); return true; }
+    return false;
+  }
+  var person = table === 'profiles';
+  var keys = person ? ['users', 'clientUsers'] : [_rtTableMap[table]];
+  var did = false;
+  keys.forEach(function (key) {
+    var arr = key ? S.data[key] : null;
+    if (!Array.isArray(arr)) return;
+    var idx = arr.findIndex(function (x) { return x && x.id === row.id; });
+    if (type === 'INSERT') {
+      if (idx < 0 && !person) { arr.push(row); did = true; }
+    } else if (type === 'UPDATE') {
+      if (idx >= 0 && arr[idx] !== row && _rtNewerThan(row, arr[idx])) { Object.assign(arr[idx], row); did = true; }
+    } else if (type === 'DELETE') {
+      if (idx >= 0) { S.data[key] = arr.filter(function (x) { return !x || x.id !== row.id; }); did = true; }
+    }
+  });
+  return did;
+}
+function _rtAfterLoad() {
+  var heard = _rtInLoad;
+  _rtInLoad = [];
+  if (!heard.length || !S.data) return 0;
+  var put = 0;
+  for (var i = 0; i < heard.length; i++) {
+    try { if (_rtPutBack(heard[i])) put++; } catch (e) {}
+  }
+
+  if (put) { _rtDueTheirs = true; _rtRender(); }
+  return put;
 }
 async function _ensureActiveTenant() {
   if (!supabaseClient || !TENANT_ID) return false;
@@ -20495,6 +20592,8 @@ async function loadAllData() {
   _loadAllDataPromise = _loadAllDataInner().finally(function() {
     _loadAllDataPromise = null;
 
+    try { _rtAfterLoad(); } catch (e) {}
+
     try { _flibMoveImpactSoon(); } catch (e) {}
 
     if (S._bootReady) return;
@@ -20504,7 +20603,8 @@ async function loadAllData() {
 
     var _bootPics = null;
     try { _bootPics = _storageImagesReady(_bootPicturePaths(), 2000); } catch (e) { _bootPics = null; }
-    return Promise.all([_logoDecoded(_logoSrc, 2000), _bootPics]).then(function () {
+
+    return Promise.all([_logoDecoded(_logoSrc, 2000), _bootPics, (typeof _e2eHoldKeys === 'function') ? _e2eHoldKeys() : null]).then(function () {
       if (S._bootReady) return;
       S._bootReady = true;
       try { if (typeof render === 'function') render(true); } catch (e) {}
@@ -20576,7 +20676,7 @@ function _syncRead(q) {
 function _syncFull(st, q, probe) {
   var withV = !!q.fullV && st.lastVer != null && st.lastVer >= _SYNC_SCHEMA;
   var b = withV ? q.fullV() : q.full();
-  return Promise.resolve(q.isApi ? b : _readPaged(b)).then(function (res) {
+  return Promise.resolve(q.isApi ? b : _readPaged(b, q.max)).then(function (res) {
     var rows = q.isApi ? res : (res && !res.error ? res.data : null);
     if (!Array.isArray(rows)) { delete st.keys[q.key]; return res; }
     var ent = { table: q.table, rows: new Map(), max: 0, ver: null };
@@ -20600,8 +20700,8 @@ async function _syncDelta(st, q, ent, probe) {
   var shape = q.shape;
   var sel = q.cols ? q.cols + ',row_version' : '*';
   var got = await Promise.all([
-    _readPaged(shape(db.from(table).select('id,row_version'))),
-    _readPaged(shape(db.from(table).select(sel)).gt('row_version', ent.max)),
+    _readPaged(shape(db.from(table).select('id,row_version')), q.max),
+    _readPaged(shape(db.from(table).select(sel)).gt('row_version', ent.max), q.max),
     probe,
   ]);
   var V = got[0], D = got[1];
@@ -20665,30 +20765,150 @@ async function _syncDelta(st, q, ent, probe) {
   return out;
 }
 var _PAGE_ROWS = 1000;
+var _pagedSeen = null;
+function _pagedName() { return 'pental_paged:' + String((typeof TENANT_ID !== 'undefined' && TENANT_ID) || (typeof location !== 'undefined' ? location.host : '')); }
+function _pagedKey(b) {
+  try {
+    var ks = [];
+    b.url.searchParams.forEach(function (v, k) { if (k !== 'offset' && k !== 'limit') ks.push(k + ((k === 'select' || k === 'order') ? '=' + String(v).length : '')); });
+    return b.url.pathname.replace(/^.*\/rest\/v1\//, '') + '?' + ks.sort().join('&');
+  } catch (e) { return ''; }
+}
+function _pagedHint(key) {
+  if (!_pagedSeen) { _pagedSeen = {}; try { var o = JSON.parse(localStorage.getItem(_pagedName()) || '{}'); if (o && typeof o === 'object' && !Array.isArray(o)) _pagedSeen = o; } catch (e) { _pagedSeen = {}; } }
+  var n = Number(_pagedSeen[key]) || 0;
+  return n >= 2 && n <= 500 ? Math.floor(n) : 0;
+}
+function _pagedNote(key, pages) {
+  if (!key || !_pagedSeen) return;
+  if (pages >= 2) { if (_pagedSeen[key] === pages) return; _pagedSeen[key] = pages; }
+  else { if (!(key in _pagedSeen)) return; delete _pagedSeen[key]; }
+  try { localStorage.setItem(_pagedName(), JSON.stringify(_pagedSeen)); } catch (e) {}
+}
 async function _readPaged(b, max) {
   if (!b || typeof b.range !== 'function' || !b.url || !b.url.searchParams) return b;
   var cap = max || parseInt(b.url.searchParams.get('limit') || '', 10) || 10000;
-  var first = await b.range(0, Math.min(_PAGE_ROWS, cap) - 1);
-  if (!first || first.error || !Array.isArray(first.data) || first.data.length < _PAGE_ROWS || cap <= _PAGE_ROWS) return first;
+  var pkey = cap > _PAGE_ROWS ? _pagedKey(b) : '', hint = pkey ? _pagedHint(pkey) : 0;
+  var first = null;
+  if (!hint) {
+    first = await b.range(0, Math.min(_PAGE_ROWS, cap) - 1);
+    if (!first || first.error || !Array.isArray(first.data) || first.data.length < _PAGE_ROWS || cap <= _PAGE_ROWS) return first;
+  }
   var ord = b.url.searchParams.get('order') || '';
   if (!/(^|,)id\./.test(ord)) b.order('id', { ascending: true });
-  var rows = [], lastHead;
-  for (var from = 0; from < cap; from += _PAGE_ROWS) {
-    var res = await b.range(from, Math.min(from + _PAGE_ROWS, cap) - 1);
-    if (!res || res.error || !Array.isArray(res.data)) return res;
-    var head = res.data[0] && res.data[0].id;
-    if (from > 0 && head !== undefined && head === lastHead) break;
-    lastHead = head;
-    for (var i = 0; i < res.data.length; i++) rows.push(res.data[i]);
-    if (res.data.length < _PAGE_ROWS) break;
+
+  var rows = [], lastHead, from = 0, wave = hint ? Math.min(hint + 1, 16) : 4, page = 0, done = false;
+  while (!done && from < cap) {
+    var asks = [];
+    for (var w = 0; w < wave && from < cap; w++, from += _PAGE_ROWS) {
+      asks.push(b.range(from, Math.min(from + _PAGE_ROWS, cap) - 1).then(function (r) { return r; }));
+    }
+    var got = await Promise.all(asks);
+    for (var g = 0; g < got.length; g++, page++) {
+      var res = got[g];
+      if (!res || res.error || !Array.isArray(res.data)) return res;
+      if (!first) first = res;
+      var head = res.data[0] && res.data[0].id;
+      if (page > 0 && head !== undefined && head === lastHead) { done = true; break; }
+      lastHead = head;
+      for (var i = 0; i < res.data.length; i++) rows.push(res.data[i]);
+      if (res.data.length < _PAGE_ROWS) { page++; done = true; break; }
+    }
+    wave = 8;
   }
+  _pagedNote(pkey, page);
   first.data = rows;
   return first;
 }
-function _syncQ(key, table, shape, cols) {
-  return _syncRead({ key: key, table: table, shape: shape, cols: cols || null,
+function _syncQ(key, table, shape, cols, max) {
+  return _syncRead({ key: key, table: table, shape: shape, cols: cols || null, max: max,
     full: function () { return shape(supabaseClient.from(table).select(cols || '*')); },
     fullV: cols ? function () { return shape(supabaseClient.from(table).select(cols + ',row_version')); } : null });
+}
+var _IDS_PER_READ = 150;
+var _IDS_PER_GROUP = 90;
+function _idGroups(ids) {
+  if (ids.length <= _IDS_PER_READ) return [{ tag: '', ids: ids }];
+  var n = 2;
+  while (ids.length / n > _IDS_PER_GROUP) n *= 2;
+  var lists = [];
+  for (var g = 0; g < n; g++) lists.push([]);
+  for (var i = 0; i < ids.length; i++) {
+
+    var s = String(ids[i]), h = 0x811c9dc5;
+    for (var c = 0; c < s.length; c++) { h ^= s.charCodeAt(c); h = Math.imul(h, 0x01000193); }
+    h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
+    lists[(h >>> 0) % n].push(ids[i]);
+  }
+  var out = [];
+  lists.forEach(function (list, at) {
+
+    for (var from = 0, part = 0; from < list.length; from += _IDS_PER_READ, part++) {
+      out.push({ tag: '#' + at + '/' + n + (part ? '.' + part : ''), ids: list.slice(from, from + _IDS_PER_READ) });
+    }
+  });
+  return out;
+}
+function _whenMicros(v) {
+  var m = /^(\d{4}-\d\d-\d\d)[T ](\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d(?::?\d\d)?)?$/.exec(v == null ? '' : String(v));
+  if (!m) return null;
+  var frac = ((m[3] || '') + '000000').slice(0, 6);
+  var zone = m[4] || 'Z';
+  if (/^[+-]\d\d$/.test(zone)) zone += ':00';
+  else if (/^[+-]\d{4}$/.test(zone)) zone = zone.slice(0, 3) + ':' + zone.slice(3);
+  var t = Date.parse(m[1] + 'T' + m[2] + '.' + frac.slice(0, 3) + zone);
+  return isFinite(t) ? t * 1000 + parseInt(frac.slice(3), 10) : null;
+}
+function _rowsInOrder(rows, column, asc) {
+  var keyed = rows.map(function (r) { return { r: r, k: _whenMicros(r && r[column]), s: r && r[column] != null ? String(r[column]) : null, id: r && r.id != null ? String(r.id) : '' }; });
+  keyed.sort(function (a, b) {
+    if (a.s == null || b.s == null) {
+      if (a.s == null && b.s == null) return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      return (a.s == null) === !!asc ? 1 : -1;
+    }
+    var d = 0;
+    if (a.k != null && b.k != null) d = a.k < b.k ? -1 : a.k > b.k ? 1 : 0;
+    else d = a.s < b.s ? -1 : a.s > b.s ? 1 : 0;
+    if (d) return asc ? d : -d;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+  return keyed.map(function (x) { return x.r; });
+}
+function _syncQIn(key, table, column, ids, order, asc) {
+  var groups = _idGroups(ids);
+
+  var live = {};
+  groups.forEach(function (g) { live[key + g.tag] = true; });
+  Object.keys(_sync.keys).forEach(function (k) { if ((k === key || k.indexOf(key + '#') === 0) && !live[k]) delete _sync.keys[k]; });
+  var ask = function (g) {
+    return _syncQ(key + g.tag, table, function (q) {
+      q = q.in(column, g.ids);
+      return order ? q.order(order, { ascending: asc }) : q;
+    }, null, Infinity);
+  };
+  if (groups.length === 1) return ask(groups[0]);
+  var answered = function (r) { return !!r && !r.error && Array.isArray(r.data); };
+  return Promise.all(groups.map(function (g) {
+    return Promise.resolve(ask(g)).then(function (r) { return answered(r) ? r : ask(g); }, function () { return ask(g); });
+  })).then(function (answers) {
+    var rows = [];
+    for (var i = 0; i < answers.length; i++) {
+      if (!answered(answers[i])) return answers[i] || { data: null, error: { message: 'no answer' }, count: null, status: 0, statusText: '' };
+      for (var j = 0; j < answers[i].data.length; j++) rows.push(answers[i].data[j]);
+    }
+    return { data: order ? _rowsInOrder(rows, order, asc) : rows, error: null, count: null, status: 200, statusText: 'OK' };
+  });
+}
+async function _inParts(ids, write, quiet) {
+  var first = null;
+  for (var i = 0; i < ids.length; i += _IDS_PER_READ) {
+    var r = await write(ids.slice(i, i + _IDS_PER_READ));
+    if (r && r.error) {
+      if (!quiet) throw new Error(r.error.message || 'the database refused it');
+      first = first || r.error;
+    }
+  }
+  return { error: first };
 }
 function _engagementsCommercial() {
   return _readPaged(supabaseClient.rpc('rpc_engagements_commercial'), Infinity).then(function (r) {
@@ -21154,33 +21374,26 @@ async function _loadAllDataInner() {
   if (assessmentIds.length && !_commercialOnly) {
     var p2 = {};
 
-    var _ofThese = function (order, asc) {
-      return function (q) {
-        q = q.in('assessment_id', assessmentIds);
-        return (order ? q.order(order, { ascending: asc }) : q).limit(10000);
-      };
-    };
-    p2.timeline = _syncQ('2:timeline', 'timeline_events', _ofThese('created_at', true));
+    var _ofThese = function (key, table, order, asc) { return _syncQIn(key, table, 'assessment_id', assessmentIds, order, asc); };
+    p2.timeline = _ofThese('2:timeline', 'timeline_events', 'created_at', true);
 
-    p2.findings = _syncQ('2:findings', 'findings', _ofThese(null));
+    p2.findings = _ofThese('2:findings', 'findings', null);
     p2.scan_findings = _syncQ('2:scan_findings', 'findings', function (q) {
-      return q.not('scan_run_id', 'is', null).is('assessment_id', null).limit(10000);
-    });
-    p2.files = _syncQ('2:files', 'assessment_files', _ofThese('created_at', false));
-    p2.comments = _syncQ('2:comments', 'assessment_comments', _ofThese('created_at', true));
+      return q.not('scan_run_id', 'is', null).is('assessment_id', null);
+    }, null, Infinity);
+    p2.files = _ofThese('2:files', 'assessment_files', 'created_at', false);
+    p2.comments = _ofThese('2:comments', 'assessment_comments', 'created_at', true);
     if (!isClient) {
-      p2.qa_comments = _syncQ('2:qa_comments', 'qa_comments', _ofThese('created_at', true));
+      p2.qa_comments = _ofThese('2:qa_comments', 'qa_comments', 'created_at', true);
     }
 
     if (isCon) {
       var _conClientIds = S.data.clients.map(function(c) { return c.id; });
       if (_conClientIds.length) {
-        p2.proposals = _syncQ('2:proposals', 'proposals', function (q) { return q.in('client_id', _conClientIds); });
-        p2.invoices = _syncQ('2:invoices', 'invoices', function (q) { return q.in('client_id', _conClientIds); });
+        p2.proposals = _syncQIn('2:proposals', 'proposals', 'client_id', _conClientIds, null);
+        p2.invoices = _syncQIn('2:invoices', 'invoices', 'client_id', _conClientIds, null);
       }
-      p2.feedback = _syncQ('2:feedback', 'feedback', function (q) {
-        return q.in('assessment_id', assessmentIds).order('created_at', { ascending: false });
-      });
+      p2.feedback = _ofThese('2:feedback', 'feedback', 'created_at', false);
       var _qaIds = S.data.assessments.map(function(a) { return a.qa_assignee; }).filter(Boolean);
 
       S.data.assessments.forEach(function (a) { if (a.lead_id && _qaIds.indexOf(a.lead_id) < 0) _qaIds.push(a.lead_id); });
@@ -22344,24 +22557,32 @@ async function submitChangePassword() {
     toast('Password changed.', 'success');
   } catch (e) { fail('Network error. Please try again.'); }
 }
-async function _loadPasswordAdoption() {
-  var els = [document.getElementById('pwAdoption'), document.getElementById('pwAdoptionInline')].filter(Boolean);
-  if (!els.length) return;
-  var el = { set innerHTML(v) { els.forEach(function(e) { e.innerHTML = v; }); },
-             set textContent(v) { els.forEach(function(e) { e.textContent = v; }); } };
+var _pwAdoptionMemo = null;
+function _pwAdoptionWords() { return _pwAdoptionMemo ? _pwAdoptionMemo.html : 'Checking who has set a password...'; }
+async function _loadPasswordAdoption(force) {
+  var els = function () { return [document.getElementById('pwAdoption'), document.getElementById('pwAdoptionInline')].filter(Boolean); };
+  if (!els().length) return;
+  if (force !== true && _pwAdoptionMemo && Date.now() - _pwAdoptionMemo.at < 60000) return;
+  if (_loadPasswordAdoption.busy) return;
+  _loadPasswordAdoption.busy = true;
+  var put = function (html, keep) {
+    if (keep) _pwAdoptionMemo = { at: Date.now(), html: html };
+    els().forEach(function (e) { if (e.innerHTML !== html) e.innerHTML = html; });
+  };
   try {
     var r = await supabaseClient.rpc('rpc_password_adoption');
     if (r && r.error && _isMissingRpc(r.error)) {
-      el.textContent = 'Run the latest database update to see how many users have set a password.';
+      put('Run the latest database update to see how many users have set a password.', false);
       return;
     }
     var d = r && r.data;
-    if (!d || !d.ok) { el.textContent = 'Could not load the current figures.'; return; }
+    if (!d || !d.ok) { if (!_pwAdoptionMemo) put('Could not load the current figures.', false); return; }
     var pending = d.without_password || 0;
-    el.innerHTML = '<strong>' + d.with_password + ' of ' + d.total_users + '</strong> active users have set a password.' +
-      (pending ? ' <strong>' + pending + '</strong> still to go.' : ' Everyone is set up.') +
-      (d.invites_outstanding ? ' ' + d.invites_outstanding + ' invite' + (d.invites_outstanding === 1 ? '' : 's') + ' currently outstanding.' : '');
-  } catch (e) { el.textContent = 'Could not load the current figures.'; }
+    put('<strong>' + Number(d.with_password) + ' of ' + Number(d.total_users) + '</strong> active users have set a password.' +
+      (pending ? ' <strong>' + Number(pending) + '</strong> still to go.' : ' Everyone is set up.') +
+      (d.invites_outstanding ? ' ' + Number(d.invites_outstanding) + ' invite' + (d.invites_outstanding === 1 ? '' : 's') + ' currently outstanding.' : ''), true);
+  } catch (e) { if (!_pwAdoptionMemo) put('Could not load the current figures.', false); }
+  finally { _loadPasswordAdoption.busy = false; }
 }
 async function sendPasswordInvites() {
   try {
@@ -22393,7 +22614,7 @@ async function sendPasswordInvites() {
     if (!notSent.length) toast(_sentWord + sent + ' setup link' + (sent === 1 ? '' : 's') + '.', 'success');
     else toast((sent ? _sentWord + sent + ' setup link' + (sent === 1 ? '' : 's') + '. ' : '') + 'Not sent to ' + notSent.join('; ') + '. Try those again in a few minutes.', 'error', 15000);
     _sentManySaid(_jobs, 'setup link');
-    _loadPasswordAdoption();
+    _loadPasswordAdoption(true);
   } catch (e) {
     _hideLoading();
     toast('Could not send the invites.', 'error');
@@ -22457,6 +22678,9 @@ async function _ssoFinish(p) {
 async function logout() {
 
   window._signingOutHere = true;
+
+  try { document.body.classList.remove('loaded'); } catch (e) {}
+  try { var _tc = document.getElementById('toastContainer') || document.querySelector('.toast-container'); if (_tc) _tc.style.visibility = 'hidden'; } catch (e) {}
 
   try { _lfAllGone(false); } catch (e) {}
 
@@ -22539,6 +22763,8 @@ async function logout() {
     window.location.replace(window.location.origin + window.location.pathname);
   } catch(e) {
 
+    window._signingOutHere = false;
+    try { var _tc2 = document.getElementById('toastContainer') || document.querySelector('.toast-container'); if (_tc2) _tc2.style.visibility = ''; } catch (e2) {}
     render();
   }
 }
@@ -22549,7 +22775,18 @@ async function loadBrandingFromDB() {
       auth: { persistSession: false, autoRefreshToken: false, storageKey: 'pental-portal-tmp-' + (TENANT_ID || 'default') },
     });
     if (!TENANT_ID) return;
-    var res = await tmpClient.rpc('rpc_get_login_branding', { p_tenant_id: TENANT_ID });
+
+    var res = null;
+    var _eb = window.__pentalBranding;
+    window.__pentalBranding = null;
+    if (_eb && _eb.p && _eb.tid === TENANT_ID && _eb.url === EFFECTIVE_SUPABASE_URL) {
+      try {
+        var _ebr = await _eb.p;
+        var _ebRow = _ebr && _ebr.ok ? (Array.isArray(_ebr.row) ? _ebr.row[0] : _ebr.row) : null;
+        if (_ebRow && typeof _ebRow === 'object' && !_ebRow.error && !_ebRow.code) res = { data: _ebRow };
+      } catch (e) { res = null; }
+    }
+    if (!res) res = await tmpClient.rpc('rpc_get_login_branding', { p_tenant_id: TENANT_ID });
     if (res.data && !res.data.error) {
       var d = res.data;
 
@@ -22566,7 +22803,8 @@ async function loadBrandingFromDB() {
         font_display: d.font_display || null,
         font_body: d.font_body || null,
         font_mono: d.font_mono || null,
-        favicon_url: d.favicon_url || null,
+
+        favicon_url: d.favicon_url || d.favicon_data || null,
         login_title: d.login_title || '',
         login_subtitle: d.login_subtitle || '',
         login_support_email: d.login_support_email || '',
@@ -23040,9 +23278,10 @@ async function init() {
 
   var _brandingP = Promise.race([loadBrandingFromDB(), new Promise(function(r) { setTimeout(r, 2000); })]);
   var _sessionP = supabaseClient.auth.getSession();
-  var _results = await Promise.all([_brandingP, _sessionP]);
 
-  var session = _results[1].data.session;
+  var _sessRes0 = await _sessionP;
+
+  var session = _sessRes0.data.session;
 
   if (session && session.access_token) {
     try {
@@ -23073,9 +23312,15 @@ async function init() {
     } catch (issErr) { console.debug('[BOOT] JWT iss decode failed (non-fatal):', issErr && issErr.message); }
   }
 
+  var _refreshEarly = session
+    ? supabaseClient.auth.refreshSession().then(function (r) { return { r: r }; }, function (e) { return { e: e }; })
+    : null;
+  await _brandingP;
   if (session) {
     try {
-      var _refreshResp = await supabaseClient.auth.refreshSession();
+      var _re0 = await _refreshEarly;
+      if (_re0.e) throw _re0.e;
+      var _refreshResp = _re0.r;
       if (_refreshResp.error) {
 
         var _err = _refreshResp.error;
@@ -23129,6 +23374,8 @@ async function init() {
 
       if (_localMfaValid) {
         try {
+
+          try { window._profileEarly = { uid: session.user.id, at: Date.now(), p: _profileByEmailQ().then(function (r) { return r; }, function () { return null; }) }; } catch (e) { window._profileEarly = null; }
           var _mfaCheckP = supabaseClient.rpc('mfa_is_fresh');
 
           var _mfaTimeout = new Promise(function(r) { setTimeout(function() { r({ data: null, _timedOut: true }); }, 3000); });
@@ -23141,6 +23388,7 @@ async function init() {
 
       var _needsReverify = !_localMfaValid || _serverMfaValid === false;
       if (_needsReverify) {
+        window._profileEarly = null;
 
         if (_serverMfaValid === false) {
           try { localStorage.removeItem('pental_mfa_verified'); } catch(_e) {}
@@ -23315,7 +23563,8 @@ function _setupAuthListener() {
         if (!window._ssoError) window._ssoError = 'You were signed out. Please sign in again.';
         try { toast('You were signed out. Please sign in again.', 'warning'); } catch (e) {}
       }
-      render();
+
+      if (!window._signingOutHere) render();
     }
   });
 }
@@ -23402,13 +23651,25 @@ document.addEventListener('visibilitychange', function() {
   if (document.visibilityState === 'hidden') { saveNavState(); }
 });
 window.addEventListener('pageshow', function(e) { if (e.persisted) { saveNavState(); } });
+function _profileByEmailQ() {
+  var byo = !!(window.TENANT_INFO && window.TENANT_INFO.is_byo);
+  var q = supabaseClient.from('profiles').select(PROFILE_COLS).eq('email', _mfaEmail());
+  if (TENANT_ID && !byo) q = q.eq('tenant_id', TENANT_ID);
+  return q.maybeSingle();
+}
 async function loadProfile__portal() {
   if (!S.user) return;
 
   var _isLpByo = !!(window.TENANT_INFO && window.TENANT_INFO.is_byo);
-  var pQ = supabaseClient.from('profiles').select(PROFILE_COLS).eq('email', _mfaEmail());
-  if (TENANT_ID && !_isLpByo) pQ = pQ.eq('tenant_id', TENANT_ID);
-  var { data: profile, error } = await pQ.maybeSingle();
+
+  var _pe = window._profileEarly, _first = null;
+  window._profileEarly = null;
+  if (_pe && _pe.p && _pe.uid === S.user.id && Date.now() - _pe.at < 15000) {
+    try { _first = await _pe.p; } catch (e) { _first = null; }
+    if (!_first || !_first.data || _first.error) _first = null;
+  }
+  if (!_first) _first = await _profileByEmailQ();
+  var profile = _first.data, error = _first.error;
 
   if (!profile) {
 
@@ -23441,6 +23702,7 @@ async function loadProfile__portal() {
     }
   }
 
+  var _mfaJob = (async function () {
   if (S._mfaStatusCache && S._mfaStatusCache.email === profile.email) {
     profile.totp_secret = S._mfaStatusCache.status;
     profile.mfa_methods = S._mfaStatusCache.methods || null;
@@ -23466,16 +23728,15 @@ async function loadProfile__portal() {
     }
     S._mfaStatusCache = { email: profile.email, status: profile.totp_secret, methods: profile.mfa_methods };
   }
+  })();
 
-  S.profile = profile;
-
-  await Promise.all([
+  var _threeP = Promise.all([
 
   (async function () { try {
     var _nfRes = await supabaseClient.from('profiles').select('findings_viewed_at,viewed_findings').eq('id', profile.id).maybeSingle();
     if (_nfRes.data && !_nfRes.error) {
-      S.profile.findings_viewed_at = _nfRes.data.findings_viewed_at;
-      S.profile.viewed_findings = _nfRes.data.viewed_findings;
+      profile.findings_viewed_at = _nfRes.data.findings_viewed_at;
+      profile.viewed_findings = _nfRes.data.viewed_findings;
     }
   } catch(e) {} })(),
 
@@ -23483,17 +23744,20 @@ async function loadProfile__portal() {
 
     var _sigRes = await supabaseClient.rpc('rpc_my_signature');
     if (!_sigRes.error) {
-      S.profile.signature_data = _sigRes.data;
+      profile.signature_data = _sigRes.data;
     }
   } catch(e) {} })(),
 
   (async function () { try {
     var _obRes = await supabaseClient.from('profiles').select('onboarding_completed_at').eq('id', profile.id).maybeSingle();
     if (_obRes.data && !_obRes.error) {
-      S.profile.onboarding_completed_at = _obRes.data.onboarding_completed_at;
+      profile.onboarding_completed_at = _obRes.data.onboarding_completed_at;
     }
   } catch(e) {} })(),
   ]);
+  try { await _mfaJob; } catch (e) {}
+  S.profile = profile;
+  await _threeP;
 
   if (typeof maybePromptWebAuthnEnrollment === 'function') {
     setTimeout(function() { maybePromptWebAuthnEnrollment().catch(function(){}); }, 1500);
@@ -23684,6 +23948,215 @@ function _radarFit(els) {
   });
 }
 window._radarFit = _radarFit;
+var _MORPH = {
+  on: true,
+  seen: (typeof WeakMap === 'function') ? new WeakMap() : null,
+  owned: (typeof WeakSet === 'function') ? new WeakSet() : null,
+  roots: {},
+  off: {},
+  cur: null,
+  rounds: 12,
+  stats: { whole: 0, same: 0, kept: 0, fresh: 0, healed: 0, draws: 0, unsettled: 0 }
+};
+(function () {
+  try {
+    if (typeof Element === 'undefined' || typeof EventTarget === 'undefined' || !_MORPH.owned) { _MORPH.on = false; return; }
+    try { if (typeof localStorage !== 'undefined' && localStorage.getItem('pental_draw_whole') === '1') _MORPH.on = false; } catch (e) {}
+    var add = EventTarget.prototype.addEventListener;
+    Element.prototype.addEventListener = function () {
+      try { _MORPH.owned.add(this); } catch (e) {}
+      return add.apply(this, arguments);
+    };
+  } catch (e) { _MORPH.on = false; }
+})();
+var _MORPH_NEVER = { CANVAS: 1, OBJECT: 1, EMBED: 1, VIDEO: 1, AUDIO: 1, SCRIPT: 1 };
+function _morphView() {
+  try {
+    return [S.page, (S.currentAssessment || {}).id, (S.currentScanRun || {}).id, (S.currentFinding || {}).id, (S.currentClient || {}).id, S.qa_review_id].map(function (x) { return x == null ? '' : String(x); }).join('|');
+  } catch (e) { return ''; }
+}
+function _morphShallow(o, n) {
+  if (o.nodeName !== n.nodeName || o.namespaceURI !== n.namespaceURI) return false;
+  var na = n.attributes, oa = o.attributes;
+  if (na.length !== oa.length) return false;
+  for (var i = 0; i < na.length; i++) { var a = na[i]; if (o.getAttributeNS(a.namespaceURI, a.localName) !== a.value) return false; }
+  return true;
+}
+function _morphOwnedEl(el) {
+  return _MORPH.owned.has(el) || Object.keys(el).length > 0;
+}
+function _morphClean(el) {
+  if (_MORPH.owned.has(el) || _MORPH_NEVER[el.nodeName]) return false;
+  var all = el.getElementsByTagName('*');
+  for (var i = 0; i < all.length; i++) { if (_MORPH.owned.has(all[i]) || all[i].nodeName === 'CANVAS') return false; }
+  return true;
+}
+function _morphForm(c, focus) {
+  if (c === focus) return;
+  var tag = c.nodeName;
+  if (tag === 'INPUT') {
+    var type = String(c.type || '').toLowerCase();
+    if (type === 'checkbox' || type === 'radio') { if (c.checked !== c.defaultChecked) c.checked = c.defaultChecked; if (c.indeterminate) c.indeterminate = false; }
+    else if (type === 'file') { try { if (c.files && c.files.length) c.value = ''; } catch (e) {} }
+    else if (c.value !== c.defaultValue) c.value = c.defaultValue;
+  } else if (tag === 'TEXTAREA') {
+    if (c.value !== c.defaultValue) c.value = c.defaultValue;
+  } else if (tag === 'SELECT') {
+    var opts = c.options, i;
+    if (c.multiple) { for (i = 0; i < opts.length; i++) if (opts[i].selected !== opts[i].defaultSelected) opts[i].selected = opts[i].defaultSelected; }
+    else {
+      var want = -1;
+      for (i = 0; i < opts.length; i++) if (opts[i].defaultSelected) want = i;
+      if (want < 0) for (i = 0; i < opts.length; i++) if (!opts[i].disabled) { want = i; break; }
+      if (c.selectedIndex !== want) c.selectedIndex = want;
+    }
+  }
+}
+function _morphForms(root, focus) {
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(root.nodeName)) _morphForm(root, focus);
+  var all = root.querySelectorAll('input,textarea,select');
+  for (var i = 0; i < all.length; i++) _morphForm(all[i], focus);
+}
+function _morphFresh(nc, st, src) {
+  var f = document.importNode(nc, true);
+  if (f.nodeType === 1) { _MORPH.seen.set(f, { src: src || nc.outerHTML, live: null }); st.fresh.push(f); }
+  return f;
+}
+function _morphPair(oc, nc) {
+  if (oc.nodeType !== nc.nodeType) return false;
+  if (oc.nodeType !== 1) return oc.nodeType === 3 || oc.nodeType === 8;
+  return oc.nodeName === nc.nodeName && oc.namespaceURI === nc.namespaceURI && (oc.getAttribute('id') || '') === (nc.getAttribute('id') || '');
+}
+function _morphOne(parent, oc, nc, st) {
+  if (oc.nodeType !== 1) {
+    if (oc.data !== nc.data) parent.replaceChild(document.importNode(nc, false), oc);
+    return;
+  }
+  var rec = _MORPH.seen.get(oc);
+
+  if (rec && rec.live !== rec.src) {
+    var src = nc.outerHTML;
+    if (rec.live !== null && rec.src === src && _morphClean(oc) && oc.outerHTML === rec.live) { st.kept.push([oc, rec]); _morphForms(oc, st.focus); return; }
+    parent.replaceChild(_morphFresh(nc, st, src), oc);
+    return;
+  }
+  if (!_MORPH_NEVER[oc.nodeName] && _morphShallow(oc, nc) && !_morphOwnedEl(oc)) {
+
+    _morphKids(oc, nc, st);
+    _morphForm(oc, st.focus);
+    return;
+  }
+  parent.replaceChild(_morphFresh(nc, st), oc);
+}
+function _morphKids(o, n, st) {
+  var oc = o.firstChild, nc = n.firstChild, byId = null, nn, m, x;
+  while (nc) {
+    nn = nc.nextSibling;
+    if (oc && _morphPair(oc, nc)) {
+      x = oc; oc = oc.nextSibling;
+      _morphOne(o, x, nc, st);
+    } else {
+      m = null;
+      if (nc.nodeType === 1 && nc.getAttribute('id')) {
+        if (!byId) { byId = {}; for (x = oc; x; x = x.nextSibling) { if (x.nodeType === 1) { var xi = x.getAttribute('id'); if (xi && !(xi in byId)) byId[xi] = x; } } }
+        m = byId[nc.getAttribute('id')] || null;
+        if (m && (m.parentNode !== o || !_morphPair(m, nc))) m = null;
+        if (m) byId[nc.getAttribute('id')] = null;
+      }
+      if (m) {
+        if (m === oc) oc = oc.nextSibling; else o.insertBefore(m, oc);
+        _morphOne(o, m, nc, st);
+      } else o.insertBefore(_morphFresh(nc, st), oc);
+    }
+    nc = nn;
+  }
+  while (oc) { nn = oc.nextSibling; o.removeChild(oc); oc = nn; }
+}
+function _morphSwap(slot, el, html) {
+  var M = _MORPH;
+  M.stats.draws++;
+  if (!M.on || !M.seen || !el || typeof html !== 'string') return false;
+  var view = _morphView();
+  if (M.off[view]) return false;
+  var root = M.roots[slot];
+  if (!root || root.el !== el || root.view !== view || root.live === null) return false;
+  var st = M.cur || (M.cur = { kept: [], fresh: [], roots: [], view: view, focus: _uiLiveFocus() });
+  try {
+
+    if (root.raw === html && _morphClean(el) && el.outerHTML === root.live) {
+      _morphForms(el, st.focus);
+      st.kept.push([el, root]);
+      M.stats.same++;
+      return true;
+    }
+    var tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    var n = tpl.content.firstElementChild;
+    if (!n || n.nextElementSibling || !_morphShallow(el, n) || _morphOwnedEl(el)) return false;
+    for (var t = tpl.content.firstChild; t; t = t.nextSibling) { if (t !== n && !(t.nodeType === 3 && !/\S/.test(t.data))) return false; }
+    var k0 = st.kept.length, f0 = st.fresh.length;
+    _morphKids(el, n, st);
+    M.stats.kept += st.kept.length - k0;
+    M.stats.fresh += st.fresh.length - f0;
+    root.raw = html; root.live = null;
+    st.roots.push(root);
+    return true;
+  } catch (e) {
+    try { console.warn('[draw] the page could not be brought up to date in place, so it is drawn whole:', (e && e.message) || e); } catch (e2) {}
+    M.off[view] = true;
+    return false;
+  }
+}
+function _morphWhole(slot, el, html) {
+  var M = _MORPH;
+  if (!M.on || !M.seen || !el) return;
+  M.stats.whole++;
+  var st = M.cur || (M.cur = { kept: [], fresh: [], roots: [], view: _morphView(), focus: null });
+  var root = M.roots[slot] = { el: el, raw: html, live: null, view: _morphView() };
+  st.roots.push(root);
+}
+function _morphAfter() {
+  var M = _MORPH, st = M.cur;
+  M.cur = null;
+  if (!st) return true;
+  for (var i = 0; i < st.kept.length; i++) {
+    var el = st.kept[i][0], rec = st.kept[i][1];
+    if (el.isConnected && el.outerHTML !== rec.live) {
+
+      M.off[st.view] = true;
+      M.stats.healed++;
+      try { console.warn('[draw] a piece of the page left in place was changed by the work after a draw; this view is drawn whole from now on'); } catch (e) {}
+      return false;
+    }
+  }
+  var settle = function () {
+    for (var j = 0; j < st.fresh.length; j++) { var f = st.fresh[j], r = M.seen.get(f); if (r && f.isConnected) r.live = f.outerHTML; }
+    for (var q = 0; q < st.roots.length; q++) { var rt = st.roots[q]; if (rt.el && rt.el.isConnected) rt.live = rt.el.outerHTML; }
+  };
+
+  if (!st.fresh.length && !st.roots.length) return true;
+  var obs = null, moved = false, looks = 0;
+  try {
+    if (M.rounds > 0 && typeof MutationObserver === 'function' && document.body) {
+      obs = new MutationObserver(function () { moved = true; });
+      obs.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
+    }
+  } catch (e) { obs = null; }
+  var step = function () {
+    try {
+      if (obs) {
+        if (obs.takeRecords().length) moved = true;
+        if (moved && looks++ < M.rounds) { moved = false; Promise.resolve().then(step); return; }
+        obs.disconnect();
+        if (moved) { M.stats.unsettled++; return; }
+      }
+      settle();
+    } catch (e) { try { if (obs) obs.disconnect(); } catch (e2) {} }
+  };
+  Promise.resolve().then(step);
+  return true;
+}
+window._MORPH = _MORPH;
 var _renderTimer = null;
 var _lastManualRenderAt = 0;
 var _RT_RENDER_COOLDOWN_MS = 750;
@@ -23764,6 +24237,13 @@ function _qaEditorRestore(snap) {
     }
   } catch (e) {}
 }
+function _uiLiveFocus() {
+  try {
+    var a = document.activeElement;
+    var dm = (a && a.closest) ? a.closest('.modal-content') : null;
+    return (dm && dm.__mkDone) ? null : a;
+  } catch (e) { return document.activeElement; }
+}
 function _uiKeepSnapshot() {
   try {
     var snap = { y: (typeof window !== 'undefined' && window.scrollY) || 0, panes: [], focus: null };
@@ -23775,7 +24255,7 @@ function _uiKeepSnapshot() {
         snap.panes.push({ id: el.id, top: el.scrollTop, left: el.scrollLeft });
       }
     }
-    var a = document.activeElement;
+    var a = _uiLiveFocus();
 
     if (a && a._mselFor) a = a._mselFor;
     if (a && a.id && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || '')) {
@@ -23885,6 +24365,7 @@ function _doRender() {
   if (_suppressRender) return;
 
   if (_afmDrag && _afmDrag.on) { _afmDrag.owed = true; return; }
+  _MORPH.cur = null;
 
   _fcOrderMemo = null;
 
@@ -23962,7 +24443,12 @@ function _doRender() {
       if (_existingSidebar && _existingMain && _existingMobNav && !_modalState && !_hadModal) {
 
         var _swapMainRegion = function () {
-          _existingMain.outerHTML = renderMainRegion();
+
+          var _mainHtml = renderMainRegion();
+          if (!_morphSwap('main', _existingMain, _mainHtml)) {
+            _existingMain.outerHTML = _mainHtml;
+            _morphWhole('main', _appEl.querySelector('main.main'), _mainHtml);
+          }
           if (_sSearchFocused) {
             var _sNewP = document.getElementById('settingsSearchInput');
             if (_sNewP) { try { _sNewP.focus(); if (_sSearchCaret != null) _sNewP.setSelectionRange(_sSearchCaret, _sSearchCaret); } catch (e) {} }
@@ -23972,7 +24458,11 @@ function _doRender() {
           } else if (_sPanelOpen && typeof _renderSettingsSearchResults === 'function') {
             try { _renderSettingsSearchResults(); } catch (e) {}
           }
-          _existingMobNav.outerHTML = renderMobBottomNav();
+          var _mobHtml = renderMobBottomNav();
+          if (!_morphSwap('mob', _existingMobNav, _mobHtml)) {
+            _existingMobNav.outerHTML = _mobHtml;
+            _morphWhole('mob', _appEl.querySelector('.mob-bottom-nav'), _mobHtml);
+          }
 
           var _bn = document.getElementById('rbBanner');
           if (_bn) {
@@ -24025,6 +24515,7 @@ function _doRender() {
     try { var _mkOld = document.querySelector('.modal-content'); if (_mkOld) _mkOld.__mkDone = true; } catch (e) {}
     try { var _pkOld = document.querySelector('main.main .content'); if (_pkOld) _pkOld.__pkDone = true; } catch (e) {}
     document.getElementById('app').innerHTML = _html;
+    _MORPH.roots = {};
 
     try {
       if (S.modal && S.modal.type === 'finding' && typeof setupFindingModal === 'function') setupFindingModal();
@@ -24180,6 +24671,14 @@ function _doRender() {
   } catch (e) {}
 
   try { if (typeof _carryIntoDialog === 'function') _carryIntoDialog(); } catch (e) {}
+
+  try { if (typeof _e2eDress === 'function' && typeof E2E !== 'undefined' && E2E.on && (E2E.waiting || E2E.lockedN)) _e2eDress(document.getElementById('app')); } catch (e) {}
+  var _morphOk = true;
+  try { _morphOk = _morphAfter(); } catch (e) { _MORPH.cur = null; }
+  if (!_morphOk && !_doRender._again) {
+    _doRender._again = true;
+    try { _doRender(); } finally { _doRender._again = false; }
+  }
 }
 var _commentReadObserver = null;
 var _commentDwellTimers = {};
@@ -25190,8 +25689,6 @@ async function verifyMfaWebAuthn(manual) {
         allowCredentials.map(function(c) { return (c.transports || []).join('/'); }).join(',') +
         (_missingTransports ? ' (' + _missingTransports + ' had none recorded, defaulted to internal)' : ''));
 
-      var _prfSalt = null;
-      try { if (!_e2eOff() && S.profile) _prfSalt = await _e2ePrfSalt(); } catch (e) { _prfSalt = null; }
       var _pkReq = {
         challenge: challengeBytes,
         rpId: rpId,
@@ -25199,13 +25696,8 @@ async function verifyMfaWebAuthn(manual) {
         userVerification: 'preferred',
         timeout: 60000,
       };
-      if (_prfSalt) _pkReq.extensions = { prf: { eval: { first: _prfSalt } } };
       var assertionByo = await navigator.credentials.get({ publicKey: _pkReq });
       if (!assertionByo) throw new Error('No assertion returned');
-      try {
-        var _ext = assertionByo.getClientExtensionResults ? assertionByo.getClientExtensionResults() : null;
-        if (_ext && _ext.prf && _ext.prf.results && _ext.prf.results.first) _e2eStashPrf(_abToB64u(assertionByo.rawId), _ext.prf.results.first);
-      } catch (e) {  }
 
       var assertionDataByo = {
         credential_id: _abToB64u(assertionByo.rawId),
@@ -25994,8 +26486,6 @@ async function _enrollWebAuthnKeyInner() {
           authenticatorSelection: { residentKey: 'discouraged', userVerification: 'preferred' },
           timeout: 60000,
           attestation: 'none',
-
-          extensions: { prf: {} },
         },
       });
       if (!cred) { toast('No credential created', 'error'); return; }
@@ -26037,8 +26527,6 @@ async function _enrollWebAuthnKeyInner() {
         var assertCanonicalText = JSON.stringify(assertCanonical);
         var assertChallengeB64u = await _sha256B64u(assertCanonicalText);
         var assertChallengeBytes = new Uint8Array(_b64uToAb(assertChallengeB64u));
-        var _regPrf = null;
-        try { if (!_e2eOff() && S.profile) _regPrf = await _e2ePrfSalt(); } catch (e) { _regPrf = null; }
         var _regReq = {
             challenge: assertChallengeBytes,
             rpId: rpId,
@@ -26050,13 +26538,8 @@ async function _enrollWebAuthnKeyInner() {
             userVerification: 'preferred',
             timeout: 60000,
           };
-        if (_regPrf) _regReq.extensions = { prf: { eval: { first: _regPrf } } };
         var assertResp = await navigator.credentials.get({ publicKey: _regReq });
         if (assertResp) {
-          try {
-            var _rx = assertResp.getClientExtensionResults ? assertResp.getClientExtensionResults() : null;
-            if (_rx && _rx.prf && _rx.prf.results && _rx.prf.results.first) _e2ePasskeyAdded(ext.credentialIdB64u, _rx.prf.results.first);
-          } catch (e) {  }
           var assertData = {
             credential_id: _abToB64u(assertResp.rawId),
             client_data_json: _abToB64u(assertResp.response.clientDataJSON),
@@ -26548,7 +27031,7 @@ function renderMobBottomNav() {
 function renderMainRegion() {
 
   var _under = !!(S.wizard && (S.page === 'settings' || S.page === 'contractors'));
-  return '<main class="main"><header class="header"><button class="mob-toggle" onclick="toggleMobileMenu()" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button><h2>' + getTitle() + '</h2>' + (_under ? '' : renderHeaderSearch()) + '</header><div class="content">' + (_under ? '' : renderMoveBanner() + renderOverLimitBanner() + renderSchemaUpdateBanner() + renderBreadcrumbs() + _rtPageDraw()) + '</div></main>';
+  return '<main class="main"><header class="header"><button class="mob-toggle" onclick="toggleMobileMenu()" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button><h2>' + getTitle() + '</h2>' + (_under ? '' : renderHeaderSearch()) + '</header><div class="content">' + (_under ? '' : renderMoveBanner() + renderOverLimitBanner() + renderMailboxStoppedBanner() + renderSchemaUpdateBanner() + renderBreadcrumbs() + _rtPageDraw()) + '</div></main>';
 }
 function renderOverLimitBanner() {
   var ol = TENANT_INFO && TENANT_INFO.over_limit;
@@ -27094,7 +27577,9 @@ window.addEventListener('popstate', function(e) {
   render();
   _navSuppressHistory = false;
 });
-async function refreshAndStay() {
+async function refreshAndStay(o) {
+
+  var _behind = !!(o && o.behind);
 
   _mStayRefreshDue = false;
   try {
@@ -27126,9 +27611,9 @@ async function refreshAndStay() {
       if (refreshedF) S.currentFinding = refreshedF;
     }
     render();
-    _hideLoading();
+    if (!_behind) _hideLoading();
   } catch(e) {
-    _hideLoading();
+    if (!_behind) _hideLoading();
 
     _authTrace('refreshAndStay failed: ' + ((e && e.message) || e));
     console.warn('Soft refresh failed; keeping the current session:', e);
@@ -27498,7 +27983,7 @@ var _E2E_JSON = {
 };
 var _E2E_EMPTY_LIST = { evidence: 1, assets: 1, refs: 1, qa_comments: 1, artifacts: 1, appendices: 1, responses: 1, tags: 1 };
 var _E2E_REFS = { findings: 1, assessments: 1, qa_comments: 1, assessment_comments: 1 };
-var _E2E_LOCKED = '\u2063Encrypted\u2063';
+var _E2E_LOCKED = '\u2063Locked\u2063';
 var _E2E_RE = /^pe2([ejst])1\.([0-9a-f]{32})\.([A-Za-z0-9_-]{16,})$/;
 var _E2E_EC = { name: 'ECDH', namedCurve: 'P-256' };
 var _E2E_PW_COST = { m: 65536, t: 3, p: 1 };
@@ -27630,23 +28115,39 @@ function _e2eUnwrap(privKey, kid, principalId, wrapped) {
 }
 async function _e2eSeal(kid, key, value, isJson) {
   var k32 = _e2eK32(kid), tag = isJson ? 'j' : 'e';
-  var plain = _e2eTE.encode(isJson ? JSON.stringify(value) : String(value));
-  return 'pe2' + tag + '1.' + k32 + '.' + _e2eB64u(await _e2eGcm(key.sym, plain, 'pe2' + tag + '1.' + k32));
+  var text = isJson ? JSON.stringify(value) : String(value);
+  var seal = 'pe2' + tag + '1.' + k32 + '.' + _e2eB64u(await _e2eGcm(key.sym, _e2eTE.encode(text), 'pe2' + tag + '1.' + k32));
+  _e2eSealed(seal, text, isJson);
+  return seal;
 }
 async function _e2eSealToKey(kid, pubKey, value, isJson) {
   var k32 = _e2eK32(kid), tag = isJson ? 't' : 's';
-  var plain = _e2eTE.encode(isJson ? JSON.stringify(value) : String(value));
-  return 'pe2' + tag + '1.' + k32 + '.' + _e2eB64u(await _e2eSealTo(pubKey, plain, 'pe2' + tag + '1.' + k32));
+  var text = isJson ? JSON.stringify(value) : String(value);
+  var seal = 'pe2' + tag + '1.' + k32 + '.' + _e2eB64u(await _e2eSealTo(pubKey, _e2eTE.encode(text), 'pe2' + tag + '1.' + k32));
+  _e2eSealed(seal, text, isJson);
+  return seal;
+}
+function _e2eSealed(seal, text, isJson) {
+  try { _e2eRemember(seal, isJson ? JSON.parse(text) : text); } catch (e) {}
 }
 function _e2eIsSeal(v) { return typeof v === 'string' && v.charCodeAt(0) === 112 && v.slice(0, 3) === 'pe2' && _E2E_RE.test(v); }
-async function _e2eOpen(seal) {
-  var m = _E2E_RE.exec(seal);
-  if (!m) return seal;
-  var kid = _e2eKidOf32(m[2]);
+var _e2eAadMemo = {};
+async function _e2eOpen(seal, known) {
+  var t, k32, body;
+  if (known === true && seal.charCodeAt(5) === 46 && seal.charCodeAt(38) === 46) { t = seal.charAt(3); k32 = seal.slice(6, 38); body = seal.slice(39); }
+  else {
+    var m = _E2E_RE.exec(seal);
+    if (!m) return seal;
+    t = m[1]; k32 = m[2]; body = m[3];
+  }
+  var kid = _e2eKidOf32(k32);
   var key = await _e2eKey(kid);
   if (!key) { var e = new Error('locked'); e.locked = true; throw e; }
-  var t = m[1], blob = _e2eUnB64u(m[3]), aad = 'pe2' + t + '1.' + m[2];
-  var bytes = (t === 'e' || t === 'j') ? await _e2eUnGcm(key.sym, blob, aad) : await _e2eOpenFrom(key.priv, blob, aad);
+  var blob = _e2eUnB64u(body), bytes;
+  if (t === 'e' || t === 'j') {
+    var aad = _e2eAadMemo[t + k32] || (_e2eAadMemo[t + k32] = _e2eTE.encode('pe2' + t + '1.' + k32));
+    bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: blob.subarray(0, 12), additionalData: aad }, key.sym, blob.subarray(12)));
+  } else bytes = await _e2eOpenFrom(key.priv, blob, 'pe2' + t + '1.' + k32);
   var s = _e2eTD.decode(bytes);
   return (t === 'j' || t === 't') ? JSON.parse(s) : s;
 }
@@ -27679,7 +28180,9 @@ function _e2eDeviceLabel() {
 }
 async function _e2eDeviceUp() {
   var slot = _e2eSlot(), rec = null;
-  try { rec = await _e2eIdbDo('readonly', function (st) { return st.get(slot); }); } catch (e) { rec = null; }
+
+  try { rec = await _e2eIdbDo('readonly', function (st) { return st.get(slot); }); }
+  catch (e) { rec = await _e2eIdbDo('readonly', function (st) { return st.get(slot); }); }
   var mine = (E2E.st && E2E.st.principals) || [];
   if (rec && mine.some(function (p) { return p.id === rec.id && p.revoked; })) {
 
@@ -27690,19 +28193,36 @@ async function _e2eDeviceUp() {
 
     var pair = await crypto.subtle.generateKey(_E2E_EC, false, ['deriveBits']);
     rec = { id: _e2eUuid(), priv: pair.privateKey, pub: await _e2ePubExport(pair.publicKey) };
-    await _e2eIdbDo('readwrite', function (st) { return st.put(rec, slot); });
+    try { await _e2eIdbDo('readwrite', function (st) { return st.add(rec, slot); }); }
+    catch (e) {
+
+      var theirs = await _e2eIdbDo('readonly', function (st) { return st.get(slot); });
+      if (!theirs || !theirs.id) throw e;
+      rec = theirs;
+    }
   }
-  var r = await supabaseClient.rpc('rpc_e2e_register_principal', { p_id: rec.id, p_kind: 'device', p_pub: rec.pub, p_label: _e2eDeviceLabel() });
-  if (r.error) throw r.error;
+
+  var known = mine.some(function (p) { return p.id === rec.id && p.kind === 'device' && !p.revoked; });
+  var reg = supabaseClient.rpc('rpc_e2e_register_principal', { p_id: rec.id, p_kind: 'device', p_pub: rec.pub, p_label: _e2eDeviceLabel() });
+  if (known) {
+    Promise.resolve(reg).then(function (r) { if (r && r.error) console.warn('[e2e] this browser could not say it was used:', r.error.message || r.error); }, function () {});
+  } else {
+    var r = await reg;
+    if (r.error) throw r.error;
+  }
   E2E.device = rec;
   _e2eKeepStorage();
   return rec;
+}
+function _e2eAsksAloud() {
+  try { return /\bFirefox\//.test(String(navigator.userAgent || '')); } catch (e) { return false; }
 }
 function _e2eKeepStorage() {
   try { localStorage.removeItem('pental_keep_storage_asked'); } catch (e) {}
   try {
     var st = navigator.storage;
     if (!st || !st.persist || !(E2E.stash && E2E.stash.pw)) return;
+    if (_e2eAsksAloud()) return;
     var ask = function () {
       try {
         var p = st.persist();
@@ -27713,18 +28233,46 @@ function _e2eKeepStorage() {
     st.persisted().then(function (kept) { if (!kept) ask(); }, function () {});
   } catch (e) {}
 }
-function _e2ePrfSalt() {
-  return crypto.subtle.digest('SHA-256', _e2eTE.encode('pental e2e prf v1|' + String(TENANT_ID || location.host) + '|' + ((S && S.profile && S.profile.id) || '')))
-    .then(function (b) { return new Uint8Array(b); });
-}
 async function _e2eKek(method, material, params) {
-  if (method === 'passkey') return _e2eHkdfAes(material, 'pental e2e passkey v1');
   if (method === 'kit') return _e2eHkdfAes(material, 'pental e2e kit v1');
-  var hw = await _pmArgon2Lib();
+
+  if (method === 'invite') return _e2eHkdfAes(material, 'pental e2e invite v1');
   var cost = (params && params.cost) || _E2E_PW_COST;
-  var out = await hw.argon2id({ password: material, salt: _e2eUnB64u(params.salt), parallelism: cost.p, iterations: cost.t,
-                                memorySize: cost.m, hashLength: 32, outputType: 'binary' });
+  var out = await _e2eArgon(material, _e2eUnB64u(params.salt), cost);
   return _e2eHkdfAes(out, 'pental e2e password v1');
+}
+var _E2E_ARGON_WORKER = 'self.onmessage=function(ev){var d=ev.data;try{importScripts(d.lib);self.hashwasm.argon2id({password:d.password,salt:d.salt,parallelism:d.p,iterations:d.t,memorySize:d.m,hashLength:32,outputType:"binary"})'
+  + '.then(function(o){self.postMessage({ok:true,out:o});},function(e){self.postMessage({ok:false,error:String((e&&e.message)||e)});});}catch(e){self.postMessage({ok:false,error:String((e&&e.message)||e)});}};';
+function _e2eArgonHere(pw, salt, cost) {
+  return _pmArgon2Lib().then(function (hw) {
+    return hw.argon2id({ password: pw, salt: salt, parallelism: cost.p, iterations: cost.t, memorySize: cost.m, hashLength: 32, outputType: 'binary' });
+  });
+}
+function _e2eArgon(pw, salt, cost) {
+  return new Promise(function (resolve) {
+    var done = false, w = null, url = null, t = null;
+    var tidy = function () {
+      if (t) clearTimeout(t);
+      try { if (w) w.terminate(); } catch (e) {}
+      try { if (url) URL.revokeObjectURL(url); } catch (e) {}
+    };
+    var here = function () { if (done) return; done = true; tidy(); resolve(_e2eArgonHere(pw, salt, cost)); };
+    try {
+      if (E2E.noWorker || typeof Worker !== 'function' || typeof Blob !== 'function' || typeof URL === 'undefined' || !URL.createObjectURL
+        || typeof _VENDOR === 'undefined' || !_VENDOR.argon2 || typeof location === 'undefined') { here(); return; }
+      url = URL.createObjectURL(new Blob([_E2E_ARGON_WORKER], { type: 'text/javascript' }));
+      w = new Worker(url);
+      w.onmessage = function (ev) {
+        var d = ev.data || {};
+        if (done) return;
+        if (d.ok && d.out && d.out.length === 32) { done = true; tidy(); resolve(new Uint8Array(d.out)); }
+        else { E2E.noWorker = true; here(); }
+      };
+      w.onerror = function (e) { try { e.preventDefault(); } catch (e2) {} E2E.noWorker = true; here(); };
+      t = setTimeout(function () { E2E.noWorker = true; here(); }, 30000);
+      w.postMessage({ lib: new URL(_VENDOR.argon2, location.href).href, password: pw, salt: salt, m: cost.m, t: cost.t, p: cost.p });
+    } catch (e) { E2E.noWorker = true; here(); }
+  });
 }
 async function _e2eFactorOpen(w, material) {
   var kek = await _e2eKek(w.method, material, w.params || {});
@@ -27739,16 +28287,15 @@ async function _e2eFactorNew(method, ref, material) {
   var pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
   var id = _e2eUuid(), pub = await _e2ePubExport(pair.publicKey);
   var wrapped = 'pe2a1.' + _e2eB64u(await _e2eGcm(kek, pkcs8, 'pe2a1|' + id + '|' + method));
-  var label = method === 'passkey' ? 'Passkey' : method === 'password' ? 'Password' : 'Recovery kit';
+  var label = method === 'password' ? 'Password' : 'Recovery kit';
   var r = await supabaseClient.rpc('rpc_e2e_register_principal', { p_id: id, p_kind: 'account', p_pub: pub, p_label: label });
   if (r.error) throw r.error;
   var w = await supabaseClient.rpc('rpc_e2e_put_wrap', { p_principal: id, p_method: method, p_ref: ref || '', p_params: params, p_wrapped: wrapped });
   if (w.error) throw w.error;
-  E2E.factors[id] = { priv: await _e2ePrivImport(pkcs8), method: method };
+  E2E.factors[id] = { priv: await _e2ePrivImport(pkcs8), method: method, pub: pub };
   return id;
 }
-function _e2eStashPassword(pw) { if (!_e2eOff() && pw) E2E.stash = Object.assign(E2E.stash || {}, { pw: _e2eTE.encode(pw) }); }
-function _e2eStashPrf(credId, out) { if (!_e2eOff() && out) E2E.stash = Object.assign(E2E.stash || {}, { prf: { cred: credId, out: new Uint8Array(out) } }); }
+function _e2eStashPassword(pw) { if (!_e2eOff() && pw) { E2E.stash = Object.assign(E2E.stash || {}, { pw: _e2eTE.encode(pw) }); E2E.typedHere = true; } }
 window._e2eStashPassword = _e2eStashPassword;
 function _e2eTake(st) {
   var before = _e2eHeldKids();
@@ -27762,10 +28309,14 @@ function _e2eTake(st) {
 
   if (E2E.on && E2E.waiting && _e2eHeld().length) {
     E2E.waiting = false;
+    E2E.keysAt = Date.now();
+    if (E2E.keysSoonDone) E2E.keysSoonDone();
+
+    var held = !!E2E.holding;
     setTimeout(function () {
       _e2eShow();
       _e2eEvery();
-      _e2eReadAgain();
+      if (!held) _e2eReadAgain();
     }, 0);
   } else if (E2E.on && E2E.lockedN) {
 
@@ -27822,8 +28373,14 @@ function _e2eKey(kid) {
         return k;
       } catch (e) {
 
-        console.warn('[e2e] a key given to this browser did not open; asking for it again');
-        try { await supabaseClient.rpc('rpc_e2e_drop_grant', { p_key: kid, p_principal: g.principal_id }); } catch (e2) {}
+        var again = false;
+        try { again = await _e2eCanBeGivenAgain(kid, g.principal_id); } catch (e3) { again = false; }
+        if (again) {
+          console.warn('[e2e] a key given to this browser did not open; asking for it again');
+          try { await supabaseClient.rpc('rpc_e2e_drop_grant', { p_key: kid, p_principal: g.principal_id }); } catch (e2) {}
+        } else {
+          console.warn('[e2e] a key given to this browser did not open; it is kept, as nothing else holds it');
+        }
       }
     }
     return null;
@@ -27831,6 +28388,17 @@ function _e2eKey(kid) {
   E2E.keyP[kid] = p;
   p.then(function (k) { if (!k) delete E2E.keyP[kid]; });
   return p;
+}
+async function _e2eCanBeGivenAgain(kid, principalId) {
+  E2E.askedAgain = E2E.askedAgain || {};
+  var memo = E2E.askedAgain[kid + '|' + principalId];
+  if (memo && Date.now() - memo.at < 60000) return false;
+  E2E.askedAgain[kid + '|' + principalId] = { at: Date.now() };
+  var r = await supabaseClient.rpc('rpc_e2e_status');
+  if (r.error || !r.data) return false;
+  var st = r.data;
+  var mineToo = (st.grants || []).some(function (g) { return g.key_id === kid && g.principal_id !== principalId; });
+  return mineToo || Number(st.holders) > 1;
 }
 function _e2eHeld() {
   var mine = {};
@@ -27866,7 +28434,7 @@ async function _e2eStart() {
   if (!st.signed_in || !st.fresh) return false;
   if (!st.active) {
 
-    if (st.role === 'admin' && st.auto !== false) {
+    if (st.role === 'admin' && st.auto !== false && _e2eStashHas()) {
       try { await _e2eActivate(); } catch (e) { console.warn('[e2e] turning encryption on did not finish:', (e && e.message) || e); }
       st = await _e2eStatus();
     }
@@ -27874,12 +28442,40 @@ async function _e2eStart() {
   }
   E2E.on = true;
   await _e2eDeviceUp();
-  await _e2eFactorsUp();
+
+  var mineHeld = !!E2E.device && E2E.grants.some(function (g) { return g.principal_id === E2E.device.id; });
+  if (mineHeld && _e2eStashHas()) {
+    setTimeout(function () {
+      _e2eFactorsUp().then(function () { _e2eNudge(); }, function (e) { console.warn('[e2e] the sign-in\u2019s key could not be opened:', (e && e.message) || e); });
+    }, 1200);
+  } else {
+    await _e2eFactorsUp();
+  }
+
+  if (_e2eHeld().length === 0 && !_e2eNoKeysToHold()) {
+    try { await _e2eInviteOpen(); } catch (e) { console.warn('[e2e] the key the database keeps could not be opened:', (e && e.message) || e); }
+  }
   E2E.waiting = _e2eHeld().length === 0 && !_e2eNoKeysToHold();
+  if (E2E.waiting) {
+    E2E.waitSince = Date.now();
+
+    _e2eKeysSoonArm();
+  }
   _e2eLoops();
   _e2eLive();
   _e2eShow();
+  if (E2E.waiting) {
+
+    _e2eFactorKeep().then(function () {}, function () {});
+  }
   return true;
+}
+function _e2eKeysSoonArm() {
+  if (E2E.keysSoon) return;
+  var done;
+  E2E.keysSoon = new Promise(function (r) { done = r; });
+  E2E.keysSoonDone = function () { if (E2E.keysSoon) { E2E.keysSoon = null; E2E.keysSoonDone = null; done(); } };
+  setTimeout(function () { if (E2E.keysSoonDone) E2E.keysSoonDone(); }, Math.max(0, (E2E.waitSince || Date.now()) + _E2E_WAIT_LOOK_MS - Date.now()));
 }
 function _e2eWatchOn() {
   if (E2E.watch) return;
@@ -27899,22 +28495,36 @@ async function _e2eRecheck() {
   } catch (e) {  }
   finally { E2E.rechecking = false; }
 }
+async function _e2eHoldKeys() {
+  try {
+    if (_e2eOff()) return;
+    if (E2E.ready) { try { await E2E.ready; } catch (e) {} }
+    if (!E2E.on || !E2E.waiting) return;
+    E2E.holding = true;
+    var until = (E2E.waitSince || Date.now()) + _E2E_WAIT_LOOK_MS;
+    while (E2E.on && E2E.waiting && !E2E.resigning && Date.now() < until) await new Promise(function (r) { setTimeout(r, 120); });
+    if (E2E.on && !E2E.waiting && E2E.lockedN && S && S.profile) {
+
+      E2E.lockedN = 0;
+      try { if (typeof _syncReset === 'function') _syncReset(); } catch (e) {}
+      try { await _loadAllDataInner(); } catch (e) {}
+      try { if (typeof _rtAfterLoad === 'function') _rtAfterLoad(); } catch (e) {}
+    }
+  } catch (e) {  }
+  finally { E2E.holding = false; }
+}
+window._e2eHoldKeys = _e2eHoldKeys;
+function _e2eStashHas() { return !!(E2E.stash && E2E.stash.pw); }
 function _e2eNoKeysToHold() { var r = E2E.st && E2E.st.role; return r === 'sales' || r === 'marketing' || r === 'none'; }
 async function _e2eFactorsUp() {
   var stash = E2E.stash; E2E.stash = null;
   if (!stash) return;
   var wraps = (E2E.st && E2E.st.wraps) || [];
   try {
-    if (stash.prf) {
-      var wp = wraps.filter(function (w) { return w.method === 'passkey' && w.ref === stash.prf.cred; })[0];
-      if (wp) E2E.factors[wp.principal_id] = { priv: await _e2eFactorOpen(wp, stash.prf.out), method: 'passkey' };
-      else E2E._newFactor = { method: 'passkey', ref: stash.prf.cred, material: stash.prf.out };
-    }
-  } catch (e) { console.warn('[e2e] the passkey did not open its key'); }
-  try {
     if (stash.pw) {
       var ww = wraps.filter(function (w) { return w.method === 'password'; })[0];
-      if (ww) E2E.factors[ww.principal_id] = { priv: await _e2eFactorOpen(ww, stash.pw), method: 'password' };
+
+      if (ww) { if (!E2E.factors[ww.principal_id]) E2E.factors[ww.principal_id] = { priv: await _e2eFactorOpen(ww, stash.pw), method: 'password' }; }
       else E2E._newFactorPw = { method: 'password', ref: '', material: stash.pw };
     }
   } catch (e) { console.warn('[e2e] the password did not open its key'); }
@@ -27938,8 +28548,20 @@ async function _e2eSelfGive() {
   if (!r.error) await _e2eStatus();
   return out.length;
 }
+async function _e2eFactorsMake() {
+  var stash = E2E.stash || {}, out = [];
+  var one = async function (method, ref, material) {
+    try { var id = await _e2eFactorNew(method, ref, material); out.push({ id: id, pub: E2E.factors[id].pub }); }
+    catch (e) { console.warn('[e2e] the ' + method + ' could not be given a key of its own:', (e && e.message) || e); }
+  };
+  if (stash.pw) await one('password', '', stash.pw);
+  return out;
+}
 async function _e2eActivate() {
   await _e2eDeviceUp();
+
+  var facs = await _e2eFactorsMake();
+  if (!facs.length) return false;
   var cl = await _readPaged(supabaseClient.from('clients').select('id'));
   if (cl.error) throw cl.error;
   var made = {}, firm = await _e2eNewDataKey('firm', null);
@@ -27952,9 +28574,11 @@ async function _e2eActivate() {
       if (!have) { var k = await _e2eNewDataKey('client', clientIds[i]); made[k.id] = k; }
     }
     var devPub = await _e2ePubImport(E2E.device.pub), keys = [], grants = [];
+    var to = [{ id: E2E.device.id, pub: devPub }];
+    for (var fi = 0; fi < facs.length; fi++) to.push({ id: facs[fi].id, pub: await _e2ePubImport(facs[fi].pub) });
     for (var kid in made) {
       keys.push({ id: kid, scope: made[kid].scope, client_id: made[kid].client_id, pub: made[kid].pub });
-      grants.push({ key_id: kid, principal_id: E2E.device.id, wrapped: await _e2eWrapFor(devPub, kid, E2E.device.id, made[kid].secret) });
+      for (var ti = 0; ti < to.length; ti++) grants.push({ key_id: kid, principal_id: to[ti].id, wrapped: await _e2eWrapFor(to[ti].pub, kid, to[ti].id, made[kid].secret) });
     }
     var r = await supabaseClient.rpc('rpc_e2e_activate', { p_keys: keys, p_grants: grants, p_force: false });
     if (r.error) throw r.error;
@@ -27977,8 +28601,16 @@ function _e2eLoops() {
     try {
 
       if (E2E.waiting || E2E.grantsDue || E2E.lockedN) { E2E.grantsDue = false; await _e2eStatus(); }
+      if (E2E.waiting) await _e2eFactorKeep();
       if (!E2E.waiting) {
         await _e2eGiveNeeded();
+
+        if (await _e2eInvitesMake()) {
+          await _e2eGiveNeeded();
+
+          try { await _e2eStatus(); } catch (e) {}
+          _e2eShow();
+        }
         await _e2eFactorKeep();
         await _e2eClientKeysUp();
         await _e2eScanWaiting();
@@ -27986,7 +28618,13 @@ function _e2eLoops() {
         if (typeof _e2eSweepSoon === 'function') _e2eSweepSoon();
       }
     } catch (e) { console.debug('[e2e] keys:', (e && e.message) || e); }
-    finally { if (E2E.loops) { E2E.loops.busy = false; _e2eEvery(); } }
+    finally {
+      if (E2E.loops) {
+        E2E.loops.busy = false; _e2eEvery();
+
+        if (E2E.loops.again) { E2E.loops.again = false; _e2eNudge(); }
+      }
+    }
   };
   E2E.loops.run = run;
   run();
@@ -27994,7 +28632,8 @@ function _e2eLoops() {
 }
 function _e2eEvery() {
   if (!E2E.loops) return;
-  var want = E2E.waiting ? 4000 : 60000;
+
+  var want = E2E.waiting ? ((Date.now() - (E2E.waitSince || 0) < _E2E_WAIT_LOOK_MS + 2000) ? 1000 : 4000) : 60000;
   if (E2E.loops.every === want && E2E.loops.t) return;
   if (E2E.loops.t) clearInterval(E2E.loops.t);
   E2E.loops.every = want;
@@ -28002,14 +28641,20 @@ function _e2eEvery() {
 }
 function _e2eNudge() {
   if (!E2E.loops || !E2E.loops.run) return;
-  if (E2E.nudgeT) clearTimeout(E2E.nudgeT);
-  E2E.nudgeT = setTimeout(function () { E2E.nudgeT = null; E2E.loops && E2E.loops.run && E2E.loops.run(); }, 300);
+
+  if (E2E.nudgeT) return;
+  E2E.nudgeT = setTimeout(function () {
+    E2E.nudgeT = null;
+    if (!E2E.loops || !E2E.loops.run) return;
+    if (E2E.loops.busy) { E2E.loops.again = true; return; }
+    E2E.loops.run();
+  }, 40);
 }
 window._e2eNudge = _e2eNudge;
 async function _e2eGiveNeeded() {
   var r = await supabaseClient.rpc('rpc_e2e_needed', { p_limit: 200 });
   if (r.error || !Array.isArray(r.data) || !r.data.length) return 0;
-  var out = [], pubs = {};
+  var out = [], pubs = {}, jobs = [];
   for (var i = 0; i < r.data.length; i++) {
     var n = r.data[i], k = await _e2eKey(n.key_id);
     if (!k) continue;
@@ -28019,21 +28664,171 @@ async function _e2eGiveNeeded() {
       catch (e) { pubs[n.principal_id] = null; console.warn('[e2e] a browser\u2019s key could not be read, so it is passed over'); }
     }
     if (!pubs[n.principal_id]) continue;
-    out.push({ key_id: n.key_id, principal_id: n.principal_id, wrapped: await _e2eWrapFor(pubs[n.principal_id], n.key_id, n.principal_id, k.secret) });
+    jobs.push({ key_id: n.key_id, principal_id: n.principal_id, pub: pubs[n.principal_id], secret: k.secret });
+  }
+
+  for (var j = 0; j < jobs.length; j += 40) {
+    var part = await Promise.all(jobs.slice(j, j + 40).map(function (x) {
+      return _e2eWrapFor(x.pub, x.key_id, x.principal_id, x.secret).then(function (w) { return { key_id: x.key_id, principal_id: x.principal_id, wrapped: w }; }, function () { return null; });
+    }));
+    part.forEach(function (g) { if (g) out.push(g); });
   }
   if (!out.length) return 0;
   var w = await supabaseClient.rpc('rpc_e2e_put_grants', { p_grants: out });
   return w.error ? 0 : ((w.data && w.data.given) || 0);
 }
 async function _e2eFactorKeep() {
-  var todo = [E2E._newFactor, E2E._newFactorPw].filter(Boolean);
-  E2E._newFactor = E2E._newFactorPw = null;
+  var todo = [E2E._newFactorPw].filter(Boolean);
+  E2E._newFactorPw = null;
+  var made = 0;
   for (var i = 0; i < todo.length; i++) {
-    try { await _e2eFactorNew(todo[i].method, todo[i].ref, todo[i].material); }
-    catch (e) { console.debug('[e2e] could not keep the ' + todo[i].method + ' able to open a new browser'); }
+    try { await _e2eFactorNew(todo[i].method, todo[i].ref, todo[i].material); made++; }
+    catch (e) {
+
+      todo[i].tries = (todo[i].tries || 0) + 1;
+      console.warn('[e2e] could not keep the ' + todo[i].method + ' able to open a new browser' + (todo[i].tries < 3 ? '; trying again' : '') + ':', (e && e.message) || e);
+      if (todo[i].tries < 3) E2E._newFactorPw = todo[i];
+    }
   }
 
-  if (todo.length) { await _e2eGiveNeeded(); await _e2eStatus(true); _e2eShow(); }
+  if (made) { await _e2eGiveNeeded(); await _e2eStatus(true); _e2eShow(); }
+}
+var _E2E_INVITE_BATCH = 40;
+var _E2E_INVITE_ASK_MS = 5 * 60 * 1000;
+var _E2E_INVITE_OFF_MS = 60 * 60 * 1000;
+function _e2eInviteOffNow() { return !!E2E.inviteOff && Date.now() - E2E.inviteOff < _E2E_INVITE_OFF_MS; }
+function _e2eKeptTool() { return typeof REPORTER !== 'undefined' && !!REPORTER; }
+function _e2eKeptInfo(principalId) { return 'pental e2e kept v1|' + String(TENANT_ID || '').toLowerCase() + '|' + String(principalId).toLowerCase(); }
+async function _e2eKeptPub(fresh) {
+  if (_e2eKeptTool()) return null;
+  if (E2E.keptPub) return E2E.keptPub;
+  if (!fresh && E2E.keptPubOff && Date.now() - E2E.keptPubOff < _E2E_INVITE_OFF_MS) return null;
+  try {
+    var r = await tenantFetch('/api/utils?fn=e2e-kept', { method: 'GET' });
+    var d = r.ok ? await r.json() : null;
+    if (d && d.ok && d.pub) { E2E.keptPub = await _e2ePubImport(d.pub); E2E.keptPubOff = 0; E2E.keptWhy = ''; return E2E.keptPub; }
+
+    E2E.keptWhy = (d && d.ok === false && d.why === 'off') ? (d.off === 'seed' || d.off === 'switch' ? d.off : 'off') : '';
+  } catch (e) { E2E.keptWhy = '';  }
+  E2E.keptPubOff = Date.now();
+  return null;
+}
+async function _e2eKeptLook() {
+  if (_e2eKeptTool() || _e2eOff() || !E2E.on) return '';
+  try { await _e2eKeptPub(!!E2E.keptWhy); } catch (e) {}
+  return E2E.keptWhy || '';
+}
+function _e2eKeptOffNow() {
+  if (_e2eKeptTool()) return '';
+  var w = E2E.keptWhy;
+  return (w === 'seed' || w === 'switch' || w === 'off') ? w : '';
+}
+function _e2eKeptOffHtml() {
+  var w = _e2eKeptOffNow();
+  if (!w) return '';
+  var what = w === 'seed' ? 'This portal’s server has no seed to make Pental’s half of the lock from'
+    : w === 'switch' ? 'Pental’s half of the lock is switched off on this portal’s server'
+    : 'This portal’s server is not giving out Pental’s half of the lock';
+  var fix = w === 'seed' ? ' It is put right where the portal is deployed (PENTAL_E2E_KEPT_SEED on its Vercel project), not in these settings.'
+    : w === 'switch' ? ' It is switched back on where the portal is deployed (PENTAL_E2E_KEPT_OFF on its Vercel project), not in these settings.'
+    : ' It is put right where the portal is deployed, not in these settings.';
+  return '<div class="alert alert-warn" id="e2eKeptOff" role="status" style="margin-top:0.75rem"><div><strong>Keys are not being kept at the moment.</strong> '
+    + esc(what + ', so nobody new is kept a key and a key already kept cannot be opened: a first sign-in, or a reset password on a browser that holds none of that person’s keys, waits for a teammate’s portal to be open.' + fix) + '</div></div>';
+}
+async function _e2eKeptAsk(principalId, sealed, ticket) {
+  try {
+    var r = await tenantFetch('/api/utils?fn=e2e-kept', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ principal_id: principalId, sealed: sealed, ticket: ticket || '' }) });
+    var d = null;
+    try { d = await r.json(); } catch (e) { d = null; }
+    if (r.ok && d && d.ok && d.secret) return { secret: d.secret };
+    if (r.ok && d && d.ok === false && d.why === 'key') return { secret: '' };
+    return { later: true };
+  } catch (e) { return { later: true }; }
+}
+function _e2ePersonAdded() {
+  try { E2E.inviteDue = true; _e2eNudge(); } catch (e) {}
+}
+window._e2ePersonAdded = _e2ePersonAdded;
+async function _e2eInvitesMake() {
+  if (_e2eInviteOffNow() || !E2E.on || E2E.waiting || !E2E.device || !_e2eHeld().length) return 0;
+  if (!E2E.inviteDue && E2E.inviteAsked && Date.now() - E2E.inviteAsked < _E2E_INVITE_ASK_MS) return 0;
+  E2E.inviteDue = false;
+  E2E.inviteAsked = Date.now();
+  var r = await supabaseClient.rpc('rpc_e2e_invite_wanted', { p_limit: _E2E_INVITE_BATCH });
+  if (r.error) {
+    if (typeof _isMissingRpc === 'function' && _isMissingRpc(r.error)) E2E.inviteOff = Date.now();
+    return 0;
+  }
+  E2E.inviteOff = 0;
+  var ids = Array.isArray(r.data) ? r.data : [];
+  if (!ids.length) return 0;
+
+  var tool = _e2eKeptTool(), kp = tool ? null : await _e2eKeptPub();
+  if (!tool && !kp) { E2E.inviteOff = Date.now(); return 0; }
+  var list = (await Promise.all(ids.map(async function (pid) {
+    try {
+      var secret = crypto.getRandomValues(new Uint8Array(32));
+
+      var pair = await crypto.subtle.generateKey(_E2E_EC, true, ['deriveBits']);
+      var pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
+      var id = _e2eUuid(), kek = await _e2eKek('invite', secret, {});
+      return { profile_id: pid, id: id, pub: await _e2ePubExport(pair.publicKey),
+        wrapped: 'pe2a1.' + _e2eB64u(await _e2eGcm(kek, pkcs8, 'pe2a1|' + id + '|invite')),
+        secret: tool ? _e2eB64u(secret) : 'pe2k1.' + _e2eB64u(await _e2eSealTo(kp, secret, _e2eKeptInfo(id))) };
+    } catch (e) { return null; }
+  }))).filter(Boolean);
+  if (!list.length) return 0;
+  var w = await supabaseClient.rpc('rpc_e2e_invite_put', { p_invites: list });
+  if (w.error) return 0;
+  if (w.data && w.data.ok === false) { if (w.data.why === 'vault') E2E.inviteOff = Date.now(); return 0; }
+  var made = (w.data && w.data.made) || 0;
+
+  if (ids.length >= _E2E_INVITE_BATCH) { E2E.inviteDue = true; if (E2E.loops) E2E.loops.again = true; }
+  if (made) { _e2eSetMemo = null; _e2eMyMemo = null; }
+  return made;
+}
+async function _e2eInviteOpen() {
+  var mine = ((E2E.st && E2E.st.wraps) || []).filter(function (w) { return w.method === 'invite'; });
+  if (!mine.length) return false;
+  var o = await _e2eInviteOpenOnce(mine);
+
+  if (!o.opened && o.later) {
+    await new Promise(function (res) { setTimeout(res, 700); });
+    o = await _e2eInviteOpenOnce(mine);
+  }
+  if (!o.opened) {
+
+    if (o.dead && !o.later) { try { await supabaseClient.rpc('rpc_e2e_drop_wrap', { p_method: 'invite', p_ref: '' }); await _e2eStatus(true); } catch (e) {} }
+    return false;
+  }
+  await _e2eSelfGive();
+  return true;
+}
+async function _e2eInviteOpenOnce(mine) {
+  var out = { opened: 0, dead: 0, later: 0 };
+  var r = await supabaseClient.rpc('rpc_e2e_invite_take');
+  if (r.error || !r.data || !r.data.ok) { out.later = 1; return out; }
+  var got = {};
+  (r.data.keys || []).forEach(function (k) { if (k && k.principal_id) got[k.principal_id] = { secret: k.secret || '', ticket: k.ticket || '' }; });
+  for (var i = 0; i < mine.length; i++) {
+    var w = mine[i];
+    if (E2E.factors[w.principal_id]) { out.opened++; continue; }
+    try {
+      var g = got[w.principal_id];
+      if (!g || !g.secret) throw new Error('its secret could not be opened');
+      var secret = g.secret;
+      if (/^pe2k1\./.test(secret)) {
+        var p = await _e2eKeptAsk(w.principal_id, secret, g.ticket);
+        if (p.later) { out.later++; continue; }
+        if (!p.secret) throw new Error('Pental could not open its half');
+        secret = p.secret;
+      }
+      E2E.factors[w.principal_id] = { priv: await _e2eFactorOpen(w, _e2eUnB64u(secret)), method: 'invite' };
+      out.opened++;
+    } catch (e) { out.dead++; }
+  }
+  return out;
 }
 function _e2eStateRow(list, id) {
   try { var a = (S && S.data && S.data[list]) || []; for (var i = 0; i < a.length; i++) if (a[i] && a[i].id === id) return a[i]; } catch (e) {}
@@ -28210,7 +29005,7 @@ async function _e2eOpenDeep(root, depth) {
   for (var i = 0; i < list.length; i += 200) {
     await Promise.all(list.slice(i, i + 200).map(function (seal) {
       if (E2E.cache.has(seal)) { opened[seal] = { v: E2E.cache.get(seal) }; return null; }
-      return _e2eOpen(seal).then(function (v) {
+      return _e2eOpen(seal, true).then(function (v) {
         opened[seal] = { v: v };
         _e2eRemember(seal, v);
       }, function (e) { opened[seal] = { locked: true, key: !!(e && e.locked) }; if (!(e && e.locked)) console.warn('[e2e] a sealed value did not open', e && e.message); });
@@ -28327,6 +29122,8 @@ async function _e2eFetch(base, input, init) {
   if (m[2].indexOf('rpc/rpc_e2e_') !== 0) {
     var rd = E2E.ready || (E2E.availKnown ? null : _e2eReady());
     if (rd) { try { await rd; } catch (e) {} }
+
+    if (E2E.waiting && E2E.keysSoon) { try { await E2E.keysSoon; } catch (e) {} }
   }
   var data;
   try { data = JSON.parse(text); } catch (e) { return new Response(text, { status: res.status, statusText: res.statusText, headers: headers }); }
@@ -28460,18 +29257,22 @@ async function _e2eSweep() {
   for (var ti = 0; ti < _E2E_SWEEP.length; ti++) {
     var table = _E2E_SWEEP[ti], after = null;
     for (var guard = 0; guard < 100000; guard++) {
-      var r = await supabaseClient.rpc('rpc_e2e_plain_rows', { p_table: table, p_after: after, p_limit: 100 });
+
+      var r = await supabaseClient.rpc('rpc_e2e_plain_rows', { p_table: table, p_after: after, p_limit: 200 });
       if (r.error) throw r.error;
       var rows = Array.isArray(r.data) ? r.data : [];
       if (!rows.length) break;
       var out = await _e2eSealPlain(table, rows);
       if (out.length) {
-        var w = await supabaseClient.rpc('rpc_e2e_seal_rows', { p_table: table, p_rows: out });
-        if (w.error) throw w.error;
-        sealedRows += (w.data && w.data.sealed) || 0;
+        var half = Math.ceil(out.length / 2), parts = out.length > 20 ? [out.slice(0, half), out.slice(half)] : [out];
+        var ws = await Promise.all(parts.map(function (part) { return supabaseClient.rpc('rpc_e2e_seal_rows', { p_table: table, p_rows: part }); }));
+        for (var wi = 0; wi < ws.length; wi++) {
+          if (ws[wi].error) throw ws[wi].error;
+          sealedRows += (ws[wi].data && ws[wi].data.sealed) || 0;
+        }
       }
       after = rows[rows.length - 1].id;
-      await _e2eBreath(document && document.hidden ? 10 : 60);
+      await _e2eBreath(document && document.hidden ? 10 : 40);
     }
   }
 
@@ -28713,18 +29514,6 @@ async function _e2eKbReapply(k) {
   return { ok: !failed || !!n, updated: n, failed: failed };
 }
 window._e2eKbReapply = _e2eKbReapply;
-async function _e2ePasskeyAdded(credId, prfOut) {
-  if (!E2E.on || !prfOut || !credId) return false;
-  try {
-    var st = await _e2eStatus();
-    if ((st.wraps || []).some(function (w) { return w.method === 'passkey' && w.ref === credId; })) return true;
-    await _e2eFactorNew('passkey', credId, new Uint8Array(prfOut));
-    await _e2eGiveNeeded();
-    await _e2eStatus();
-    return true;
-  } catch (e) { console.debug('[e2e] the new passkey will open this person’s keys from its next sign-in'); return false; }
-}
-window._e2ePasskeyAdded = _e2ePasskeyAdded;
 async function _e2eApiKeyMade(keyId) {
   if (!E2E.on || !keyId || E2E.waiting) return '';
   var part = _e2eB64u(crypto.getRandomValues(new Uint8Array(32)));
@@ -28803,46 +29592,30 @@ function _e2eBadge(a) {
   if (_e2eOff() || !E2E.on || !a || !a.id) return '';
   var kid = a.client_id ? E2E.byClient[a.client_id] : null;
   var waiting = E2E.waiting || (kid && !_e2eHoldsKid(kid));
+
+  var soon = !E2E.waiting || Date.now() - (E2E.waitSince || 0) < _E2E_WAIT_LOOK_MS;
   return '<button type="button" class="e2e-badge' + (waiting ? ' is-waiting' : '') + '" onclick="_e2eBadgeOpen(event,\'' + esc(a.id) + '\')" aria-haspopup="dialog"'
-    + ' title="' + (waiting ? 'End-to-end encrypted: this browser is still being given its key' : 'End-to-end encrypted: what this is') + '">'
-    + _E2E_LOCK + '<span>' + (waiting ? 'Encrypted, opening soon' : 'End-to-end encrypted') + '</span></button>';
+    + ' title="' + (waiting ? (soon ? 'End-to-end encrypted: this browser is being given its key' : 'End-to-end encrypted: this browser has not been given its key yet') : 'End-to-end encrypted: what this is') + '">'
+    + _E2E_LOCK + '<span>' + (waiting ? (soon ? 'Opening on this browser' : 'Locked on this browser') : 'End-to-end encrypted') + '</span></button>';
 }
 window._e2eBadge = _e2eBadge;
-var _e2eHoldersMemo = {};
-async function _e2eHolders(clientId) {
-  if (!clientId) return null;
-  var m = _e2eHoldersMemo[clientId];
-  if (m && Date.now() - m.at < 60000) return m.v;
-  var r = await supabaseClient.rpc('rpc_e2e_holders', { p_client: clientId });
-  var v = (!r.error && r.data && r.data.ok) ? r.data : null;
-  _e2eHoldersMemo[clientId] = { at: Date.now(), v: v };
-  return v;
-}
-function _e2ePeople(n) { n = Number(n) || 0; return n + (n === 1 ? ' person' : ' people'); }
-function _e2ePopHtml(a, h) {
+function _e2ePopHtml(a) {
   var isClient = S.profile && S.profile.role === 'client';
-  var firm = ((S.data && S.data.settings) || {}).company_name || 'your firm';
-  var client = (typeof getClientName === 'function' && a.client_id) ? getClientName(a.client_id) : '';
   var kid = a.client_id ? E2E.byClient[a.client_id] : null;
   var waiting = E2E.waiting || (kid && !_e2eHoldsKid(kid));
   var out = '<div class="e2e-pop-head">' + _E2E_LOCK + '<strong>End-to-end encrypted</strong></div>';
   out += '<p>' + (isClient
     ? 'Your findings, comments, files and credentials for this engagement are encrypted in the browser before they are saved, and opened only in the browsers of the people allowed to read them.'
     : 'This engagement’s findings, notes, comments, files and the client’s credentials are encrypted in the browser before they are saved, and opened only in the browsers of the people allowed to read them.') + '</p>';
-  out += '<ul class="e2e-pop-facts"><li>The database they are kept in stores them encrypted and holds no key that opens them.</li>'
-    + '<li>Each person’s key stays in their own browser, and is given to a new one of theirs by their passkey, their password or a teammate’s portal.</li></ul>';
-  if (h) {
-    var total = (Number(h.firm) || 0) + (Number(h.client) || 0);
-    out += '<div class="e2e-pop-who">' + (isClient
-      ? 'Readable by ' + _e2ePeople(h.client) + ' at your organisation and ' + _e2ePeople(h.firm) + ' at ' + esc(firm) + '.'
-      : 'Readable by ' + _e2ePeople(total) + ': ' + (Number(h.firm) || 0) + ' at ' + esc(firm) + (client ? ' and ' + (Number(h.client) || 0) + ' at ' + esc(client) : '') + '.') + '</div>';
-    if (!isClient && Array.isArray(h.people) && h.people.length) {
-      out += '<div class="e2e-pop-names">' + h.people.slice(0, 12).map(function (p) { return esc(p.name || 'Someone') + (p.role === 'client' ? ' (' + esc(client || 'client') + ')' : ''); }).join(', ')
-        + (h.people.length > 12 ? ' and ' + (h.people.length - 12) + ' more' : '') + '</div>';
-    }
-  } else out += '<div class="e2e-pop-who is-quiet">Counting who can read it…</div>';
-  if (waiting) out += '<div class="e2e-pop-wait">This browser is still being given its key. It opens everything by itself as soon as another of your devices, or a teammate’s portal, is online.</div>';
-  out += '<a class="e2e-pop-link" href="' + _E2E_HOW + '" target="_blank" rel="noopener">How Pental’s encryption works</a>';
+
+  var kept = ((E2E.st && E2E.st.wraps) || []).some(function (w) { return w.method === 'invite'; });
+  out += '<ul class="e2e-pop-facts"><li>The database they are kept in stores them encrypted, and a copy of it opens none of them.</li>'
+    + '<li>Each person’s key stays in their own browser, and is given to a new one of theirs by their password or a teammate’s portal.</li>'
+    + (!kept ? '' : _e2eKeptTool()
+      ? '<li>For a first sign-in or a reset password, the database keeps each person a sealed key, and opens it only for them, signed in and verified.</li>'
+      : '<li>For a first sign-in or a reset password, the database keeps each person a key under two locks, its own and Pental’s. Neither opens it alone, and it is opened only for that person, signed in and verified.</li>')
+    + '</ul>';
+  if (waiting) out += '<div class="e2e-pop-wait">' + _e2eWaitHtml() + '</div>';
   return out;
 }
 function _e2ePopClose() {
@@ -28871,46 +29644,117 @@ async function _e2eBadgeOpen(ev, aid) {
   pop.className = 'e2e-pop';
   pop.setAttribute('role', 'dialog');
   pop.setAttribute('aria-label', 'End-to-end encrypted');
-  pop.innerHTML = _e2ePopHtml(a, null);
+  pop.innerHTML = _e2ePopHtml(a);
   document.body.appendChild(pop);
   if (btn) { btn.setAttribute('aria-expanded', 'true'); _e2ePopPlace(pop, btn); }
   E2E.pop = { el: pop, btn: btn };
   document.addEventListener('mousedown', _e2ePopAway, true);
   document.addEventListener('keydown', _e2ePopKey, true);
-  var h = null;
-  try { h = await _e2eHolders(a.client_id); } catch (e) { h = null; }
-  if (E2E.pop && E2E.pop.el === pop) {
-    pop.innerHTML = _e2ePopHtml(a, h || { firm: 0, client: 0, unknown: true });
-    if (h === null) { var who = pop.querySelector('.e2e-pop-who'); if (who) { who.textContent = 'Who can read it could not be counted just now.'; who.classList.add('is-quiet'); } }
-    if (btn) _e2ePopPlace(pop, btn);
-  }
 }
 window._e2eBadgeOpen = _e2eBadgeOpen;
 function _e2eBarHtml() {
 
   if (_e2eOff()) {
     if (!E2E.lockedN || !S || !S.profile) return '';
-    return '<div class="e2e-bar" role="status" aria-live="polite"><span class="e2e-bar-icon">' + _E2E_LOCK + '</span>'
+    return '<div class="e2e-bar is-ask' + _e2eBarNew() + '" role="status" aria-live="polite"><span class="e2e-bar-icon">' + _E2E_LOCK + '</span>'
       + '<div class="e2e-bar-text"><strong>Encrypted work cannot open here</strong><span>' + esc(_e2eBlindWhy()) + '</span></div>'
       + '<a class="e2e-bar-link" href="' + _E2E_HOW + '" target="_blank" rel="noopener">What is this?</a></div>';
   }
-  if (!E2E.on || !S || !S.profile) return '';
-  if (E2E.waiting) {
-    var isClient = S.profile.role === 'client';
-    var hasKit = ((E2E.st && E2E.st.wraps) || []).some(function (w) { return w.method === 'kit'; });
-    return '<div class="e2e-bar" role="status" aria-live="polite"><span class="e2e-bar-icon is-pulse">' + _E2E_LOCK + '</span>'
-      + '<div class="e2e-bar-text"><strong>Getting this browser’s keys</strong><span>' + (isClient
-        ? 'Your engagement is end-to-end encrypted. It opens here as soon as your testing team’s portal is online, usually within a minute.'
-        : 'Your firm’s work is end-to-end encrypted. It opens here as soon as another of your devices, or a teammate’s portal, is online.') + '</span></div>'
-      + (hasKit ? '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitUseOpen()">Use your recovery kit</button>' : '')
-      + '<a class="e2e-bar-link" href="' + _E2E_HOW + '" target="_blank" rel="noopener">What is this?</a></div>';
-  }
+  E2E.barSince = 0;
   return '';
 }
+function _e2eBarNew() {
+  if (!E2E.barSince) E2E.barSince = Date.now();
+  return Date.now() - E2E.barSince < 400 ? ' is-new' : '';
+}
+var _E2E_WAIT_LOOK_MS = 10000;
+function _e2eFactorIn(method) { return Object.keys(E2E.factors).some(function (id) { return E2E.factors[id] && E2E.factors[id].method === method; }); }
+function _e2eWhenAt(t) {
+
+  try {
+    if (!t) return '';
+    var d = new Date(t), day = _e2eWhenWords(t);
+    if (isNaN(d.getTime())) return day;
+    return day + ', ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return ''; }
+}
+function _e2eWaitHtml() {
+
+  if (!E2E.waiting) return 'This browser has not been given its key yet. It opens everything by itself as soon as another of your devices, or a teammate’s portal, is online.';
+  var isClient = !!(S.profile && S.profile.role === 'client');
+  var wraps = (E2E.st && E2E.st.wraps) || [], who = E2E.waitWho || null;
+  var mineWord = isClient ? 'your engagement' : 'your work';
+  var once = (_e2eFactorIn('password') || E2E._newFactorPw)
+    ? ' You only do this once: after that your password opens ' + mineWord + ' on any browser.'
+    : ' You only do this once on each browser.';
+  var canPw = _e2eCanUsePassword(), words;
+  if (canPw) words = 'This browser has not opened ' + mineWord + ' before. Your password opens it as you sign in.';
+  else if (isClient) words = 'This browser has not been given its key yet. It gets it from your testing team’s portal, or a colleague’s at your organisation, within a minute of one being open.' + once;
+  else {
+    var mine = (who && who.mine) || [];
+    if (mine.length) {
+      words = 'This browser has not been given its keys yet. Open the portal in ' + esc(mine[0].label) + (mine[0].last ? ' (last used ' + esc(_e2eWhenAt(mine[0].last)) + ')' : '')
+        + (mine.length > 1 ? ', or another browser where your work already opens' : '') + ', and it gives this one its keys within a minute.'
+        + (who.team ? ' A teammate with the portal open does the same.' : '') + once;
+    } else if (who && who.team) words = 'This browser has not been given its keys yet. It gets them from a teammate’s open portal, within a minute of one being open.' + once;
+    else words = 'This browser has not been given its keys yet. It gets them from another browser where your work already opens, or a teammate’s portal, as soon as one is open.' + once;
+  }
+  var acts = '';
+  if (canPw && !_e2eResignMay()) acts += '<button type="button" class="btn btn-primary btn-sm" onclick="_e2eSignInAgain()">Sign in again</button>';
+  if (wraps.some(function (w) { return w.method === 'kit'; })) acts += '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitUseOpen()">Use your recovery kit</button>';
+  return words + (acts ? '<div class="e2e-pop-acts">' + acts + '</div>' : '');
+}
+function _e2eCanUsePassword() {
+  var wraps = (E2E.st && E2E.st.wraps) || [], who = E2E.waitWho || null;
+  return !!E2E.waiting && !!who && who.pwHolds === true && wraps.some(function (w) { return w.method === 'password'; }) && !_e2eFactorIn('password');
+}
+async function _e2eWaitLook() {
+  if (!E2E.waiting || E2E.waitLooking) return;
+  if (E2E.waitAsked && Date.now() - E2E.waitAsked < 30000) return;
+  E2E.waitAsked = Date.now();
+  E2E.waitLooking = true;
+  try {
+    var r = await supabaseClient.rpc('rpc_e2e_people');
+    if (!r.error && Array.isArray(r.data)) {
+      var me = S.profile && S.profile.id, dev = E2E.device && E2E.device.id;
+      var when = function (p) { return String(p.last_seen_at || p.created_at || ''); };
+      var mine = r.data.filter(function (p) { return p.profile_id === me && p.kind === 'device' && p.id !== dev && Number(p.keys) > 0; })
+        .sort(function (a, b) { return when(b).localeCompare(when(a)); })
+        .map(function (p) { return { label: p.label || 'A browser', last: p.last_seen_at || p.created_at || null }; });
+      var holds = function (m) { return r.data.some(function (p) { return p.profile_id === me && p.kind === 'account' && Number(p.keys) > 0 && (p.methods || []).indexOf(m) >= 0; }); };
+      var iHold = r.data.some(function (p) { return p.profile_id === me && Number(p.keys) > 0; });
+      E2E.waitWho = { at: Date.now(), mine: mine, pwHolds: holds('password'), kitHolds: holds('kit'), team: Number((E2E.st || {}).holders || 0) - (iHold ? 1 : 0) > 0 };
+    }
+  } catch (e) {  }
+  finally { E2E.waitLooking = false; }
+  _e2eShow();
+  _e2eResignDue();
+}
+var _e2eDrawn = (typeof WeakMap === 'function') ? new WeakMap() : { get: function () {}, set: function () {} };
 function _e2eShow() {
   if (typeof document === 'undefined' || !document.getElementById) return;
   var bar = document.getElementById('e2eBar');
-  if (bar) bar.innerHTML = _e2eBarHtml();
+  if (bar) {
+    var barHtml = _e2eBarHtml();
+
+    var barKey = barHtml.replace(' is-new"', '"');
+    if (_e2eDrawn.get(bar) !== barKey || (!!barHtml !== !!bar.firstChild)) {
+      var going = !barHtml && bar.firstElementChild && bar.firstElementChild.classList && !bar.firstElementChild.classList.contains('is-out');
+      if (going) {
+
+        var leaving = bar.firstElementChild;
+        leaving.classList.add('is-out');
+        setTimeout(function () { try { if (leaving.parentNode === bar && !_e2eBarHtml()) bar.innerHTML = ''; } catch (e) {} }, 240);
+      } else if (barHtml || !bar.firstElementChild || !bar.firstElementChild.classList.contains('is-out')) bar.innerHTML = barHtml;
+      _e2eDrawn.set(bar, barKey);
+    }
+  }
+
+  if (E2E.on && E2E.waiting) {
+    _e2eWaitLook();
+    var left = _E2E_WAIT_LOOK_MS - (Date.now() - (E2E.waitSince || 0));
+    if (left > 0 && !E2E.waitT) E2E.waitT = setTimeout(function () { E2E.waitT = null; _e2eShow(); }, left + 60);
+  } else if (E2E.waitWho || E2E.waitAsked) { E2E.waitWho = null; E2E.waitAsked = 0; }
 
   try {
     document.querySelectorAll('.e2e-badge').forEach(function (b) {
@@ -28921,10 +29765,37 @@ function _e2eShow() {
   } catch (e) {}
   var my = document.querySelector('[data-e2e-mine]');
   if (my) _e2eMyLoad(true);
+  _e2eDressWatch();
 }
 window._e2eShow = _e2eShow;
+var _E2E_RESIGN_AFTER_MS = 5000;
+function _e2eResignMay() {
+  if (E2E.typedHere) return false;
+  try { return Date.now() - (Number(sessionStorage.getItem('pental_e2e_resigned')) || 0) > 600000; } catch (e) { return false; }
+}
+function _e2eResignDue() {
+  if (E2E.resigning || !_e2eCanUsePassword() || !_e2eResignMay()) return;
+  var left = _E2E_RESIGN_AFTER_MS - (Date.now() - (E2E.waitSince || 0));
+  if (left > 0) {
+    if (!E2E.resignT) E2E.resignT = setTimeout(function () { E2E.resignT = null; _e2eResignDue(); }, left + 50);
+    return;
+  }
+  E2E.resigning = true;
+  _e2eStatus().then(function () {
+    if (!E2E.on || !E2E.waiting || !_e2eCanUsePassword() || !S || !S.profile) { E2E.resigning = false; return; }
+    try { sessionStorage.setItem('pental_e2e_resigned', String(Date.now())); } catch (e) {}
+    try { if (typeof _showLoading === 'function') _showLoading(); } catch (e) {}
+    try { _saySignedOut('Signed out so that your password can open your encrypted work on this browser. Sign in to carry on.', 'info'); } catch (e) {}
+    _e2eSignInAgain();
+  }, function () { E2E.resigning = false; });
+}
+function _e2eSignInAgain() {
+  try { _e2ePopClose(); } catch (e) {}
+  try { if (typeof logout === 'function') logout(); } catch (e) {}
+}
+window._e2eSignInAgain = _e2eSignInAgain;
 function _e2eKitOpen() { S.modal = { type: 'e2e-kit', extra: {} }; render(); }
-function _e2eKitUseOpen() { S.modal = { type: 'e2e-kit-use', extra: {} }; render(); }
+function _e2eKitUseOpen() { try { _e2ePopClose(); } catch (e) {} S.modal = { type: 'e2e-kit-use', extra: {} }; render(); }
 window._e2eKitOpen = _e2eKitOpen;
 window._e2eKitUseOpen = _e2eKitUseOpen;
 function renderE2eKitModal() {
@@ -28932,7 +29803,7 @@ function renderE2eKitModal() {
   var had = ((E2E.st && E2E.st.wraps) || []).some(function (w) { return w.method === 'kit'; });
   var h = '<div class="modal-header"><h2 class="modal-title">Recovery kit</h2><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div><div class="modal-body e2e-kit">';
   if (!x.code) {
-    h += '<p class="e2e-kit-lead">A code that opens your encrypted work on a new browser, if every browser you have used and your passkey were ever lost. You never need it otherwise.</p>';
+    h += '<p class="e2e-kit-lead">A code that opens your encrypted work on a new browser, if every browser you have used were ever lost and your password forgotten. You never need it otherwise.</p>';
     h += '<ul class="e2e-kit-points"><li>Made here, in your browser. Pental and your database never see it.</li><li>Keep it somewhere safe and offline, such as a password manager or a printed copy.</li>'
       + (had ? '<li>Making a new kit stops your current one working.</li>' : '') + '</ul>';
     h += '</div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM()">Cancel</button><button class="btn btn-primary" id="e2eKitGo" onclick="_e2eKitGo()">' + (had ? 'Make a new kit' : 'Make my kit') + '</button></div>';
@@ -28969,7 +29840,7 @@ async function _e2eKitGo() {
 function _e2eKitText(code) {
   var firm = ((S.data && S.data.settings) || {}).company_name || 'your firm';
   return 'Pental recovery kit\n\nFor: ' + ((S.profile && S.profile.email) || '') + '\nPortal: ' + location.origin + '\nFirm: ' + firm + '\nMade: ' + today()
-    + '\n\n' + code + '\n\nThis opens your end-to-end encrypted work on a new browser if every browser you have used and your passkey were lost.'
+    + '\n\n' + code + '\n\nThis opens your end-to-end encrypted work on a new browser if every browser you have used were lost and your password forgotten.'
     + '\nTo use it: sign in to the portal as usual, then choose Use your recovery kit in the bar at the bottom of the page.'
     + '\nKeep it private. Anyone who has it and can sign in as you can open your work. Making a new kit stops this one working.\n';
 }
@@ -29003,52 +29874,78 @@ function _e2eMyCardShell() {
   if (_e2eOff() || !E2E.avail || !E2E.on) return '';
   setTimeout(function () { _e2eMyLoad(false); }, 0);
   return '<div class="card mb-4" data-e2e-mine><div class="card-header"><span class="card-title">' + _E2E_LOCK.replace('<svg ', '<svg width="16" height="16" style="vertical-align:-3px;margin-right:4px" ')
-    + ' End-to-end encryption</span></div><div class="card-body" id="e2eMine">' + _e2eMyHtml(null) + '</div></div>';
+    + ' End-to-end encryption</span></div><div class="card-body" id="e2eMine">' + _e2eMyHtml(_e2eMyMemo ? _e2eMyMemo.v : null) + '</div></div>';
 }
 window._e2eMyCardShell = _e2eMyCardShell;
 var _e2eMyMemo = null;
 async function _e2eMyLoad(force) {
   var el = document.getElementById('e2eMine');
   if (!el) return;
-  if (!force && _e2eMyMemo && Date.now() - _e2eMyMemo.at < 30000) { el.innerHTML = _e2eMyHtml(_e2eMyMemo.v); return; }
-  var r = await supabaseClient.rpc('rpc_e2e_people');
-  var mine = (!r.error && Array.isArray(r.data)) ? r.data.filter(function (p) { return p.profile_id === (S.profile && S.profile.id); }) : [];
-  _e2eMyMemo = { at: Date.now(), v: mine };
-  el = document.getElementById('e2eMine');
-  if (el) el.innerHTML = _e2eMyHtml(mine);
+
+  var put = function (v) {
+    var e2 = document.getElementById('e2eMine');
+    if (!e2) return;
+    var html = _e2eMyHtml(v);
+    if (_e2eDrawn.get(e2) !== html) { e2.innerHTML = html; _e2eDrawn.set(e2, html); }
+  };
+
+  if (_e2eMyMemo && _e2eDrawn.get(el) === undefined) _e2eDrawn.set(el, _e2eMyHtml(_e2eMyMemo.v));
+  if (!force && _e2eMyMemo && Date.now() - _e2eMyMemo.at < 30000) { put(_e2eMyMemo.v); return; }
+  if (_e2eMyLoad.busy) return;
+  _e2eMyLoad.busy = true;
+  try {
+    var r = (await Promise.all([supabaseClient.rpc('rpc_e2e_people'), _e2eKeptLook()]))[0];
+    var mine = (!r.error && Array.isArray(r.data)) ? r.data.filter(function (p) { return p.profile_id === (S.profile && S.profile.id); }) : [];
+    if (!r.error || !_e2eMyMemo) _e2eMyMemo = { at: Date.now(), v: mine };
+    put(_e2eMyMemo.v);
+  } finally { _e2eMyLoad.busy = false; }
 }
 function _e2eWhenWords(t) { return t ? (typeof fmtDate === 'function' ? fmtDate(t) : String(t).slice(0, 10)) : ''; }
 function _e2eMyHtml(list) {
   var st = E2E.st || {}, h = '';
-  h += '<p class="set-p">Your engagements’ work is encrypted in your browser before it is saved. Each browser you sign in on keeps its own key, which never leaves it; your passkey or password opens your work on a new one, with nothing else to do.</p>';
+  h += '<p class="set-p">Your engagements’ work is encrypted in your browser before it is saved. Each browser you sign in on keeps its own key, which never leaves it; your password opens your work on a new one, with nothing else to do.</p>';
+  var canPw = _e2eCanUsePassword() && !_e2eResignMay();
   h += '<div class="e2e-me-now' + (E2E.waiting ? ' is-waiting' : '') + '">' + _E2E_LOCK + '<span>' + (E2E.waiting
-    ? 'This browser (' + esc(_e2eDeviceLabel()) + ') is being given your keys.'
-    : 'This browser (' + esc(_e2eDeviceLabel()) + ') holds your keys.') + '</span></div>';
-  if (!list) return h + '<p class="sub-text">Loading your browsers…</p>';
+    ? 'This browser (' + esc(_e2eDeviceLabel()) + ') ' + (canPw ? 'has not opened your work before. Sign in again and your password opens it here.' : 'has not been given your keys yet.')
+    : 'This browser (' + esc(_e2eDeviceLabel()) + ') holds your keys.') + '</span>'
+    + (canPw ? '<button type="button" class="btn btn-primary btn-sm" onclick="_e2eSignInAgain()">Sign in again</button>' : '')
+
+    + (E2E.waiting && ((E2E.st && E2E.st.wraps) || []).some(function (w) { return w.method === 'kit'; }) ? '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitUseOpen()">Use your recovery kit</button>' : '') + '</div>';
+
+  if (!list) return h + '<div class="e2e-wait-rows" role="status" aria-label="Loading your browsers"><span class="e2e-shimmer"></span><span class="e2e-shimmer"></span><span class="e2e-shimmer"></span></div>';
   var dev = list.filter(function (p) { return p.kind === 'device'; });
   var acc = list.filter(function (p) { return p.kind === 'account'; });
   var api = list.filter(function (p) { return p.kind === 'apikey'; });
   var meId = E2E.device && E2E.device.id;
   h += '<div class="e2e-list-h">Your browsers</div><div class="e2e-list">';
   dev.forEach(function (p) {
-    h += '<div class="e2e-row"><div class="e2e-row-main"><strong>' + esc(p.label || 'A browser') + '</strong>' + (p.id === meId ? ' <span class="e2e-tag">This one</span>' : '')
-      + '<span class="e2e-row-sub">Added ' + esc(_e2eWhenWords(p.created_at)) + (p.last_seen_at ? ', last used ' + esc(_e2eWhenWords(p.last_seen_at)) : '') + '</span></div>'
+
+    h += '<div class="e2e-row"><div class="e2e-row-main"><span class="e2e-row-name"><strong>' + esc(p.label || 'A browser') + '</strong>' + (p.id === meId ? '<span class="e2e-tag">This one</span>' : '') + '</span>'
+      + '<span class="e2e-row-sub">Added ' + esc(_e2eWhenWords(p.created_at)) + (p.last_seen_at ? ', last used ' + esc(_e2eWhenAt(p.last_seen_at)) : '')
+      + (Number(p.keys) > 0 ? '' : '. Not given your keys yet') + '</span></div>'
       + (p.id === meId ? '' : '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eRemove(\'' + esc(p.id) + '\')">Remove</button>') + '</div>';
   });
   if (!dev.length) h += '<div class="e2e-row"><span class="e2e-row-sub">None yet.</span></div>';
   h += '</div>';
-  var methods = {};
-  acc.forEach(function (p) { (p.methods || []).forEach(function (m) { methods[m] = (methods[m] || 0) + 1; }); });
+
+  var methods = {}, holds = {};
+  acc.forEach(function (p) { (p.methods || []).forEach(function (m) { methods[m] = (methods[m] || 0) + 1; if (Number(p.keys) > 0) holds[m] = (holds[m] || 0) + 1; }); });
+  var soon = E2E.waiting ? 'Set up. It opens your work on any browser once a browser that holds your keys has been open.' : 'Set up a moment ago, and being given your keys now.';
   h += '<div class="e2e-list-h">What opens your work on a new browser</div><div class="e2e-list">';
-  h += '<div class="e2e-row"><div class="e2e-row-main"><strong>Your passkey</strong><span class="e2e-row-sub">' + (methods.passkey
-    ? (methods.passkey === 1 ? 'Your passkey opens it as you sign in.' : methods.passkey + ' passkeys open it as you sign in.')
-    : 'Sign in once with a passkey that supports this (most do) and it opens your work on a new browser.') + '</span></div></div>';
-  h += '<div class="e2e-row"><div class="e2e-row-main"><strong>Your password</strong><span class="e2e-row-sub">' + (methods.password
+  h += '<div class="e2e-row"><div class="e2e-row-main"><strong>Your password</strong><span class="e2e-row-sub">' + (holds.password
     ? 'Your password opens it as you sign in.'
-    : 'Sign in once with your password and it opens your work on a new browser.') + '</span></div></div>';
+    : methods.password ? soon
+    : 'Not yet. Sign out and sign in again with your password: from then on it opens your work on any browser.') + '</span></div></div>';
+
+  if (holds.invite) h += '<div class="e2e-row"><div class="e2e-row-main"><strong>A reset password</strong><span class="e2e-row-sub">'
+    + (_e2eKeptOffNow()
+
+      ? 'The database keeps you a key under two locks, its own and Pental’s, but Pental’s half is not there at the moment: until it is, a reset password on a browser that holds none of your keys waits for a teammate’s portal to be open.'
+      : 'If you forget your password, reset it from the sign-in page. The new one opens your work, with a key the database keeps for you'
+        + (_e2eKeptTool() ? '.' : ' under two locks, its own and Pental’s.')) + '</span></div></div>';
   h += '<div class="e2e-row"><div class="e2e-row-main"><strong>Recovery kit</strong><span class="e2e-row-sub">' + (methods.kit
-    ? 'Saved. It opens your work if every browser you have and your passkey were lost.'
-    : 'Optional. A code you keep, for the case where every browser you have and your passkey were lost.') + '</span></div>'
+    ? 'Saved. It opens your work if every browser you have were lost and your password forgotten.'
+    : 'Optional. A code you keep, for the case where every browser you have were lost and your password forgotten.') + '</span></div>'
     + '<div class="e2e-row-acts">' + (methods.kit
       ? '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitOpen()">Make a new kit</button><button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitRemove()">Remove</button>'
       : '<button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitOpen()"' + (E2E.waiting ? ' disabled' : '') + '>Save a recovery kit</button>') + '</div></div>';
@@ -29058,7 +29955,7 @@ function _e2eMyHtml(list) {
     api.forEach(function (p) { h += '<div class="e2e-row"><div class="e2e-row-main"><strong>' + esc(p.label || 'API key') + '</strong><span class="e2e-row-sub">Added ' + esc(_e2eWhenWords(p.created_at)) + '</span></div></div>'; });
     h += '</div>';
   }
-  h += '<p class="sub-text" style="margin-top:0.75rem">A teammate’s portal gives a new browser of yours its keys too, as soon as both are open. <a href="' + _E2E_HOW + '" target="_blank" rel="noopener">How it works</a></p>';
+  h += '<p class="e2e-note">A teammate’s portal gives a new browser of yours its keys too, as soon as both are open. <a href="' + _E2E_HOW + '" target="_blank" rel="noopener">How it works</a></p>';
   return h;
 }
 async function _e2eRemove(pid) {
@@ -29071,7 +29968,7 @@ async function _e2eRemove(pid) {
   var s = document.getElementById('e2eFirm'); if (s) _e2eSetLoad(true);
 }
 async function _e2eKitRemove() {
-  if (!(await confirmAsync('Your recovery kit will no longer open your work. Your browsers, passkey and password still do.', { title: 'Remove recovery kit', confirmText: 'Remove' }))) return;
+  if (!(await confirmAsync('Your recovery kit will no longer open your work. Your browsers and password still do.', { title: 'Remove recovery kit', confirmText: 'Remove' }))) return;
   var r = await supabaseClient.rpc('rpc_e2e_drop_wrap', { p_method: 'kit', p_ref: '' });
   if (r.error) { toast(_errMsg(r.error) || 'It could not be removed.', 'error'); return; }
   await _e2eStatus();
@@ -29094,7 +29991,8 @@ async function _e2eSetLoad(force) {
     var res = await Promise.all([
       supabaseClient.rpc('rpc_e2e_people'),
       supabaseClient.rpc('rpc_e2e_events', { p_limit: 30 }),
-      supabaseClient.rpc('rpc_e2e_plain_count')
+      supabaseClient.rpc('rpc_e2e_plain_count'),
+      _e2eKeptLook()
     ]);
     _e2eSetMemo = { at: Date.now(), people: Array.isArray(res[0].data) ? res[0].data : [], events: Array.isArray(res[1].data) ? res[1].data : [],
                     left: (res[2] && !res[2].error && res[2].data) || {} };
@@ -29105,38 +30003,46 @@ async function _e2eSetLoad(force) {
 }
 var _E2E_EVENT_WORDS = {
   activated: 'turned encryption on', device_added: 'signed in on a new browser', account_key: 'made a key their sign-in opens',
-  granted: 'was given keys', removed: 'had a key removed', kit_made: 'saved a recovery kit', client_key: 'made a client’s key', apikey_key: 'made an API key that opens it'
+  granted: 'was given keys', removed: 'had a key removed', kit_made: 'saved a recovery kit', client_key: 'made a client’s key', apikey_key: 'made an API key that opens it',
+
+  invite_made: 'was given a key your database keeps for them', invite_used: 'opened their work with the key your database keeps for them'
 };
 function _e2eSetHtml(m) {
   var st = E2E.st || {}, h = '';
   if (!st.active) {
-    h += '<p class="set-p">End-to-end encryption turns on by itself the first time an administrator signs in after the update, and encrypts the work already here in the background.</p>';
+
+    h += '<p class="set-p">End-to-end encryption turns on by itself the next time an administrator signs in, and encrypts the work already here in the background.'
+      + (st.role === 'admin' && st.auto !== false ? ' To turn it on now, sign out and sign in again.' : '') + '</p>';
     return h;
   }
   h += '<div class="e2e-status"><span class="e2e-status-dot"></span><div><strong>On since ' + esc(_e2eWhenWords(st.activated_at)) + '</strong>'
     + '<span>Findings, notes, comments, the QA review, the timeline, scan results, the asset inventory, tickets, credentials and every engagement file are encrypted in each browser before they are saved. Client and engagement names, dates, statuses, severities, proposals and invoices stay readable, so billing, the calendar and counts keep working.</span></div></div>';
-  if (!m) return h + '<p class="sub-text">Loading…</p>';
-  var left = 0;
-  Object.keys(m.left || {}).forEach(function (k) { left += Number(m.left[k]) || 0; });
+  if (!m) return h + '<div class="e2e-wait-rows" role="status" aria-label="Loading"><span class="e2e-shimmer"></span><span class="e2e-shimmer"></span><span class="e2e-shimmer"></span></div>';
+  var left = _e2eLeftOf(m.left);
   var mig = st.migration || {};
-  h += '<div class="e2e-progress">' + (left
-    ? '<strong>' + left.toLocaleString() + ' item' + (left === 1 ? '' : 's') + ' saved before still to encrypt.</strong> This happens in the background in an administrator’s or a senior’s browser while the portal is open.'
-    : '<strong>Everything here is encrypted.</strong>' + (mig.sealed_rows || mig.sealed_files ? ' The work saved before encryption was turned on has been encrypted too.' : '')) + '</div>';
+  h += '<div class="e2e-progress" id="e2eProgress">' + _e2eProgressHtml(left, mig) + '</div>';
+  h += _e2eKeptOffHtml();
+  if (left) _e2eProgressWatch();
   var byPerson = {};
   (m.people || []).forEach(function (p) {
     var k = p.profile_id;
     if (!byPerson[k]) byPerson[k] = { name: p.name || p.email || 'Someone', role: p.role, devices: [], methods: {}, api: 0 };
     if (p.kind === 'device') byPerson[k].devices.push(p);
-    else if (p.kind === 'account') (p.methods || []).forEach(function (x) { byPerson[k].methods[x] = 1; });
+
+    else if (p.kind === 'account') { if (Number(p.keys) > 0) (p.methods || []).forEach(function (x) { byPerson[k].methods[x] = 1; }); }
     else if (p.kind === 'apikey') byPerson[k].api++;
   });
   var people = Object.keys(byPerson).map(function (k) { return byPerson[k]; }).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
   h += '<div class="e2e-list-h">People and their browsers</div><div class="e2e-list">';
   people.forEach(function (p) {
     var ms = [];
-    if (p.methods.passkey) ms.push('passkey'); if (p.methods.password) ms.push('password'); if (p.methods.kit) ms.push('recovery kit');
-    h += '<div class="e2e-row"><div class="e2e-row-main"><strong>' + esc(p.name) + '</strong> <span class="e2e-tag">' + esc(_roleWord(p.role)) + '</span>'
-      + '<span class="e2e-row-sub">' + p.devices.length + (p.devices.length === 1 ? ' browser' : ' browsers') + (ms.length ? '; opened on a new one by their ' + ms.join(', ') : '') + (p.api ? '; ' + p.api + ' API key' + (p.api === 1 ? '' : 's') : '') + '</span>'
+    if (p.methods.password) ms.push('password'); if (p.methods.kit) ms.push('recovery kit');
+
+    h += '<div class="e2e-row"><div class="e2e-row-main"><span class="e2e-row-name"><strong>' + esc(p.name) + '</strong><span class="e2e-tag">' + esc(_roleWord(p.role)) + '</span></span>'
+      + '<span class="e2e-row-sub">' + p.devices.length + (p.devices.length === 1 ? ' browser' : ' browsers') + (ms.length ? '; opened on a new one by their ' + ms.join(', ') : '')
+      + (p.methods.invite ? (_e2eKeptOffNow()
+          ? '; a key is kept for them, which cannot be opened at the moment'
+          : p.devices.length ? '; a reset password opens it too, with the key your database keeps for them' : '; their first sign-in is ready, and opens their work with nobody else online') : '') + (p.api ? '; ' + p.api + ' API key' + (p.api === 1 ? '' : 's') : '') + '</span>'
       + (p.devices.length ? '<span class="e2e-row-devs">' + p.devices.map(function (d) {
         return '<span class="e2e-dev">' + esc(d.label || 'A browser') + (d.last_seen_at ? ', ' + esc(_e2eWhenWords(d.last_seen_at)) : '')
           + ' <button type="button" class="e2e-x" title="Remove this browser" aria-label="Remove ' + esc(d.label || 'this browser') + '" onclick="_e2eRemove(\'' + esc(d.id) + '\')">&times;</button></span>';
@@ -29144,7 +30050,7 @@ function _e2eSetHtml(m) {
   });
   if (!people.length) h += '<div class="e2e-row"><span class="e2e-row-sub">Nobody yet.</span></div>';
   h += '</div>';
-  if (Number(st.holders) <= 1) h += '<div class="alert alert-info" style="margin-top:0.75rem">Only one person holds your firm’s keys. Sign in on a second device, add a passkey, or save a recovery kit on My Profile, so a lost browser never locks the firm out.</div>';
+  if (Number(st.holders) <= 1) h += '<div class="alert alert-info" style="margin-top:0.75rem">Only one person holds your firm’s keys. Sign in on a second device, or save a recovery kit on My Profile, so a lost browser never locks the firm out.</div>';
   if ((m.events || []).length) {
     h += '<div class="e2e-list-h">Recent activity</div><div class="e2e-events">';
     m.events.slice(0, 15).forEach(function (e) {
@@ -29157,6 +30063,102 @@ function _e2eSetHtml(m) {
   }
   return h;
 }
+function _e2eLeftOf(left) {
+  var n = 0;
+  Object.keys(left || {}).forEach(function (k) { n += Number(left[k]) || 0; });
+  return n;
+}
+function _e2eLeftKey() { return 'pental_e2e_left0:' + String(TENANT_ID || location.host); }
+function _e2eLeftWas(left) {
+  var was = 0;
+  try { was = Number(localStorage.getItem(_e2eLeftKey())) || 0; } catch (e) {}
+  if (!left) { if (was) { try { localStorage.removeItem(_e2eLeftKey()); } catch (e) {} } return 0; }
+  if (left > was) { was = left; try { localStorage.setItem(_e2eLeftKey(), String(was)); } catch (e) {} }
+  return was;
+}
+function _e2eProgressHtml(left, mig) {
+  var was = _e2eLeftWas(left);
+  if (!left) return '<strong>Everything here is encrypted.</strong>' + (mig && (mig.sealed_rows || mig.sealed_files) ? ' The work saved before encryption was turned on has been encrypted too.' : '');
+  var done = Math.max(0, was - left), pct = was ? Math.min(99, Math.floor(done * 100 / was)) : 0;
+  return '<div class="e2e-progress-head"><strong>Encrypting the work saved before</strong><span>' + (done
+      ? done.toLocaleString() + ' of ' + was.toLocaleString() + ' items'
+      : left.toLocaleString() + ' item' + (left === 1 ? '' : 's') + ' to go') + '</span></div>'
+    + '<div class="e2e-meter' + (done ? '' : ' is-starting') + '" role="progressbar" aria-label="Encrypting the work saved before" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><span style="width:' + Math.max(pct, 3) + '%"></span></div>'
+    + '<span class="e2e-progress-sub">It carries on in the background in an administrator’s or a senior’s browser while the portal is open. Everything saved from now on is encrypted as it is saved.</span>';
+}
+function _e2eProgressWatch() {
+  if (E2E.progT) return;
+  E2E.progT = setInterval(async function () {
+    var el = document.getElementById('e2eProgress');
+    if (!el || !E2E.on) { clearInterval(E2E.progT); E2E.progT = null; return; }
+    if (document.hidden) return;
+    try {
+      var r = await supabaseClient.rpc('rpc_e2e_plain_count');
+      if (r.error) return;
+      var left = _e2eLeftOf(r.data);
+      if (_e2eSetMemo) _e2eSetMemo.left = r.data || {};
+      el = document.getElementById('e2eProgress');
+      if (el) el.innerHTML = _e2eProgressHtml(left, (E2E.st || {}).migration || {});
+      if (!left) { clearInterval(E2E.progT); E2E.progT = null; }
+    } catch (e) {}
+  }, 5000);
+}
+function _e2eDressState() {
+  if (E2E.opening) return 'opening';
+  return (E2E.waiting && Date.now() - (E2E.waitSince || 0) < _E2E_WAIT_LOOK_MS) ? 'opening' : 'locked';
+}
+function _e2eDress(root) {
+  if (!root || typeof document === 'undefined' || !document.createTreeWalker) return 0;
+  var hits = [], n, w = document.createTreeWalker(root, 4 , null);
+  while ((n = w.nextNode())) { var v = n.nodeValue; if (v.length >= _E2E_LOCKED.length && v.indexOf(_E2E_LOCKED) >= 0) hits.push(n); }
+  if (!hits.length) return 0;
+  var state = _e2eDressState(), made = 0;
+  hits.forEach(function (t) {
+    var p = t.parentNode;
+    if (!p || p.nodeType !== 1) return;
+    if (p.closest('.e2e-locked,textarea,select,option,script,style,title,[contenteditable]:not([contenteditable="false"])')) return;
+    var parts = t.nodeValue.split(_E2E_LOCKED), frag = document.createDocumentFragment();
+    for (var i = 0; i < parts.length; i++) {
+      if (i) {
+        var sp = document.createElement('span');
+        sp.className = 'e2e-locked';
+        sp.setAttribute('data-e2e-state', state);
+        sp.title = 'Locked: it is end-to-end encrypted, and this browser has not been given the key that opens it yet';
+        sp.textContent = _E2E_LOCKED;
+        frag.appendChild(sp);
+        made++;
+      }
+      if (parts[i]) frag.appendChild(document.createTextNode(parts[i]));
+    }
+    p.replaceChild(frag, t);
+  });
+  return made;
+}
+function _e2eDressWatch() {
+  if (typeof document === 'undefined' || typeof MutationObserver === 'undefined' || !document.body) return;
+  var need = !!(E2E.on && (E2E.waiting || E2E.lockedN));
+  if (!need) {
+    if (E2E.dressObs) { try { E2E.dressObs.disconnect(); } catch (e) {} E2E.dressObs = null; }
+    return;
+  }
+  var state = _e2eDressState();
+  try { document.querySelectorAll('.e2e-locked').forEach(function (el) { if (el.getAttribute('data-e2e-state') !== state) el.setAttribute('data-e2e-state', state); }); } catch (e) {}
+  if (E2E.dressObs) return;
+  var due = false;
+  var pass = function () {
+    due = false;
+    if (!E2E.dressObs) return;
+    try { _e2eDress(document.body); } catch (e) {}
+  };
+  E2E.dressObs = new MutationObserver(function () {
+    if (due) return;
+    due = true;
+    (window.requestAnimationFrame || setTimeout)(pass);
+  });
+  try { E2E.dressObs.observe(document.body, { childList: true, subtree: true, characterData: true }); } catch (e) { E2E.dressObs = null; return; }
+  pass();
+}
+Object.assign(window, { _e2eDress: _e2eDress, _e2eDressWatch: _e2eDressWatch });
 function _e2eForget() {
   if (E2E.loops && E2E.loops.t) clearInterval(E2E.loops.t);
   if (E2E.watch) { clearInterval(E2E.watch); E2E.watch = null; }
@@ -29164,6 +30166,15 @@ function _e2eForget() {
   E2E.loops = null; E2E.ready = null; E2E.on = false; E2E.waiting = false; E2E.st = null;
   E2E.device = null; E2E.factors = {}; E2E.keys = {}; E2E.keyP = {}; E2E.pubs = {}; E2E.byClient = {};
   E2E.firmKid = null; E2E.grants = []; E2E.cache = new Map(); E2E.cacheBytes = 0; E2E.stash = null; E2E.making = {};
+  E2E._newFactorPw = null; E2E.waitWho = null; E2E.waitAsked = 0; E2E.waitSince = 0; E2E.askedAgain = {};
+  if (E2E.waitT) { clearTimeout(E2E.waitT); E2E.waitT = null; }
+  if (E2E.progT) { clearInterval(E2E.progT); E2E.progT = null; }
+  if (E2E.resignT) { clearTimeout(E2E.resignT); E2E.resignT = null; }
+  if (E2E.keysSoonDone) E2E.keysSoonDone();
+  E2E.holding = false;
+  E2E.typedHere = false; E2E.barSince = 0; E2E.resigning = false;
+  if (E2E.dressObs) { try { E2E.dressObs.disconnect(); } catch (e) {} E2E.dressObs = null; }
+  E2E.opening = false; E2E.lockedN = 0;
   Object.keys(E2E.clientOf).forEach(function (t) { E2E.clientOf[t] = {}; });
 }
 window._e2eForget = _e2eForget;
@@ -29268,6 +30279,8 @@ window._closeMAsking = _closeMAsking;
 function closeM() {
 
   if (_mIsDismissGesture() && _mIsDirty()) { _closeMAsking(); return; }
+
+  try { if (typeof _edPopEl !== 'undefined' && _edPopEl) _edClosePop(); S._cvssKept = null; } catch (e) {}
   _mDirty = false; _mTyped = []; _mPaint = null;
   _mBaselineKey = ''; _mModalRef = null;
 
@@ -29308,6 +30321,8 @@ function closeM() {
   _mStayRefreshDue = false; _mStayReq = null; _mStayAgain = false; _mSaved = null;
   var _codesDue = !!S._codesDue;
   S._codesDue = false;
+
+  try { var _mkGone = document.querySelectorAll('.modal-content'); for (var _gi = 0; _gi < _mkGone.length; _gi++) _mkGone[_gi].__mkDone = true; } catch (e) {}
   S.modal = null; _propAuthLastCapture = null; S._propAuthMode = null; document.body.style.overflow = ''; render();
   if (_codesDue) setTimeout(function () { try { generateMissingJobCodes(); } catch (e) {} }, 500);
   if (_stayDue) setTimeout(function () { try { refreshAndStay(); } catch (e) {} }, 0);
@@ -29581,6 +30596,8 @@ document.addEventListener('keydown', function(e) {
 
     var overlay = document.getElementById('confirmOverlay');
     if (overlay) { closeConfirm(false); return; }
+
+    if (typeof _edPopEl !== 'undefined' && _edPopEl) { _edClosePop(); return; }
 
     if (S.modal) { closeM(); }
   }
@@ -36706,7 +37723,7 @@ async function _archiveItems(table, items, label) {
   confirmDialog('Archive ' + label, 'Archive ' + items.length + ' ' + label.toLowerCase() + '? You can restore them later.', async function() {
     _showLoading(); try {
       var ts = _archiveNow();
-      await supabaseClient.from(table).update({ archived_at: ts }).in('id', items.map(function(i) { return i.id; }));
+      await _inParts(items.map(function(i) { return i.id; }), function (part) { return supabaseClient.from(table).update({ archived_at: ts }).in('id', part); });
 
       items.forEach(function(i) { i.archived_at = ts; });
       render();
@@ -36809,8 +37826,8 @@ function emptyAssessmentArchive() {
   confirmDialog('Empty Assessment Archive', '<p>Permanently delete '+items.length+' archived assessment'+(items.length>1?'s':'')+'?</p><p style="color:var(--red-text);font-weight:600">This cannot be undone.</p>', async function() {
     _showLoading(); try {
       var ids = items.map(function(a){return a.id;});
-      await supabaseClient.from('qa_comments').delete().in('assessment_id',ids);
-      await supabaseClient.from('assessment_comments').delete().in('assessment_id',ids);
+      await _inParts(ids, function (part) { return supabaseClient.from('qa_comments').delete().in('assessment_id', part); }, true);
+      await _inParts(ids, function (part) { return supabaseClient.from('assessment_comments').delete().in('assessment_id', part); }, true);
 
       try {
         var _archFiles = (S.data.files || []).filter(function(f) { return ids.indexOf(f.assessment_id) >= 0 && f.storage_path; });
@@ -36834,14 +37851,14 @@ function emptyAssessmentArchive() {
         _aPaths = _pathsNotSharedElsewhere(_aPaths, {});
         if (_aPaths.length) { await supabaseClient.storage.from('assessment-files').remove(_aPaths); }
       } catch(e) { console.warn('Assessment storage cleanup:', e.message); }
-      await supabaseClient.from('assessment_files').delete().in('assessment_id',ids);
-      await supabaseClient.from('timeline_events').delete().in('assessment_id',ids);
-      await supabaseClient.from('findings').delete().in('assessment_id',ids);
-      await supabaseClient.from('contractor_payments').delete().in('assessment_id',ids);
-      await supabaseClient.from('feedback').delete().in('assessment_id',ids);
-      await supabaseClient.from('invoices').delete().in('assessment_id',ids);
-      await supabaseClient.from('proposals').delete().in('assessment_id',ids);
-      await supabaseClient.from('assessments').delete().in('id',ids);
+      await _inParts(ids, function (part) { return supabaseClient.from('assessment_files').delete().in('assessment_id', part); }, true);
+      await _inParts(ids, function (part) { return supabaseClient.from('timeline_events').delete().in('assessment_id', part); }, true);
+      await _inParts(ids, function (part) { return supabaseClient.from('findings').delete().in('assessment_id', part); }, true);
+      await _inParts(ids, function (part) { return supabaseClient.from('contractor_payments').delete().in('assessment_id', part); }, true);
+      await _inParts(ids, function (part) { return supabaseClient.from('feedback').delete().in('assessment_id', part); }, true);
+      await _inParts(ids, function (part) { return supabaseClient.from('invoices').delete().in('assessment_id', part); }, true);
+      await _inParts(ids, function (part) { return supabaseClient.from('proposals').delete().in('assessment_id', part); }, true);
+      await _inParts(ids, function (part) { return supabaseClient.from('assessments').delete().in('id', part); });
       toast(items.length+' deleted','success'); await refreshAndStay();
     } catch(e) { toast('Error: '+e.message,'error'); } finally { _hideLoading(); }
   });
@@ -38751,7 +39768,8 @@ function _evNeedsLayout(ed) {
 
   var sees = typeof _aiCanSeeImages !== 'function' || _aiCanSeeImages();
   if (sees && _evImages(ed).some(function (img) { return _evUnexplained(img, ed); })) return true;
-  return _evBlockItems(ed).some(function (b) { var a = _evBlockAbove(b); return !a.lines.length && !a.lead; });
+
+  return _evBlockItems(ed).some(function (b) { var a = _evBlockAbove(b); return !a.lines.length && (!a.lead || _evLeadIsLabel(a.lead)); });
 }
 function _evUnexplained(img, ed) {
   return !_evLineKept(img, ed, true) || _evCapWanted(img, ed);
@@ -38878,6 +39896,191 @@ function _evAskedWords(figs, blks) {
   var w = (figs || []).map(function (x) { return 'Figure ' + x.n; }).concat((blks || []).map(function (x) { return 'Block ' + x.n; }));
   return w.length < 3 ? w.join(' and ') : w.slice(0, -1).join(', ') + ' and ' + w[w.length - 1];
 }
+var _EV_PROSE_WORDS = (function () {
+  var o = Object.create(null);
+  ('the a an is are was were be been being am of to in on at by for from with without into onto over under about after before between through during against '
+    + 'and or but so if then than that this these those it its they them their there here we our us i my you your he she his her which who whom whose what when where why how '
+    + 'not no nor can could may might must shall should will would do does did done has have had having also only just very more most much many some any all each every both '
+    + 'either neither other another such same own too as because however although though while until since unless whether via using used use uses '
+    + 'shows show showed shown gives gave given returns returned allows allowed allow leaks leaked discloses disclosed exposes exposed accepts accepted bypasses bypassed '
+    + 'works worked fails failed found tested confirmed checked tried seems appears vulnerable missing enabled disabled accessible possible able see seen noted note below above'
+
+    + ' les des une est dans pour pas que qui avec sont cette mais nous vous aussi peut ont cela donc alors'
+    + ' und das ist nicht mit auf von ein eine wird wurde kann sich auch bei nach aus wie oder aber dass zum zur durch sind werden'
+    + ' los las una por para son como pero sus este esta puede desde sobre porque cuando'
+    + ' och att det som med den inte har till ett vid eller men kan ska'
+    + ' og ikke fra av et ved skal blir ble'
+    + ' ja ei oli tai kun niin mutta voi ovat joka kuin vain jos ole'
+    + ' \u00e9t\u00e9 \u00eatre f\u00fcr \u00fcber est\u00e1 m\u00e1s tambi\u00e9n fr\u00e5n \u00e4r p\u00e5 n\u00e4r n\u00e5r ogs\u00e5 ett\u00e4 my\u00f6s t\u00e4m\u00e4 sek\u00e4')
+    .split(' ').forEach(function (w) { o[w] = 1; });
+  return o;
+})();
+function _evNoQuotes(s) {
+  return String(s == null ? '' : s).replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/(^|[\s=(,\[{:])'(?:[^'\\]|\\.)*'(?=$|[\s)\],;}:])/g, "$1''");
+}
+function _evHasProse(s) {
+  return _evNoQuotes(s).toLowerCase().split(/\s+/).some(function (w) { w = w.replace(/^[("'\[]+|[)"'\].,;:!?]+$/g, ''); return !!w && !!_EV_PROSE_WORDS[w]; });
+}
+var _EV_PROMPT = /^(?:\$\s+\S|(?:PS\s+)?[A-Za-z]:\\[^>\n]{0,160}>\s*\S|PS>\s*\S|[\w.-]+@[\w.-]+:[^\s#$]*[#$]\s+\S|>>>\s+\S|(?:mysql|sqlite|psql|msf\d?|meterpreter|sqlmap|s?ftp|redis[\w.:-]*|mongo\w*)\s*(?:\([^)]*\))?\s*[>#]\s*\S)/i;
+var _EV_HEREDOC = /<<-?\s*(['"]?)([A-Za-z_]\w*)\1\s*$/;
+var _EV_STMTS = [
+  /^import\s+[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*\s*;?$/,
+  /^import\s+(?:[\w*{}\s,$]+\s+from\s+)?['"][^'"]+['"]\s*;?$/,
+  /^from\s+[\w.]+\s+import\s+[\w.*(), ]+$/,
+  /^(?:#include\s*[<"]|#define\s+\w|#!\s*\/|<\?(?:php|xml)\b)/,
+  /^(?:using|package|namespace)\s+[\w.:\\]+\s*;\s*$/,
+  /^(?:def|class|function|func|fn|sub)\s+[\w$]+\s*[(:{<]/,
+  /^(?:async\s+)?function\s*[\w$]*\s*\(/,
+  /^(?:if|else\s+if|elif|while|for|foreach|switch|catch|with)\s*\(.*\)\s*[{:]?\s*$/,
+  /^(?:\}\s*)?(?:else|try|finally|do)\s*[{:]\s*$/,
+  /^(?:for|while|until|if)\s.+;\s*(?:do|then)\b/,
+  /^(?:do|done|fi|then|esac)\s*;?$/,
+  /^(?:(?:const|let|var|val|final|static|public|private|protected|export|local|declare|readonly|global)\s+)*[\w$.\[\]'"-]+\s*[-+*\/%|&^:]?=\s*(?:"[^"]*"|'[^']*'|`[^`]*`|\S+)\s*;?$/,
+  /^return\b.*;\s*$/,
+  /^(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|GRANT|UNION)\b.*;\s*$/,
+
+  /^(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT)\s+\S+\s+HTTP\/\d(?:\.\d)?$/,
+  /^HTTP\/\d(?:\.\d)?\s+\d{3}(?:\s+[A-Z][A-Za-z-]*){0,4}$/,
+
+  /^\[[+*!\-]\]\s+\S/,
+  /^\[?\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/,
+  /^\d{2}:\d{2}:\d{2}[.,]?\d*\s+\S/,
+  /^\[?(?:INFO|WARN|WARNING|ERROR|DEBUG|TRACE|FATAL)\]?[\s:]\s*\S/,
+  /^at\s+[\w.$<>]+\s*\(.*\)$/,
+  /^Traceback \(most recent call last\):$/,
+  /^File ".*", line \d+/,
+  /^[bcdlps-][rwxsStT-]{9}[.+@]?\s+\d+\s/,
+  /^[0-9a-f]{4,8}:?\s+(?:[0-9a-f]{2,4}\s+){2,}/i,
+  /^uid=\d+\([^)]*\)(?:\s+\w+=\S+)*$/
+];
+var _EV_HEADER = /^(?:Host|Server|Date|Accept(?:-[A-Za-z]+)*|User-Agent|Content-[A-Za-z-]+|Cookie|Set-Cookie|Location|Authorization|Proxy-[A-Za-z-]+|Cache-Control|Connection|Origin|Referer|Pragma|Expires|ETag|Last-Modified|Vary|Via|Upgrade(?:-Insecure-Requests)?|Transfer-Encoding|Strict-Transport-Security|WWW-Authenticate|X-[A-Za-z0-9-]+|Access-Control-[A-Za-z-]+|Sec-[A-Za-z-]+|If-[A-Za-z-]+|Keep-Alive|Retry-After|Referrer-Policy|Permissions-Policy|Cross-Origin-[A-Za-z-]+):\s+\S/;
+var _EV_TOOLS = (function () {
+  var o = Object.create(null);
+  ('cat grep egrep fgrep ls cd cp mv rm mkdir rmdir chmod chown chgrp ln xargs wc xxd hexdump md5sum sha1sum sha256sum printf printenv whoami hostname uname ps df du lsblk '
+    + 'ping traceroute tracert nslookup dig whois curl wget nc ncat netcat telnet ssh scp sftp ftp rsync nmap masscan rustscan naabu sqlmap nikto gobuster dirb ffuf wfuzz feroxbuster '
+    + 'hydra medusa hashcat msfconsole msfvenom searchsploit enum4linux smbclient smbmap rpcclient crackmapexec nxc netexec evil-winrm ldapsearch kerbrute certipy openssl sslscan sslyze '
+    + 'testssl.sh nuclei httpx subfinder amass wpscan whatweb wafw00f python python2 python3 pip pip3 perl ruby php npm npx gcc docker kubectl terraform aws gcloud git tar unzip gunzip '
+    + 'apt-get systemctl journalctl crontab ifconfig iptables netstat tcpdump tshark powershell pwsh netsh ipconfig systeminfo tasklist wmic certutil findstr icacls schtasks nltest setspn '
+    + 'klist psql mysql sqlite3 mongosh redis-cli sqlcmd jq chroot gdb strace ltrace objdump readelf ldd adb frida apktool jadx dalfox commix chisel socat proxychains awk sed')
+    .split(' ').forEach(function (w) { o[w] = 1; });
+  return o;
+})();
+var _EV_TARGET = /[\/\\~$@]|^\d{1,3}(?:\.\d{1,3}){3}(?:[:\/]\d+)?$|^[\w-]+(?:\.[\w-]+)*\.[A-Za-z][\w-]*$/;
+function _evCodeLine(line, cmdOnly) {
+  var t = String(line == null ? '' : line).replace(/ /g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return false;
+  if (_EV_PROMPT.test(t) || _EV_HEREDOC.test(t)) return true;
+  if (cmdOnly !== true && _EV_STMTS.some(function (re) { return re.test(t); })) return true;
+  var bare = _evNoQuotes(t);
+
+  if (cmdOnly !== true && /^(?:(?:await|return|new|yield|echo|print)\s+)?[A-Za-z_$][\w$]*(?:\.[\w$]+|\[[^\]]*\]|::[\w$]+|->[\w$]+)*\(.*\)\s*;?$/.test(t)) {
+    var out = bare;
+    for (var i = 0; i < 4; i++) out = out.replace(/\([^()]*\)/g, ' ');
+    if (!_evHasProse(out)) return true;
+  }
+
+  if (_evHasProse(bare)) return false;
+  var rest = bare.replace(/^[#>%]\s+/, '');
+  var first = rest.split(' ')[0] || '';
+  var cmd = /^(?:\.{0,2}\/)?[a-z0-9_][a-z0-9_.+-]*(?:\/[\w.+-]+)*$/.test(first) || /^[A-Z][a-z]+-[A-Z][A-Za-z]+$/.test(first) || /^[A-Za-z]:\\\S+$/.test(first);
+  var flag = /\s-{1,2}[A-Za-z][\w-]*(?:[=:]\S+)?(?=\s|$)/.test(rest);
+  var op = /\s\|\s*[a-z.\/~]|\|\||&&|\s>>?\s*(?:[\w.-]*[\/.][\w.\/-]*|&\d|\$\w)|\s2>&?\d?|\$\(/.test(rest);
+  if (cmd && (flag || op)) return true;
+
+  if (cmd) {
+    var ws = rest.split(' ');
+    if (/^(?:sudo|doas)$/.test(ws[0])) ws.shift();
+    var tool = String(ws[0] || '').replace(/^(?:\.{0,2}\/)?(?:[\w.+-]+\/)*/, '');
+    var args = ws.slice(1);
+    if (args.length && _EV_TOOLS[tool]) {
+      if (/^(?:e|f)?grep$|^findstr$/.test(tool) && args.length >= 2) args = args.slice(1);
+      if (args.some(function (a) { return _EV_TARGET.test(a); }) && args.every(function (a) { return _EV_TARGET.test(a) || /^\d+$/.test(a); })) return true;
+    }
+  }
+  if (cmdOnly === true) return false;
+  if (_EV_HEADER.test(t)) return true;
+
+  return /^<[!?\/A-Za-z][^<>]*>/.test(t) && />$/.test(t);
+}
+function _evColumns(line) {
+  var t = String(line == null ? '' : line).replace(/ /g, ' ').trim().replace(/([.!?:;,]) {2,}(?=\S)/g, '$1 ');
+  if (/\S\t+\S/.test(t) || /\S {3,}\S/.test(t)) return true;
+  var m = t.match(/\S {2}(?=\S)/g);
+  return !!m && m.length >= 2;
+}
+function _evOutputLine(line) {
+  var s = String(line == null ? '' : line).replace(/ /g, ' ');
+  var t = s.trim();
+  if (!t) return false;
+  if (!/[A-Za-z]{2}/.test(t)) return true;
+  if (_evColumns(s)) return true;
+  var m = /^([\w.()\/\[\]#-]+)\s*[:=]\s*(\S+(?:\s\S+){0,2})$/.exec(t.replace(/\s+/g, ' '));
+  if (m && /[\d_\/\\()]|[a-z][A-Z]/.test(m[1] + ' ' + m[2]) && !_evHasProse(m[2])) return true;
+  return /^[A-Z][A-Z0-9_%#\/-]*(?:\s+[A-Z][A-Z0-9_%#\/-]*){2,}$/.test(t);
+}
+function _evCodeFlags(lines) {
+  var norm = (lines || []).map(function (l) { return l == null ? null : String(l).replace(/ /g, ' ').replace(/\s+/g, ' ').trim(); });
+  var out = [], tag = null;
+  for (var i = 0; i < norm.length; i++) {
+    var t = norm[i];
+    if (t == null) { tag = null; out.push(false); continue; }
+    if (tag) { if (t === tag) tag = null; out.push(!!t); continue; }
+    var m = _EV_HEREDOC.exec(t);
+    if (m) { for (var j = i + 1; j < norm.length && norm[j] != null; j++) if (norm[j] === m[2]) { tag = m[2]; break; } }
+    out.push(_evCodeLine(t));
+  }
+  return out;
+}
+function _evLinesOf(els) {
+  var t = '';
+  (function walk(list) {
+    Array.prototype.forEach.call(list, function (n) {
+      if (n.nodeType === 3) t += n.nodeValue;
+      else if (n.nodeType === 1) { if (n.tagName === 'BR') t += '\n'; else walk(n.childNodes); }
+    });
+  })(els || []);
+  return t.replace(/ /g, ' ').split('\n');
+}
+function _evReadsAsListing(text, strict) {
+  var lines = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n').filter(function (l) { return /\S/.test(l); });
+  if (lines.length < 2) return false;
+  var flags = _evCodeFlags(lines);
+  var code = flags.filter(Boolean).length;
+  if (_EV_PROMPT.test(lines[0].replace(/ /g, ' ').trim())) return true;
+  if (strict) return code >= 2 && code * 5 >= lines.length * 3;
+  var out = 0, cols = 0;
+  lines.forEach(function (l, i) { if (flags[i]) return; if (_evOutputLine(l)) out++; if (_evColumns(l)) cols++; });
+  if (code && (code + out) * 5 >= lines.length * 3) return true;
+  if (cols >= 2) return true;
+  return lines.length >= 3 && out === lines.length;
+}
+var _EV_POINTS = /\b(?:below|above|beneath|underneath|following|follows|here|see|shown|attached)\b/i;
+var _EV_POINTER_WORDS = (function () {
+  var o = Object.create(null);
+  ('request requests response responses reply replies output outputs result results command commands code script scripts snippet payload poc proof concept log logs listing '
+    + 'evidence example query body raw http https terminal console shell session exchange traffic call the a an of for to from in on at by with and or as is are was were be '
+    + 'can could this that it its which below above beneath underneath following follows here see seen shown show shows given provided listed displayed attached included '
+    + 'captured observed found used sent received returned came back got full complete relevant corresponding resulting same first second third next previous please find '
+    + 'refer then now also again server client tool run ran executed issued made').split(' ').forEach(function (w) { o[w] = 1; });
+  return o;
+})();
+function _evLeadWords(lead) {
+  return String(lead ? (lead.nodeType === 3 ? lead.nodeValue : lead.textContent) : '').replace(/[\s ]+/g, ' ').trim();
+}
+function _evLeadIsLabel(lead) {
+  if (!lead) return false;
+  if (lead.nodeType === 1 && (!/^(P|DIV|H[1-6])$/.test(lead.tagName) || !_evInlineOnly(lead) || _EV_NOT_NOTE.test(lead.className || ''))) return false;
+  var t = _evLeadWords(lead);
+  if (!t || t.split(' ').length > 6) return false;
+  return /:$/.test(t) || _EV_POINTS.test(t);
+}
+function _evLeadIsPointer(lead) {
+  if (!lead || lead.nodeType !== 1 || !_evLeadIsLabel(lead)) return false;
+  var t = _evLeadWords(lead);
+  if (/\d/.test(t)) return false;
+  var w = t.toLowerCase().replace(/[^a-z\s\/&-]+/g, ' ').split(/[\s\/&-]+/).filter(Boolean);
+  return w.length > 0 && w.every(function (x) { return !!_EV_POINTER_WORDS[x]; });
+}
 var _EV_INLINE = { B: 1, STRONG: 1, I: 1, EM: 1, U: 1, S: 1, CODE: 1, A: 1, SPAN: 1, MARK: 1, SUB: 1, SUP: 1, SMALL: 1, FONT: 1, BR: 1 };
 function _evInlineOnly(el) {
   return Array.prototype.every.call(el.childNodes, function (n) { return n.nodeType !== 1 || (_EV_INLINE[n.tagName] && _evInlineOnly(n)); });
@@ -38895,31 +40098,200 @@ function _evClaimedLines(ed) {
   } catch (e) {}
   return out;
 }
-function _evNotes(ed) {
-  var out = [];
-  if (!ed) return out;
+function _evNoteWalk(ed) {
+  var loose = 0;
+  if (!ed) return { notes: [], loose: 0 };
   var claimed = _evClaimedLines(ed);
-  (function walk(host) {
-    var run = [];
+  var walk = function (host) {
+
+    var items = [], run = [];
     var end = function () {
       while (run.length && (run[run.length - 1].tagName === 'BR' || (run[run.length - 1].nodeType === 3 && !/\S/.test(run[run.length - 1].nodeValue)))) run.pop();
-      if (_evWords(run.map(function (n) { return n.textContent; }).join(' ')) >= 3) out.push({ el: null, els: run });
+      if (run.length) items.push({ el: null, els: run });
       run = [];
     };
     Array.prototype.slice.call(host.childNodes).forEach(function (n) {
+      if (n.nodeType === 1 && _evIsCode(n)) { end(); items.push(null); return; }
       if (n.nodeType === 3 || (n.nodeType === 1 && _EV_INLINE[n.tagName] && _evInlineOnly(n))) { if (run.length || n.nodeType !== 1 || n.tagName !== 'BR') run.push(n); return; }
       end();
       if (n.nodeType !== 1) return;
 
-      if (_EV_NOT_NOTE.test(n.className || '') && !(n.classList && n.classList.contains(_EV_OWN) && claimed.indexOf(n) < 0)) return;
+      if (_EV_NOT_NOTE.test(n.className || '') && !(n.classList && n.classList.contains(_EV_OWN) && claimed.indexOf(n) < 0)) { items.push(null); return; }
       var only = _evInlineOnly(n);
-      if (_EV_NOTE_WALK[n.tagName] || ((n.tagName === 'DIV' || n.tagName === 'LI') && !only && !_evIsItem(n))) { walk(n); return; }
-      if (_EV_NOTE_TAGS[n.tagName] && only && _evWords(n.textContent) >= 3) out.push({ el: n, els: [n] });
+      if (_EV_NOTE_WALK[n.tagName] || ((n.tagName === 'DIV' || n.tagName === 'LI') && !only && !_evIsItem(n))) { items.push({ notes: walk(n) }); return; }
+      if (_EV_NOTE_TAGS[n.tagName] && only) { items.push({ el: n, els: [n] }); return; }
+      items.push(null);
     });
     end();
-  })(ed);
-  return out;
+    var flat = [];
+    items.forEach(function (it) {
+      if (!it || it.notes) { flat.push(null); return; }
+      it.lines = _evLinesOf(it.els);
+      it.from = flat.length;
+      it.lines.forEach(function (l) { flat.push(l); });
+    });
+    var code = _evCodeFlags(flat);
+    var out = [];
+    items.forEach(function (it) {
+      if (!it) return;
+      if (it.notes) { it.notes.forEach(function (x) { out.push(x); }); return; }
+      var words = 0;
+      it.lines.forEach(function (l, k) {
+        if (!/\S/.test(l)) return;
+        if (code[it.from + k]) loose++;
+        else if (!_evOutputLine(l)) words++;
+      });
+      if (!words || _evWords(it.els.map(function (n) { return n.textContent; }).join(' ')) < 3) return;
+      out.push({ el: it.el, els: it.els });
+    });
+    return out;
+  };
+  var notes = walk(ed);
+  return { notes: notes, loose: loose };
 }
+function _evNotes(ed) { return _evNoteWalk(ed).notes; }
+function _evLooseCode(ed) { return _evNoteWalk(ed).loose; }
+function _evBoxedWords(lines, blocks) {
+  return 'put ' + lines + ' line' + (lines === 1 ? '' : 's') + ' of code or commands into ' + (blocks === 1 ? 'a code block' : blocks + ' code blocks');
+}
+function _evCap(s) { s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); }
+function _evBoxHasWords(el) { return /\S/.test(String((el && el.textContent) || '').replace(/\u00a0/g, ' ')); }
+function _evBoxTake(p, block) {
+  var it = p.it, last = it.lines.length - 1, mine = [];
+  if (p.d0 <= 0 && p.d1 >= last) mine = it.top.slice();
+  else for (var k = p.d0; k <= p.d1; k++) { mine = mine.concat(it.ln[k] || []); if (k < p.d1 && it.brs[k]) mine.push(it.brs[k]); }
+  var bBefore = p.d0 > 0 ? it.brs[p.d0 - 1] : null, bAfter = p.d1 < last ? it.brs[p.d1] : null;
+  var all = (bBefore ? [bBefore] : []).concat(mine, bAfter ? [bAfter] : []).filter(function (n) { return n && n.parentNode; });
+  if (!all.length) {
+    if (it.el && it.el.parentNode && !_evBoxHasWords(it.el)) { if (block) it.el.parentNode.insertBefore(block, it.el); it.el.parentNode.removeChild(it.el); return !!block; }
+    return false;
+  }
+  var ref = all[0], end = all[all.length - 1];
+  if (!it.el) {
+
+    if (block) ref.parentNode.insertBefore(block, ref);
+    all.forEach(function (n) { if (n.parentNode) n.parentNode.removeChild(n); });
+    return true;
+  }
+  var holder = ref.parentNode, tail = null;
+  if (!holder || !holder.parentNode) return false;
+  if (end.nextSibling) {
+    tail = holder.cloneNode(false);
+    tail.removeAttribute('id');
+    while (end.nextSibling) tail.appendChild(end.nextSibling);
+  }
+  all.forEach(function (n) { if (n.parentNode) n.parentNode.removeChild(n); });
+  var at = holder;
+  if (block) { holder.parentNode.insertBefore(block, holder.nextSibling); at = block; }
+  if (tail && _evBoxHasWords(tail)) at.parentNode.insertBefore(tail, at.nextSibling);
+  if (!_evBoxHasWords(holder)) holder.parentNode.removeChild(holder);
+  return true;
+}
+function _evBoxLoose(ed, dry) {
+  var res = { lines: 0, blocks: [] };
+  if (!ed) return res;
+  var nonBlank = function (l) { return /\S/.test(l); };
+  var groups = [];
+  var walk = function (host) {
+    var items = [], run = [];
+    var end = function () {
+      while (run.length && (run[run.length - 1].tagName === 'BR' || (run[run.length - 1].nodeType === 3 && !/\S/.test(run[run.length - 1].nodeValue)))) run.pop();
+      if (run.length) items.push({ el: null, els: run });
+      run = [];
+    };
+    Array.prototype.slice.call(host.childNodes).forEach(function (n) {
+      if (n.nodeType === 1 && _evIsCode(n)) { end(); items.push(null); return; }
+      if (n.nodeType === 3 || (n.nodeType === 1 && _EV_INLINE[n.tagName] && _evInlineOnly(n))) { if (run.length || n.nodeType !== 1 || n.tagName !== 'BR') run.push(n); return; }
+      end();
+      if (n.nodeType !== 1) return;
+      if (n.tagName === 'BLOCKQUOTE') { walk(n); items.push(null); return; }
+      if ((n.tagName === 'P' || n.tagName === 'DIV') && _evInlineOnly(n) && !_EV_NOT_NOTE.test(n.className || '')) { items.push({ el: n, els: [n] }); return; }
+      items.push(null);
+    });
+    end();
+    var flat = [];
+    items.forEach(function (it) {
+      if (!it) { flat.push(null); return; }
+      it.lines = _evLinesOf(it.els);
+      it.from = flat.length;
+      it.lines.forEach(function (l) { flat.push(l); });
+
+      it.top = it.el ? Array.prototype.slice.call(it.el.childNodes) : it.els.slice();
+      it.ln = [[]]; it.brs = [];
+      it.top.forEach(function (n) { if (n.nodeType === 1 && n.tagName === 'BR') { it.brs.push(n); it.ln.push([]); } else it.ln[it.ln.length - 1].push(n); });
+      it.cut = it.ln.length === it.lines.length;
+    });
+    var code = _evCodeFlags(flat);
+    var open = null;
+    items.forEach(function (it) {
+      if (!it) { open = null; return; }
+      var cls = it.lines.map(function (l, k) { return !nonBlank(l) ? 'B' : code[it.from + k] ? 'C' : _evOutputLine(l) ? 'O' : 'W'; });
+      var first = -1, last = -1, firstNb = -1, lastNb = -1;
+      cls.forEach(function (c, k) {
+        if (c !== 'B') { if (firstNb < 0) firstNb = k; lastNb = k; }
+        if (c === 'C' || c === 'O') { if (first < 0) first = k; last = k; }
+      });
+
+      if (firstNb < 0) { if (open) open.blank.push(it); return; }
+      if (first < 0) { open = null; return; }
+      var pieces = [];
+      var coreCls = cls.slice(first, last + 1);
+      if (coreCls.indexOf('C') >= 0 && (coreCls.indexOf('W') < 0 || _evReadsAsListing(it.lines.slice(first, last + 1).join('\n')))) pieces.push({ i0: first, i1: last, c: true });
+      else {
+        var k = first;
+        while (k <= last) {
+          if (cls[k] !== 'C' && cls[k] !== 'O') { k++; continue; }
+          var j = k, e = k, c = false;
+          while (j <= last && cls[j] !== 'W') { if (cls[j] !== 'B') { e = j; if (cls[j] === 'C') c = true; } j++; }
+          pieces.push({ i0: k, i1: e, c: c });
+          k = j;
+        }
+      }
+      var was = open;
+      open = null;
+      pieces.forEach(function (p, n) {
+
+        var part = { it: it, i0: p.i0, i1: p.i1, d0: p.i0 === firstNb ? 0 : p.i0, d1: p.i1 === lastNb ? it.lines.length - 1 : p.i1 };
+        var g;
+        if (n === 0 && was && p.i0 === firstNb) {
+          g = was;
+          g.blank.forEach(function (b) { g.parts.push({ it: b, i0: 0, i1: 0, d0: 0, d1: b.lines.length - 1, blank: true }); });
+        } else { g = { parts: [], c: false, blank: [] }; groups.push(g); }
+        g.blank = [];
+        g.parts.push(part);
+        if (p.c) g.c = true;
+        open = p.i1 === lastNb ? g : null;
+      });
+    });
+  };
+  walk(ed);
+  groups.forEach(function (g) {
+    var text = [];
+    g.parts.forEach(function (p) {
+      if (p.blank) { text.push(''); return; }
+      for (var k = p.i0; k <= p.i1; k++) text.push(p.it.lines[k].replace(/\s+$/, ''));
+    });
+    while (text.length && !nonBlank(text[0])) text.shift();
+    while (text.length && !nonBlank(text[text.length - 1])) text.pop();
+    var n = text.filter(nonBlank).length;
+    if (!n) return;
+    if (!g.c && text.filter(_evColumns).length < 2) return;
+
+    if (n === 1 && !_evCodeLine(text.filter(nonBlank)[0], true)) return;
+
+    if (g.parts.some(function (p) { return !p.it.cut && !(p.d0 <= 0 && p.d1 >= p.it.lines.length - 1); })) return;
+    if (dry) { res.lines += n; res.blocks.push(null); return; }
+    var block = document.createElement('div');
+    block.className = 'code-block';
+    block.setAttribute('contenteditable', 'true');
+    block.textContent = text.join('\n');
+    var placed = false;
+    g.parts.forEach(function (p) { if (_evBoxTake(p, placed ? null : block) && !placed) placed = !!block.parentNode; });
+    if (placed) { res.lines += n; res.blocks.push(block); }
+  });
+  return res;
+}
+window._evBoxLoose = _evBoxLoose;
 function _evNoteMd(els) {
   var md = function (n) {
     if (n.nodeType === 3) return String(n.nodeValue).replace(/\u00a0/g, ' ');
@@ -39025,7 +40397,8 @@ function _evLeftNorm(t) {
 function _evTidyWhy(els, html, left) {
   var d = document.createElement('div');
   d.innerHTML = html || '';
-  var was = els.map(function (n) { return n.textContent || ''; }).join(' ').replace(/\u00a0/g, ' '), now = (d.textContent || '').replace(/\u00a0/g, ' ');
+
+  var was = els.map(function (n) { return _evLinesOf([n]).join(' '); }).join(' '), now = _evLinesOf([d]).join(' ');
   left = (left || []).filter(Boolean);
   var wasN = _evLeftNorm(was);
   var notOwn = left.filter(function (l) { var n = _evLeftNorm(l).replace(/[.,;:!?\s]+$/, ''); return !n || wasN.indexOf(n) < 0; })[0];
@@ -39041,6 +40414,14 @@ function _evTidyWhy(els, html, left) {
   var nowCode = code([d]), nowHref = all([d], 'a[href]', function (a) { return a.getAttribute('href'); });
   var lostLink = all(els, 'a[href]', function (a) { return a.getAttribute('href'); }).filter(function (h) { return nowHref.indexOf(h) < 0; })[0];
   if (lostLink) return { why: 'link', what: lostLink };
+
+  var wasLines = _evLinesOf(els), codeAt = _evCodeFlags(wasLines);
+  var nowLines = _evLinesOf([d]).map(function (l) { return l.replace(/\s+/g, ' ').trim(); });
+  var leftN = _evLeftNorm(leftT);
+  var lostLine = wasLines.map(function (l) { return l.replace(/\s+/g, ' ').trim(); }).filter(function (l, i) {
+    return !!l && codeAt[i] && nowLines.indexOf(l) < 0 && !(leftN && leftN.indexOf(_evLeftNorm(l)) >= 0);
+  })[0];
+  if (lostLine) return { why: 'codeline', what: lostLine };
 
   var kept = function (w) {
     if (now.indexOf(w) >= 0) return true;
@@ -39104,6 +40485,7 @@ function _evWhyWords(r) {
   if (r.why === 'shorter') return 'left out much of what it says';
   if (r.why === 'longer') return 'added a great deal to it';
   if (r.why === 'notown') return 'said it left out ' + q(r.what) + ', which the note does not have';
+  if (r.why === 'codeline') return 'put the line of code ' + q(r.what) + ' into words, which has to stay as written on a line of its own';
   return '';
 }
 function _evDropNote(x) {
@@ -39137,12 +40519,15 @@ function _evPutNote(x, html) {
   x.els.forEach(function (n) { if (n.parentNode) n.parentNode.removeChild(n); });
   return d;
 }
-function _evTextFor(ed, imgs, keepAi, withBlocks, withNotes) {
+function _evTextFor(ed, imgs, keepAi, withBlocks, withNotes, skipNotes) {
   var c = ed.cloneNode(true);
   var all = Array.prototype.slice.call(ed.querySelectorAll('img'));
   var cimgs = Array.prototype.slice.call(c.querySelectorAll('img'));
 
-  if (withNotes) _evNotes(c).forEach(function (nt, i) {
+  var nNo = 0;
+  if (withNotes) _evNotes(c).forEach(function (nt, at) {
+    if (skipNotes && skipNotes[at]) return;
+    var i = nNo++;
     var t = '[Note ' + (i + 1) + '] ' + _evNoteMd(nt.els) + ' [End of note ' + (i + 1) + ']';
     if (nt.el) { nt.el.textContent = t; return; }
     var d = c.ownerDocument.createElement('div');
@@ -39326,22 +40711,39 @@ async function generateEvidenceLayout(o) {
   var _where = o.where || 'the evidence';
   var ed = document.getElementById(_edId);
   if (!ed) return null;
+
+  if (S._evBusy && S._evBusy === ed) return null;
+
+  var before = ed.innerHTML;
+  var box = _evBoxLoose(ed), boxKeep = false;
+  var boxSaid = box.lines ? _evBoxedWords(box.lines, box.blocks.length) : '';
+  var _evUndoAll = function () {
+    if (document.getElementById(_edId) !== ed) return;
+    ed.innerHTML = before;
+    try { if (typeof resolveStorageImages === 'function') resolveStorageImages(ed); } catch (e3) {}
+  };
+  var boxBack = function () { if (!box.lines) return; box = { lines: 0, blocks: [] }; _evUndoAll(); };
   var imgs = _evImages(ed);
   var blocks = _evBlockItems(ed);
 
-  var notes = _evNotes(ed);
-
-  if (!imgs.length && !blocks.length && !notes.length) { if (!o.silent) toast(_evHasWords(ed) ? 'Nothing to explain or tidy yet: write a sentence or more of your notes, or paste a screenshot, a request, code or output, into ' + _where : 'Paste a screenshot, a request, code or output, or write your notes, into ' + _where + ' first', 'error'); return null; }
-  var sees = _aiCanSeeImages();
-
   var bAsk = blocks.map(function (b, i) { return { n: i + 1, item: b, above: _evBlockAbove(b) }; })
-    .filter(function (x) { return !x.above.own && !x.above.lead && (!o.onlyNew || !x.above.lines.length); });
+    .filter(function (x) { return !x.above.own && (!x.above.lead || _evLeadIsLabel(x.above.lead)) && (!o.onlyNew || !x.above.lines.length); });
+
+  var _evGiveWay = bAsk.map(function (x) { return x.above.lead && _evLeadIsPointer(x.above.lead) ? x.above.lead : null; }).filter(Boolean);
+  var _evSkipN = {};
+  var notes = _evNotes(ed).filter(function (nt, i) { if (nt.el && _evGiveWay.indexOf(nt.el) >= 0) { _evSkipN[i] = 1; return false; } return true; });
+
+  var loose = _evLooseCode(ed);
+  var looseSaid = loose >= 2 ? loose + ' lines of code or commands stand outside a code block and were left as written: select them and press the code button (</>) to have them explained' : '';
+
+  if (!imgs.length && !blocks.length && !notes.length) { if (!o.silent) toast(looseSaid ? 'Nothing to explain yet: the ' + looseSaid.replace(/ and were left as written: /, ': ') + ', then ask again' : _evHasWords(ed) ? 'Nothing to explain or tidy yet: write a sentence or more of your notes, or paste a screenshot, a request, code or output, into ' + _where : 'Paste a screenshot, a request, code or output, or write your notes, into ' + _where + ' first', 'error'); return null; }
+  var sees = _aiCanSeeImages();
   var noSee = 'the model chosen in Settings, AI does not read pictures';
   if (!sees && imgs.length && !bAsk.length && !notes.length) {
     if (!o.silent) toast('Screenshots cannot be explained: ' + noSee + '. Choose one that does, such as the one Pental recommends for Anthropic, OpenAI or Ollama.', 'error');
+    boxBack();
     return { error: noSee };
   }
-  if (S._evBusy && S._evBusy === ed) return null;
   S._evBusy = ed;
 
   var _evInstr = '';
@@ -39355,11 +40757,16 @@ async function generateEvidenceLayout(o) {
 
   var wasEditable = ed.getAttribute('contenteditable');
   ed.setAttribute('contenteditable', 'false');
-  var before = ed.innerHTML;
   try {
     var ollama = ((S.data && S.data.settings) || {}).ai_provider === 'ollama';
     var asked = !sees ? [] : o.onlyNew ? imgs.filter(function (im) { return _evUnexplained(im, ed); }) : imgs;
     if (!asked.length && !bAsk.length && !notes.length) {
+
+      if (boxSaid) {
+        boxKeep = true;
+        if (!o.silent) toast(_evCap(boxSaid) + '; ' + (o.onlyNew ? 'nothing else was new to explain' : 'every block already has a line of your own' + (imgs.length ? ', and every screenshot a line and a caption' : '')) + '. Click here to undo.', 'success', 10000, _evUndoAll);
+        return { done: 0, unread: 0, kept: o.onlyNew ? 0 : blocks.length, blocks: 0, boxed: box.lines, boxedBlocks: box.blocks.length };
+      }
       if (!o.silent && !o.onlyNew && blocks.length) toast('Nothing to change: every block already has a line of your own' + (imgs.length ? ', and every screenshot a line and a caption' : ''), 'info');
       return { done: 0, unread: 0, kept: o.onlyNew ? 0 : blocks.length, blocks: 0 };
     }
@@ -39387,7 +40794,7 @@ async function generateEvidenceLayout(o) {
     if (o.about) ctx += '\n' + o.about;
 
     var _evEdit = !!_evInstr && !o.onlyNew && !!ed.querySelector('.' + _EV_AI);
-    var evText = _evTextFor(ed, imgs, !!o.onlyNew || _evEdit, bAsk.length > 0, notes.length > 0);
+    var evText = _evTextFor(ed, imgs, !!o.onlyNew || _evEdit, bAsk.length > 0, notes.length > 0, _evSkipN);
     var evMax = bAsk.length || notes.length ? 9000 : 6000;
     if (evText.length > evMax) evText = evText.slice(0, evMax) + '…';
 
@@ -39398,7 +40805,7 @@ async function generateEvidenceLayout(o) {
     var got = {}, gotB = {}, gotN = {}, gotL = {}, gotU = {}, nRead = true, refused = '', nGiven = 0;
     var size = _AI_IMG_MAX;
 
-    var askAll = async function (figList, blkList, noteList, again) {
+    var askAll = async function (figList, blkList, noteList, again, fix) {
       var k = 0, bLeft = blkList.length > 0 || noteList.length > 0;
       while (k < figList.length || bLeft) {
         var batch = [], used = 0;
@@ -39424,11 +40831,14 @@ async function generateEvidenceLayout(o) {
           + (withB.length ? (batch.length ? '\n' : '') + 'Write the line that goes above each of these blocks: ' + withB.map(function (x) { return 'Block ' + x.n; }).join(', ') + ', giving each entry its block number.'
 
             + ' Each line is about its own block alone (a request\'s, what was sent; a response\'s, what came back), not the blocks around it.' : '')
-          + (withN.length ? (batch.length || withB.length ? '\n' : '') + 'Give back, under notes, each of the tester\'s notes that your instructions say to rewrite, of ' + withN.map(function (x) { return 'Note ' + x.n; }).join(', ') + ', giving each entry its note number, and leave out any they do not.' : '')
+          + (fix && fix.length ? fix.map(function (b) { return 'Your rewrite of Note ' + b.n + ' ' + _evWhyWords(b.why) + '.'; }).join(' ') + ' Give ' + (fix.length === 1 ? 'that note' : 'those notes') + ' again, with every name, value and line of code exactly as the tester wrote it.\n' : '')
+          + (withN.length ? (batch.length || withB.length ? '\n' : '') + 'Give back, under notes, each of the tester\'s notes that your instructions say to rewrite, of ' + withN.map(function (x) { return 'Note ' + x.n; }).join(', ') + ', giving each entry its note number, and leave out any they do not.'
+
+            + ' A note, or a line of one, that is code, a command or a tool\'s output is never put into words: leave such a note out, and give such a line back exactly as written, on a line of its own.' : '')
           + (_evEdit && (batch.length || withB.length) ? '\nThe lines above the screenshots and blocks, and the captions under the screenshots, that are there already are shown as they stand now: edit those to follow the additional instructions, rather than writing them afresh, and keep what the instructions do not ask you to change.' : '');
         var raw;
         try {
-          if (o.say) o.say((again ? 'asking again: ' : '') + (batch.length ? (figList.length > batch.length ? 'explaining ' + (k + 1) + '-' + (k + batch.length) + ' of ' + figList.length : 'explaining ' + batch.length + ' screenshot' + (batch.length === 1 ? '' : 's')) : withB.length ? 'explaining ' + withB.length + ' block' + (withB.length === 1 ? '' : 's') : 'tidying ' + withN.length + ' note' + (withN.length === 1 ? '' : 's')));
+          if (o.say) o.say((again || fix ? 'asking again: ' : '') + (batch.length ? (figList.length > batch.length ? 'explaining ' + (k + 1) + '-' + (k + batch.length) + ' of ' + figList.length : 'explaining ' + batch.length + ' screenshot' + (batch.length === 1 ? '' : 's')) : withB.length ? 'explaining ' + withB.length + ' block' + (withB.length === 1 ? '' : 's') : 'tidying ' + withN.length + ' note' + (withN.length === 1 ? '' : 's')));
           raw = await callAI(um, sp, Math.min(withN.length ? 6000 : 4000, 700 + 220 * batch.length + 160 * withB.length + nTok),
             _genOpts(o, batch.length ? { images: batch.map(function (x) { return x.data; }), imagesExact: true, responseFormat: 'json' } : (refused ? { responseFormat: 'json', _noImages: true } : { responseFormat: 'json' }), _aixK));
         } catch (e) {
@@ -39452,7 +40862,12 @@ async function generateEvidenceLayout(o) {
         }
         if (withN.length) {
           var nl = _evNotesFromReply(raw, withN.map(function (x) { return x.n; }));
-          Object.keys(nl.by).forEach(function (n) { gotN[n] = nl.by[n]; if (nl.left[n]) gotL[n] = nl.left[n]; if (nl.unsure[n]) gotU[n] = nl.unsure[n]; });
+          Object.keys(nl.by).forEach(function (n) {
+            gotN[n] = nl.by[n];
+
+            if (nl.left[n]) gotL[n] = nl.left[n]; else if (fix) delete gotL[n];
+            if (nl.unsure[n]) gotU[n] = nl.unsure[n];
+          });
           nRead = nl.read;
           nGiven += nl.given || 0;
         }
@@ -39469,6 +40884,23 @@ async function generateEvidenceLayout(o) {
     var anyBack = Object.keys(got).length || Object.keys(gotB).length || Object.keys(gotN).length;
     if ((lackF.length || lackB.length) && anyBack && !(o.signal && o.signal.aborted)) {
       try { await askAll(lackF, lackB, [], true); } catch (e) { if (o.signal && o.signal.aborted) throw e; }
+      if (document.getElementById(_edId) !== ed) return null;
+    }
+
+    var nBad = nAsk.map(function (x) {
+      var h = gotN[x.n];
+      if (!h || !x.els.every(function (n) { return ed.contains(n); })) return null;
+
+      var left = (gotL[x.n] || []).slice();
+      _evUnsureParts(x.els.map(function (n) { return n.textContent || ''; }).join(' ')).forEach(function (u) {
+        var un = _evLeftNorm(u).replace(/[.,;:!?\s]+$/, '');
+        if (un && !left.some(function (l) { return _evLeftNorm(l).indexOf(un) >= 0; })) left.push(u);
+      });
+      var why = _evTidyWhy(x.els, h, left);
+      return why ? { n: x.n, x: x, why: why } : null;
+    }).filter(Boolean);
+    if (nBad.length && !(o.signal && o.signal.aborted)) {
+      try { await askAll([], [], nBad.map(function (b) { return b.x; }), false, nBad); } catch (e) { if (o.signal && o.signal.aborted) throw e; }
       if (document.getElementById(_edId) !== ed) return null;
     }
     if (refused && !Object.keys(got).length && !bAsk.length && !nAsk.length) return { done: 0, unread: items.length - readable.length, kept: 0, blocks: 0, refused: refused };
@@ -39522,9 +40954,12 @@ async function generateEvidenceLayout(o) {
       if (!ed.contains(x.item.top)) { if (a && a.above) gone++; return; }
       if (!a || !a.above) { missB[x.item.kind === 'table' ? 'table' : 'code']++; return; }
       var ab = _evBlockAbove(x.item);
-      if (ab.own || ab.lead) { kept++; return; }
+
+      var label = ab.lead && _evLeadIsLabel(ab.lead) ? ab.lead : null;
+      if (ab.own || (ab.lead && !label)) { kept++; return; }
       var line = ab.lines[0];
       ab.lines.slice(1).forEach(function (l) { if (l.parentNode) l.parentNode.removeChild(l); });
+      if (!line && label && _evLeadIsPointer(label)) { line = document.createElement('p'); line.className = _EV_AI; label.parentNode.replaceChild(line, label); }
       if (!line) { line = document.createElement('p'); line.className = _EV_AI; x.item.top.parentNode.insertBefore(line, x.item.top); }
       line.textContent = a.above;
       bDone[x.item.kind === 'table' ? 'table' : 'code']++;
@@ -39569,17 +41004,22 @@ async function generateEvidenceLayout(o) {
       toast('Nothing was written: ' + missWords + '. Ask again, or write ' + (missN === 1 ? 'it' : 'them') + ' yourself.', 'error', 10000);
       return { done: 0, unread: unread, kept: kept, blocks: 0, lined: 0, capped: 0, missed: missN, missWords: missWords, refused: refused };
     }
+
+    boxKeep = !!(done || bn || nDone) || !missWords;
+    if (!boxKeep) boxBack();
     if (!o.silent) {
       var blind = !sees && imgs.length ? ' The screenshots were not: ' + noSee + '.' : '';
       if (done || bn || nDone) {
         var w = _evDoneWords(lined, bDone, nDone, capped);
         var msg = w.charAt(0).toUpperCase() + w.slice(1);
+        if (boxSaid) msg += '; ' + boxSaid;
         if (unread) msg += '; ' + unread + ' could not be read from here';
         if (kept) msg += '; what you wrote yourself was kept';
         if (nLeft.length) msg += '; ' + _evLeftWords(nLeft);
         if (nUnsure) msg += '; ' + _evUnsureWords(nUnsure);
 
         if (nWhy.length) msg += '; ' + _evNotesSaid('your', { refused: nWhy });
+        if (looseSaid) msg += '; ' + looseSaid;
 
         if (missWords) msg += '; ' + missWords;
         toast(msg + '.' + blind + (missWords ? ' Ask again, or write ' + (missN === 1 ? 'it' : 'them') + ' yourself.' : '') + ' Click here to undo.',
@@ -39594,10 +41034,13 @@ async function generateEvidenceLayout(o) {
         if (imgs.length && sees) said0.push('every screenshot already has a line and a caption of your own');
         if (blocks.length) said0.push(said0.length ? 'every block a line' : 'every block already has a line');
         if (nAsk.length) said0.push(_evNotesSaid('your', { refused: nWhy, given: nGiven, unasked: _evUnasked }));
+        if (looseSaid) said0.push(looseSaid);
         if (!said0.length) said0.push('there was nothing it could explain');
         var _evList = (said0.length < 3 ? said0.join(', and ') : said0.slice(0, -1).join(', ') + ', and ' + said0[said0.length - 1])
           + (unread ? ', and ' + unread + ' could not be read from here' : '');
-        if (nAsk.length) {
+
+        if (boxSaid) toast(_evCap(boxSaid) + '. Nothing else changed: ' + _evList + '.' + blind + ' Click here to undo.', 'success', 10000, _evUndoAll);
+        else if (nAsk.length) {
           var _evHint = !nWhy.length && !_evInstr ? ' Say what you want done to them in the instructions beside ' + (o.verbName || 'Explain evidence') + ', and ask again.' : '';
           toast('Nothing changed: ' + _evList + '.' + blind + _evHint, 'info');
         } else toast('Nothing to change: ' + _evList + (blind ? '.' + blind : ''), 'info');
@@ -39610,11 +41053,17 @@ async function generateEvidenceLayout(o) {
       notesSaid: nAsk.length && !nDone ? _evNotesSaid('its', { refused: nWhy, given: nGiven, unasked: _evUnasked }) : '',
       notesWhy: nDone && nWhy.length ? _evNotesSaid('its', { refused: nWhy }) : '',
 
-      notesLeft: nLeft, unsure: nUnsure };
+      notesLeft: nLeft, unsure: nUnsure,
+
+      loose: loose,
+
+      boxed: box.lines, boxedBlocks: box.blocks.length };
   } catch (e) {
     if (!o.silent) toast('AI error: ' + ((e && e.message) || e), 'error');
     return { error: String((e && e.message) || e || 'the model could not be asked') };
   } finally {
+
+    if (!boxKeep) { try { boxBack(); } catch (e4) {} }
     if (wasEditable === null) ed.removeAttribute('contenteditable'); else ed.setAttribute('contenteditable', wasEditable);
     if (S._evBusy === ed) S._evBusy = null;
     _genSoloDone(solo);
@@ -40302,11 +41751,11 @@ function _genFindingSteps(ed, imgs) {
 
   var _notes0 = ed ? _evNotes(ed).length : 0;
   var evStep = null;
-  if (ed && ((imgs && imgs.length) || _blocks0 || _notes0)) L.push(evStep = { key: 'evidence', label: 'Evidence', el: 'evidenceEditor', lock: false,
+  if (ed && ((imgs && imgs.length) || _blocks0 || _notes0 || _evBoxLoose(ed, true).lines)) L.push(evStep = { key: 'evidence', label: 'Evidence', el: 'evidenceEditor', lock: false,
     doing: 'explaining the evidence',
 
     nothing: function () { return S._aiImagesRefused ? 'the provider would not take the pictures' : (evStep && evStep.notesSaid ? evStep.notesSaid : 'nothing new to explain'); },
-    filled: function () { var e = document.getElementById('evidenceEditor') || ed; return !_evNeedsLayout(e) && !_evNotes(e).length; }, keptNote: function () { return 'everything in it already has a line, and each screenshot a caption'; },
+    filled: function () { var e = document.getElementById('evidenceEditor') || ed; return !_evNeedsLayout(e) && !_evNotes(e).length && !_evBoxLoose(e, true).lines; }, keptNote: function () { return 'everything in it already has a line, and each screenshot a caption'; },
     run: function (o) {
       var ed0 = document.getElementById('evidenceEditor');
       return generateEvidenceLayout({ silent: true, onlyNew: true, quiet: true, signal: o.signal, onRateLimit: o.onRateLimit, say: o.say, run: o.run }).then(function (r) {
@@ -40321,8 +41770,10 @@ function _genFindingSteps(ed, imgs) {
         var bw = { code: (r && r.code) || 0, table: (r && r.tables) || 0 };
 
         if (r && r.missed) throw new Error(((n || nb || nn) ? _evDoneWords(r.lined || 0, bw, nn, r.capped || 0) + ', but ' : '') + r.missWords);
-        if (!n && !nb && !nn) return null;
-        var said = _evDoneWords(r.lined != null ? r.lined : n, bw, nn, r.capped != null ? r.capped : undefined) + (r && r.notesWhy ? '; ' + r.notesWhy : '')
+
+        var _bx = (r && r.boxed) ? _evBoxedWords(r.boxed, r.boxedBlocks || 1) : '';
+        if (!n && !nb && !nn) { if (_bx) { o.run.notes.push(_bx); return _bx; } return null; }
+        var said = _evDoneWords(r.lined != null ? r.lined : n, bw, nn, r.capped != null ? r.capped : undefined) + (_bx ? '; ' + _bx : '') + (r && r.notesWhy ? '; ' + r.notesWhy : '')
           + (r && r.notesLeft && r.notesLeft.length ? '; ' + _evLeftWords(r.notesLeft) : '')
           + (r && r.unsure ? '; ' + _evUnsureWords(r.unsure) : '');
         o.run.notes.push(said);
@@ -40821,7 +42272,35 @@ function _cvssScoreKind(d) {
   });
   return t && e ? 'Base, threat and environmental score' : t ? 'Base and threat score' : e ? 'Base and environmental score' : 'Base score';
 }
+function _cvssDraftKey(d) {
+  if (!d) return '';
+  var v = d.v || {};
+  return String(d.version || '') + '|'
+    + Object.keys(v).filter(function (k) { return !!v[k]; }).sort().map(function (k) { return k + ':' + v[k]; }).join('/')
+    + '|' + (d.more || []).join('/');
+}
+function _cvssLeft(o) {
+  if (!_edPopEl || !_edPopEl.classList || !_edPopEl.classList.contains('cvss-pop')) return false;
+  var d = S._cvssDraft, was = S._cvssOpened;
+  if (!d || !was || _cvssDraftKey(d) === was.key) { _edClosePop(); return true; }
+  var left = (d.version === '4.0' ? _CVSS4_METRICS : _CVSS_METRICS).filter(function (m) { return !(d.v || {})[m[0]]; }).length;
+  if (!left) { applyCvssPicker(); return true; }
+  var picked = Object.keys(d.v || {}).filter(function (k) { return !!d.v[k]; }).length;
+  _edClosePop();
+  if (!picked) {
+    if (!(o && o.quiet)) toast('No metrics are picked, so the score and its metrics are as they were.', 'info');
+    return true;
+  }
+  S._cvssKept = { modal: S.modal || null, ids: JSON.stringify(_CVSS_IDS), stored: was.stored, version: d.version, v: d.v, more: (d.more || []).slice() };
+  if (!(o && o.quiet)) {
+    toast(left + (left === 1 ? ' metric is' : ' metrics are') + ' still to pick, so the score is as it was. What you picked is kept: open Metrics to finish.', 'warning', 8000);
+  }
+  return true;
+}
+window._cvssLeft = _cvssLeft;
 function openCvssPicker(btn, scoreId, vecId, btnId) {
+
+  try { _cvssLeft({ quiet: true }); } catch (e) {}
   _cvssUse(scoreId, vecId, btnId);
   var el = _cvssVecEl();
   var stored = el ? String(el.value || '') : '';
@@ -40833,6 +42312,13 @@ function openCvssPicker(btn, scoreId, vecId, btnId) {
 
     more: stored ? _cvssMoreOf(stored, ver) : [],
   };
+
+  S._cvssOpened = { key: _cvssDraftKey(S._cvssDraft), stored: stored };
+  var kept = S._cvssKept;
+  S._cvssKept = null;
+  if (kept && kept.modal === (S.modal || null) && kept.ids === JSON.stringify(_CVSS_IDS) && kept.stored === stored) {
+    S._cvssDraft = { version: kept.version, v: kept.v, more: kept.more };
+  }
   _edOpenPop(btn, _cvssPickerHtml(), 'cvss-pop');
 }
 window.openCvssPicker = openCvssPicker;
@@ -42196,9 +43682,11 @@ function _staffFindingsCardHtml(list, title, opts) {
   h += '<div class="mob-table">' + _findingTableOpen(_sfHead)
     + '<thead><tr>' + _sfHead + '</tr></thead><tbody>';
 
-  sorted.forEach(function (f) {
-    var a = (S.data.assessments || []).find(function (x) { return x.id === f.assessment_id; })
-      || { id: f.assessment_id };
+  var _shown = _sfWindow(_scope, sorted);
+  var _aById = {};
+  (S.data.assessments || []).forEach(function (x) { if (x && x.id && !_aById[x.id]) _aById[x.id] = x; });
+  _shown.forEach(function (f) {
+    var a = _aById[f.assessment_id] || { id: f.assessment_id };
     var row = _renderFindingRow(f, a, false, { affected: _scan, cols: _fCols });
 
     var srcCell = '';
@@ -42221,14 +43709,31 @@ function _staffFindingsCardHtml(list, title, opts) {
   h += '</tbody></table></div>';
 
   h += '<div class="mob-cards" style="display:none">';
-  sorted.forEach(function (f) {
-    var a = (S.data.assessments || []).find(function (x) { return x.id === f.assessment_id; })
-      || { id: f.assessment_id };
+  _shown.forEach(function (f) {
+    var a = _aById[f.assessment_id] || { id: f.assessment_id };
     h += _renderFindingMobCard(f, a);
   });
-  h += '</div></div>';
+  h += '</div>' + _sfMoreHtml(_scope, _shown.length, sorted.length) + '</div>';
   return h;
 }
+var _SF_STEP = 200;
+function _sfWindow(scope, list) {
+  var n = (S._sfShown && S._sfShown[scope]) || _SF_STEP;
+  return list.length > n ? list.slice(0, n) : list;
+}
+function _sfMoreHtml(scope, shown, total) {
+  if (shown >= total) return '';
+  var left = total - shown, step = Math.min(_SF_STEP, left);
+  return '<div class="sf-more" role="status"><span>Showing ' + shown.toLocaleString() + ' of ' + total.toLocaleString() + '</span>'
+    + '<button type="button" class="btn btn-secondary btn-sm" onclick="_sfMore(' + jsArg(scope) + ',' + step + ')">Show ' + step.toLocaleString() + ' more</button>'
+    + (left > step ? '<button type="button" class="btn btn-ghost btn-sm" onclick="_sfMore(' + jsArg(scope) + ',0)">Show all ' + total.toLocaleString() + '</button>' : '') + '</div>';
+}
+function _sfMore(scope, by) {
+  S._sfShown = S._sfShown || {};
+  S._sfShown[scope] = by ? ((S._sfShown[scope] || _SF_STEP) + by) : Infinity;
+  render();
+}
+window._sfMore = _sfMore;
 function _retestIsMine(f, a) {
   if (!f || !a || !S.profile) return false;
   return S.profile.role === 'admin' || a.lead_id === S.profile.id || f.created_by === S.profile.id || _conOnWork(a);
@@ -42471,7 +43976,7 @@ function renderSettings__portal() {
   h += '<div style="flex:1 1 100%;margin:0.75rem 0 0.25rem;padding:0.9rem;border:1px solid rgba(var(--accent-rgb),0.35);border-radius:9px;background:rgba(var(--accent-rgb),0.04)">';
   h += '<div style="font-size:0.84rem;font-weight:700;color:var(--text)">Everyone signs in with a password, then TOTP or a passkey</div>';
   h += '<div style="font-size:0.74rem;color:var(--gray);line-height:1.55;margin-top:0.35rem">That is what opens a person\u2019s end-to-end encrypted work on a new browser, straight away. Passwords are hashed and kept only in your own database.</div>';
-  h += '<div id="pwAdoptionInline" style="font-size:0.74rem;color:var(--gray);line-height:1.55;margin:0.6rem 0 0.5rem">Checking who has set a password...</div>';
+  h += '<div id="pwAdoptionInline" style="font-size:0.74rem;color:var(--gray);line-height:1.55;margin:0.6rem 0 0.5rem">' + _pwAdoptionWords() + '</div>';
   h += '<button class="btn btn-secondary btn-sm" onclick="sendPasswordInvites()" style="font-size:0.74rem">Email everyone who still needs a password</button>';
   h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.45rem;line-height:1.5">Anyone can also ask for the link themselves from the sign-in page, so nobody is locked out.</div>';
   h += '</div>';
@@ -44934,7 +46439,7 @@ function renderSettings__portal() {
     {
       h += '<div style="margin-bottom:1rem;padding:0.85rem;border:1px solid var(--border);border-radius:8px;background:var(--hover)">';
       h += '<div style="font-size:0.86rem;font-weight:700;color:var(--text);margin-bottom:0.3rem">Password sign-in</div>';
-      h += '<div id="pwAdoption" style="font-size:0.76rem;color:var(--gray);line-height:1.55;margin-bottom:0.6rem">Checking who has set a password...</div>';
+      h += '<div id="pwAdoption" style="font-size:0.76rem;color:var(--gray);line-height:1.55;margin-bottom:0.6rem">' + _pwAdoptionWords() + '</div>';
       h += '<button class="btn btn-secondary btn-sm" onclick="sendPasswordInvites()" style="font-size:0.75rem">Send setup links to everyone without a password</button>';
       h += '<div style="font-size:0.7rem;color:var(--gray);margin-top:0.5rem;line-height:1.5">Anyone without a password can request a setup link from the sign-in page at any time, so nobody is permanently locked out. Sending the links below is the quickest way to move everyone across.</div>';
       h += '</div>';
@@ -57784,6 +59289,8 @@ async function saveFinding(id, aid, _opts) {
 
   var _stay = !!(_opts && _opts.stay);
 
+  try { _cvssLeft({ quiet: !_stay }); } catch (e) {}
+
   var _final = !!(_opts && _opts.final) && !(_opts && _opts.draft);
   var _stayWhy = '';
   if (!(_opts && _opts.draft)) {
@@ -58120,10 +59627,13 @@ async function saveFinding(id, aid, _opts) {
     if (!_rtNeedWords) S._mRetestOutcome = null;
     S._mRetestWithdraw = null;
     if (S._mRtPrev && S._mRtPrev.id === id) S._mRtPrev = null;
+
+    var _rtTl = null;
     if (id && _rtSaid.length) {
-      for (var _rsi = 0; _rsi < _rtSaid.length; _rsi++) {
-        try { await addTimelineEvent(aid, _rtSaid[_rsi] + ((savedData && savedData.title) || title || 'finding')); } catch (e) {}
-      }
+      var _rtTitle = (savedData && savedData.title) || title || 'finding';
+      _rtTl = _rtSaid.reduce(function (p, w) {
+        return p.then(function () { return addTimelineEvent(aid, w + _rtTitle); }).catch(function () {});
+      }, Promise.resolve());
     }
 
     var _libAdded = false, _libDid = '';
@@ -58212,7 +59722,8 @@ async function saveFinding(id, aid, _opts) {
 
     if (id && data && data.status === 'remediated') _ticketsAfterRemediation(id);
 
-    refreshAndStay();
+    if (_rtTl) _rtTl.then(function () { return refreshAndStay(); }).catch(function () {});
+    else refreshAndStay();
   } catch (e) {
     console.error('Save finding exception:', e);
     toast('Error: ' + e.message, 'error');
@@ -58476,6 +59987,11 @@ var _edPopPlace = null, _edPopRO = null;
 document.addEventListener('mousedown', function (e) {
   if (!_edPopEl) return;
   if (_edPopEl.contains(e.target)) return;
+
+  try {
+    var _cb = document.getElementById(_CVSS_IDS.btn || 'cvssPickBtn');
+    if (_cvssLeft({ quiet: !!(_cb && e.target && _cb.contains(e.target)) })) return;
+  } catch (x) {}
   if (e.target.closest && e.target.closest('.ed-pop-btn')) return;
   _edClosePop();
 });
@@ -59692,6 +61208,25 @@ function _edPlaceBlock(editor, range, block) {
     range.insertNode(block);
   }
 }
+function _edRangeLines(range) {
+  var lines = [], cur = '';
+  var BLOCK = /^(P|DIV|H[1-6]|LI|BLOCKQUOTE|PRE|UL|OL|TR|TABLE|SECTION|ARTICLE)$/;
+  var flush = function () { lines.push(cur); cur = ''; };
+  (function walk(n) {
+    for (var c = n.firstChild; c; c = c.nextSibling) {
+      if (c.nodeType === 3) cur += c.nodeValue;
+      else if (c.nodeType !== 1) continue;
+      else if (c.nodeName === 'BR') { if (c.nextSibling || !BLOCK.test(n.nodeName)) flush(); }
+      else if (BLOCK.test(c.nodeName)) { if (cur) flush(); walk(c); flush(); }
+      else walk(c);
+    }
+  })(range.cloneContents());
+  if (cur) lines.push(cur);
+  while (lines.length && !/\S/.test(lines[0])) lines.shift();
+  while (lines.length && !/\S/.test(lines[lines.length - 1])) lines.pop();
+  return lines.join('\n').replace(/\u00a0/g, ' ');
+}
+window._edRangeLines = _edRangeLines;
 function insertCodeBlock(editorId) {
   var editor = document.getElementById(editorId);
   if (!editor) return;
@@ -59736,7 +61271,7 @@ function insertCodeBlock(editorId) {
     return;
   }
 
-  var selText = sel.toString();
+  var selText = range.collapsed ? '' : _edRangeLines(range);
   var block = document.createElement('div');
   block.className = 'code-block';
   block.setAttribute('contenteditable', 'true');
@@ -59744,6 +61279,10 @@ function insertCodeBlock(editorId) {
   range.deleteContents();
 
   _edPlaceBlock(editor, range, block);
+
+  [block.previousSibling, block.nextSibling].forEach(function (sib) {
+    if (sib && sib.nodeType === 1 && /^(P|DIV)$/.test(sib.nodeName) && !sib.firstElementChild && !sib.textContent && sib.parentNode) sib.parentNode.removeChild(sib);
+  });
 
   var inside = document.createRange();
   inside.selectNodeContents(block);
@@ -59798,14 +61337,15 @@ function _evReflowExchange(text) {
 window._evReflowExchange = _evReflowExchange;
 window._evLooksLikeExchange = _evLooksLikeExchange;
 function _evPasteReadsAsCode(text, html) {
-  if (html) return _evHtmlIsCodeView(html);
+  if (html) return _evHtmlIsCodeView(html) || (!/<(img|table|ul|ol|h[1-6])\b/i.test(String(html)) && _evReadsAsListing(text, true));
   var t = String(text == null ? '' : text).replace(/\r\n?/g, '\n').trim();
   if (t.split('\n').length < 2) return false;
   if (_evLooksLikeExchange(t)) return true;
   if (/^[\[{]/.test(t)) {
-    try { var j = JSON.parse(t); return !!j && typeof j === 'object'; } catch (e) { return false; }
+    try { var j = JSON.parse(t); if (j && typeof j === 'object') return true; } catch (e) {  }
   }
-  return /^<\?xml\b/i.test(t);
+  if (/^<\?xml\b/i.test(t)) return true;
+  return _evReadsAsListing(t);
 }
 function _evHtmlIsCodeView(html) {
   var h = String(html || '').replace(/&quot;|&#39;/g, "'");
@@ -59836,7 +61376,10 @@ function _evPasteCode(e, ed) {
   var block = document.createElement('div');
   block.className = 'code-block';
   block.setAttribute('contenteditable', 'true');
-  block.textContent = String(text).replace(/\r\n?/g, '\n').replace(/^(\s*\n)+/, '').replace(/\s+$/, '');
+  var listing = String(text).replace(/\r\n?/g, '\n').replace(/^(\s*\n)+/, '').replace(/\s+$/, '');
+
+  if (html && /\n\n/.test(listing) && !/[^\n]\n[^\n]/.test(listing)) listing = listing.replace(/\n{2}/g, '\n');
+  block.textContent = listing;
   _edPlaceBlock(ed, range, block);
 
   try {
@@ -64600,6 +66143,9 @@ async function requestRetest(id) {
   confirmDialog(_rqCl ? 'Request Retest' : 'Mark for Retest',
     _rqCl ? 'Request a retest for "' + esc(fName) + '"? The testing team will be notified.'
           : 'Mark "' + esc(fName) + '" for retest? Its retest results can then be written on the finding.', async function() {
+
+  if (!_retestBegin(id)) return;
+  var _rqSaid = '', _rqKind = 'success', _rqRow = null, _rqTl = null;
   _showLoading();
   try {
 
@@ -64614,17 +66160,19 @@ async function requestRetest(id) {
         { from: { retest_status: was }, what: 'Requesting a retest' });
       if (!result.ok) return;
       var _rf = (S.data.findings || []).find(function(x) { return x.id === id; });
-      if (_rf && _rf.assessment_id) {
-        try { await addTimelineEvent(_rf.assessment_id, 'Retest requested for: ' + (_rf.title || 'finding')); } catch(e) {}
-      }
+      if (_rf && _rf.assessment_id) _rqTl = addTimelineEvent(_rf.assessment_id, 'Retest requested for: ' + (_rf.title || 'finding'));
+    } else {
+
+      _rqRow = { retest_requested: true, retest_status: 'requested' };
     }
 
-    toast(_rqAlready ? 'A retest had already been requested' : (_rqCl ? 'Retest requested' : 'Marked for retest'), _rqAlready ? 'info' : 'success');
-    await refreshAndStay();
+    _rqSaid = _rqAlready ? 'A retest had already been requested' : (_rqCl ? 'Retest requested' : 'Marked for retest');
+    _rqKind = _rqAlready ? 'info' : 'success';
   } catch (e) {
     toast('Error: ' + e.message, 'error');
   }
- finally { _hideLoading(); }
+ finally { _hideLoading(); _retestEnd(id); }
+  if (_rqSaid) _retestLanded(id, _rqSaid, { row: _rqRow, after: _rqTl, kind: _rqKind });
   });
 }
 function _findingSelIds() {
@@ -65125,15 +66673,82 @@ function _retestOutcomeBadge(f) {
   var o = f && f.retest_status !== 'not_fixed' && _RETEST_OUTCOMES[f.retest_status];
   return (o && f.status !== o.status) ? badge(o.badge, o.label) : '';
 }
+var _retestActing = {};
+function _retestBusy(id) { var t = _retestActing[id]; return !!(t && Date.now() - t < 120000); }
+function _retestBegin(id) {
+  if (_retestBusy(id)) return false;
+  _retestActing[id] = Date.now();
+  return true;
+}
+function _retestEnd(id) { delete _retestActing[id]; }
+function _retestNewPictures(html) {
+  var n = 0;
+  String(html || '').replace(/<img\b[^>]*>/gi, function (tag) {
+    var m = /\ssrc\s*=\s*"(data:[^"]*)"/i.exec(tag);
+    if (m && m[1].indexOf('data:image/gif;base64,R0lGODlh') !== 0 && !/\sdata-sp\s*=/i.test(tag)) n++;
+    return tag;
+  });
+  return n;
+}
+var _retestSent = {};
+function _retestPaths(html) {
+  var out = [];
+  String(html || '').replace(/\sdata-sp\s*=\s*"([^"]+)"/gi, function (m, p) { if (out.indexOf(p) < 0) out.push(p); return m; });
+  return out;
+}
+async function _retestUpload(html, assessmentId, id) {
+  if (!html || !/<img\b/i.test(html)) return html;
+  var n = _retestNewPictures(html);
+  if (n) _loadingNote('Saving ' + n + ' screenshot' + (n === 1 ? '' : 's'));
+  try {
+    var out = await uploadHtmlImages(html, assessmentId, id, 'retest');
+    if (n) { var had = String(html); _retestSent[id] = _retestPaths(out).filter(function (p) { return had.indexOf(p) < 0; }); }
+    return out;
+  }
+  finally { if (n) _loadingNote(''); }
+}
+function _retestTakeDown(paths) {
+  if (!paths || !paths.length || !supabaseClient) return;
+  _imgUpForget(paths);
+  try { Promise.resolve(supabaseClient.storage.from('assessment-files').remove(paths)).catch(function () {}); } catch (e) {}
+}
+function _retestUnsend(id) { var p = _retestSent[id]; delete _retestSent[id]; _retestTakeDown(p); }
+window._retestPaths = _retestPaths;
+function _retestLanded(id, msg, o) {
+  o = o || {};
+  var _out = null;
+  try {
+    var loc = (S.data.findings || []).find(function (x) { return x.id === id; });
+    if (loc && o.row) Object.keys(o.row).forEach(function (k) { loc[k] = _coCopy(o.row[k]); });
+    _out = _loadAllDataPromise || null;
+    if (_out && loc && _rtInLoad.length < _RT_IN_LOAD_MAX) _rtInLoad.push({ table: 'findings', eventType: 'UPDATE', new: _coCopy(loc) });
+    if (S.currentFinding) {
+      var cf = (S.data.findings || []).find(function (x) { return x.id === S.currentFinding.id; });
+      if (cf) S.currentFinding = cf;
+    }
+    render(true);
+  } catch (e) {}
+  delete _retestSent[id];
+  if (msg) toast(msg, o.kind || 'success');
+  Promise.resolve(o.after).catch(function () {})
+    .then(function () { return _out ? Promise.resolve(_out).catch(function () {}) : null; })
+    .then(function () { return refreshAndStay({ behind: true }); }).catch(function () {});
+}
+window._retestBusy = _retestBusy;
+window._retestNewPictures = _retestNewPictures;
 async function completeRetest(id, fixed, retestHtml, how) {
   var hw = how || {};
 
   var out = _retestOutcomeKey(fixed) || 'not_fixed';
   var oc = _RETEST_OUTCOMES[out];
+  if (!_retestBegin(id)) return;
+  var _said = '', _tl = null;
   _showLoading();
   try {
     var f0 = (S.data.findings || []).find(function(x) { return x.id === id; });
     var from = _coHas(hw, 'from') ? hw.from : (f0 ? f0.retest_status : undefined);
+
+    retestHtml = await _retestUpload(retestHtml, f0 ? f0.assessment_id : '', id);
     var res = await _coUpdate('findings', id, function (row) {
       var who = _coWho(row.row_by), by = (who && who !== 'You') ? ' by ' + who : '';
       if (!_coSame(row.retest_status, from)) {
@@ -65147,23 +66762,23 @@ async function completeRetest(id, fixed, retestHtml, how) {
       if (retestHtml) data.retest_results = hw.append ? _buildRetestResultsHtml(_retestUnmark(retestHtml), _retestDraftOf(row).rest) : _retestUnmark(retestHtml);
       return { patch: data };
     });
-    if (!res.ok) { _coSaidUpdate('findings', id, res, 'The retest'); return; }
+    if (!res.ok) { _retestUnsend(id); _coSaidUpdate('findings', id, res, 'The retest'); return; }
 
     if (S._rtEditOpen && S._rtEditOpen.id === id) S._rtEditOpen = null;
     _rtKeepForget(id);
     var f = (S.data.findings || []).find(function(x) { return x.id === id; });
-    if (f && f.assessment_id) {
-      try { await addTimelineEvent(f.assessment_id, 'Retest completed - ' + oc.words + ': ' + (f.title || 'finding')); } catch(e) {}
-    }
-    toast(out === 'fixed' ? 'Finding marked as remediated'
+
+    if (f && f.assessment_id) _tl = addTimelineEvent(f.assessment_id, 'Retest completed - ' + oc.words + ': ' + (f.title || 'finding'));
+    _said = out === 'fixed' ? 'Finding marked as remediated'
       : out === 'part_fixed' ? 'Finding marked as part remediated - client can request another retest'
       : out === 'accepted' ? 'Finding marked as risk accepted'
-      : 'Finding not remediated - client can request another retest', 'success');
+      : 'Finding not remediated - client can request another retest';
     if (out === 'fixed') _ticketsAfterRemediation(id);
-    await refreshAndStay();
   } catch (e) {
+    if (!_said) _retestUnsend(id);
     toast('Error: ' + e.message, 'error');
-  } finally { _hideLoading(); }
+  } finally { _hideLoading(); _retestEnd(id); }
+  if (_said) _retestLanded(id, _said, { after: _tl });
 }
 var _RETEST_HTMLISH = /<(?:p|div|ul|ol|li|br|h[1-6]|pre|blockquote|table|strong|em|code)\b[^>]*>/i;
 function _stripRetestDateHeader(html) {
@@ -65603,36 +67218,42 @@ function toggleRetestEdit(id) {
   }
 }
 async function saveRetestResultsDirect(id, html) {
-  if (html === undefined) {
+  var _fromEd = html === undefined, _rtAid = '';
+  if (_fromEd) {
     var el = document.getElementById('retestResultsEditor');
     if (!el) return;
     html = el.innerHTML.trim();
     var clean = html.replace(/<br\s*\/?>/g,'').replace(/&nbsp;/g,'').replace(/<[^>]+>/g,'').trim();
     if (!clean) { toast('Please enter retest results', 'error'); return; }
     var f = (S.data.findings || []).find(function(x) { return x.id === id; });
-    var _rtAid = f ? f.assessment_id : '';
-    html = await uploadHtmlImages(html, _rtAid, id, 'retest');
+    _rtAid = f ? f.assessment_id : '';
   }
+  if (!_retestBegin(id)) return;
   var open = (S._rtEditOpen && S._rtEditOpen.id === id) ? S._rtEditOpen : null;
-  html = _retestUnmark(html);
+  var _done = null;
   _showLoading();
   try {
+
+    if (_fromEd) html = await _retestUpload(html, _rtAid, id);
+    html = _retestUnmark(html);
     var _seq = _setFailSeq;
     var r = await _coSave('findings', id, { retest_results: html },
       open ? { base: { values: { retest_results: open.value }, version: open.version } } : {});
     if (!r.ok && r.conflicts.length) {
+
+      var _sent = _retestSent[id]; delete _retestSent[id];
       _coShowConflict('findings', id, r.conflicts, function (choice) {
         if (choice === 'mine') return saveRetestResultsDirect(id, html);
-      }, { by: r.by });
+      }, { by: r.by, onTheirs: function () { _retestTakeDown(_sent); } });
       return;
     }
-    if (!r.ok) { _coSaid('findings', id, r, _seq); return; }
+    if (!r.ok) { _retestUnsend(id); _coSaid('findings', id, r, _seq); return; }
     S._rtEditOpen = null;
     _rtKeepForget(id);
-    toast('Retest results saved', 'success');
-    await refreshAndStay();
-  } catch(e) { toast('Error: ' + e.message, 'error'); }
-  finally { _hideLoading(); }
+    _done = { row: Object.assign({ retest_results: html }, r.row || {}) };
+  } catch(e) { _retestUnsend(id); toast('Error: ' + e.message, 'error'); }
+  finally { _hideLoading(); _retestEnd(id); }
+  if (_done) _retestLanded(id, 'Retest results saved', _done);
 }
 async function saveRetestResults(id) {
   var el = document.getElementById('retestResultsEditor');
@@ -65642,20 +67263,23 @@ async function saveRetestResults(id) {
   if (!clean) { toast('Please enter retest results', 'error'); return; }
   var f = (S.data.findings || []).find(function(x) { return x.id === id; });
   var _rtAid = f ? f.assessment_id : '';
-  html = await uploadHtmlImages(html, _rtAid, id, 'retest');
+  if (!_retestBegin(id)) return;
+  var _done = false;
   _showLoading();
   try {
+
+    html = await _retestUpload(html, _rtAid, id);
 
     var _rtAt = new Date().toISOString();
     var _r = await _coUpdate('findings', id, function (row) {
       return { patch: { retest_results: _retestDraftPut(row, html, _rtAt) } };
     });
-    if (!_r.ok) { _coSaidUpdate('findings', id, _r, 'The retest results'); return; }
+    if (!_r.ok) { _retestUnsend(id); _coSaidUpdate('findings', id, _r, 'The retest results'); return; }
     _rtKeepForget(id);
-    toast('Retest results saved', 'success');
-    await refreshAndStay();
-  } catch(e) { toast('Error: ' + e.message, 'error'); }
-  finally { _hideLoading(); }
+    _done = true;
+  } catch(e) { _retestUnsend(id); toast('Error: ' + e.message, 'error'); }
+  finally { _hideLoading(); _retestEnd(id); }
+  if (_done) _retestLanded(id, 'Retest results saved');
 }
 async function completeRetestWithResults(id, fixed) {
   var f = (S.data.findings || []).find(function(x) { return x.id === id; });
@@ -65676,7 +67300,8 @@ async function completeRetestWithResults(id, fixed) {
     return;
   }
 
-  editorHtml = await uploadHtmlImages(editorHtml, f ? f.assessment_id : '', id, 'retest');
+  if (_retestBusy(id)) return;
+  if (document.getElementById('confirmOverlay')) return;
 
   var _editing = !!(f && f.retest_status !== 'requested');
   var _open = (S._rtEditOpen && S._rtEditOpen.id === id) ? S._rtEditOpen : null;
@@ -65691,6 +67316,8 @@ async function completeRetestWithResults(id, fixed) {
 }
 async function saveKB() {
   var m = S.modal;
+
+  try { _cvssLeft({ quiet: !_mStayReq }); } catch (e) {}
   var titleEl = document.getElementById('kb_title');
   var title = ((titleEl || {}).value || '').trim();
   var descEl = document.getElementById('kb_desc');
@@ -66142,6 +67769,7 @@ async function saveClient() {
               password_login: true
             });
           } catch (e) { _res = null; }
+          if (_res) _e2ePersonAdded();
           if (_res && !_res.warning) { _sent++; if (_res.invite_job) _jobs.push({ job: _res.invite_job, email: _people[_pi].email }); }
 
           else if (_res && _res.warning) _unsent.push(_people[_pi].email + ' (' + _res.warning + ')');
@@ -66212,8 +67840,8 @@ async function deleteClient(clientId) {
 
       var assessmentIds = assessments.map(function(a) { return a.id; });
       if (assessmentIds.length) {
-        r = await supabaseClient.from('qa_comments').delete().in('assessment_id', assessmentIds); if (r.error) console.warn('qa_comments:', r.error.message);
-        r = await supabaseClient.from('assessment_comments').delete().in('assessment_id', assessmentIds); if (r.error) console.warn('comments:', r.error.message);
+        r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('qa_comments').delete().in('assessment_id', part); }, true); if (r.error) console.warn('qa_comments:', r.error.message);
+        r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('assessment_comments').delete().in('assessment_id', part); }, true); if (r.error) console.warn('comments:', r.error.message);
 
         try {
           var _cFiles = (S.data.files || []).filter(function(f) { return assessmentIds.indexOf(f.assessment_id) >= 0 && f.storage_path; });
@@ -66230,20 +67858,20 @@ async function deleteClient(clientId) {
           _cEvPaths = _pathsNotSharedElsewhere(_cEvPaths, { skipClientId: id });
           if (_cEvPaths.length) { await supabaseClient.storage.from('assessment-files').remove(_cEvPaths); }
         } catch(e) { console.warn('Client evidence storage cleanup:', e.message); }
-        r = await supabaseClient.from('assessment_files').delete().in('assessment_id', assessmentIds); if (r.error) console.warn('files:', r.error.message);
-        r = await supabaseClient.from('timeline_events').delete().in('assessment_id', assessmentIds); if (r.error) console.warn('timeline:', r.error.message);
-        r = await supabaseClient.from('findings').delete().in('assessment_id', assessmentIds); if (r.error) console.warn('findings:', r.error.message);
-        r = await supabaseClient.from('contractor_payments').delete().in('assessment_id', assessmentIds); if (r.error) console.warn('payments:', r.error.message);
-        r = await supabaseClient.from('feedback').delete().in('assessment_id', assessmentIds); if (r.error) console.warn('feedback:', r.error.message);
+        r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('assessment_files').delete().in('assessment_id', part); }, true); if (r.error) console.warn('files:', r.error.message);
+        r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('timeline_events').delete().in('assessment_id', part); }, true); if (r.error) console.warn('timeline:', r.error.message);
+        r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('findings').delete().in('assessment_id', part); }, true); if (r.error) console.warn('findings:', r.error.message);
+        r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('contractor_payments').delete().in('assessment_id', part); }, true); if (r.error) console.warn('payments:', r.error.message);
+        r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('feedback').delete().in('assessment_id', part); }, true); if (r.error) console.warn('feedback:', r.error.message);
       }
 
       var clientProposalIds = (S.data.proposals || []).filter(function(p) { return p.client_id === clientId; }).map(function(p) { return p.id; });
       if (clientProposalIds.length) {
-        try { r = await supabaseClient.from('invoices').update({ proposal_id: null }).in('proposal_id', clientProposalIds); if (r.error) console.warn('invoice proposal_id unlink:', r.error.message); } catch(e) { console.warn('invoice proposal_id unlink:', e.message); }
+        try { r = await _inParts(clientProposalIds, function (part) { return supabaseClient.from('invoices').update({ proposal_id: null }).in('proposal_id', part); }, true); if (r.error) console.warn('invoice proposal_id unlink:', r.error.message); } catch(e) { console.warn('invoice proposal_id unlink:', e.message); }
       }
       if (assessmentIds.length) {
-        try { r = await supabaseClient.from('proposals').update({ assessment_id: null }).in('assessment_id', assessmentIds); if (r.error) console.warn('proposal assessment_id unlink:', r.error.message); } catch(e) { console.warn('proposal assessment_id unlink:', e.message); }
-        try { r = await supabaseClient.from('invoices').update({ assessment_id: null }).in('assessment_id', assessmentIds); if (r.error) console.warn('invoice assessment_id unlink:', r.error.message); } catch(e) { console.warn('invoice assessment_id unlink:', e.message); }
+        try { r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('proposals').update({ assessment_id: null }).in('assessment_id', part); }, true); if (r.error) console.warn('proposal assessment_id unlink:', r.error.message); } catch(e) { console.warn('proposal assessment_id unlink:', e.message); }
+        try { r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('invoices').update({ assessment_id: null }).in('assessment_id', part); }, true); if (r.error) console.warn('invoice assessment_id unlink:', r.error.message); } catch(e) { console.warn('invoice assessment_id unlink:', e.message); }
       }
 
       r = await supabaseClient.from('invoices').delete().eq('client_id', clientId); if (r.error) console.warn('invoices:', r.error.message);
@@ -66596,6 +68224,7 @@ async function inviteUser() {
       ? await adminApi('invite_user', { email: email, name: name, role: role, password_login: true })
       : await _personAddOnly(email, name, role, null);
     if (result) {
+      _e2ePersonAdded();
 
       if (_invTeam && result.user_id) {
         try {
@@ -71310,6 +72939,17 @@ var EmailKit = (function () {
       body: '<h1>Your new sign-in email</h1>\n'
         + '<p>{{who}} set this address as the sign-in email for your account (previously {{old_email}}).</p>\n'
         + '<p>Sign-in codes will be sent here from now on.</p>' },
+
+    { key: 'mailbox_stopped', group: 'security', label: 'Connected mailbox stopped', cta: 'Open your portal', hidden: true,
+      description: 'Sent by Pental to the account owner and the administrators when the connected mailbox no longer lets the portal send.',
+      vars: ['company_name', 'provider', 'mailbox', 'why', 'action_url'],
+      subject: 'Connect your portal\'s mailbox again',
+      note: 'Sent from Pental\'s own mailbox, because yours has stopped sending for the portal.',
+      body: '<h1>Your mailbox needs connecting again</h1>\n'
+        + '<p>Your {{company_name}} portal can no longer send email through its connection to <strong>{{mailbox}}</strong>. {{provider}} has ended that connection, {{why}}.</p>\n'
+        + '<p>Until it is connected again, email that relies on it is not delivered.</p>\n'
+        + '<p>To connect it again, sign in at pental.io/manage, open Email and press Connect. It takes about a minute, and nothing else has to be set up again.</p>\n'
+        + '<a class="button" href="{{action_url}}">Open your portal</a>' },
   ];
 
   var GROUPS = [
@@ -71629,6 +73269,13 @@ var EmailKit = (function () {
   var PENTAL_WITHHELD = { critical_finding: ['finding_title', 'cvss'], comment_new: ['snippet'], comment_reply: ['snippet'],
     meeting_invitation: ['notes'], meeting_updated: ['notes'] };
 
+  var MAILBOX_ENDS = {
+    microsoft: 'which happens when the mailbox\'s password is reset, its sessions are signed out, its licence is removed or the permission is withdrawn',
+    google: 'which happens when the mailbox\'s password is changed, or when the permission is withdrawn by its owner or an administrator',
+    zoho: 'which happens when the portal\'s access is removed under Connected Apps in Zoho, when the password is changed and its API tokens are ended with it, or when the mailbox has been connected more than twenty times',
+    other: 'which a provider does when the permission is withdrawn',
+  };
+
   var PENTAL_MADE = { action_url: 1, setup_link: 1, portal_url: 1, magic_link: 1, meeting_link: 1, company_name: 1,
     join_block: 1, notes_block: 1, deal_info: 1 };
   var MEETING_HOST = /^https:\/\/([a-z0-9-]+\.)*teams\.(microsoft\.com|live\.com|microsoft\.us)\/[^\s"'<>\\]*$/i;
@@ -71736,6 +73383,7 @@ var EmailKit = (function () {
     text.company_name = brand.name;
 
     if (key === 'mfa_changed') text.change = text.change === 'updated' ? 'updated' : 'enabled';
+    if (key === 'mailbox_stopped') text.why = Object.prototype.hasOwnProperty.call(MAILBOX_ENDS, String(given.kind || '')) ? MAILBOX_ENDS[String(given.kind)] : MAILBOX_ENDS.other;
     if (key === 'session_revoked') {
       var n = parseInt(given.count, 10);
       text.count = String(n > 0 && n < 10000 ? n : 1);
@@ -71802,6 +73450,8 @@ var EmailKit = (function () {
 
       name: 'Sam Patel', role: 'standard', old_role: 'standard', new_role: 'senior', change: 'enabled',
       who: 'An administrator', old_email: 'old.address@example.com', new_email: 'user@example.com',
+
+      provider: 'Microsoft 365', mailbox: 'notifications@example.com',
     };
   }
   function sampleBlocks(meetingLink) {
@@ -72763,6 +74413,8 @@ function _mailRouteText(cap) {
     return 'The email this portal writes is sent by your own database, through your connected mailbox.' + renews + after;
   }
   var tail = ' Pental\'s servers write each email in Pental\'s standard wording, not your templates, and leave out a critical finding\'s title and score and a comment\'s words: the email links to them in the portal.';
+
+  if (cap.blocked && cap.stopped === true) return String(cap.blocked) + ' Until it is connected again, email that relies on that mailbox is not delivered: Pental\'s servers send a firm\'s notifications through its own mailbox, and never from theirs in its place. Password emails still arrive.';
   if (cap.blocked) return String(cap.blocked) + ' Meanwhile email is sent through Pental\'s servers.' + tail;
   if (cap.failing) return 'Your database could not get through to your mailbox\'s mail service when it last tried, so email is sent through Pental\'s servers until it can (it tries again with the next email).' + tail;
   if (cap.transport === 'none') return 'Email is sent through Pental\'s servers, because no mailbox of your own is connected.' + tail + ' Connect a Microsoft 365, Google or Zoho mailbox at pental.io/manage to send all of it from your own side.';
@@ -73564,7 +75216,8 @@ async function deleteArtifact(assessmentId, artIdx) {
 function updateCredFields(snap) {
   var el = document.getElementById('credDynamicFields');
   if (!el) return;
-  var fresh = !el.firstChild;
+
+  var fresh = !el.firstChild || arguments.length > 0;
   var aid = el.getAttribute('data-aid') || '';
   var d = _credDraft && _credDraft.aid === aid ? _credDraft : null;
   var typeEl = document.getElementById('credAuthType');
@@ -77644,6 +79297,11 @@ function _restoreWhatSaid(what, n) {
   return shown + (list.length > 4 ? ', and ' + (list.length - 4) + ' more' : '');
 }
 window._restoreWhatSaid = _restoreWhatSaid;
+function _restoreWhen(v) {
+  if (typeof v !== 'string' || !v) return false;
+  var t = Date.parse(v);
+  return isFinite(t) && t > 0 && t <= Date.now() + 86400000;
+}
 async function exportAllData() {
   if (!S.profile || S.profile.role !== 'admin') { toast('Admin access required', 'error'); return; }
   var _expBtn = document.getElementById('btn_export_data');
@@ -77665,7 +79323,9 @@ async function exportAllData() {
     proposals: S.data.proposals || [],
     invoices: S.data.invoices || [],
     kb_entries: S.data.library || [],
-    profiles: (S.data.users || []).map(function(u) { return { id: u.id, auth_user_id: u.auth_user_id, email: u.email, name: u.name, role: u.role, active: u.active, client_id: u.client_id }; }),
+
+    profiles: (S.data.users || []).map(function(u) { return { id: u.id, auth_user_id: u.auth_user_id, email: u.email, name: u.name, role: u.role, active: u.active, client_id: u.client_id,
+      job_title: u.job_title || null, phone: u.phone || null, contractor_company: u.contractor_company || null, avatar_key: _avatarStorageKey(u.avatar_url) || null }; }),
     meetings: S.data.meetings || [],
     meeting_attendees: S.data.meeting_attendees || [],
     assessment_comments: S.data.assessment_comments || [],
@@ -77772,14 +79432,17 @@ async function importAllData(evt, opts) {
     var stats = { inserted: 0, skipped: 0, errors: 0, what: [] };
 
     var _idMap = {};
+
+    var _sameHere = {};
     try {
       var _hereByEmail = {};
       (S.data.users || []).forEach(function (u) { if (u && u.id && u.email) _hereByEmail[String(u.email).trim().toLowerCase()] = u.id; });
       (data.profiles || []).forEach(function (p) {
         var _h = p && p.id && p.email && _hereByEmail[String(p.email).trim().toLowerCase()];
+        if (_h) _sameHere[p.id] = _h;
         if (_h && String(_h) !== String(p.id)) _idMap[p.id] = _h;
       });
-    } catch (e) { _idMap = {}; }
+    } catch (e) { _idMap = {}; _sameHere = {}; }
 
     if (C) (data.profiles || []).forEach(function (p) {
       if (!p || !p.id || _idMap[p.id]) return;
@@ -77855,7 +79518,9 @@ async function importAllData(evt, opts) {
       for (var j = 0; j < rows.length; j += CHUNK) {
         var chunk = rows.slice(j, j + CHUNK).map(function(r) {
           var row = Object.assign({}, r);
-          delete row.created_at; delete row.updated_at;
+
+          if (!_restoreWhen(row.created_at)) delete row.created_at;
+          delete row.updated_at;
 
           delete row.row_version;
 
@@ -77870,6 +79535,12 @@ async function importAllData(evt, opts) {
           if (!_m) break;
           console.warn('import ' + tableName + ': this database has no ' + _m[1] + ' column, restoring without it');
           chunk.forEach(function (r) { delete r[_m[1]]; });
+          error = (await supabaseClient.from(tableName).upsert(chunk, { onConflict: 'id', ignoreDuplicates: true })).error;
+        }
+
+        if (error && /created_at/.test(String(error.message || ''))) {
+          console.warn('import ' + tableName + ': this database stamps created_at itself, restoring without it');
+          chunk.forEach(function (r) { delete r.created_at; });
           error = (await supabaseClient.from(tableName).upsert(chunk, { onConflict: 'id', ignoreDuplicates: true })).error;
         }
         if (error) { stats.errors += chunk.length; stats.what.push(chunk.length + ' ' + _restoreTableWords(tableName, chunk.length)); console.error('import ' + tableName + ':', error.message); } else { stats.inserted += chunk.length; }
@@ -77992,6 +79663,36 @@ async function importAllData(evt, opts) {
         }
       } catch (e) { stats.errors++; stats.what.push('your logos'); console.error('restore logos failed:', e); }
     }
+
+    if (!C || C.team) try {
+      var _hereNow = {};
+      (S.data.users || []).forEach(function (u) { if (u && u.id) _hereNow[u.id] = u; });
+      var _madeNow = {};
+      _restoredPeople.forEach(function (p) { _madeNow[p.id] = true; });
+      for (var _pd = 0; _pd < (data.profiles || []).length; _pd++) {
+        var _bp = data.profiles[_pd];
+        if (!_bp || !_bp.id) continue;
+        var _same = _sameHere[_bp.id];
+        if (!_same && !_madeNow[_bp.id]) continue;
+        if (_same && C && C.people && (C.people[_bp.id] === 'out' || C.people[_bp.id] === false)) continue;
+        var _tid = _same || _bp.id, _cur = _hereNow[_tid] || {}, _patch = {};
+        ['job_title', 'phone', 'contractor_company'].forEach(function (k) {
+          var v = typeof _bp[k] === 'string' ? _bp[k].trim() : '';
+          if (v && !(_same && String(_cur[k] || '').trim())) _patch[k] = v.slice(0, 200);
+        });
+
+        var _ak = typeof _bp.avatar_key === 'string' ? _bp.avatar_key : '';
+        if (_ak && /^[A-Za-z0-9._\/-]+$/.test(_ak) && _ak.indexOf('..') === -1 && _ak.charAt(0) !== '/' && _zip && _zip.file('storage/avatars/' + _ak) && !(_same && _cur.avatar_url)) {
+          try { _patch.avatar_url = supabaseClient.storage.from('avatars').getPublicUrl(_ak).data.publicUrl; } catch (e) {}
+        }
+        if (!Object.keys(_patch).length) continue;
+        var _pr = null;
+        if (_tid === S.profile.id) { try { _pr = await _safeRpc('save_own_profile', { updates: _patch }); } catch (e) { _pr = { error: e }; } }
+        if (!_pr || _pr.error) _pr = await supabaseClient.from('profiles').update(_patch).eq('id', _tid).select('id');
+        if (_pr && _pr.error) { stats.errors++; stats.what.push((_bp.name || _bp.email || 'a person') + '’s job title and details'); console.error('restore profile details:', _pr.error.message || _pr.error); }
+        else { stats.inserted++; if (_tid === S.profile.id) Object.assign(S.profile, _patch); }
+      }
+    } catch (e) { console.error('restore profile details failed:', e); }
 
     var _whatSaid = _restoreWhatSaid(stats.what, stats.errors);
     S._importFailed = stats.errors ? stats.what.slice() : [];
@@ -91298,7 +92999,8 @@ function notForRetest(id, after) {
       + (drafted ? ' The draft saved for this retest is removed.' : '')
       + ' A retest can be asked for again at any time.',
     async function () {
-      var done = false;
+      var done = false, _tl = null;
+      if (!_retestBegin(id)) { if (after) after(false); return; }
       _showLoading();
       try {
         var r = await _coMove('findings', id, _retestWithdrawn,
@@ -91306,13 +93008,12 @@ function notForRetest(id, after) {
         done = !!(r && r.ok);
         if (done) {
           _rtKeepForget(id);
-          try { await addTimelineEvent(f.assessment_id, 'Marked not for retest: ' + (f.title || 'finding')); } catch (e) {}
-          toast('Marked not for retest', 'success');
-          await refreshAndStay();
+          _tl = addTimelineEvent(f.assessment_id, 'Marked not for retest: ' + (f.title || 'finding'));
         }
       } catch (e) {
         toast('Error: ' + e.message, 'error');
-      } finally { _hideLoading(); }
+      } finally { _hideLoading(); _retestEnd(id); }
+      if (done) _retestLanded(id, 'Marked not for retest', { after: _tl });
       if (after) after(done);
     },
     function () { if (after) after(false); },

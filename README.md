@@ -224,7 +224,7 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 
 **Your brand**
 
-- **Your look.** A logo for each theme and a favicon, your accent, severity, alert and text colours, how reference codes look, and your fonts for headings, text and code. Severity colours can be copied from your PDF report template. Dark, light, or both with a switch for each person.
+- **Your look.** A logo for each theme and a favicon, your accent, severity, alert and text colours, how reference codes look, and your fonts for headings, text and code. Severity colours can be copied from your PDF report template. Dark, light, or both with a switch for each person. Until you set a logo and a favicon of your own, the sign-in page, the sidebar and the browser tab show Pental's.
 - **Your sign-in page.** Its title, heading, subtitle, support email and footer, with your logo and name shown or not.
 - **Your company and testing IPs**, carried onto your reports.
 
