@@ -8098,6 +8098,12 @@ function _fitStats(rows) {
 
   rows.forEach(function (g) {
     if (g.hasAttribute('data-st-fit')) { g.style.gridTemplateColumns = g.getAttribute('data-st-fit'); g.removeAttribute('data-st-fit'); }
+    if (g.hasAttribute('data-st-fill')) {
+      Array.prototype.forEach.call(g.children, function (s) {
+        if (s.style && s.style.gridColumn) { s.style.gridColumn = ''; if (!s.getAttribute('style')) s.removeAttribute('style'); }
+      });
+      g.removeAttribute('data-st-fill');
+    }
   });
   var vals = [];
   rows.forEach(function (g) {
@@ -8108,12 +8114,19 @@ function _fitStats(rows) {
   });
 
   vals.forEach(function (p) { p[0].style.width = 'max-content'; p[0].style.whiteSpace = 'nowrap'; });
-  var cols = rows.map(function (g) {
+  var shape = [];
+  var cols = rows.map(function (g, gi) {
+    shape[gi] = null;
     if (!g.getClientRects().length) return 0;
     var most = 0, col = Infinity, n = 0;
+    var sh = shape[gi] = { n: 0, line1: 0, top: null, kids: [] };
     Array.prototype.forEach.call(g.children, function (s) {
       if (!s.getClientRects().length) return;
       n++;
+      var st = s.getBoundingClientRect().top;
+      if (sh.top === null) sh.top = st;
+      if (Math.abs(st - sh.top) < 1) sh.line1++;
+      sh.n++; sh.kids.push(s);
       var v = s.classList.contains('stat') && s.querySelector('.stat-value');
       if (!v) return;
       var cs = getComputedStyle(s);
@@ -8131,10 +8144,23 @@ function _fitStats(rows) {
     return Math.max(1, Math.ceil(n / lines));
   });
   vals.forEach(function (p) { p[0].style.cssText = p[1]; });
+
   rows.forEach(function (g, i) {
-    if (!cols[i]) return;
+    var sh = shape[i], c = cols[i];
+    if (!c && sh && sh.line1 > 0 && sh.n > sh.line1) {
+      c = Math.ceil(sh.n / Math.ceil(sh.n / sh.line1));
+      if (c === sh.line1 && sh.n % c === 0) c = 0;
+    }
+    if (!c) return;
     g.setAttribute('data-st-fit', g.style.gridTemplateColumns || '');
-    g.style.gridTemplateColumns = 'repeat(' + cols[i] + ',minmax(0,1fr))';
+    var rem = sh ? sh.n % c : 0;
+    if (!rem) { g.style.gridTemplateColumns = 'repeat(' + c + ',minmax(0,1fr))'; return; }
+    var a = c, b = rem, t;
+    while (b) { t = a % b; a = b; b = t; }
+    var fine = c * rem / a, full = sh.n - rem;
+    g.style.gridTemplateColumns = 'repeat(' + fine + ',minmax(0,1fr))';
+    g.setAttribute('data-st-fill', '1');
+    sh.kids.forEach(function (s, k) { s.style.gridColumn = 'span ' + (k < full ? fine / c : fine / rem); });
   });
 }
 window._fitStats = _fitStats;
@@ -9165,7 +9191,6 @@ async function reportUsage() {
     if (last && lastPlan === _plan && Date.now() - last < 24 * 60 * 60 * 1000) return;
 
     var users = (S.data.users || []).filter(function (u) { return u && u.role !== 'client'; }).length;
-    var clients = (S.data.clients || []).length;
 
     if (!users) return;
 
@@ -9177,7 +9202,7 @@ async function reportUsage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token,
                  'x-tenant-id': TENANT_ID },
-      body: JSON.stringify({ users: users, clients: clients }),
+      body: JSON.stringify({ users: users }),
     });
 
     if (r && r.ok) {
@@ -22089,7 +22114,7 @@ async function _sentAndSaid(job, email, what, okText, created, again) {
   toast((created ? 'Account created. ' : '') + 'Sending the ' + what + ' to ' + email + ' from your own mail.', 'info', 5000);
   var o = await _mailJobOutcome(job);
   if (o.ok) toast(okText, 'success');
-  else if (o.pending) toast(_forPeople('The ' + what + ' to ' + email + ' has not gone yet. Your own mail is still trying, and Settings, Email Log shows when it goes.'), 'info', 12000);
+  else if (o.pending) toast(_forPeople('The ' + what + ' to ' + email + ' has not gone yet. Your own mail is still trying. If it has not arrived in a few minutes, send it again.'), 'info', 12000);
   else toast(_forPeople('The ' + what + ' to ' + email + ' did not go: ' + _mailWhy(o.error) + '. ' + (again || 'Send it again with Resend invite.')), 'error', 14000);
 }
 function _mailWhy(e) { return String(e == null || e === '' ? 'the mail service refused it' : e).replace(/[\s.]+$/, ''); }
@@ -22099,7 +22124,7 @@ async function _sentManySaid(list, what) {
   var failed = [], waiting = [];
   outs.forEach(function (o, i) { if (o.pending) waiting.push(list[i].email); else if (!o.ok) failed.push(list[i].email + ' (' + _mailWhy(o.error) + ')'); });
   if (failed.length) toast(_forPeople('The ' + what + ' did not go to ' + failed.join('; ') + '. Send ' + (failed.length === 1 ? 'it' : 'them') + ' again with Resend invite.'), 'error', 16000);
-  if (waiting.length) toast(_forPeople('The ' + what + ' to ' + waiting.join(', ') + ' ' + (waiting.length === 1 ? 'has' : 'have') + ' not gone yet. Your own mail is still trying, and Settings, Email Log shows when ' + (waiting.length === 1 ? 'it goes' : 'they go') + '.'), 'info', 14000);
+  if (waiting.length) toast(_forPeople('The ' + what + ' to ' + waiting.join(', ') + ' ' + (waiting.length === 1 ? 'has' : 'have') + ' not gone yet. Your own mail is still trying. ' + (waiting.length === 1 ? 'If it has not arrived in a few minutes, send it again.' : 'Any that have not arrived in a few minutes can be sent again.')), 'info', 14000);
 }
 async function resendUserInvite(userId) {
   var u = _anyUserById(userId);
@@ -23183,9 +23208,6 @@ async function init() {
 
         if (_ol.max_users != null && Number(_ol.users) > Number(_ol.max_users)) {
           _olWhat.push(_ol.users + ' internal users, and the subscription is for ' + _testersWord(Number(_ol.max_users)));
-        }
-        if (_ol.max_clients != null && Number(_ol.clients) > Number(_ol.max_clients)) {
-          _olWhat.push(_ol.clients + ' clients on a plan that allows ' + _ol.max_clients);
         }
         _blockMsg = '<h2 style="margin-bottom:0.5rem">Portal Suspended</h2>'
           + '<p style="color:#999;max-width:480px;margin:0 auto;margin-bottom:1rem">'
@@ -27044,9 +27066,6 @@ function renderOverLimitBanner() {
   if (usersOver) {
     over.push(ol.users + ' internal users, and the subscription is for ' + _testersWord(Number(ol.max_users)));
   }
-  if (ol.max_clients != null && Number(ol.clients) > Number(ol.max_clients)) {
-    over.push(ol.clients + ' clients on a plan that allows ' + ol.max_clients);
-  }
 
   var what = over.length ? over.join(', and ') : 'over what your subscription allows';
 
@@ -28733,7 +28752,7 @@ function _e2eKeptOffHtml() {
     : w === 'switch' ? ' It is switched back on where the portal is deployed (PENTAL_E2E_KEPT_OFF on its Vercel project), not in these settings.'
     : ' It is put right where the portal is deployed, not in these settings.';
   return '<div class="alert alert-warn" id="e2eKeptOff" role="status" style="margin-top:0.75rem"><div><strong>Keys are not being kept at the moment.</strong> '
-    + esc(what + ', so nobody new is kept a key and a key already kept cannot be opened: a first sign-in, or a reset password on a browser that holds none of that person’s keys, waits for a teammate’s portal to be open.' + fix) + '</div></div>';
+    + esc(what + ', so nobody new is kept a key and a key already kept cannot be opened. Until it is put right, a first sign-in, or a reset password on a browser that holds none of that person’s keys, has to wait for its keys.' + fix) + '</div></div>';
 }
 async function _e2eKeptAsk(principalId, sealed, ticket) {
   try {
@@ -28945,7 +28964,7 @@ async function _e2eSealRows(table, rows, isInsert, ids) {
     var clientId = await _e2eRowClient(table, row, ids);
     var k = await _e2eKeyForClient(clientId);
     if (!k) throw _e2eRefusal('This was not saved: its key could not be found. Reload the page and try again.');
-    if (!k.key && !isInsert) throw _e2eRefusal('This was not saved: this browser is still waiting to be given the key it needs, which takes a moment while a teammate\u2019s portal is open.');
+    if (!k.key && !isInsert) throw _e2eRefusal('This was not saved: this browser is still waiting to be given the key it needs, which it is as soon as the portal is open on a browser that already holds it.');
     var pub = k.key ? null : await k.pub;
     for (var p1 = 0; p1 < ph.length; p1++) ph[p1].scope = k.key ? await _e2eSeal(k.kid, k.key, ph[p1].scope, false) : await _e2eSealToKey(k.kid, pub, ph[p1].scope, false);
     var refs = {};
@@ -29606,15 +29625,8 @@ function _e2ePopHtml(a) {
   var out = '<div class="e2e-pop-head">' + _E2E_LOCK + '<strong>End-to-end encrypted</strong></div>';
   out += '<p>' + (isClient
     ? 'Your findings, comments, files and credentials for this engagement are encrypted in the browser before they are saved, and opened only in the browsers of the people allowed to read them.'
-    : 'This engagement’s findings, notes, comments, files and the client’s credentials are encrypted in the browser before they are saved, and opened only in the browsers of the people allowed to read them.') + '</p>';
+    : 'This engagement’s findings, notes, comments, files and credentials are encrypted in the browser before they are saved, and opened only in the browsers of the people allowed to read them.') + '</p>';
 
-  var kept = ((E2E.st && E2E.st.wraps) || []).some(function (w) { return w.method === 'invite'; });
-  out += '<ul class="e2e-pop-facts"><li>The database they are kept in stores them encrypted, and a copy of it opens none of them.</li>'
-    + '<li>Each person’s key stays in their own browser, and is given to a new one of theirs by their password or a teammate’s portal.</li>'
-    + (!kept ? '' : _e2eKeptTool()
-      ? '<li>For a first sign-in or a reset password, the database keeps each person a sealed key, and opens it only for them, signed in and verified.</li>'
-      : '<li>For a first sign-in or a reset password, the database keeps each person a key under two locks, its own and Pental’s. Neither opens it alone, and it is opened only for that person, signed in and verified.</li>')
-    + '</ul>';
   if (waiting) out += '<div class="e2e-pop-wait">' + _e2eWaitHtml() + '</div>';
   return out;
 }
@@ -29680,7 +29692,7 @@ function _e2eWhenAt(t) {
 }
 function _e2eWaitHtml() {
 
-  if (!E2E.waiting) return 'This browser has not been given its key yet. It opens everything by itself as soon as another of your devices, or a teammate’s portal, is online.';
+  if (!E2E.waiting) return 'This browser has not been given its key yet. It opens everything by itself as soon as the portal is open on a browser that already holds it.';
   var isClient = !!(S.profile && S.profile.role === 'client');
   var wraps = (E2E.st && E2E.st.wraps) || [], who = E2E.waitWho || null;
   var mineWord = isClient ? 'your engagement' : 'your work';
@@ -29689,15 +29701,14 @@ function _e2eWaitHtml() {
     : ' You only do this once on each browser.';
   var canPw = _e2eCanUsePassword(), words;
   if (canPw) words = 'This browser has not opened ' + mineWord + ' before. Your password opens it as you sign in.';
-  else if (isClient) words = 'This browser has not been given its key yet. It gets it from your testing team’s portal, or a colleague’s at your organisation, within a minute of one being open.' + once;
+  else if (isClient) words = 'This browser has not been given its key yet. It gets it from your testing team’s portal, within a minute of one being open.' + once;
   else {
     var mine = (who && who.mine) || [];
     if (mine.length) {
       words = 'This browser has not been given its keys yet. Open the portal in ' + esc(mine[0].label) + (mine[0].last ? ' (last used ' + esc(_e2eWhenAt(mine[0].last)) + ')' : '')
-        + (mine.length > 1 ? ', or another browser where your work already opens' : '') + ', and it gives this one its keys within a minute.'
-        + (who.team ? ' A teammate with the portal open does the same.' : '') + once;
-    } else if (who && who.team) words = 'This browser has not been given its keys yet. It gets them from a teammate’s open portal, within a minute of one being open.' + once;
-    else words = 'This browser has not been given its keys yet. It gets them from another browser where your work already opens, or a teammate’s portal, as soon as one is open.' + once;
+        + (mine.length > 1 ? ', or another browser where your work already opens' : '') + ', and it gives this one its keys within a minute.' + once;
+    } else if (who && who.team) words = 'This browser has not been given its keys yet. It gets them by itself, within a minute of the portal being open on a browser that already holds them.' + once;
+    else words = 'This browser has not been given its keys yet. It gets them from another browser where your work already opens, as soon as one is open.' + once;
   }
   var acts = '';
   if (canPw && !_e2eResignMay()) acts += '<button type="button" class="btn btn-primary btn-sm" onclick="_e2eSignInAgain()">Sign in again</button>';
@@ -29812,7 +29823,7 @@ function renderE2eKitModal() {
   h += '<p class="e2e-kit-lead">Your recovery kit. Save it now: it is shown once.</p>';
   h += '<div class="e2e-kit-code" id="e2eKitCode" tabindex="0">' + esc(x.code) + '</div>';
   h += '<div class="e2e-kit-acts"><button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitCopy()">' + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>' + ' Copy</button><button type="button" class="btn btn-ghost btn-sm" onclick="_e2eKitSave()">' + IC.dl + ' Download</button></div>';
-  h += '<p class="sub-text">To use it on a new browser, sign in as usual, then choose Use your recovery kit in the bar at the bottom of the page.</p>';
+  h += '<p class="sub-text">To use it on a new browser, sign in as usual, open My Profile and choose Use your recovery kit.</p>';
   h += '</div><div class="modal-footer"><button class="btn btn-primary" onclick="_e2eKitDone()">I have saved it</button></div>';
   return h;
 }
@@ -29841,7 +29852,7 @@ function _e2eKitText(code) {
   var firm = ((S.data && S.data.settings) || {}).company_name || 'your firm';
   return 'Pental recovery kit\n\nFor: ' + ((S.profile && S.profile.email) || '') + '\nPortal: ' + location.origin + '\nFirm: ' + firm + '\nMade: ' + today()
     + '\n\n' + code + '\n\nThis opens your end-to-end encrypted work on a new browser if every browser you have used were lost and your password forgotten.'
-    + '\nTo use it: sign in to the portal as usual, then choose Use your recovery kit in the bar at the bottom of the page.'
+    + '\nTo use it: sign in as usual, open My Profile and choose Use your recovery kit.'
     + '\nKeep it private. Anyone who has it and can sign in as you can open your work. Making a new kit stops this one working.\n';
 }
 function _e2eKitCopy() {
@@ -29940,9 +29951,9 @@ function _e2eMyHtml(list) {
   if (holds.invite) h += '<div class="e2e-row"><div class="e2e-row-main"><strong>A reset password</strong><span class="e2e-row-sub">'
     + (_e2eKeptOffNow()
 
-      ? 'The database keeps you a key under two locks, its own and Pental’s, but Pental’s half is not there at the moment: until it is, a reset password on a browser that holds none of your keys waits for a teammate’s portal to be open.'
-      : 'If you forget your password, reset it from the sign-in page. The new one opens your work, with a key the database keeps for you'
-        + (_e2eKeptTool() ? '.' : ' under two locks, its own and Pental’s.')) + '</span></div></div>';
+      ? 'The database keeps you a key under two locks, its own and Pental’s, but Pental’s half is not there at the moment: until it is, a reset password on a browser that holds none of your keys has to wait for them.'
+
+      : 'If you forget your password, reset it from the sign-in page. The new one opens your work, with a key the database keeps for you.') + '</span></div></div>';
   h += '<div class="e2e-row"><div class="e2e-row-main"><strong>Recovery kit</strong><span class="e2e-row-sub">' + (methods.kit
     ? 'Saved. It opens your work if every browser you have were lost and your password forgotten.'
     : 'Optional. A code you keep, for the case where every browser you have were lost and your password forgotten.') + '</span></div>'
@@ -29955,7 +29966,7 @@ function _e2eMyHtml(list) {
     api.forEach(function (p) { h += '<div class="e2e-row"><div class="e2e-row-main"><strong>' + esc(p.label || 'API key') + '</strong><span class="e2e-row-sub">Added ' + esc(_e2eWhenWords(p.created_at)) + '</span></div></div>'; });
     h += '</div>';
   }
-  h += '<p class="e2e-note">A teammate’s portal gives a new browser of yours its keys too, as soon as both are open. <a href="' + _E2E_HOW + '" target="_blank" rel="noopener">How it works</a></p>';
+  h += '<p class="e2e-note"><a href="' + _E2E_HOW + '" target="_blank" rel="noopener">How it works</a></p>';
   return h;
 }
 async function _e2eRemove(pid) {
@@ -31762,10 +31773,12 @@ var _DEFAULT_LAYOUTS = {
       { cols: ['proposals', 'client_feedback', 'active_sessions'] }
     ]
   },
+
   contractor: {
     rows: [
       { cols: ['stats_overview'] },
-      { cols: ['my_assessments', 'recent_findings', 'active_sessions'] },
+      { cols: ['my_assessments', 'recent_findings'] },
+      { cols: ['active_sessions'] },
       { cols: ['contractor_payments'] }
     ]
   },
@@ -31774,10 +31787,10 @@ var _DEFAULT_LAYOUTS = {
       { cols: ['feedback_prompts'] },
       { cols: ['severity_summary'] },
       { cols: ['stats_overview'] },
-      { cols: ['weakness_radar', 'client_findings'] },
-      { cols: ['invoices_balance', 'recent_assessments', 'active_sessions'] },
+      { cols: ['recent_assessments', 'client_findings'] },
+      { cols: ['weakness_radar', 'invoices_balance'] },
 
-      { cols: ['client_tracker'] },
+      { cols: ['client_tracker', 'active_sessions'] },
       { cols: ['account_security'] }
     ]
   },
@@ -31787,17 +31800,31 @@ var _DEFAULT_LAYOUTS = {
       { cols: ['meetings_today'] },
       { cols: ['stats_overview'] },
       { cols: ['new_contact_requests'] },
-      { cols: ['proposals', 'sales_clients', 'active_sessions'] },
+      { cols: ['proposals', 'sales_clients'] },
+      { cols: ['active_sessions'] },
       { cols: ['outstanding_invoices'] }
     ]
   },
   marketing: {
     rows: [
       { cols: ['stats_overview'] },
-      { cols: ['recent_feedback', 'active_sessions'] }
+      { cols: ['recent_feedback'] },
+      { cols: ['active_sessions'] }
     ]
   }
 };
+(function _dashWidthWatch() {
+  try {
+    if (!window.matchMedia) return;
+    ['(min-width: 961px)', '(min-width: 1281px)'].forEach(function (q) {
+      var m = window.matchMedia(q);
+      var on = function () {
+        try { if (typeof S !== 'undefined' && S && S.profile && S._bootReady && S.page === 'dashboard' && !S.modal && !S.wizard && document.querySelector('.dash-row, .dash-one')) render(); } catch (e) {}
+      };
+      if (m.addEventListener) m.addEventListener('change', on); else if (m.addListener) m.addListener(on);
+    });
+  } catch (e) {}
+})();
 function renderAssessments() {
   var u = S.profile, isC = u.role === 'client';
 
@@ -37352,7 +37379,7 @@ async function saveMyProfile() {
       var uid = S.user ? S.user.id : null;
       if (uid) { var { data: d3, error: e3 } = await supabaseClient.from('profiles').update(updates).eq('auth_user_id', uid).eq('tenant_id', TENANT_ID).select('id'); if (!e3 && d3 && d3.length) _saved = true; }
     }
-    if (!_saved) throw new Error('Unable to save. Run the save_own_profile SQL function in Supabase.');
+    if (!_saved) throw new Error('Unable to save: your database does not have its latest update yet.');
     Object.assign(S.profile, updates);
 
     var me = (S.data.users || []).find(function(u) { return u.id === S.profile.id; });
@@ -44715,17 +44742,20 @@ function renderSettings__portal() {
   var _roleTitles = _pdfTpl.proposal_role_titles || {};
   h += '<div class="form-group"><label class="form-label">Default Signer Titles by Role</label>';
   h += '<p style="font-size:0.75rem;color:var(--gray);margin-bottom:0.4rem">Auto-filled when staff create proposals. Users can still change per proposal.</p>';
-  h += '<div class="form-row" style="margin-bottom:0.25rem">';
+
+  var _salesTitle = _retiredRoleHeld('sales');
+  h += _salesTitle ? '<div class="form-row" style="margin-bottom:0.25rem">' : '<div class="grid-3">';
   h += '<div class="form-group" style="margin-bottom:0.3rem"><label class="form-label" style="font-size:0.72rem">Admin</label>';
   h += '<input class="form-input" id="set_role_title_admin" value="' + esc(_roleTitles.admin || 'Director') + '" style="padding:0.35rem 0.5rem;font-size:0.82rem"></div>';
   h += '<div class="form-group" style="margin-bottom:0.3rem"><label class="form-label" style="font-size:0.72rem">Senior</label>';
   h += '<input class="form-input" id="set_role_title_senior" value="' + esc(_roleTitles.senior || 'Senior Penetration Tester') + '" style="padding:0.35rem 0.5rem;font-size:0.82rem"></div>';
-  h += '</div>';
-  h += '<div class="form-row">';
+  if (_salesTitle) h += '</div><div class="form-row">';
   h += '<div class="form-group" style="margin-bottom:0.3rem"><label class="form-label" style="font-size:0.72rem">Standard</label>';
   h += '<input class="form-input" id="set_role_title_standard" value="' + esc(_roleTitles.standard || 'Penetration Tester') + '" style="padding:0.35rem 0.5rem;font-size:0.82rem"></div>';
-  h += '<div class="form-group" style="margin-bottom:0.3rem"><label class="form-label" style="font-size:0.72rem">Sales</label>';
-  h += '<input class="form-input" id="set_role_title_sales" value="' + esc(_roleTitles.sales || 'Account Manager') + '" style="padding:0.35rem 0.5rem;font-size:0.82rem"></div>';
+  if (_salesTitle) {
+    h += '<div class="form-group" style="margin-bottom:0.3rem"><label class="form-label" style="font-size:0.72rem">Sales</label>';
+    h += '<input class="form-input" id="set_role_title_sales" value="' + esc(_roleTitles.sales || 'Account Manager') + '" style="padding:0.35rem 0.5rem;font-size:0.82rem"></div>';
+  }
   h += '</div></div>';
 
   h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the proposal settings above.</div>';
@@ -66588,7 +66618,7 @@ async function _bulkSetFindingDraft(draft, idsIn) {
       if (f && _findingIsDraft(f)) _still++;
     });
   }
-  if (_missingCol) toast('Your database does not have the draft column yet. An admin re-runs the setup SQL under Settings, Database (schema 2025090701).', 'error');
+  if (_missingCol) toast('Your database does not have the draft column yet: it needs its latest update.', 'error');
   else if (failed) toast(done + ' changed, ' + failed + ' could not be', 'error');
   else if (_still) toast(done + ' marked final, ' + _still + ' still shown as a draft with required fields empty' + (_libSaid(_libMany) ? '; ' + _libSaid(_libMany) : ''), 'warning');
   else toast(done + ' finding' + (done === 1 ? '' : 's') + ' marked ' + word + (_libSaid(_libMany) ? ', ' + _libSaid(_libMany) : ''), _libMany.failed ? 'warning' : 'success');
@@ -68493,6 +68523,9 @@ async function dashEdSwitchRole(role) {
   }
   S._dashEd = { role: role, layout: _dashEdLoadLayoutForRole(role), dirty: false };
   render();
+}
+function _retiredRoleHeld(role) {
+  return (S.data.users || []).some(function (u) { return u && u.role === role && u.active !== false; });
 }
 function _renderDashboardEditor() {
 
@@ -71710,7 +71743,7 @@ function handleLogoUpload(e, variant) {
         var _upd = {}; _upd[_col] = url;
         var res = await _setPut(_upd, existing.id, _col);
         if (res.error) throw res.error;
-        if (!res.data || !res.data[0]) throw new Error('Save returned no data - verify Supabase connection');
+        if (!res.data || !res.data[0]) throw new Error('The save returned nothing. Check the connection to your database and try again.');
         S.data.settings[_col] = url;
         if (window._dbBranding) window._dbBranding[_col] = url;
         if (!_isLight) { try { var b = JSON.parse(localStorage.getItem('pental_branding') || '{}'); b.has_logo = true; localStorage.setItem('pental_branding', JSON.stringify(b)); } catch(x) {} }
@@ -71745,7 +71778,7 @@ function handleLogoUpload(e, variant) {
         var _upd = {}; _upd[_col] = url;
         var res = await _setPut(_upd, existing.id, _col);
         if (res.error) throw res.error;
-        if (!res.data || !res.data[0]) throw new Error('Save returned no data - verify Supabase connection');
+        if (!res.data || !res.data[0]) throw new Error('The save returned nothing. Check the connection to your database and try again.');
         S.data.settings[_col] = url;
         if (window._dbBranding) window._dbBranding[_col] = url;
         if (!_isLight) { try { var b = JSON.parse(localStorage.getItem('pental_branding') || '{}'); b.has_logo = true; localStorage.setItem('pental_branding', JSON.stringify(b)); } catch(x) {} }
@@ -71837,7 +71870,7 @@ async function _saveFavicon(dataUrl, w, h) {
     var url = await _uploadBranding('favicon', dataUrl);
     var res = await _setPut({ favicon_url: url }, existing.id, 'favicon_url');
     if (res.error) throw res.error;
-    if (!res.data || !res.data[0]) throw new Error('Save returned no data - verify Supabase connection');
+    if (!res.data || !res.data[0]) throw new Error('The save returned nothing. Check the connection to your database and try again.');
     S.data.settings.favicon_url = url;
     if (window._dbBranding) window._dbBranding.favicon_url = url;
     applyFavicon(url);
@@ -93970,8 +94003,8 @@ function _irvHtml() {
         + '<span class="irv-pe">' + esc(p.email) + '</span><span class="irv-pr">' + esc(_IRV_ROLE[p.role] || p.role) + '</span>' + tag + '<span class="irv-pc">' + ctl + '</span></li>';
     }).join('') + '</ul>';
     if (P.seats.cap && newN && P.seats.used + chosen > P.seats.cap) {
-      body += '<p class="irv-warn">Your plan has ' + _irvN(P.seats.cap, 'tester seat') + ' and ' + P.seats.used + ' are in use, so ' + _irvN(Math.max(0, P.seats.cap - P.seats.used), 'more person', 'more people')
-        + ' can come across. Leave someone out, or add seats under Billing first.</p>';
+      body += '<p class="irv-warn">Your subscription is for ' + _irvN(P.seats.cap, 'tester') + ' and ' + P.seats.used + ' are in use, so ' + _irvN(Math.max(0, P.seats.cap - P.seats.used), 'more person', 'more people')
+        + ' can come across. Leave someone out, or add testers at pental.io/manage first.</p>';
     }
     if (newN) {
       body += tool

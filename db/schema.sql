@@ -29759,7 +29759,7 @@ BEGIN
         || '<p>The collector for <strong>' || v_name || '</strong> replaced its token with one of its own, and the old token was then used again, '
         || 'so two programs hold it. To be safe, the scanner''s token has been switched off and its scans wait.</p>' || E'\n'
         || '<p>If you run that collector in two places, or in a container that keeps nothing between starts, that is the reason. '
-        || 'Otherwise somebody else has the old token. Either way, make a new token in Settings, Scanning, and start the collector with it.</p>',
+        || 'Otherwise somebody else has the old token. Either way, make a new token in Settings, Scans, and start the collector with it.</p>',
         'security_collector_token', v_p.id);
     END LOOP;
   EXCEPTION WHEN OTHERS THEN
@@ -29772,7 +29772,7 @@ REVOKE ALL ON FUNCTION public._scan_token_reused(text) FROM PUBLIC, anon, authen
 CREATE OR REPLACE FUNCTION public._scan_token_reused_words() RETURNS text
 LANGUAGE sql IMMUTABLE SET search_path = public, pg_catalog, pg_temp AS $strw$
   SELECT 'This collector''s token was replaced by one of its own and then used again, so two programs hold it. '
-      || 'It has been switched off to be safe, and your administrators were told: make a new token in Settings, Scanning, and start the collector with it.'::text;
+      || 'It has been switched off to be safe, and your administrators were told: make a new token in Settings, Scans, and start the collector with it.'::text;
 $strw$;
 REVOKE ALL ON FUNCTION public._scan_token_reused_words() FROM PUBLIC, anon, authenticated;
 
@@ -30067,7 +30067,7 @@ BEGIN
       IF EXISTS (SELECT 1 FROM public.scan_providers WHERE inbound_token_hash = v_hash AND connection = 'collector' AND token_seen_at IS NOT NULL) THEN
         RETURN jsonb_build_object('ok', false, 'rotate', true, 'error',
           'This token has passed through Pental''s servers, so your database takes work only from a token of the collector''s own. '
-          || 'The collector makes one itself; if it cannot, make a new token in Settings, Scanning, and start the collector with it.');
+          || 'The collector makes one itself; if it cannot, make a new token in Settings, Scans, and start the collector with it.');
       END IF;
       -- 1837: one this scanner's collector has since replaced, in use again.
       IF public._scan_token_reused(v_hash) THEN
@@ -30087,7 +30087,7 @@ BEGIN
   -- no scan runs twice (as Xero's clock stands down, _xero_stood_down).
   IF public._xero_stood_down() IS NOT NULL THEN
     RETURN jsonb_build_object('ok', true, 'jobs', '[]'::jsonb, 'paused',
-      CASE public._xero_stood_down() WHEN 'moved' THEN 'This portal has moved to another database, so this one hands out no more scans. Download the collector again from the portal (Settings, Scanning) and run that one.'
+      CASE public._xero_stood_down() WHEN 'moved' THEN 'This portal has moved to another database, so this one hands out no more scans. Download the collector again from the portal (Settings, Scans) and run that one.'
            ELSE 'This portal''s database is being moved, so no scans are handed out until it is done.' END);
   END IF;
   PERFORM public._scan_reap();
@@ -30706,7 +30706,7 @@ BEGIN
       -- heard from, never here), and Pental gives it none now: it is
       -- replaced, not moved. One never heard from at all is started.
       'error', CASE WHEN v_p.connection = 'collector' AND v_p.collector_direct_at IS NULL AND v_p.agent_last_seen IS NOT NULL
-                    THEN 'This scanner''s collector is from before Pental moved scanning to your own database, so it gets no work now. Download the collector again from Settings, Scanning, and run it in place of the old one.'
+                    THEN 'This scanner''s collector is from before Pental moved scanning to your own database, so it gets no work now. Download the collector again from Settings, Scans, and run it in place of the old one.'
                     WHEN v_p.connection = 'collector' AND v_p.collector_direct_at IS NULL
                     THEN 'This scanner''s collector has not asked your database for work yet. Start it with its token, then test again.'
                     WHEN v_p.connection = 'collector'
@@ -30845,7 +30845,7 @@ BEGIN
   IF v_p.token_seen_at IS NOT NULL OR v_p.token_from_pental_at IS NOT NULL THEN
     RAISE EXCEPTION USING ERRCODE = 'PT403', DETAIL = 'from_pental', MESSAGE =
       'This token has passed through Pental''s servers, so your database takes no post made with it. '
-      || 'Make a new token for this scanner in Settings, Scanning, and post with that.';
+      || 'Make a new token for this scanner in Settings, Scans, and post with that.';
   END IF;
   IF NOT COALESCE(v_p.is_active, true) THEN
     RAISE EXCEPTION USING ERRCODE = 'PT409', MESSAGE = 'That scanner connection is switched off', DETAIL = 'switched_off';
@@ -30857,7 +30857,7 @@ BEGIN
   -- and reloads its schema for every such answer.
   IF NOT public._scan_push_readers() THEN
     RAISE EXCEPTION USING ERRCODE = 'PT409', DETAIL = 'no_reader', MESSAGE =
-      'Nothing on your side reads posted output yet, so this was not taken. Set up a collector in Settings, Scanning, '
+      'Nothing on your side reads posted output yet, so this was not taken. Set up a collector in Settings, Scans, '
       || 'with a token made there, or run a gateway from 1.7.0 or the kit, then post again.';
   END IF;
   v_text := CASE WHEN jsonb_typeof(p_body) = 'string' THEN p_body #>> '{}' WHEN p_body IS NULL THEN NULL ELSE p_body::text END;
@@ -49592,9 +49592,9 @@ UPDATE public.settings SET password_login_enabled = true, sso_google_enabled = f
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: 4d33c3a1c6dd7c6d @ 2025111301
+-- schema-fingerprint: 4c813085ac495b61 @ 2025111501
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025111301, now())
+VALUES (1, 2025111501, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 

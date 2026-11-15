@@ -392,7 +392,9 @@ Pental counts installs and running copies of Pental Report, to know how many use
 
 ## Security
 
-Every person signs in with a password and a second factor: an authenticator app, or a security key or passkey once Pental Report is served over HTTPS. Passwords are hashed with bcrypt. Row-level security in PostgreSQL checks every read and write against the person's role and a recent second factor. Your AI key is kept encrypted in the database, and this server's signing keys are sealed with `VAULT_KEY`. An API key is kept only as a SHA-256 hash, works as its person through the API's own functions alone, and is refused from a web page.
+Every person signs in with a password and a second factor: an authenticator app, or a security key or passkey once Pental Report is served over HTTPS. Passwords are hashed with bcrypt. Row-level security in PostgreSQL checks every read and write against the person's role and a recent second factor. The testing work is end-to-end encrypted: findings in full, evidence, screenshots and files, scope, notes, summaries and comments are encrypted in the browser of whoever writes them, and opened only in your team's browsers. Read straight from the database, they are unreadable, and there is nothing to set up.
+
+Your AI key is kept encrypted in the database, and this server's signing keys are sealed with `VAULT_KEY`. An API key is kept only as a SHA-256 hash, works as its person through the API's own functions alone, and is refused from a web page.
 
 Found a vulnerability? Please see [SECURITY.md](SECURITY.md).
 
