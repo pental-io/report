@@ -11154,18 +11154,32 @@ END $$;
 -- p_tenant_id argument is accepted for signature compatibility with the
 -- master-side function (the portal passes the same argument to either side
 -- depending on whether the tenant is BYO or not), but is not used.
+-- 2040: AND WHETHER THE PORTAL IS STILL FRESH. [stated] Arian, 15 November
+-- 2026, of the notice that an email was sent to set the first password: "i
+-- meant on the loGIN page when the portal is still fresh to let them know".
+-- Fresh is that nobody has set a password on this portal yet, which is the
+-- time the first administrator arrives at the sign-in page with nothing to
+-- type. One word, true or false: no name, no address and no count. If it
+-- cannot be read the answer is false and the rest is given as before, so the
+-- sign-in page never loses its branding to it.
 CREATE OR REPLACE FUNCTION public.rpc_get_login_branding(p_tenant_id uuid)
   RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER STABLE
   SET search_path = public, pg_catalog, pg_temp
 AS $fn$
 #variable_conflict use_variable
-DECLARE v_settings RECORD;
+DECLARE v_settings RECORD; v_fresh boolean := false;
 BEGIN
   SELECT * INTO v_settings FROM public.settings LIMIT 1;
   IF NOT FOUND THEN
     RETURN jsonb_build_object('error', 'Settings not found');
   END IF;
+  BEGIN
+    v_fresh := NOT EXISTS (SELECT 1 FROM public.user_credentials);
+  EXCEPTION WHEN OTHERS THEN
+    v_fresh := false;
+  END;
   RETURN jsonb_build_object(
+    'fresh',                   v_fresh,
     'company_name',            COALESCE(NULLIF(v_settings.company_name, ''), ''),
     'company_email',           COALESCE(v_settings.company_email, ''),
     'accent_color',            COALESCE(NULLIF(v_settings.accent_color, ''), '#991b1b'),
@@ -49592,9 +49606,9 @@ UPDATE public.settings SET password_login_enabled = true, sso_google_enabled = f
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: 4c813085ac495b61 @ 2025111501
+-- schema-fingerprint: 94b2bb89941dc6db @ 2025111502
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025111501, now())
+VALUES (1, 2025111502, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 

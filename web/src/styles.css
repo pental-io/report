@@ -1300,78 +1300,219 @@ img.sp-hold{width:var(--sp-w);max-width:100%;height:auto;aspect-ratio:var(--sp-a
   .mob-toggle{display:none!important}
 }
 
-/* ── First-login setup wizard ── */
-.wiz-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.85);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;z-index:200;padding:1.25rem;overflow-y:auto;animation:wizFade 0.3s ease}
+/* ── The setup wizard (first sign-in, and Re-run Setup Wizard in Settings) ──
+   v60.70: [stated] Arian, 15 November 2026: "Also make the setup wizard more
+   seamless and modern and professional and effective and usable", "Make sure
+   it works as well". One calm sheet: the stages down the left with the steps
+   of the one in hand, the step on the right under a line that fills stage by
+   stage, Back on the left and the way on at the right. On a phone it is the
+   whole screen, the step scrolls between a header and a footer that stay put,
+   and the list of steps is a sheet opened by Steps (the footer used to be
+   pushed out of the sheet by any step taller than the screen, so there was no
+   Next to press). */
+.wiz-overlay{position:fixed;inset:0;background:rgba(8,10,14,0.6);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:200;padding:1.5rem;animation:wizFade 0.2s ease}
 @keyframes wizFade{0%{opacity:0}100%{opacity:1}}
-.wiz-shell{background:var(--card);border:1px solid var(--border);border-radius:16px;width:100%;max-width:1080px;max-height:92vh;display:flex;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,0.6),0 0 0 1px rgba(255,255,255,0.03) inset;animation:wizSlide 0.35s cubic-bezier(0.16,1,0.3,1)}
-@keyframes wizSlide{0%{opacity:0;transform:translateY(12px) scale(0.99)}100%{opacity:1;transform:none}}
-.wiz-sidebar{flex:0 0 260px;background:rgba(255,255,255,0.02);border-right:1px solid var(--border);padding:1.5rem 1rem;overflow-y:auto;display:flex;flex-direction:column}
-.wiz-sidebar-head{padding:0 0.5rem 1rem;border-bottom:1px solid var(--border);margin-bottom:0.9rem}
-.wiz-sidebar-head .wiz-brand{font-family:var(--font-display);font-size:0.7rem;color:var(--gray);letter-spacing:0.15em;font-weight:700}
-.wiz-sidebar-head .wiz-title{font-size:1.05rem;font-weight:700;color:var(--text);margin-top:0.25rem}
-.wiz-step-list{display:flex;flex-direction:column;gap:0.2rem;flex:1}
-.wiz-step-item{display:flex;align-items:center;gap:0.6rem;padding:0.55rem 0.6rem;border-radius:8px;cursor:pointer;transition:background 0.15s;font-size:0.82rem;color:var(--gray);border:none;background:transparent;text-align:left;width:100%;font-family:inherit;line-height:1.2}
+.wiz-shell{position:relative;background:var(--card);border:1px solid var(--border);border-radius:14px;width:100%;max-width:1180px;height:min(840px,100%);max-height:100%;display:flex;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,0.42);animation:wizRise 0.28s cubic-bezier(0.16,1,0.3,1)}
+@keyframes wizRise{0%{opacity:0;transform:translateY(10px)}100%{opacity:1;transform:none}}
+
+/* The list of steps. */
+.wiz-sidebar{flex:0 0 272px;display:flex;flex-direction:column;min-height:0;background:rgba(var(--accent-rgb),0.035);border-right:1px solid var(--border)}
+.wiz-sidebar-head{position:relative;padding:1.3rem 1.25rem 0.95rem}
+.wiz-sidebar-head .wiz-title{font-family:var(--font-display);font-size:1.02rem;font-weight:700;color:var(--text);letter-spacing:0.01em;line-height:1.25}
+.wiz-sidebar-head .wiz-sub{display:none;font-size:0.76rem;color:var(--gray);margin-top:0.2rem}
+.wiz-rail-close{display:none}
+.wiz-step-list{flex:1;min-height:0;overflow-y:auto;padding:0 0.65rem 1rem;scrollbar-width:thin}
+.wiz-group{margin-bottom:0.1rem}
+.wiz-stage{display:flex;align-items:center;gap:0.5rem;width:100%;margin:0;padding:0.55rem 0.6rem;border:none;border-radius:8px;background:transparent;font-family:inherit;font-size:0.84rem;font-weight:600;line-height:1.3;color:var(--gray);text-align:left;cursor:pointer;transition:background 0.12s,color 0.12s}
+.wiz-stage:hover{background:var(--hover);color:var(--text)}
+.wiz-stage.is-current{color:var(--text);cursor:default}
+.wiz-stage.is-current:hover{background:transparent}
+.wiz-stage-name{flex:1;min-width:0}
+.wiz-stage-count{flex-shrink:0;display:inline-flex;align-items:center;font-size:0.7rem;font-weight:600;color:var(--gray)}
+.wiz-stage-count.is-all{width:16px;height:16px;border-radius:50%;justify-content:center;background:var(--green);color:#fff}
+.wiz-stage-chev{flex-shrink:0;color:var(--gray);transition:transform 0.15s}
+.wiz-group.is-open .wiz-stage-chev{transform:rotate(90deg)}
+.wiz-group.is-current .wiz-stage-chev{visibility:hidden}
+.wiz-group-steps{margin:0.05rem 0 0.4rem 1.05rem;padding-left:0.4rem;border-left:1px solid var(--border)}
+.wiz-group-steps[hidden]{display:none}
+.wiz-step-item{display:flex;align-items:center;gap:0.55rem;width:100%;padding:0.42rem 0.55rem;border:none;border-radius:7px;background:transparent;font-family:inherit;font-size:0.82rem;line-height:1.3;color:var(--gray);text-align:left;cursor:pointer;transition:background 0.12s,color 0.12s}
 .wiz-step-item:hover{background:var(--hover);color:var(--text)}
-.wiz-step-item.active{background:rgba(var(--accent-rgb),0.12);color:var(--text);font-weight:600}
 .wiz-step-item.done{color:var(--text)}
-.wiz-step-item:disabled{cursor:not-allowed;opacity:0.6}
-.wiz-step-dot{flex-shrink:0;width:22px;height:22px;border-radius:50%;border:1.5px solid var(--border);background:var(--bg);display:inline-flex;align-items:center;justify-content:center;font-size:0.65rem;font-weight:700;color:var(--gray);transition:all 0.2s}
-.wiz-step-item.active .wiz-step-dot{background:var(--accent);border-color:var(--accent);color:#fff}
-.wiz-step-item.done .wiz-step-dot{background:var(--green);border-color:var(--green);color:#fff}
-.wiz-step-label{flex:1;min-width:0;line-height:1.3;overflow-wrap:anywhere}
-.wiz-step-plan{font-size:0.58rem;background:rgba(var(--accent-rgb),0.15);color:var(--accent);padding:1px 5px;border-radius:3px;font-weight:700;letter-spacing:0.02em;flex-shrink:0}
-.wiz-main{flex:1;display:flex;flex-direction:column;min-width:0}
-.wiz-main-head{padding:1.4rem 1.75rem 0.6rem;border-bottom:1px solid var(--border)}
-.wiz-main-eyebrow{font-size:0.68rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent);font-weight:700;margin-bottom:0.3rem}
-.wiz-main-title{font-size:1.45rem;font-weight:700;color:var(--text);margin-bottom:0.25rem;font-family:var(--font-display);letter-spacing:0.02em}
-.wiz-main-desc{font-size:0.88rem;color:var(--gray);margin-bottom:0.9rem;line-height:1.5}
-.wiz-progress{height:3px;background:var(--border);margin-bottom:-1px;position:relative;overflow:hidden}
-.wiz-progress-bar{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--accent),rgba(var(--accent-rgb),0.6));transition:width 0.4s cubic-bezier(0.4,0,0.2,1)}
-.wiz-body{flex:1;overflow-y:auto;padding:1.5rem 1.75rem}
-.wiz-footer{padding:1rem 1.75rem;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:0.75rem;background:rgba(255,255,255,0.02);flex-wrap:wrap}
-.wiz-footer-left{display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap}
-.wiz-footer-right{display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-left:auto}
-.wiz-step-count{font-size:0.72rem;color:var(--gray);font-weight:600}
-.wiz-check-item{display:flex;align-items:flex-start;gap:0.6rem;padding:0.75rem 0;border-bottom:1px solid var(--border)}
-.wiz-check-item:last-child{border-bottom:none}
-.wiz-check-item .wiz-ci-icon{flex-shrink:0;width:28px;height:28px;border-radius:8px;background:rgba(var(--accent-rgb),0.12);color:var(--accent);display:flex;align-items:center;justify-content:center;margin-top:2px}
-.wiz-check-item .wiz-ci-body{flex:1;min-width:0}
-.wiz-check-item .wiz-ci-title{font-weight:600;color:var(--text);font-size:0.9rem;margin-bottom:0.15rem}
-.wiz-check-item .wiz-ci-desc{font-size:0.78rem;color:var(--gray);line-height:1.5}
-.wiz-tile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:0.75rem;margin-top:0.5rem}
-.wiz-tile{border:1px solid var(--border);border-radius:10px;padding:0.85rem 1rem;cursor:pointer;transition:all 0.15s;background:var(--bg)}
-.wiz-tile:hover{border-color:var(--accent)}
-.wiz-tile.active{border-color:var(--accent);background:rgba(var(--accent-rgb),0.08)}
-.wiz-tile-title{font-weight:600;color:var(--text);font-size:0.88rem;margin-bottom:0.2rem}
-.wiz-tile-desc{font-size:0.72rem;color:var(--gray);line-height:1.4}
-.wiz-celebrate{text-align:center;padding:1rem 0 2rem}
-.wiz-celebrate .wiz-trophy{width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,var(--accent),rgba(var(--accent-rgb),0.6));display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem;color:#fff;box-shadow:0 8px 24px rgba(var(--accent-rgb),0.3)}
-.wiz-celebrate h3{font-family:var(--font-display);font-size:1.6rem;font-weight:700;color:var(--text);margin-bottom:0.5rem;letter-spacing:0.02em}
-.wiz-celebrate p{color:var(--gray);font-size:0.92rem;line-height:1.6;max-width:480px;margin:0 auto 1rem}
-.wiz-badge{display:inline-flex;align-items:center;gap:0.3rem;padding:3px 9px;background:rgba(var(--accent-rgb),0.12);color:var(--accent);border-radius:12px;font-size:0.68rem;font-weight:700;letter-spacing:0.04em;margin-left:0.35rem}
-.wiz-plan-gate{border:1px dashed var(--border);border-radius:10px;padding:1.5rem;text-align:center;background:rgba(255,255,255,0.02);margin:1rem 0}
-.wiz-plan-gate h4{font-weight:700;color:var(--text);margin-bottom:0.4rem}
-.wiz-plan-gate p{font-size:0.82rem;color:var(--gray);margin-bottom:0.8rem}
+.wiz-step-item.active{background:rgba(var(--accent-rgb),0.12);color:var(--text);font-weight:600}
+.wiz-step-dot{flex-shrink:0;width:16px;height:16px;border-radius:50%;border:1.5px solid var(--border);display:inline-flex;align-items:center;justify-content:center;color:#fff}
+.wiz-step-item.done .wiz-step-dot{background:var(--green);border-color:var(--green)}
+.wiz-step-item.active .wiz-step-dot{border-color:var(--accent);background:var(--accent);box-shadow:inset 0 0 0 3px var(--card)}
+.wiz-step-label{flex:1;min-width:0;overflow-wrap:anywhere}
+
+/* The step. */
+.wiz-main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+.wiz-main-head{padding:1rem 1.75rem 1rem}
+.wiz-main-top{display:flex;align-items:center;gap:0.6rem;min-height:30px;margin-bottom:0.3rem}
+.wiz-main-eyebrow{flex:1;min-width:0;font-size:0.76rem;font-weight:600;color:var(--gray)}
+.wiz-steps-btn{display:none}
+.wiz-close{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:none;border-radius:8px;background:transparent;color:var(--gray);font-size:1.35rem;line-height:1;cursor:pointer;transition:background 0.12s,color 0.12s}
+.wiz-close:hover{background:var(--hover);color:var(--text)}
+.wiz-main-title{font-family:var(--font-display);font-size:1.4rem;font-weight:700;line-height:1.25;color:var(--text);letter-spacing:0.01em;margin:0 0 0.25rem;outline:none}
+.wiz-main-desc{font-size:0.9rem;color:var(--gray);line-height:1.5;margin:0;max-width:64ch}
+.wiz-resumed{margin:0.65rem 0 0;font-size:0.8rem;color:var(--gray)}
+.wiz-link{padding:0;border:none;background:none;font:inherit;font-weight:600;color:var(--text);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.wiz-progress{display:flex;gap:4px;height:3px;padding:0 1.75rem}
+.wiz-progress-part{position:relative;flex:1 1 0;min-width:6px;height:3px;border-radius:2px;background:var(--border);overflow:hidden}
+.wiz-progress-bar{position:absolute;top:0;bottom:0;left:0;border-radius:2px;background:var(--accent);transition:width 0.35s cubic-bezier(0.4,0,0.2,1)}
+.wiz-body{flex:1;min-height:0;overflow-y:auto;padding:1.4rem 1.75rem 1.6rem}
+.wiz-body.wiz-enter{animation:wizEnter 0.22s ease}
+@keyframes wizEnter{0%{opacity:0;transform:translateY(4px)}100%{opacity:1;transform:none}}
+.wiz-footer{display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;padding:0.85rem 1.75rem;border-top:1px solid var(--border);background:var(--card)}
+.wiz-footer-left,.wiz-footer-right{display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap}
+.wiz-footer-right{margin-left:auto}
+.wiz-skip{color:var(--gray)}
+.wiz-dirty-note{font-size:0.76rem;color:var(--gray);margin-left:0.35rem}
+.wiz-dirty-note[hidden]{display:none}
+
+/* What its own steps are made of. */
+.wiz-h{font-family:var(--font-display);font-size:1.2rem;font-weight:700;line-height:1.3;color:var(--text);margin:0 0 0.5rem}
+.wiz-lead{font-size:0.9rem;line-height:1.6;color:var(--gray);margin:0 0 1rem;max-width:68ch}
+.wiz-lead strong{color:var(--text)}
+.wiz-sec-h{font-size:0.95rem;font-weight:700;color:var(--text);margin:0 0 0.5rem}
+.wiz-facts{list-style:none;margin:0 0 1.5rem;padding:0;display:grid;gap:0.6rem;max-width:68ch}
+.wiz-facts li{display:flex;align-items:flex-start;gap:0.6rem;font-size:0.86rem;line-height:1.55;color:var(--gray)}
+.wiz-facts strong{color:var(--text)}
+.wiz-fact-mark{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-top:0.1rem;border-radius:50%;background:rgba(var(--accent-rgb),0.14);color:var(--accent)}
+.wiz-cover-h{font-size:0.86rem;font-weight:700;color:var(--text);margin:0 0 0.5rem}
+.wiz-cover{border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.wiz-cover-row{display:grid;grid-template-columns:8.5rem minmax(0,1fr) auto;gap:0.9rem;align-items:baseline;width:100%;padding:0.7rem 0.95rem;border:none;border-top:1px solid var(--border);background:transparent;font-family:inherit;text-align:left;cursor:pointer;transition:background 0.12s}
+.wiz-cover-row:first-child{border-top:none}
+.wiz-cover-row:hover{background:var(--hover)}
+.wiz-cover-t{font-size:0.86rem;font-weight:600;color:var(--text)}
+.wiz-cover-d{font-size:0.8rem;line-height:1.5;color:var(--gray)}
+.wiz-cover-n{font-size:0.74rem;color:var(--gray);white-space:nowrap}
+.wiz-flow{display:grid;margin:0 0 0.25rem;padding:0;list-style:none}
+.wiz-flow-item{position:relative;display:flex;gap:0.8rem;padding-bottom:0.95rem}
+.wiz-flow-item:last-child{padding-bottom:0}
+.wiz-flow-item::before{content:"";position:absolute;left:13px;top:28px;bottom:1px;width:1px;background:var(--border)}
+.wiz-flow-item:last-child::before{display:none}
+.wiz-flow-n{position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;width:27px;height:27px;border-radius:50%;border:1.5px solid rgba(var(--accent-rgb),0.5);background:var(--card);color:var(--text);font-size:0.76rem;font-weight:700}
+.wiz-flow-t{font-size:0.9rem;font-weight:600;color:var(--text);line-height:27px}
+.wiz-flow-d{font-size:0.8rem;line-height:1.5;color:var(--gray);max-width:72ch}
+.wiz-auto-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:0.5rem}
+.wiz-auto{padding:0.65rem 0.8rem;border:1px solid var(--border);border-radius:9px}
+.wiz-auto-t{display:flex;align-items:center;gap:0.4rem;font-size:0.83rem;font-weight:600;color:var(--text)}
+.wiz-auto-d{margin-top:3px;font-size:0.75rem;line-height:1.45;color:var(--gray)}
+.wiz-chip-grid{display:flex;flex-wrap:wrap;gap:0.4rem}
+.wiz-chip{padding:0.35rem 0.7rem;border:1px solid var(--border);border-radius:999px;font-size:0.78rem;color:var(--text)}
+.wiz-done{max-width:680px;margin:1.5rem auto 0;text-align:center}
+.wiz-done .wiz-lead{margin-left:auto;margin-right:auto}
+.wiz-done-mark{display:flex;align-items:center;justify-content:center;width:52px;height:52px;margin:0 auto 1rem;border-radius:50%;background:rgba(34,197,94,0.14);color:var(--green)}
+.wiz-nexts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0.75rem;margin-top:1rem;text-align:left}
+.wiz-done .wiz-done-note{margin:1.5rem auto 0;font-size:0.82rem}
+/* v60.70: what is said while the wizard is open (Settings saved) is said at the top; the corner is where its Next is */
+.toast-container.in-wizard{top:calc(0.9rem + env(safe-area-inset-top,0px));bottom:auto;left:50%;right:auto;transform:translateX(-50%);align-items:center;width:max-content;max-width:calc(100vw - 2rem)}
+.toast-container.in-wizard .toast{animation-name:wizToastIn}
+.toast-container.in-wizard .toast.hiding{transform:translateY(-10px)}
+@keyframes wizToastIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+.wiz-next{display:block;padding:0.9rem 1rem;border:1px solid var(--border);border-radius:10px;background:transparent;font-family:inherit;text-align:left;cursor:pointer;transition:border-color 0.15s,background 0.15s}
+.wiz-next:hover{border-color:var(--accent);background:rgba(var(--accent-rgb),0.05)}
+.wiz-next.is-first{border-color:rgba(var(--accent-rgb),0.55);background:rgba(var(--accent-rgb),0.06)}
+.wiz-next-t{display:block;margin-bottom:0.2rem;font-size:0.9rem;font-weight:700;color:var(--text)}
+.wiz-next-d{display:block;font-size:0.78rem;line-height:1.45;color:var(--gray)}
+
+/* v60.71: a step that is Settings' cards is drawn as the step: no box, and no heading saying the step's name again. */
+.wiz-body .card.wiz-flat{background:transparent;border:none;border-radius:0;box-shadow:none;overflow:visible;margin:0}
+.wiz-body .card.wiz-flat > .card-header{display:none}
+.wiz-body .card.wiz-flat.wiz-flat-bar > .card-header{display:flex;padding:0 0 0.9rem;border-bottom:none;background:transparent}
+.wiz-body .card.wiz-flat > .card-body{padding:0;background:transparent;border:none;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}
+/* A step of several cards: each is a part of the step under its own heading, with a rule between parts and no box. */
+.wiz-body .card.wiz-flat.wiz-sect{padding:1.4rem 0 0.75rem;border-top:1px solid var(--border)}
+.wiz-body .card.wiz-flat.wiz-sect.wiz-sect-first{padding-top:0;border-top:none}
+.wiz-body .card.wiz-flat.wiz-sect > .card-header{display:flex;padding:0 0 0.8rem;border-bottom:none;background:transparent}
+.wiz-body .card.wiz-flat.wiz-sect > .card-header .card-title{font-size:0.98rem}
+.wiz-body .card.wiz-flat.wiz-sect.wiz-sect-same > .card-header{justify-content:flex-end}
+.wiz-body .card.wiz-flat.wiz-sect.wiz-sect-same > .card-header .card-title{display:none}
+.wiz-body .card.wiz-flat.wiz-sect.wiz-sect-bare > .card-header{display:none}
+/* A card that only holds other cards is not a part itself: no rule, no space of its own. */
+.wiz-body .card.wiz-flat.wiz-group{padding:0;border-top:none}
+.wiz-body .card.wiz-flat.wiz-group > .card-header{display:flex;padding:0 0 0.8rem;border-bottom:none;background:transparent}
+.wiz-body .card.wiz-flat.wiz-group.wiz-sect-same > .card-header{justify-content:flex-end}
+.wiz-body .card.wiz-flat.wiz-group.wiz-sect-same > .card-header .card-title{display:none}
+.wiz-body .card.wiz-flat.wiz-group.wiz-sect-bare > .card-header{display:none}
+
+/* v60.71: what the wizard's own steps that ask are made of (Automations, Security). */
+.wiz-sec-h.is-next{margin-top:1.6rem}
+.wiz-opts{display:grid;gap:0.7rem}
+.wiz-opt{padding:0.9rem 1rem;border:1px solid var(--border);border-radius:10px}
+.wiz-opt-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin:0}
+label.wiz-opt-head{cursor:pointer}
+.wiz-opt-t{font-size:0.9rem;font-weight:600;line-height:1.35;color:var(--text)}
+.wiz-opt-d{margin:0.25rem 0 0.75rem;font-size:0.8rem;line-height:1.5;color:var(--gray);max-width:68ch}
+.wiz-opt-field{display:flex;align-items:center;flex-wrap:wrap;gap:0.6rem;font-size:0.8rem;color:var(--gray);transition:opacity 0.15s}
+.wiz-opt-field > label{margin:0;font-weight:600;color:var(--text)}
+.wiz-opt-field .form-input{width:140px;padding:0.35rem 0.5rem}
+.wiz-opt.is-off .wiz-opt-field{opacity:0.45}
+.wiz-opt-hint{font-size:0.75rem;color:var(--gray)}
+.wiz-said{margin:0 0 1.5rem;padding:0.8rem 0.95rem;border:1px solid rgba(var(--accent-rgb),0.25);border-radius:10px;background:rgba(var(--accent-rgb),0.05)}
+.wiz-said-t{font-size:0.88rem;font-weight:600;color:var(--text)}
+.wiz-said-d{margin-top:0.15rem;font-size:0.78rem;line-height:1.55;color:var(--gray)}
+.wiz-picks{display:grid;gap:0.5rem}
+.wiz-pick{display:flex;align-items:flex-start;gap:0.7rem;margin:0;padding:0.7rem 0.9rem;border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:border-color 0.15s,background 0.15s}
+.wiz-pick:hover{border-color:var(--gray)}
+.wiz-pick:has(> input:checked){border-color:rgba(var(--accent-rgb),0.5);background:rgba(var(--accent-rgb),0.05)}
+.wiz-pick > input{flex-shrink:0;width:16px;height:16px;margin:0.15rem 0 0;accent-color:var(--accent)}
+.wiz-pick-main{display:block;min-width:0}
+.wiz-pick-t{display:block;font-size:0.86rem;font-weight:600;line-height:1.35;color:var(--text)}
+.wiz-pick-d{display:block;margin-top:0.1rem;font-size:0.76rem;line-height:1.5;color:var(--gray)}
+.wiz-pick-warn{display:block;margin-top:0.3rem;font-size:0.74rem;color:var(--notification-color)}
+.wiz-pick-warn[hidden]{display:none}
+.wiz-pick.is-disabled{cursor:not-allowed}
+.wiz-pick.is-disabled:hover{border-color:var(--border)}
+.wiz-pick.is-disabled .wiz-pick-t,.wiz-pick.is-disabled .wiz-pick-d{opacity:0.55}
+.wiz-hint{margin:0.5rem 0 0;font-size:0.76rem;line-height:1.5;color:var(--gray);max-width:68ch}
+.wiz-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.9rem;margin-bottom:0.9rem}
+.wiz-field > label{display:block;margin:0 0 0.3rem;font-size:0.82rem;font-weight:600;color:var(--text)}
+.wiz-field-unit{font-weight:400;font-size:0.74rem;color:var(--gray)}
+
+/* v60.71: Feature Modules, a list of rows. The wizard's step and Settings' tab are the same rows (wizStep_features). */
+.mod-lead{font-size:0.9rem;line-height:1.6;color:var(--gray);margin:0 0 1.1rem;max-width:68ch}
+.mod-h{display:flex;align-items:center;gap:0.4rem;font-size:0.95rem;font-weight:700;color:var(--text);margin:0 0 0.55rem}
+.mod-h-beta{margin-top:1.6rem;margin-bottom:0.25rem}
+.mod-note{font-size:0.8rem;line-height:1.5;color:var(--gray);margin:0 0 0.65rem;max-width:68ch}
+.mod-list{border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.mod-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:1.25rem;margin:0;padding:0.7rem 0.95rem;border-top:1px solid var(--border);cursor:pointer;transition:background 0.12s}
+.mod-row:first-child{border-top:none}
+.mod-row:hover{background:var(--hover)}
+.mod-row > input.mod-sw{grid-column:2;grid-row:1}
+.mod-main{grid-column:1;grid-row:1;min-width:0}
+.mod-t{font-size:0.88rem;font-weight:600;line-height:1.35;color:var(--text)}
+.mod-beta{display:inline-block;margin-left:0.4rem;padding:0.05rem 0.35rem;border-radius:8px;background:rgba(168,85,247,0.15);color:#a855f7;font-family:var(--font-mono);font-size:0.6rem;vertical-align:1px}
+.mod-d{margin-top:0.15rem;font-size:0.78rem;line-height:1.5;color:var(--gray);max-width:84ch}
+.mod-row .mod-go{margin-top:0.3rem;text-align:left}
+/* A switch: a tick box drawn as one, so everything that reads or ticks a box still does. */
+input.mod-sw{-webkit-appearance:none;appearance:none;position:relative;flex-shrink:0;width:34px;height:20px;margin:0;padding:0;border:none;border-radius:999px;background:color-mix(in srgb,var(--gray) 45%,transparent);cursor:pointer;transition:background 0.15s}
+input.mod-sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,0.35);transition:transform 0.15s}
+input.mod-sw:checked{background:var(--accent)}
+input.mod-sw:checked::after{transform:translateX(14px)}
+input.mod-sw:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){input.mod-sw,input.mod-sw::after,.mod-row,.wiz-pick{transition:none}}
+
+/* A phone, or a narrow window: the whole screen, and the list a sheet. */
 @media(max-width:800px){
-  .wiz-shell{flex-direction:column;max-height:100vh}
-  .wiz-sidebar{flex:0 0 auto;max-height:180px;border-right:none;border-bottom:1px solid var(--border);padding:0.8rem}
-  .wiz-sidebar-head{border-bottom:none;margin-bottom:0.4rem;padding-bottom:0.4rem}
-  .wiz-step-list{flex-direction:row;gap:0.4rem;overflow-x:auto;padding-bottom:0.25rem}
-  .wiz-step-item{flex-shrink:0;min-width:140px}
-  .wiz-main-head{padding:1rem 1.25rem 0.4rem}
+  .wiz-overlay{padding:0}
+  .wiz-shell{max-width:none;height:100%;border:none;border-radius:0}
+  .wiz-sidebar{display:none;position:absolute;inset:0;z-index:6;flex:none;background:var(--card);border-right:none}
+  .wiz-sidebar.is-open{display:flex}
+  .wiz-sidebar-head .wiz-sub{display:block}
+  .wiz-rail-close{display:inline-flex;align-items:center;justify-content:center;position:absolute;top:0.95rem;right:0.9rem;width:32px;height:32px;padding:0;border:none;border-radius:8px;background:transparent;color:var(--gray);font-size:1.35rem;line-height:1;cursor:pointer}
+  .wiz-steps-btn{display:inline-flex;align-items:center;gap:0.35rem;flex-shrink:0;padding:0.3rem 0.6rem;border:1px solid var(--border);border-radius:8px;background:transparent;font-family:inherit;font-size:0.78rem;font-weight:600;color:var(--text);cursor:pointer}
+  .wiz-main-head{padding:0.8rem 1rem 0.85rem}
   .wiz-main-title{font-size:1.2rem}
-  .wiz-body{padding:1rem 1.25rem}
-  .wiz-footer{padding:0.75rem 1.25rem}
+  .wiz-progress{padding:0 1rem}
+  .wiz-body{padding:1rem}
+  .wiz-footer{padding:0.7rem 1rem}
+  .wiz-cover-row{grid-template-columns:minmax(0,1fr) auto}
+  .wiz-cover-d{grid-column:1 / -1;grid-row:2}
 }
-/* 1852: the wizard fits inside its overlay at every height (a share of the
-   overlay's own height, so the browser's bars showing or not changes
-   nothing), and the overlay has nothing of its own to scroll: it scrolled by
-   its padding on a phone, and on any screen under 500px tall. */
-.wiz-shell{max-height:min(92vh,100%)}
-@media(max-width:800px){
-  .wiz-overlay{padding:0.5rem}
-  .wiz-shell{max-height:100%}
-  .wiz-step-list{scrollbar-width:thin}
+@media (prefers-reduced-motion:reduce){
+  .wiz-overlay,.wiz-shell,.wiz-body.wiz-enter{animation:none}
+  .wiz-progress-bar,.wiz-stage-chev{transition:none}
 }
 
 /* ── Modern scrollable settings tabs ── */
@@ -1593,6 +1734,21 @@ img.sp-hold{width:var(--sp-w);max-width:100%;height:auto;aspect-ratio:var(--sp-a
 .rich-editor table td,.rich-editor table th{border:1px solid var(--border);padding:0.3rem 0.45rem;vertical-align:top;min-width:2rem}
 .rich-editor table th{background:rgba(255,255,255,0.05);font-weight:700;text-align:left}
 [data-theme="light"] .rich-editor table th{background:rgba(0,0,0,0.04)}
+/* 2043f: A TABLE'S CELLS READ IN THE THEME'S OWN COLOURS, WHATEVER THEY CAME
+   WITH. [stated] Arian, of a finding whose table had its header row in white
+   words on a pale grey: "also why is the table like this". Its header cells
+   carried a ground of their own (a pale grey, from the page, reply or report
+   the table was first written in), and a ground on a cell outranks the
+   theme's, so on the dark theme the theme's white words sat on pale grey. The
+   editor gives a table no colours to choose, so on screen a cell's ground and
+   colour are the theme's, in the editors as where a finding is read, as 1919
+   made inline code's. The Word report still takes each cell as it was
+   written: its writer reads the cell's own style, not what the screen draws. */
+.rich-content td[style*="background"],.rich-content td[bgcolor],.rich-content th[style*="background"],.rich-content th[bgcolor],.rich-editor td[style*="background"],.rich-editor td[bgcolor],[data-qa-field] td[style*="background"]:not(.rich-editor *,.editor-toolbar *),[data-qa-field] td[bgcolor]:not(.rich-editor *,.editor-toolbar *),[data-qa-field] th[style*="background"]:not(.rich-editor *,.editor-toolbar *),[data-qa-field] th[bgcolor]:not(.rich-editor *,.editor-toolbar *){background:transparent!important}
+[data-theme="light"] .rich-content th[style*="background"],[data-theme="light"] .rich-content th[bgcolor],[data-theme="light"] [data-qa-field] th[style*="background"]:not(.rich-editor *,.editor-toolbar *),[data-theme="light"] [data-qa-field] th[bgcolor]:not(.rich-editor *,.editor-toolbar *){background:var(--th-bg)!important}
+.rich-editor th[style*="background"],.rich-editor th[bgcolor]{background:rgba(255,255,255,0.05)!important}
+[data-theme="light"] .rich-editor th[style*="background"],[data-theme="light"] .rich-editor th[bgcolor]{background:rgba(0,0,0,0.04)!important}
+.rich-content td[style*="color"],.rich-content th[style*="color"],.rich-editor td[style*="color"],.rich-editor th[style*="color"],[data-qa-field] td[style*="color"]:not(.rich-editor *,.editor-toolbar *),[data-qa-field] th[style*="color"]:not(.rich-editor *,.editor-toolbar *){color:inherit!important}
 .rich-editor blockquote{border-left:3px solid var(--border);margin:0.5rem 0;padding:0.1rem 0 0.1rem 0.7rem;color:var(--text)}
 .rich-editor hr{border:none;border-top:1px solid var(--border);margin:0.7rem 0}
 .rich-editor h1{font-size:1.25rem}.rich-editor h2{font-size:1.1rem}.rich-editor h3{font-size:1rem}
@@ -4129,13 +4285,11 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
 @media (max-width:700px){.set-dirty-bar{bottom:84px;left:16px;right:16px;transform:translateY(160%)}
   .set-dirty-bar.is-on{transform:none}.set-dirty-msg{white-space:normal}}
 @media (prefers-reduced-motion:reduce){.set-dirty-bar{transition:none}}
-/* 1819: the setup wizard's stages, and the line that says Next saves. */
-.wiz-stage{margin:0.75rem 0 0.15rem;padding:0 0.6rem;font-size:0.64rem;font-weight:700;letter-spacing:0.08em;
-  text-transform:uppercase;color:var(--gray);opacity:0.75}
-.wiz-stage:first-child{margin-top:0}
-.wiz-stage.is-current{color:var(--accent);opacity:1}
-.wiz-dirty-note{font-size:0.76rem;color:var(--gray);margin-left:0.35rem}
-.wiz-dirty-note[hidden]{display:none}
+/* v60.69: the sign-in page of a portal nobody has set a password on yet. */
+.login-fresh{display:block;text-align:left;margin:0 0 1.25rem;padding:0.85rem 1rem;border-radius:10px;border:1px solid rgba(var(--accent-rgb),0.3);
+  background:rgba(var(--accent-rgb),0.07);font-size:0.84rem;line-height:1.55;color:var(--gray)}
+.login-fresh strong{display:block;color:var(--text);font-size:0.9rem;font-weight:700;margin-bottom:0.2rem}
+.login-fresh a{color:var(--text);font-weight:600;text-decoration:underline;text-underline-offset:2px}
 /* 1819: sentences in a settings card are sentences (`.sub-text` is monospace,
    for metadata a line long). */
 .set-p{font-size:0.84rem;color:var(--gray);line-height:1.6;margin:0 0 0.6rem}

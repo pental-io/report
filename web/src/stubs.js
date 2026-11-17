@@ -121,6 +121,7 @@ function _scansNeedingFinalPdf() { return []; }
 function _selfScanHolds() { return false; }
 function _selfScanModuleOn() { return false; }
 async function _showPushToken() { return Promise.resolve(null); }
+function _signatureOn() { return false; }
 function _ssApplianceAdd() { return; }
 function _ssAppliancePicker() { return ''; }
 async function _ssApplianceRemove() { return Promise.resolve(null); }

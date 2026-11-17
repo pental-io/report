@@ -4731,6 +4731,7 @@ function contractorsEnabled(){return _modOn('contractors_enabled')}
 function checklistsEnabled(){return _modOn('enable_checklists_runbooks')}
 function _findingsAreaOn(){return assessmentsEnabled() || scanningEnabled()}
 function _methodologyOn(){return assessmentsEnabled() && checklistsEnabled()}
+function _autoJobsOn(){return assessmentsEnabled() || invoicesEnabled()}
 function _libUseOn(){return libraryEnabled() && (!isContractor() || contractorsLibraryOn())}
 function _financeOn(){return proposalsEnabled() || invoicesEnabled()}
 function _andList(arr) { return arr.length <= 1 ? (arr[0] || '') : arr.slice(0, -1).join(', ') + ' and ' + arr[arr.length - 1]; }
@@ -4750,11 +4751,6 @@ function _setGrouped(list) {
 }
 window._setGrouped = _setGrouped;
 var _SET_MOVED = { report_templates: 'pdf_templates', invoices: 'modules', contractors: 'modules', meetings: 'modules', contacts: 'modules', calendar: 'modules' };
-function _betaPill() {
-  if (S.profile && S.profile.role === 'client') return '';
-  return '<span class="nav-badge beta">' + 'BETA' + '</span>';
-}
-window._betaPill = _betaPill;
 function dashboardEnabled(){return _modOn('dashboard_enabled')}
 function _firstAdminId() {
   var admins = (S.data.users || []).filter(function(u) { return u.role === 'admin' && u.active !== false; });
@@ -8977,6 +8973,8 @@ function toast(message,type,titleOrDuration,clickHandler){
 }
 function _showToast(message,type,title,duration,clickHandler){
   type=type||"info";var container=ensureToastContainer();
+
+  try { container.classList.toggle('in-wizard', !!(typeof S !== 'undefined' && S && S.wizard)); } catch (e) {}
   var d = (typeof duration === 'number' && duration > 0) ? duration : 4000;
   var icons={success:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',error:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',warning:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',info:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>'};
   icons.warn = icons.warning;
@@ -20360,12 +20358,27 @@ async function api(table, method, data, match, opts) {
   if (normalizedMethod === 'UPDATE') normalizedMethod = 'PATCH';
 
   var maxRetries = 2;
-  var OP_TIMEOUT = 5000;
 
-  function _withTimeout(promise) {
+  var _isRead = normalizedMethod === 'GET' || method === 'select';
+  var OP_TIMEOUT = _isRead ? 15000 : 5000;
+
+  function _withTimeout(builder) {
+    var promise = Promise.resolve(builder);
+    var settled = false;
+    promise.then(function () { settled = true; }, function () { settled = true; });
     return Promise.race([
       promise,
-      new Promise(function(_, reject) { setTimeout(function() { reject(new Error('Operation timed out')); }, OP_TIMEOUT); })
+      new Promise(function(_, reject) {
+        var held = false;
+        (function arm(ms) {
+          setTimeout(function() {
+            if (settled) return;
+            if (_isRead && typeof _e2eHolding === 'function' && _e2eHolding()) { held = true; return arm(250); }
+            if (held) { held = false; return arm(OP_TIMEOUT); }
+            reject(new Error('Operation timed out'));
+          }, ms);
+        })(OP_TIMEOUT);
+      })
     ]);
   }
 
@@ -20614,8 +20627,15 @@ function _bootPicturePaths() {
 async function loadAllData() {
 
   if (_loadAllDataPromise) return _loadAllDataPromise;
+
+  if (!S._bootReady) _bootSafetyArm(15000);
   _loadAllDataPromise = _loadAllDataInner().finally(function() {
     _loadAllDataPromise = null;
+
+    try {
+      E2E.loadedAt = Date.now();
+      if (E2E.sweepAfterLoad) { E2E.sweepAfterLoad = false; setTimeout(function () { try { _e2eSweepSoon(); } catch (e) {} }, _E2E_SWEEP_SETTLE_MS + 50); }
+    } catch (e) {}
 
     try { _rtAfterLoad(); } catch (e) {}
 
@@ -20685,8 +20705,16 @@ function _syncRead(q) {
     return _syncFull(st, q, probe);
   }
   var timer = null;
+
   var late = new Promise(function (_, rej) {
-    timer = setTimeout(function () { rej(new Error('no answer in ' + (_SYNC_WAIT_MS / 1000) + 's')); }, _SYNC_WAIT_MS);
+    var held = false;
+    (function arm(ms) {
+      timer = setTimeout(function () {
+        if (typeof _e2eHolding === 'function' && _e2eHolding()) { held = true; return arm(250); }
+        if (held) { held = false; return arm(_SYNC_WAIT_MS); }
+        rej(new Error('no answer in ' + (_SYNC_WAIT_MS / 1000) + 's'));
+      }, ms);
+    })(_SYNC_WAIT_MS);
   });
   return Promise.race([_syncDelta(st, q, ent, probe), late]).then(function (rows) {
     clearTimeout(timer);
@@ -22227,6 +22255,22 @@ function renderSetPassword__portal(token) {
     '</form></div></div></div>';
   document.body.classList.add('loaded');
 }
+function _passwordLinkInHash() {
+  try { return new URLSearchParams((window.location.hash || '').replace(/^#/, '')).get('pw_token') || null; } catch (e) { return null; }
+}
+function _onPasswordLinkHash() {
+  var tok = _passwordLinkInHash();
+  if (!tok) return;
+
+  if (!supabaseClient) return;
+  var signedOut = !(typeof S !== 'undefined' && S && S.user)
+    && !!(document.getElementById('loginPassword') || document.getElementById('pwReqEmail') || document.getElementById('pwNew'));
+  if (!signedOut) { window.location.reload(); return; }
+  try { window.history.replaceState({}, '', window.location.pathname + window.location.search); } catch (e) {}
+  _suppressRender = true;
+  renderSetPassword(tok);
+}
+window.addEventListener('hashchange', _onPasswordLinkHash);
 function _isMissingRpc(err) {
   if (!err) return false;
   var code = err.code || '';
@@ -22371,6 +22415,8 @@ async function submitSetPassword(e) {
         return fail('This link no longer works. It may have expired, been used already, or been replaced by a newer email for this account - only the most recent link works.', true);
     }
     window._pwSetupToken = null;
+
+    if (window._dbBranding) window._dbBranding.fresh = false;
     toast('Password set. Sign in with it now.', 'success');
 
     await _backToSignIn();
@@ -22461,7 +22507,6 @@ async function _afterCredentialLogin() {
   window._showWelcomeToast = true;
   _fadeToApp();
 
-  setTimeout(function() { _maybeOfferPasswordSetup(); }, 1500);
   return false;
 }
 function openChangePassword() {
@@ -22645,30 +22690,6 @@ async function sendPasswordInvites() {
     toast('Could not send the invites.', 'error');
   }
 }
-async function _maybeOfferPasswordSetup() {
-  try {
-    if (window._pwOfferShown) return;
-    var r = await supabaseClient.rpc('rpc_has_password');
-    var d = r && r.data;
-    if (!d || !d.ok || !d.enabled || d.has_password) return;
-    window._pwOfferShown = true;
-    if (!(await confirmAsync(
-      'This portal now uses passwords to sign in. Set one now and you will not need to wait for an email next time. We will send you a link to choose it.',
-      { title: 'Set your password', confirmText: 'Send me the link', cancelText: 'Not now' }
-    ))) return;
-
-    var _ps = await _signinLocalAsk('rpc_signin_password_self', {});
-    if (_ps.via === 'locked' || _ps.via === 'throttled' || _ps.via === 'error') {
-      toast(_ps.via === 'locked' ? 'The link could not be sent just now. Try again in a few minutes.' : _ps.error, 'error');
-      return;
-    }
-    if (_ps.via === 'pental') await tenantFetch('/api/auth-code', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'password_setup', email: (S.profile && S.profile.email) || '' }),
-    });
-    toast('Check your email for a link to choose a password.', 'success');
-  } catch (e) {  }
-}
 async function _backToSignIn() {
   _suppressRender = false;
   try {
@@ -22683,17 +22704,6 @@ async function _backToSignIn() {
   return false;
 }
 window._backToSignIn = _backToSignIn;
-async function _signinLocalAsk(fn, args) {
-  try {
-    var r = await supabaseClient.rpc(fn, args);
-    if (r.error) return { via: 'pental' };
-    var d = r.data || {};
-    if (d.ok) return { via: 'firm', data: d };
-    if (d.code === 'throttled') return { via: 'throttled', error: d.error || 'Too many requests. Please wait a few minutes.' };
-    if (d.code === 'unavailable') return { via: d.locked ? 'locked' : 'pental' };
-    return { via: 'error', error: d.error || 'Something went wrong. Please try again.' };
-  } catch (e) { return { via: 'pental' }; }
-}
 async function _ssoFinish(p) {
   window._codeLoginInProgress = false;
   _hideLoading();
@@ -22825,6 +22835,8 @@ async function loadBrandingFromDB() {
         logo_url_light: d.logo_url_light || null,
 
         password_login_enabled: true,
+
+        fresh: d.fresh === true,
         font_display: d.font_display || null,
         font_body: d.font_body || null,
         font_mono: d.font_mono || null,
@@ -22969,15 +22981,22 @@ document.addEventListener('click', function() {
     resetProcessing();
   }
 }, true);
-async function init() {
-
-  setTimeout(function() {
+var _bootSafetyT = null;
+function _bootSafetyArm(ms) {
+  if (_bootSafetyT) clearTimeout(_bootSafetyT);
+  _bootSafetyT = setTimeout(function () {
+    _bootSafetyT = null;
+    if (!S._bootReady && (!S.profile || !_isMfaValid()) && !_loadAllDataPromise) { document.body.classList.add('loaded'); _bootSafetyArm(ms); return; }
     if (!S._bootReady) {
       console.warn('[boot] revealing after safety timeout, initial load did not complete');
       S._bootReady = true;
     }
     document.body.classList.add('loaded');
-  }, 15000);
+  }, ms);
+}
+async function init() {
+
+  _bootSafetyArm(15000);
 
   if (!window.supabase || !window.supabase.createClient) {
     document.body.classList.add('loaded');
@@ -23112,6 +23131,13 @@ async function init() {
 
   if (typeof _mInstallWriteWatch === 'function') _mInstallWriteWatch(supabaseClient);
 
+  if (!window._pendingPwToken) {
+    var _latePw = _passwordLinkInHash();
+    if (_latePw) {
+      window._pendingPwToken = _latePw;
+      try { window.history.replaceState({}, '', window.location.pathname + window.location.search); } catch (e) {}
+    }
+  }
   if (window._pendingPwToken) {
     var _pwTok = window._pendingPwToken;
     window._pendingPwToken = null;
@@ -27004,6 +27030,14 @@ function renderLogin__portal() {
   if (loginSub) h += '<p class="login-sub">' + loginSub + '</p>';
   h += '</div>';
 
+  if (branding.fresh === true) {
+    h += '<div class="login-fresh" id="loginFresh" role="status">'
+      + '<strong>Set your password to sign in</strong>'
+      + '<span>A link to set it was emailed to the address this portal was set up with. If it has not arrived, use '
+      + '<a href="#" onclick="renderPasswordRequest();return false">Set or reset your password</a> and another is sent.</span>'
+      + '</div>';
+  }
+
   h += '<form onsubmit="submitPasswordLogin(event)" id="loginForm">';
   h += '<div class="form-group"><label class="form-label">Email Address</label>';
   h += '<input type="email" class="login-input-modern" id="loginEmail" placeholder="you@company.com" autocomplete="username" required></div>';
@@ -27167,6 +27201,121 @@ function goToAssessmentComments(assessmentId) {
     }, 80);
   }).catch(function() {});
 }
+var _wizSteps = [
+  { id: 'welcome',      title: 'Welcome',              desc: 'What this covers, and how it saves.',                                 icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>' },
+  { id: 'how_it_works', title: 'How Pental Works',     desc: 'The workflow, and what the portal does by itself.',         icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>' },
+  { id: 'features',     title: 'Feature Modules',      desc: 'The areas your firm uses. The steps that follow are theirs.',        icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>' },
+  { id: 'migrate', when: 'assessmentsEnabled',      title: 'Bring Your Data Across', desc: 'Coming from Pental Report, AttackForge, PlexTrac, Cyver or similar? Bring it across now.', tab: 'data', section: 'migrate', icon: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' },
+  { id: 'login_page',   title: 'Login Page',           desc: 'The first thing your clients see when they visit the portal.',    tab: 'branding', section: 'login',         icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>' },
+  { id: 'branding',     title: 'Branding',             desc: 'Logo, accent colour, theme, and severity colours.',               tab: 'branding', section: 'branding',      icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="19" cy="12" r="2.5"/><circle cx="15" cy="17.5" r="2.5"/><circle cx="7.5" cy="16.5" r="2.5"/><circle cx="5" cy="10" r="2.5"/><path d="M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10"/></svg>' },
+  { id: 'pdf_templates',title: 'Documents', desc: 'How each document is made, Pental\u2019s built-in PDF or a Word template of your own, and the footer, logo and dates on every one.',       tab: 'branding', section: 'pdf_templates', icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>' },
+  { id: 'filenames',    title: 'File Naming',          desc: 'Customise how downloaded files are named.',                       tab: 'branding', section: 'filenames',     icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' },
+  { id: 'assessment_sections', when: 'assessmentsEnabled', title: 'Assessments & Job Codes', desc: 'Report sections and their order, custom sections, document labels, per-section AI prompts, the IPs your team tests from, and whether engagements and findings carry reference codes.', tab: 'assessments', section: 'assessments', icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>' },
+  { id: 'findings_config', when: '_findingsAreaOn', title: 'Findings & Severity', desc: 'Custom finding fields, labels, severity colours, CVSS version and finding AI prompts.', tab: 'findings', section: 'findings', icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l7 4v6c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6l7-4z"/></svg>' },
+
+  { id: 'checklists', when: '_methodologyOn',   title: 'Methodology',          desc: 'Checklists and runbooks for how your team tests: OWASP, NIST, CIS, or your own.', tab: 'checklists', icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg>' },
+  { id: 'proposals_cfg',title: 'Proposals',            desc: 'Who signs the proposals you send, and the titles they sign with.', tab: 'proposals', when: 'proposalsEnabled', icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' },
+  { id: 'attestation', when: 'assessmentsEnabled',  title: 'Attestation Letters',  desc: 'The letter a client shows their own customers to prove they were tested.', tab: 'attestation', icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' },
+  { id: 'contractors_cfg', title: 'External Testers',       desc: 'Teams of testers from outside your firm, and what they can use.', when: 'contractorsEnabled', icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>' },
+  { id: 'scanning_cfg', title: 'Scans',                desc: 'Scanner providers, cadences, and what a customer may run themselves.', tab: 'scanning', when: 'scanningEnabled', icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' },
+  { id: 'notifications',title: 'Notifications',        desc: 'What the portal tells your team and your clients about, and when.', tab: 'notifications', icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>' },
+  { id: 'dashboard_cfg',title: 'Dashboard',            desc: 'What the landing page shows your team when they sign in.', tab: 'dashboard', when: 'dashboardEnabled', icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>' },
+  { id: 'company',      title: 'Company Details',      desc: 'Name, registration, address and contact details.',               tab: 'company',  section: 'company',       icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"/></svg>' },
+  { id: 'finance',      title: 'Finance',              desc: 'Currency and VAT, and your day rate if you price work here.',                   tab: 'company',  section: 'finance',       icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>' },
+
+  { id: 'bank',         title: 'Bank Details',         desc: 'Where invoice payments should be sent.',                          tab: 'company',  section: 'bank', when: 'invoicesEnabled',          icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>' },
+  { id: 'signature', when: '_signatureOn',    title: 'Director Signature',   desc: 'Used on attestation letters, and on proposals if you send them.',                   tab: 'signature', section: 'signature', icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 14.66V20a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2h5.34"/><polygon points="18 2 22 6 12 16 8 16 8 12 18 2"/></svg>' },
+  { id: 'sig_box',      title: 'Signature Box Style',  desc: 'Customise the signature box appended to proposal PDFs.',          tab: 'signature', section: 'sig_box', when: 'proposalsEnabled',   icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>' },
+  { id: 'automations', when: '_autoJobsOn',  title: 'Automations',          desc: 'Start and complete assessments on their dates by themselves.',                icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>' },
+  { id: 'integrations', title: 'Integrations',         desc: 'Email, calendar, password managers, issue trackers, and card payments if you invoice.',                  tab: 'integrations',icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>' },
+  { id: 'ai',           title: 'AI Assist',            desc: 'Optional AI-generated summaries and content.',                    tab: 'ai',          icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 00-4 4v1H6a2 2 0 00-2 2v3H3a1 1 0 00-1 1v2a1 1 0 001 1h1v3a2 2 0 002 2h2v1a4 4 0 008 0v-1h2a2 2 0 002-2v-3h1a1 1 0 001-1v-2a1 1 0 00-1-1h-1V9a2 2 0 00-2-2h-2V6a4 4 0 00-4-4z"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/></svg>' },
+  { id: 'security',     title: 'Security',             desc: 'The second step at sign-in, and how long a session lasts.',                                icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>' },
+  { id: 'plan',         title: 'Subscription & Data',  desc: 'Your testers and your data.',                                    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg>' },
+  { id: 'email',        title: 'Email Templates',      desc: 'Customise the wording of system emails.',                         icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>' },
+  { id: 'done',         title: 'Setup Complete',       desc: 'Your portal is ready.',                                             icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' }
+];
+function _wizPlanAllowsStep(step) {
+  return true;
+}
+function _wizModuleAllowsStep(step) {
+  if (!step || !step.when) return true;
+  try { return typeof window[step.when] === 'function' ? !!window[step.when]() : true; }
+  catch (e) { return true; }
+}
+function _wizActiveSteps() {
+  return _wizSteps.filter(function (st) { return _wizPlanAllowsStep(st) && _wizModuleAllowsStep(st); });
+}
+function _wizKey() {
+  try { return 'pental_wiz:' + (TENANT_ID || '') + ':' + ((S.profile && S.profile.id) || ''); } catch (e) { return 'pental_wiz:'; }
+}
+function _wizKept() {
+  try { var v = JSON.parse(localStorage.getItem(_wizKey()) || 'null'); return v && typeof v === 'object' ? v : null; } catch (e) { return null; }
+}
+function _wizBegin(forced) {
+  var w = { step: 0, maxStep: 0, forced: !!forced, dirty: false, seen: {}, open: {}, resumed: false, rail: false };
+  var kept = _wizKept();
+  if (kept && kept.seen && typeof kept.seen === 'object') w.seen = kept.seen;
+  if (kept && kept.id) {
+    var steps = _wizActiveSteps();
+    for (var i = 1; i < steps.length; i++) if (steps[i].id === kept.id) { w.step = i; w.maxStep = i; w.resumed = true; }
+  }
+  return w;
+}
+window._wizBegin = _wizBegin;
+var _WIZ_DRESS = ['wiz-flat', 'wiz-flat-bar', 'wiz-sect', 'wiz-sect-first', 'wiz-sect-same', 'wiz-sect-bare', 'wiz-group'];
+function _wizDress() {
+  if (!S.wizard) return;
+  var b = document.getElementById('wizStepBody');
+  if (!b) return;
+  Array.prototype.forEach.call(b.querySelectorAll('.card.wiz-flat'), function (c) { _WIZ_DRESS.forEach(function (k) { c.classList.remove(k); }); });
+  var shown = function (c) { return c.getClientRects().length > 0; };
+  var child = function (c, cls) { for (var i = 0; i < c.children.length; i++) if (c.children[i].classList && c.children[i].classList.contains(cls)) return c.children[i]; return null; };
+  var top = Array.prototype.filter.call(b.querySelectorAll('.card'), function (c) {
+    if (!shown(c)) return false;
+    for (var p = c.parentElement; p && p !== b; p = p.parentElement) if (p.classList && p.classList.contains('card')) return false;
+    return true;
+  });
+  if (!top.length) return;
+
+  var parts = [], groups = [];
+  top.forEach(function (c) {
+    var host = child(c, 'card-body') || c;
+    var kids = Array.prototype.filter.call(host.children, function (k) { return k.classList && k.classList.contains('card') && shown(k); });
+    if (kids.length >= 2) { groups.push(c); kids.forEach(function (k) { parts.push(k); }); }
+    else parts.push(c);
+  });
+  var say = function (el) { return el ? (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase() : ''; };
+  var stepName = say(document.getElementById('wizTitle'));
+  var head = function (card) {
+    var hd = child(card, 'card-header'), t = hd ? hd.querySelector('.card-title') : null;
+    return { hd: hd, name: say(t), holds: !!hd && (!!say(hd).replace(say(t), '').trim() || !!hd.querySelector('button, a, input, select, textarea, [onclick]')) };
+  };
+  groups.forEach(function (c) {
+    var h = head(c);
+    c.classList.add('wiz-flat'); c.classList.add('wiz-group');
+    if (h.hd && h.name && h.name === stepName) { c.classList.add('wiz-sect-same'); if (!h.holds) c.classList.add('wiz-sect-bare'); }
+  });
+  parts.forEach(function (card, k) {
+    var h = head(card);
+    card.classList.add('wiz-flat');
+    if (parts.length === 1) { if (h.holds) card.classList.add('wiz-flat-bar'); return; }
+    card.classList.add('wiz-sect');
+    if (k === 0) card.classList.add('wiz-sect-first');
+    if (h.hd && h.name && h.name === stepName) { card.classList.add('wiz-sect-same'); if (!h.holds) card.classList.add('wiz-sect-bare'); }
+  });
+}
+window._wizDress = _wizDress;
+function _wizRailSync() {
+  try {
+    var list = document.querySelector('.wiz-overlay .wiz-step-list'), item = list && list.querySelector('.wiz-step-item.active');
+    if (list && item) _wizRailShow(list, item);
+  } catch (e) {}
+}
+function _wizRailShow(list, item) {
+  var lr = list.getBoundingClientRect(), ir = item.getBoundingClientRect();
+  if (ir.top < lr.top + 8) list.scrollTop -= (lr.top + 8 - ir.top);
+  else if (ir.bottom > lr.bottom - 8) list.scrollTop += (ir.bottom - lr.bottom + 8);
+}
 function _maybeTriggerOnboarding() {
   if (S.wizard) return;
   if (!S.profile || !canManage()) return;
@@ -27177,8 +27326,9 @@ function _maybeTriggerOnboarding() {
   setTimeout(function() {
     if (S.wizard || S.modal) return;
     if (S.profile.onboarding_completed_at) return;
-    S.wizard = { step: 0, maxStep: 0, forced: true, dirty: false };
+    S.wizard = _wizBegin(true);
     _doRender();
+    setTimeout(_wizRailSync, 0);
   }, 600);
 }
 function _wizDirtySync() {
@@ -27205,7 +27355,11 @@ function _wizRepaint() {
   var freshShell = wrap.querySelector('.wiz-shell');
   var curShell = root.querySelector('.wiz-shell');
   if (freshShell && curShell) {
+
+    var _railAt = 0;
+    try { var _rl = curShell.querySelector('.wiz-step-list'); _railAt = _rl ? _rl.scrollTop : 0; } catch (e) {}
     curShell.innerHTML = freshShell.innerHTML;
+    try { var _rl2 = curShell.querySelector('.wiz-step-list'); if (_rl2) _rl2.scrollTop = _railAt; _wizRailSync(); } catch (e) {}
     try { _wizKeepAfter(_wk); _setBarSync(); } catch (e) {}
     try { _wizModalSync(); } catch (e) {}
 
@@ -27286,18 +27440,19 @@ function wizStep_features() {
 
   var modules = _FEATURE_MODULES;
   var h = '';
-  h += '<p style="color:var(--gray);font-size:0.86rem;margin-bottom:0.9rem;line-height:1.55">Enable only the modules your team actually uses. Disabled modules are hidden from navigation for everyone, you can toggle them back on any time.</p>';
+
+  h += '<p class="mod-lead">Switch on the areas your firm uses. An area that is off is hidden from everyone’s navigation, and can be switched on again at any time.</p>';
 
   var _card = function(m) {
     var cur = s[m.key];
     var on = cur === undefined ? m.def : !!cur;
-    h += '<label style="display:flex;align-items:flex-start;gap:0.6rem;padding:0.75rem 0.9rem;border:1px solid var(--border);border-radius:8px;cursor:pointer;background:var(--bg);transition:border-color 0.15s">';
-    h += '<input type="checkbox" id="wiz_feat_' + esc(m.key) + '"' + (on ? ' checked' : '') + ' style="margin-top:2px;accent-color:var(--accent)">';
-    h += '<div style="flex:1;min-width:0"><div style="font-weight:600;color:var(--text);font-size:0.85rem">' + esc(m.label)
+    h += '<label class="mod-row' + (on ? ' is-on' : '') + '">';
+    h += '<input type="checkbox" class="mod-sw" id="wiz_feat_' + esc(m.key) + '"' + (on ? ' checked' : '') + ' onchange="this.parentNode.classList.toggle(\'is-on\',this.checked)">';
+    h += '<div class="mod-main"><div class="mod-t">' + esc(m.label)
 
-      + (m.beta ? '<span style="display:inline-block;margin-left:0.4rem;padding:0.05rem 0.35rem;background:rgba(168,85,247,0.15);color:#a855f7;border-radius:8px;font-family:var(--font-mono);font-size:0.6rem;vertical-align:1px">BETA</span>' : '')
+      + (m.beta ? '<span class="mod-beta">BETA</span>' : '')
       + '</div>';
-    h += '<div style="font-size:0.72rem;color:var(--gray);margin-top:2px;line-height:1.4">' + esc(m.desc) + '</div>';
+    h += '<div class="mod-d">' + esc(m.desc) + '</div>';
 
     var _go = _MOD_GO[m.key];
     if (_go && on && S.page === 'settings' && !S.wizard && !S._embedSettings && _modOn(m.key)) {
@@ -27308,14 +27463,15 @@ function wizStep_features() {
     h += '</label>';
   };
   var core = modules.filter(function(m) { return !m.beta; }), beta = modules.filter(function(m) { return !!m.beta; });
-  h += '<div style="font-weight:700;font-size:0.85rem;color:var(--text);margin-bottom:0.45rem">Core</div>';
-  h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0.5rem">';
+  h += '<div class="mod-h">Core</div>';
+  h += '<div class="mod-list">';
   core.forEach(_card);
   h += '</div>';
   if (beta.length) {
-    h += '<div style="font-weight:700;font-size:0.85rem;color:var(--text);margin:1.1rem 0 0.2rem">Beta ' + (typeof _betaPill === 'function' ? _betaPill() : '') + '</div>';
-    h += '<p style="color:var(--gray);font-size:0.76rem;margin-bottom:0.5rem;line-height:1.5">Newer areas we are still finishing. Off to begin with; switch one on to try it, and the steps that configure it appear in this wizard.</p>';
-    h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0.5rem">';
+    h += '<div class="mod-h mod-h-beta">Beta</div>';
+
+    h += '<p class="mod-note">Newer areas we are still finishing. Off to begin with; switch one on to try it' + (S.wizard ? ', and the steps that set it up join this wizard' : '') + '.</p>';
+    h += '<div class="mod-list">';
     beta.forEach(_card);
     h += '</div>';
   }
@@ -28429,12 +28585,16 @@ function _e2eReady() {
   if (_e2eOff() || typeof supabaseClient === 'undefined' || !supabaseClient || !S || !S.profile) return Promise.resolve();
   if (!E2E.ready) {
     var p = E2E.ready = _e2eStart().then(function (settled) {
+      if (E2E.starting === p) E2E.starting = null;
 
       if (settled === false && E2E.ready === p) E2E.ready = null;
     }, function (e) {
+      if (E2E.starting === p) E2E.starting = null;
       console.warn('[e2e] could not open the keys:', (e && e.message) || e);
       if (E2E.ready === p) E2E.ready = null;
     });
+
+    E2E.starting = p;
   }
   return E2E.ready;
 }
@@ -28495,6 +28655,9 @@ function _e2eKeysSoonArm() {
   E2E.keysSoon = new Promise(function (r) { done = r; });
   E2E.keysSoonDone = function () { if (E2E.keysSoon) { E2E.keysSoon = null; E2E.keysSoonDone = null; done(); } };
   setTimeout(function () { if (E2E.keysSoonDone) E2E.keysSoonDone(); }, Math.max(0, (E2E.waitSince || Date.now()) + _E2E_WAIT_LOOK_MS - Date.now()));
+}
+function _e2eHolding() {
+  return !!(E2E.starting || (E2E.waiting && E2E.keysSoon));
 }
 function _e2eWatchOn() {
   if (E2E.watch) return;
@@ -29258,27 +29421,60 @@ async function _e2eStorage(base, input, init, method, rest) {
 }
 var _E2E_SWEEP = ['assessments', 'findings', 'qa_comments', 'assessment_comments', 'timeline_events', 'tickets',
                   'assets', 'scan_runs', 'scan_results', 'co_live'];
+var _E2E_SWEEP_SETTLE_MS = 10000;
+var _E2E_SWEEP_QUIET_MS = 30 * 60000;
+var _E2E_SWEEP_BUSY_MS = 5 * 60000;
+function _e2eSweepKey() { return 'pental_e2e_sweep_' + ((typeof TENANT_ID !== 'undefined' && TENANT_ID) || 'x'); }
+function _e2eSweepNext() {
+  var n = E2E.sweepNext || 0;
+  try { var v = parseInt(localStorage.getItem(_e2eSweepKey()), 10); if (isFinite(v) && v > n) n = v; } catch (e) {}
+  return n;
+}
+function _e2eSweepLater(ms) {
+  var at = Date.now() + ms;
+  E2E.sweepNext = at;
+  try { localStorage.setItem(_e2eSweepKey(), String(at)); } catch (e) {}
+}
 function _e2eSweepSoon() {
   if (!E2E.on || E2E.waiting || E2E.sweeping) return;
   var r = E2E.st && E2E.st.role;
   if (r !== 'admin' && r !== 'senior') return;
   if (E2E.sweptAt && Date.now() - E2E.sweptAt < 5 * 60000 && !E2E.sweepAgain) return;
+  if (!E2E.sweepAgain) {
+
+    if (!S._bootReady || _loadAllDataPromise) { E2E.sweepAfterLoad = true; return; }
+    var settle = (E2E.loadedAt || 0) + _E2E_SWEEP_SETTLE_MS - Date.now();
+    if (settle > 0) { if (!E2E.sweepSettleT) E2E.sweepSettleT = setTimeout(function () { E2E.sweepSettleT = null; _e2eSweepSoon(); }, settle + 50); return; }
+    if (Date.now() < _e2eSweepNext()) return;
+  }
   E2E.sweeping = true; E2E.sweepAgain = false;
+  _e2eSweepLater(_E2E_SWEEP_QUIET_MS);
   setTimeout(function () {
-    _e2eSweep().catch(function (e) { console.debug('[e2e] sealing paused:', (e && e.message) || e); })
+    _e2eSweep().then(function (out) {
+      if (out && (out.rows || out.files)) _e2eSweepLater(_E2E_SWEEP_BUSY_MS);
+    }, function (e) { console.debug('[e2e] sealing paused:', (e && e.message) || e); })
       .then(function () { E2E.sweeping = false; E2E.sweptAt = Date.now(); });
   }, 1500);
+}
+async function _e2eSweepWait() {
+  for (var i = 0; i < 120 && typeof _loadAllDataPromise !== 'undefined' && _loadAllDataPromise; i++) await _e2eBreath(500);
 }
 window._e2eSweepSoon = _e2eSweepSoon;
 function _e2eBreath(ms) { return new Promise(function (r) { setTimeout(r, ms || 30); }); }
 async function _e2eSweep() {
-  var sealedRows = 0, sealedFiles = 0, began = Date.now();
+  var sealedRows = 0, sealedFiles = 0, began = Date.now(), passed = 0;
   for (var ti = 0; ti < _E2E_SWEEP.length; ti++) {
     var table = _E2E_SWEEP[ti], after = null;
     for (var guard = 0; guard < 100000; guard++) {
+      await _e2eSweepWait();
 
       var r = await supabaseClient.rpc('rpc_e2e_plain_rows', { p_table: table, p_after: after, p_limit: 200 });
-      if (r.error) throw r.error;
+      if (r.error) {
+
+        console.debug('[e2e] sealing passed over ' + table + ':', r.error.message || r.error.code || r.error);
+        if (++passed >= 2) throw r.error;
+        break;
+      }
       var rows = Array.isArray(r.data) ? r.data : [];
       if (!rows.length) break;
       var out = await _e2eSealPlain(table, rows);
@@ -44134,7 +44330,7 @@ function renderSettings__portal() {
   h += '<span style="font-size:0.85rem;font-weight:700;color:var(--text)">Assets</span>';
   h += '<span style="font-size:0.66rem;color:var(--green);border:1px solid rgba(34,197,94,0.3);background:rgba(34,197,94,0.08);padding:0.1rem 0.4rem;border-radius:99px;font-weight:600">Saved automatically</span>';
   h += '</div>';
-  h += '<div style="font-size:0.7rem;color:var(--gray);margin-bottom:0.75rem">These apply as soon as you choose a file, so the button above does not affect them.</div>';
+  h += '<div style="font-size:0.7rem;color:var(--gray);margin-bottom:0.75rem">These apply as soon as you choose a file.</div>';
   h += '<div style="display:flex;gap:1.25rem;align-items:flex-end;flex-wrap:wrap">';
 
   if (_themeMode() !== 'light') {
@@ -45226,7 +45422,7 @@ function renderSettings__portal() {
 
   h += '<div style="margin-top:0.75rem">';
   h += '<label for="set_notify_reply_to_email" style="display:block;font-size:0.82rem;font-weight:600;margin-bottom:0.25rem">Reply-to email <span style="font-weight:400;color:var(--gray);font-size:0.74rem">(optional)</span></label>';
-  h += '<input type="email" id="set_notify_reply_to_email" class="input" placeholder="' + esc(s.company_email || 'replies@yourcompany.com') + '" value="' + esc(s.notify_reply_to_email || '') + '" style="max-width:340px">';
+  h += '<input type="email" id="set_notify_reply_to_email" class="form-input" placeholder="' + esc(s.company_email || 'replies@yourcompany.com') + '" value="' + esc(s.notify_reply_to_email || '') + '" style="max-width:340px">';
   h += '<div style="font-size:0.72rem;color:var(--gray);margin-top:0.3rem">When clients reply to a notification, replies will go here. Leave blank to use your company email (' + esc(s.company_email || 'not set') + ').</div>';
   h += '</div>';
 
@@ -46147,6 +46343,7 @@ function renderSettings__portal() {
 
   if (_st === 'ai') {
 
+  h += '<div id="set_ai_section">';
   h += '<div class="card mt-4"><div class="card-header"><span class="card-title">' + IC.ai + ' AI Settings</span></div><div class="card-body">';
 
   h += '<p style="color:var(--gray);font-size:0.8rem;margin-bottom:1rem">Choose the provider and model for Pental Report\'s AI features. A hosted provider\'s key is stored with your settings and never sent back to the browser. <span id="ai_route_note">' + esc(_aiRouteText(_aiSide.at ? _aiSide.cap : null, s.ai_provider || 'groq', !_aiSide.at)) + '</span> With Ollama, requests go from your browser to your own machine.' + (function () {
@@ -54148,7 +54345,7 @@ async function saveAssessment() {
 function _personSendHtml(id) {
   if (typeof _irvIsTool === 'function' && _irvIsTool()) return '';
   return '<label class="irv-chk inv-send"><input type="checkbox" id="' + id + '" checked onchange="_personSendSaid(this)">'
-    + '<span><strong>Email them an invitation</strong> with a link to sign in.</span></label>'
+    + '<span><strong>Email them an invitation</strong> with a link to set their password.</span></label>'
     + '<p class="pf-hint inv-send-hint">Untick to add them without an email. They can set their password from the sign-in page (Set or reset your password) when they are ready, or you can send the invitation later with Resend invite.</p>';
 }
 function _personSendSaid(cb) {
@@ -64311,9 +64508,57 @@ async function _syncEvidenceBlocks(proposed, zip, assessmentId, ownerId) {
   return out;
 }
 var _syncLeft = [];
+function _syncPicKey(s) {
+  s = String(s == null ? '' : s).trim();
+  if (/^data:image\/gif;base64,R0lGODlh/i.test(s)) return '';
+  return s.replace(/^storage:/i, '');
+}
+function _syncWordsOf(t) {
+  return _qaDecodeText(String(t == null ? '' : t).replace(/<[^>]*>/g, ' ')).replace(/ /g, ' ').replace(/\s+/g, ' ').trim();
+}
+function _syncHtmlSig(t) {
+  t = String(t == null ? '' : t);
+  var look = String(typeof _syncStyleSig === 'function' ? _syncStyleSig(t) : '').split(',')
+    .filter(function (x) { return x && x !== 'p' && x !== 'br' && x !== 'span'; }).join(',');
+  var pics = [];
+  t.replace(/<img\b[^>]*>/gi, function (tag) {
+    var m = /\bdata-sp="([^"]*)"/i.exec(tag) || /\bsrc="([^"]*)"/i.exec(tag);
+    var h = /\bheight\s*:\s*([\d.]+)px/i.exec(tag);
+    pics.push(_syncPicKey(m ? m[1] : '') + (h ? '@' + Math.round(Number(h[1])) : ''));
+    return '';
+  });
+  return _syncWordsOf(t) + '\u0001' + look + '\u0001' + pics.join('\n');
+}
+function _syncKeptSig(v) {
+  var list = v;
+  if (typeof list === 'string') {
+    var s = list.trim();
+    if (s.charAt(0) !== '[') return _syncHtmlSig(list);
+    try { list = JSON.parse(s); } catch (e) { return _syncHtmlSig(list); }
+  }
+  if (list == null) return '';
+  if (!Array.isArray(list)) return typeof list === 'object' ? JSON.stringify(_coCanon(list)) : _syncHtmlSig(String(list));
+  var blank = 'html:' + _syncHtmlSig('');
+  return list.map(function (b) {
+    if (b == null || typeof b !== 'object') return 'html:' + _syncHtmlSig(b == null ? '' : String(b));
+    var pic = b.storagePath || b.data || b.url || b.src || '';
+    if (b.type === 'image' || (!b.type && pic && b.content == null)) {
+      return 'img:' + _syncPicKey(pic) + '|' + _syncWordsOf(b.caption) + '|' + (Number(b.height) > 0 ? Math.round(Number(b.height)) : '');
+    }
+    return 'html:' + _syncHtmlSig(b.content != null ? b.content : (b.html != null ? b.html : (b.text != null ? b.text : '')));
+  }).filter(function (x) { return x !== blank; }).join('\u0002');
+}
+function _syncWhyLeft(now, then) {
+  var words = function (v) {
+    if (typeof v === 'string' && v.trim().charAt(0) === '[') { try { v = JSON.parse(v); } catch (e) {} }
+    return _syncWordsOf(_qaTextOf(v));
+  };
+  return words(now) !== words(then) ? 'its words' : 'its pictures, their captions or sizes, or its look';
+}
 function _syncStill(now, then) {
   if (_coSame(now, then)) return true;
-  return typeof now === 'string' && typeof then === 'string' && _qaSameValue(now, then);
+  if (typeof now === 'string' && typeof then === 'string' && _qaSameValue(now, then)) return true;
+  return _syncKeptSig(now) === _syncKeptSig(then);
 }
 async function _syncApply(assessmentId, accepted, zip) {
   var a = (S.data.assessments || []).find(function (x) { return x.id === assessmentId; });
@@ -64376,7 +64621,7 @@ async function _syncApply(assessmentId, accepted, zip) {
           _kept = 0; _left = [];
           sets.forEach(function (x) {
             var now = x.cf ? _qaObj(row.custom_fields)[x.cf] : row[x.col];
-            if (!_syncStill(now, x.ch.current)) { _left.push(x); return; }
+            if (!_syncStill(now, x.ch.current)) { x.why = _syncWhyLeft(now, x.ch.current); _left.push(x); return; }
             if (x.cf) { if (!cfv) cfv = _coCopy(_qaObj(row.custom_fields)); cfv[x.cf] = x.value; }
             else p[x.col] = x.value;
             _kept++;
@@ -64393,6 +64638,8 @@ async function _syncApply(assessmentId, accepted, zip) {
         _left.forEach(function (x) {
           x.ch._left = true;
           _syncLeft.push({ what: (x.ch.label || x.col || 'A field') + ' on "' + (it.label || 'a finding') + '"' });
+
+          try { console.warn('[sync] left out: ' + (x.ch.label || x.col) + ' on "' + (it.label || 'a finding') + '": ' + (x.why || 'it') + ' changed here since the document was read'); } catch (e) {}
         });
         applied += _kept;
       }
@@ -70477,6 +70724,17 @@ function _setHideCardSaves() {
     if (!card || card.querySelector('canvas')) return;
     b.classList.add('set-card-save');
   });
+
+  Array.prototype.forEach.call(sc.querySelectorAll('button.set-card-save'), function (b) {
+    var note = b.previousElementSibling;
+    if (!note && b.parentElement && b.parentElement.firstElementChild === b) note = b.parentElement.previousElementSibling;
+    if (note && !note.children.length && /^\s*Saves the /.test(note.textContent || '')) note.classList.add('set-card-save');
+
+    var box = b.parentElement;
+    if (box && !box.classList.contains('card-body') && !box.classList.contains('card') && box.id !== 'wizStepBody'
+      && Array.prototype.every.call(box.children, function (k) { return k.classList.contains('set-card-save'); })
+      && !Array.prototype.some.call(box.childNodes, function (n) { return n.nodeType === 3 && /\S/.test(n.nodeValue || ''); })) box.classList.add('set-card-save');
+  });
 }
 function _setCardsState(fn) {
   var sc = _setScope();
@@ -70654,6 +70912,7 @@ function _setGoTab(tab) {
 }
 function _setBarSync() {
   try { _setHideCardSaves(); } catch (e) {}
+  try { _wizDress(); } catch (e) {}
   var bar = document.getElementById('setDirtyBar');
   var on = _setIsDirty() && S.page === 'settings' && !S.wizard && !S.modal;
   if (on && !bar) {

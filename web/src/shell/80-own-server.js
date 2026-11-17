@@ -152,10 +152,12 @@ function _reporterShowLink(email, link, expires) {
 // password, then the authenticator, whatever the settings say (a backup from
 // Pental carries the portal's) and before they have loaded ([stated] Arian:
 // "remove the oauth google and microsoft or anything else that doesnt work
-// with report").
+// with report"). Nor the portal's notice on a fresh portal that a link to set
+// the password was emailed (0.1.43): the tool emails nothing, and its first
+// administrator chooses a password with the setup code before any sign-in.
 function renderLogin() {
   var was = window._dbBranding;
-  window._dbBranding = Object.assign({}, was || {}, { password_login_enabled: true, sso_google_enabled: false, sso_microsoft_enabled: false });
+  window._dbBranding = Object.assign({}, was || {}, { password_login_enabled: true, sso_google_enabled: false, sso_microsoft_enabled: false, fresh: false });
   var h;
   try { h = renderLogin__portal(); } finally { window._dbBranding = was; }
   return _rpSignInBrand(h);
