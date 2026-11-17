@@ -62759,8 +62759,10 @@ function _pntlMergeRpr(rPr, style) {
 
   return '<w:rPr>' + add + body + '</w:rPr>';
 }
-function _pntlApplyScalarBookmarks(docXml, startId) {
+var _PNTL_EVERY_PLACE = /^f_[0-9a-f]{8,16}_status$/;
+function _pntlApplyScalarBookmarks(docXml, startId, rename) {
   var id = startId || 900000;
+  var fieldAt = {}, extra = {};
 
   var chosen = {};
   {
@@ -62778,6 +62780,7 @@ function _pntlApplyScalarBookmarks(docXml, startId) {
       var pPr = pAt > -1 ? /^<w:p\b[^>]*>\s*<w:pPr>([\s\S]*?)<\/w:pPr>/.exec(docXml.slice(pAt, sm.index)) : null;
       var inHeading = !!(pPr && /<w:pStyle w:val="Heading[^"]*"|<w:outlineLvl\b/.test(pPr[1]));
       var rank = (inField ? 0 : 2) - (inCell ? 1 : 0) + (inHeading && !inField ? 1 : 0);
+      fieldAt[sm.index] = inField;
       var cur = chosen[sm[1]];
       if (!cur || rank > cur.rank) chosen[sm[1]] = { at: sm.index, rank: rank };
     }
@@ -62789,9 +62792,17 @@ function _pntlApplyScalarBookmarks(docXml, startId) {
     if (body.indexOf('</w:p>') > -1 || body.indexOf('<w:bookmark') > -1
         || body.indexOf('</w:tc>') > -1 || body.indexOf('</w:tr>') > -1) return body;
 
-    if (used[name]) return body;
-    if (chosen[name] && chosen[name].at !== offset) return body;
-    used[name] = 1;
+    var bmName = name;
+    if (_PNTL_EVERY_PLACE.test(name) && chosen[name] && chosen[name].at !== offset) {
+      if (fieldAt[offset]) return body;
+      extra[name] = (extra[name] || 1) + 1;
+      bmName = name + '_' + extra[name];
+    } else {
+      if (used[name]) return body;
+      if (chosen[name] && chosen[name].at !== offset) return body;
+      used[name] = 1;
+    }
+    if (rename) bmName = rename(bmName);
     id++;
 
     var rPr = '';
@@ -62804,7 +62815,7 @@ function _pntlApplyScalarBookmarks(docXml, startId) {
     }
     var valRpr = _pntlMergeRpr(rPr, _pntlScalarStyle[name]);
     return '</w:t></w:r>'
-      + '<w:bookmarkStart w:id="' + id + '" w:name="PNTL_' + name + '"/>'
+      + '<w:bookmarkStart w:id="' + id + '" w:name="PNTL_' + bmName + '"/>'
       + '<w:r>' + valRpr + '<w:t xml:space="preserve">' + body + '</w:t></w:r>'
       + '<w:bookmarkEnd w:id="' + id + '"/>'
       + '<w:r>' + rPr + '<w:t xml:space="preserve">';
@@ -64396,6 +64407,109 @@ function _syncRetestPatch(row, sets) {
   return p;
 }
 var _SYNC_RT_KINDS = { retest_results: 1, retest_status: 1, retest_date: 1 };
+function _syncAfterOf(after, id, patch, title, created) {
+  var k = patch.retest_status, t = title || 'finding';
+  if (k && _RETEST_OUTCOMES[k]) after.lines.push('Retest completed - ' + _RETEST_OUTCOMES[k].words + ': ' + t);
+  else if (created && k === 'requested') after.lines.push('Retest requested for: ' + t);
+  if (patch.status === 'remediated') after.fixed.push(id);
+}
+async function _syncAfterApply(assessmentId, after) {
+  for (var i = 0; i < after.lines.length; i++) {
+    try { if (typeof addTimelineEvent === 'function') await addTimelineEvent(assessmentId, after.lines[i]); } catch (e) {  }
+  }
+
+  var open = after.fixed.filter(function (id) {
+    return (S.data.finding_tickets || []).some(function (t) { return t.finding_id === id && ['closed', 'closed_unfixed'].indexOf(t.mapped_status || '') < 0; });
+  })[0];
+  if (open && typeof _ticketsAfterRemediation === 'function') _ticketsAfterRemediation(open);
+}
+function _pntlRegionNames(regions, f, suffix) {
+  var first = _pntlRegionName(regions, f, suffix);
+  if (!first) return [];
+  var re = new RegExp('^' + first.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '_(\\d+)$'), more = [];
+  Object.keys(regions).forEach(function (n) { var m = re.exec(n); if (m) more.push([+m[1], n]); });
+  more.sort(function (p, q) { return p[0] - q[0]; });
+  return [first].concat(more.map(function (p) { return p[1]; }));
+}
+var _SYNC_STATUS_WORDS = { open: 'Open', remediated: 'Remediated', part_remediated: 'Part remediated', accepted: 'Accepted' };
+var _SYNC_STATUS_LIST = '(Open, Remediated, Part remediated, Accepted)';
+function _syncStatusChange(regions, f, note, retest) {
+  var out = { found: false, change: null };
+  if (typeof _ffEnabled === 'function' && !_ffEnabled('status')) return out;
+  var names = _pntlRegionNames(regions, f, 'status');
+  if (!names.length) return out;
+  out.found = true;
+  var who = f.title || '(untitled)', cur = _ffImportStatus(f.status) || 'open';
+  var lbl = (typeof _ffLabel === 'function' && _ffLabel('status')) || 'Status';
+  var said = [], keys = [], at = '';
+  names.forEach(function (nm) {
+    var t = _syncPlainOf(regions[nm]).replace(/\s+/g, ' ').trim();
+    var k = _ffImportStatus(t);
+    if (k === cur) return;
+    said.push(t);
+    if (k && keys.indexOf(k) < 0) keys.push(k);
+    if (k && !at) at = nm;
+  });
+  if (!said.length) return out;
+  if (said.some(function (t) { return !t; })) { note(who, lbl, 'it was emptied, and a finding keeps its status'); return out; }
+  var bad = said.filter(function (t) { return !_ffImportStatus(t); })[0];
+  if (bad) { note(who, lbl, '"' + bad + '" is not one of its statuses ' + _SYNC_STATUS_LIST); return out; }
+  if (keys.length > 1) {
+    note(who, lbl, 'the document gives it ' + keys.length + ' statuses (' + keys.map(function (k) { return _SYNC_STATUS_WORDS[k]; }).join(' and ') + '), so none was written');
+    return out;
+  }
+  var key = keys[0];
+  if (retest && _RETEST_OUTCOMES[retest.proposed]) {
+    var follows = _RETEST_OUTCOMES[retest.proposed].status;
+    if (follows !== key) note(who, lbl, '"' + said[0] + '" is not the status its retest result gives it (' + _SYNC_STATUS_WORDS[follows] + '), which is what is written');
+    return out;
+  }
+  out.change = { field: 'status', label: lbl, col: 'status', kind: 'status', sfx: at.replace(/^[a-z]+_[0-9a-f]+_/, ''),
+    current: f.status, proposed: key, words: _SYNC_STATUS_WORDS[key] };
+  return out;
+}
+function _syncNewFindingSaid(p) {
+  if (!p) return '';
+  var s = '';
+  if (p.status && p.status !== 'open') s += ', ' + _SYNC_STATUS_WORDS[p.status];
+  if (p.retest_status === 'requested') s += ', a retest requested';
+  else if (p.retest_status && _RETEST_OUTCOMES[p.retest_status]) {
+    s += ', retested: ' + _RETEST_OUTCOMES[p.retest_status].label + (p.retest_completed_at ? ', ' + fmtDate(p.retest_completed_at) : ', today');
+  }
+  return s;
+}
+function _syncNewFindingRetest(g, regions, imgFor, who, note) {
+  var rec = {};
+  var plain = function (s) { return g[s] ? _syncPlainOf(regions[g[s]]).replace(/\s+/g, ' ').trim() : ''; };
+  var sts = Object.keys(g).filter(function (s) { return /^status(?:_\d+)?$/.test(s); })
+    .sort(function (p, q) { return (+(p.split('_')[1] || 1)) - (+(q.split('_')[1] || 1)); })
+    .map(plain).filter(Boolean);
+  var sKeys = [], badS = '';
+  sts.forEach(function (t) { var k = _ffImportStatus(t); if (!k) { if (!badS) badS = t; } else if (sKeys.indexOf(k) < 0) sKeys.push(k); });
+  if (badS) note(who, 'Status', '"' + badS + '" is not one of its statuses ' + _SYNC_STATUS_LIST + ', so it is created Open');
+  else if (sKeys.length > 1) note(who, 'Status', 'the document gives it ' + sKeys.length + ' statuses (' + sKeys.map(function (k) { return _SYNC_STATUS_WORDS[k]; }).join(' and ') + '), so it is created Open');
+  else if (sKeys.length === 1) rec.status = sKeys[0];
+  var rsw = plain('rts');
+  var rk = rsw ? _syncRetestOutcome(rsw) : '';
+  var asked = !rk && /^retest requested\.?$/i.test(rsw);
+  var html = g.rt ? regions[g.rt] : '';
+  var words = !!html && (!!_syncPlainOf(html).trim() || /<(img|table|hr)\b/i.test(String(html)));
+  if (!rk && !asked) {
+    if (rsw) note(who, 'Retest status', '"' + rsw + '" is not one of its results (Remediated, Part remediated, Not remediated, Risk accepted), so it is created without its retest');
+    else if (words) note(who, 'Retest status', 'the document gives its retest no result, so it is created without its retest');
+    return rec;
+  }
+  rec.retest_status = rk || 'requested';
+  rec.retest_requested = !!asked;
+  if (rk) {
+    if (!rec.status && !badS && sKeys.length < 2) rec.status = _RETEST_OUTCOMES[rk].status;
+    var dw = plain('rtd'), iso = dw ? _fsDateIso(dw) : '';
+    if (dw && !iso) note(who, 'Retest date', '"' + dw + '" ' + (_fsDateTwoWays(dw) ? 'reads as two dates' : 'is not a date') + ', so the retest is dated the day it is brought in');
+    if (iso) rec.retest_completed_at = _syncRetestDateAt(iso, null);
+  }
+  if (words) { rec.retest_results = html; rec._rtImgs = imgFor ? imgFor(g.rt) : []; }
+  return rec;
+}
 function _syncBuildProposals(regions, a, imgFor) {
   var items = [], seen = {};
   var vals = (typeof _smParseVals === 'function') ? _smParseVals(a) : {};
@@ -64575,6 +64689,10 @@ function _syncBuildProposals(regions, a, imgFor) {
     var _rtc = _syncRetestChanges(regions, f, imgFor, _noteValue);
     if (_rtc.found) found = true;
     _rtc.changes.forEach(function (c) { changes.push(c); });
+
+    var _stc = _syncStatusChange(regions, f, _noteValue, _rtc.changes.filter(function (c) { return c.kind === 'retest_status'; })[0]);
+    if (_stc.found) found = true;
+    if (_stc.change) changes.push(_stc.change);
     if (found) seen[f.id] = true;
     if (changes.length) items.push({ kind: 'finding', id: f.id, label: f.title || '(untitled)', changes: changes });
   });
@@ -64684,6 +64802,8 @@ function _syncBuildProposals(regions, a, imgFor) {
     var evName = g[_PNTL_FIELD.evidence];
     var evImgs = (evName && imgFor) ? imgFor(evName) : [];
     if (evName) rec._evidence = { html: regions[evName], images: evImgs };
+
+    Object.assign(rec, _syncNewFindingRetest(g, regions, imgFor, title, _noteValue));
     items.push({ kind: 'newFinding', label: title, proposed: rec, images: evImgs });
   });
 
@@ -64802,6 +64922,7 @@ async function _syncApply(assessmentId, accepted, zip) {
   var a = (S.data.assessments || []).find(function (x) { return x.id === assessmentId; });
   if (!a) throw new Error('Assessment not found');
   var applied = 0, secSets = [];
+  var _after = { lines: [], fixed: [] };
   _syncLeft = [];
 
   var _newPhases = accepted.filter(function (x) { return x.kind === 'addPhase'; });
@@ -64876,6 +64997,8 @@ async function _syncApply(assessmentId, accepted, zip) {
           sets.forEach(function (x) { x.ch._left = true; });
           continue;
         }
+
+        if (fr.patch) _syncAfterOf(_after, it.id, fr.patch, (fr.row && fr.row.title) || it.label);
         _left.forEach(function (x) {
           x.ch._left = true;
           _syncLeft.push({ what: (x.ch.label || x.col || 'A field') + ' on "' + (it.label || 'a finding') + '"' });
@@ -64923,6 +65046,18 @@ async function _syncApply(assessmentId, accepted, zip) {
       data.severity = n.severity || 'medium';
       if (typeof n.cvss === 'number') data.cvss = n.cvss;
       if (n.refs && n.refs.length) data.refs = n.refs;
+
+      if (n.status) data.status = n.status;
+      if (n.retest_status) {
+        data.retest_status = n.retest_status;
+        data.retest_requested = !!n.retest_requested;
+        if (n.retest_requested) data.retest_requested_at = new Date().toISOString();
+        else {
+          data.retest_completed_at = n.retest_completed_at || new Date().toISOString();
+          data.retest_completed_by = (S.profile && S.profile.name) || 'Tester';
+        }
+        if (n.retest_results) data.retest_results = _retestUnmark(await _syncRichImages(n.retest_results, n._rtImgs, zip, assessmentId, 'sync'));
+      }
       var res = await supabaseClient.from('findings').insert(data).select();
       if (res && res.error) { toast('Could not add "' + data.title + '"', 'error'); console.error('[sync] insert failed', res.error); continue; }
       var rec2 = res && res.data && res.data[0];
@@ -64932,10 +65067,13 @@ async function _syncApply(assessmentId, accepted, zip) {
           if (ev2.length) { await api('findings', 'update', { evidence: ev2 }, { id: rec2.id }); rec2.evidence = ev2; }
         }
         S.data.findings.push(rec2);
+        _syncAfterOf(_after, rec2.id, data, data.title, true);
       }
       applied++;
     }
   }
+
+  await _syncAfterApply(assessmentId, _after);
 
   if (_addPh.length || secSets.length) {
     var _secKept = 0, _secLeft = [];
@@ -65259,7 +65397,7 @@ function renderSyncReviewModal() {
       : it.kind === 'removeFinding'
         ? 'Not in the document. Choose whether to keep it or delete it'
       : it.kind === 'newFinding'
-        ? ('Added to the assessment' + ((it.images || []).length ? ' with ' + it.images.length + ' screenshot(s)' : ''))
+        ? ('Added to the assessment' + _syncNewFindingSaid(it.proposed) + ((it.images || []).length ? ' with ' + it.images.length + ' screenshot(s)' : ''))
         : (it.changes || []).map(function (c) { return c.label + (c.clears ? ' (emptied)' : '') + (c.settles ? ' (' + _syncSettlesNote(c) + ')' : ''); }).join(', ');
     var _isClear = it.kind === 'section' ? !!it.clears
       : (it.kind === 'finding' && (it.changes || []).length && (it.changes || []).every(function (c) { return c.clears; }));
@@ -65315,6 +65453,9 @@ function renderSyncReviewModal() {
       r += '<div class="sync-preview">' + _syncPreviewHtml(it.proposed.description || '<p>(no description in the document)</p>', false, _figP.total,
         (it.proposed._imgs || {}).description) + '</div>';
       if (it.proposed._evidence) r += '<div class="sync-preview">' + _syncPreviewHtml(it.proposed._evidence, true, _figP.total + _figCount(it.proposed.description)) + '</div>';
+
+      if (it.proposed.retest_results) r += '<div style="margin-top:0.4rem"><b>Retest results</b></div><div class="sync-preview">'
+        + _syncPreviewHtml(it.proposed.retest_results, false, _figP.total, it.proposed._rtImgs) + '</div>';
     } else if (it.clears) {
       r += 'Emptied in the document. Ticking this clears the section here too.';
     } else r += '<div class="sync-preview">' + _syncPreviewHtml(it.id === 'executive_summary' ? _execFigs(it.proposed) : it.proposed, false,
@@ -66056,7 +66197,38 @@ function _pntlRefreshFromPortal(zip, a) {
     }
     zip.file('word/document.xml', docXml);
   }
+
+  try { _pntlRefreshHf(zip, typeof _rtDay === 'string' ? _rtDay : '', out); } catch (e) { try { console.warn('[sync] the headers and footers were not brought up to date', e); } catch (e2) {} }
   return out;
+}
+function _pntlRefreshHf(zip, day, out) {
+  var names = Object.keys(zip.files || {}).filter(function (n) { return /^word\/(?:header|footer)\d*\.xml$/.test(n); }).sort();
+  names.forEach(function (n, i) {
+    var f = zip.file(n);
+    if (!f) return;
+    var x = f.asText(), y = x, dated = 0;
+    var tag = (/footer/.test(n) ? 'f' : 'h') + ((/(\d+)\.xml$/.exec(n) || [])[1] || '0');
+    if (y.indexOf(_PNTL_B1) >= 0 || y.indexOf(_PNTL_B3) >= 0) {
+      var mx = 0;
+      (y.match(/<w:bookmark(?:Start|End)\b[^>]*\bw:id="(\d+)"/g) || []).forEach(function (t) { mx = Math.max(mx, +(/w:id="(\d+)"/.exec(t)[1])); });
+      y = _pntlApplyScalarBookmarks(y, Math.max(960000 + i * 1000, mx + 1), function (bm) { return bm + '_' + tag; });
+    }
+    if (day) {
+      var reg = _pntlRegions(y), sp = _pntlRegionSpans(y), ed = [];
+      Object.keys(sp).forEach(function (nm) {
+        if (!/^d_(?:retest|vhretest)_[hf]\d+$/.test(nm)) return;
+        var inner = reg[nm];
+        if (_pntlRegionIsRich(inner) || String(_pntlInlineText(inner) || '').trim() === day) return;
+        var xml = _pntlInlineReplacement(inner, day);
+        if (xml) ed.push({ start: sp[nm].start, end: sp[nm].end, xml: xml });
+      });
+      ed.sort(function (p, q) { return q.start - p.start; }).forEach(function (e) { y = y.slice(0, e.start) + e.xml + y.slice(e.end); dated++; });
+    }
+    if (y === x || _pntlXmlProblem(y) || _dcrXmlFault(y)) return;
+    zip.file(n, y);
+    if (dated) { out.updated += dated; out.fields.push('Retest date'); }
+    else out.healed = true;
+  });
 }
 async function _syncRecordTrail(assessmentId, opts) {
   var parts = [];
@@ -66230,10 +66402,10 @@ function _rtMyers(a, b, eq) {
   return pairs.reverse();
 }
 function _rtBody(x) {
-  var b = /<w:body\b[^>]*>/.exec(x);
+  var b = /<w:(body|hdr|ftr)\b[^>]*>/.exec(x);
   if (!b) return null;
-  var close = x.lastIndexOf('</w:body>');
-  return close > b.index ? { tag: 'w:body', start: b.index, end: close + 9, inner: b.index + b[0].length, innerEnd: close } : null;
+  var shut = '</w:' + b[1] + '>', close = x.lastIndexOf(shut);
+  return close > b.index ? { tag: 'w:' + b[1], start: b.index, end: close + shut.length, inner: b.index + b[0].length, innerEnd: close } : null;
 }
 function _rtLike(x0, e0, x1, e1, n0, n1) {
   if (e0.tag !== e1.tag) return false;
@@ -66550,6 +66722,109 @@ async function _rtTwoReports(a, plan) {
     return { F: F, F0: F0 };
   } finally { _docxSevNow = sevWas; _docxStyleOverride = styleWas; }
 }
+function _rtHfParts(z) {
+  var out = {};
+  var df = z.file('word/document.xml');
+  if (!df) return out;
+  var x = df.asText(), rels = {};
+  var rf = z.file('word/_rels/document.xml.rels');
+  ((rf ? rf.asText() : '').match(/<Relationship\b[^>]*\/?>/g) || []).forEach(function (r) {
+    var id = /\bId="([^"]+)"/.exec(r), tg = /\bTarget="([^"]+)"/.exec(r);
+    if (id && tg) rels[id[1]] = 'word/' + tg[1].replace(/^\/?word\//, '').replace(/^\.\//, '');
+  });
+  var si = 0, re = /<w:sectPr\b[^>]*>([\s\S]*?)<\/w:sectPr>/g, m;
+  while ((m = re.exec(x))) {
+    var rr = /<w:(header|footer)Reference\b[^>]*\/>/g, r2;
+    while ((r2 = rr.exec(m[1]))) {
+      var ty = (/\bw:type="([^"]+)"/.exec(r2[0]) || [])[1] || 'default';
+      var rid = (/\br:id="([^"]+)"/.exec(r2[0]) || [])[1];
+      if (rid && rels[rid] && z.file(rels[rid])) out[si + '|' + r2[1] + '|' + ty] = rels[rid];
+    }
+    si++;
+  }
+  return out;
+}
+function _rtBringHf(made, zip, ctx, res, fail) {
+  var out = [], p0 = _rtHfParts(made.F0), pF = _rtHfParts(made.F), pU = _rtHfParts(zip), done = {};
+  Object.keys(p0).forEach(function (key) {
+    var n0 = p0[key], nF = pF[key] || n0, nU = pU[key] || (zip.file(n0) ? n0 : '');
+    if (!nU || done[nU]) return;
+    var f0 = made.F0.file(n0), fF = made.F.file(nF), fU = zip.file(nU);
+    if (!f0 || !fF || !fU) return;
+    var x0 = f0.asText(), xF = fF.asText();
+    if (x0 === xF) return;
+    done[nU] = 1;
+    var xu = fU.asText();
+    var b0 = _rtBody(x0), bF = _rtBody(xF), bU = _rtBody(xu);
+    if (!b0 || !bF || !bU) return;
+    var m0 = _rtBmNames(x0), mF = _rtBmNames(xF), mU = _rtBmNames(xu);
+    var ops = [];
+    if (!_rtDelta(x0, b0, xF, bF, [], ops, m0, mF)) { res.left.push({ what: 'date', why: 'place' }); return; }
+    if (!ops.length) return;
+    var get = _rtMapper(x0, xu, m0, mU);
+    var marksU = {};
+    Object.keys(mU).forEach(function (id) { if (/^PNTL_/.test(mU[id])) marksU[mU[id].slice(5)] = 1; });
+    var startOf = function (c) {
+      var at = c.cu.inner;
+      for (var q = 0; q < c.ku.length && _RT_PROPS[c.ku[q].tag]; q++) at = c.ku[q].end;
+      return at;
+    };
+    var anchorAt = function (c, after) {
+      for (var i = after; i >= 0; i--) {
+        if (c.map[i] >= 0) return c.ku[c.map[i]].end;
+        var e0 = c.k0[i];
+        if (!_RT_FIXED[e0.tag] && _rtText(x0.slice(e0.start, e0.end))) return -1;
+      }
+      return startOf(c);
+    };
+    var edits = [];
+    ops.forEach(function (op) {
+      if (op.kind === 'add') {
+        var c = get(op.path), pos = c ? anchorAt(c, op.after) : -1;
+        if (pos < 0) { fail(op, 'place'); return; }
+        var nxt = c.ku.filter(function (e) { return e.start >= pos; }).slice(0, op.tags.length);
+        var same = nxt.length === op.tags.length && nxt.every(function (e, i) { return e.tag === op.tags[i] && _rtText(xu.slice(e.start, e.end)) === op.texts[i]; });
+        if (same) return;
+        var twin = nxt.length === op.tags.length && op.texts.join('').length > 0
+          && nxt.every(function (e, i) { return e.tag === op.tags[i] && _rtMask(_rtText(xu.slice(e.start, e.end))) === _rtMask(op.texts[i]); });
+        var gone = {};
+        if (twin) nxt.forEach(function (e) { _rtMarksIn(xu.slice(e.start, e.end), mU).forEach(function (n) { gone[n] = 1; }); });
+        edits.push({ start: pos, end: twin ? nxt[nxt.length - 1].end : pos, xml: op.xml, op: op, keep: function (n) { return !marksU[n] || !!gone[n]; } });
+        return;
+      }
+      var cp = get(op.path.slice(0, -1)), ui = cp ? cp.map[op.path[op.path.length - 1]] : -1;
+      if (!cp || ui == null || ui < 0) { fail(op, 'place'); return; }
+      var eu = cp.ku[ui], fu = xu.slice(eu.start, eu.end);
+      if (_rtText(fu) !== op.was) { fail(op, 'edited'); return; }
+      if (op.kind === 'drop') { edits.push({ start: eu.start, end: eu.end, xml: '', op: op, keep: function () { return false; } }); return; }
+      var goneS = {};
+      _rtMarksIn(fu, mU).forEach(function (n) { goneS[n] = 1; });
+      edits.push({ start: eu.start, end: eu.end, xml: op.xml, op: op, keep: function (n) { return !marksU[n] || !!goneS[n]; } });
+    });
+    if (!edits.length) return;
+    edits.forEach(function (e, i) { e.idx = i; });
+    edits.sort(function (p, q) { return q.start - p.start || q.end - p.end || q.idx - p.idx; });
+
+    var mx = 0;
+    (xu.match(/<w:bookmark(?:Start|End)\b[^>]*\bw:id="(\d+)"/g) || []).forEach(function (t) { mx = Math.max(mx, +(/w:id="(\d+)"/.exec(t)[1])); });
+    if (ctx.bmNext <= mx) ctx.bmNext = mx + 1;
+    var nx = xu, floor = Infinity;
+    edits.forEach(function (e) {
+      if (e.end > floor) { fail(e.op, 'place'); return; }
+      if (/\br:(?:embed|id|link|pict)="/.test(e.xml || '')) { fail(e.op, 'part'); return; }
+      var piece = e.xml ? _rtImport(e.xml, ctx, e.keep) : '';
+      if (ctx.bad) { fail(e.op, 'part'); ctx.bad = ''; return; }
+      var cand = nx.slice(0, e.start) + piece + nx.slice(e.end);
+      if (_pntlXmlProblem(cand)) { fail(e.op, 'place'); return; }
+      nx = cand;
+      floor = Math.min(floor, e.start);
+      if (e.op.owner === 'date') { if (res.put.indexOf('date') < 0) res.put.push('date'); }
+      else res.changed++;
+    });
+    if (nx !== xu) out.push({ name: nU, xml: nx });
+  });
+  return out;
+}
 async function _rtBringRetest(zip, a) {
   var res = { put: [], changed: 0, left: [], other: 0, why: '', wrote: false };
   var df = zip.file('word/document.xml');
@@ -66563,7 +66838,15 @@ async function _rtBringRetest(zip, a) {
   var summaryOn = !!(a.retest_summary && _cfHasContent(a.retest_summary))
     && (typeof _smEnabled !== 'function' || _smEnabled('retest_summary'))
     && (typeof _smInReport !== 'function' || _smInReport('retest_summary'));
-  if (!retested.length && !summaryOn) return res;
+
+  var statusMoved = findings.filter(function (f) {
+    var nm = 'f_' + _pntlKey(f.id) + '_status';
+    if (regions[nm] == null) return false;
+    var sk = _ffImportStatus(_pntlInlineText(regions[nm]));
+    return !!sk && sk !== (_ffImportStatus(f.status) || 'open');
+  });
+  res.status = [];
+  if (!retested.length && !summaryOn && !statusMoved.length) return res;
   var uText = _rtText(xu);
   var plan = { off: {}, statusAs: {}, noSummary: false, noDate: false }, stale = {}, need = false;
   retested.forEach(function (f) {
@@ -66601,6 +66884,15 @@ async function _rtBringRetest(zip, a) {
 
   var anyMarked = retested.some(function (f) { var k2 = _pntlKey(f.id); return ['_rt', '_rts', '_rtd'].some(function (sx) { return ('f_' + k2 + sx) in regions; }); });
   if (!('d_retest' in regions) && !('d_vhretest' in regions) && findings.some(function (f) { return !!f.retest_completed_at; }) && (need || !anyMarked)) { plan.noDate = true; need = true; }
+
+  var onlyStatus = {}, needRt = need;
+  statusMoved.forEach(function (f) {
+    if (plan.statusAs[f.id] || plan.off[f.id] || stale[f.id]) return;
+    plan.statusAs[f.id] = _ffImportStatus(_pntlInlineText(regions['f_' + _pntlKey(f.id) + '_status']));
+    onlyStatus[_pntlKey(f.id)] = f.title || 'Finding';
+    need = true;
+  });
+  res.onlyStatus = need && !needRt;
   if (!need) return res;
 
   var made;
@@ -66716,7 +67008,9 @@ async function _rtBringRetest(zip, a) {
       edits.push({ start: spU[nm].start, end: spU[nm].end, xml: xml, op: { kind: 'mark', owner: 'f:' + k }, keep: function () { return false; } });
     });
   });
-  if (!edits.length) return res;
+
+  var hfOut = _rtBringHf(made, zip, ctx, res, fail);
+  if (!edits.length && !hfOut.length) return res;
 
   edits.forEach(function (e, i) { e.idx = i; });
   edits.sort(function (p, q) { return q.start - p.start || q.end - p.end || q.idx - p.idx; });
@@ -66733,28 +67027,38 @@ async function _rtBringRetest(zip, a) {
     if (/<w:pStyle w:val="[^"]*(?:Heading|heading)[^"]*"/.test(piece) || /<w:outlineLvl\b/.test(piece)) heads = true;
     var l = label(e.op.owner);
     if ((e.op.kind === 'add' || e.op.kind === 'mark') && l) { if (res.put.indexOf(l) < 0) res.put.push(l); }
-    else res.changed++;
+    else {
+      res.changed++;
+
+      var ok2 = /^f:(.+)$/.exec(e.op.owner || '');
+      if (ok2 && onlyStatus[ok2[1]] && res.status.indexOf(onlyStatus[ok2[1]]) < 0) res.status.push(onlyStatus[ok2[1]]);
+    }
   });
-  if (out === xu) return res;
+  if (out === xu && !hfOut.length) return res;
   var parts = ['word/_rels/document.xml.rels', '[Content_Types].xml', 'word/numbering.xml', 'word/styles.xml'];
+  hfOut.forEach(function (h) { parts.push(h.name); });
   var was = {};
   parts.forEach(function (n) { var f = zip.file(n); was[n] = f ? f.asText() : null; });
   var mediaWas = {};
   Object.keys(zip.files || {}).forEach(function (n) { mediaWas[n] = 1; });
   try {
-    out = _rtRootNs(_dcrEnsureRootNs(out), xF);
-    if (heads && typeof _dcrMarkTocFieldsDirty === 'function') out = _dcrMarkTocFieldsDirty(out);
-    var fault = _dcrXmlFault(out) || _pntlXmlProblem(out);
-    if (fault) throw new Error(fault);
+    if (out !== xu) {
+      out = _rtRootNs(_dcrEnsureRootNs(out), xF);
+      if (heads && typeof _dcrMarkTocFieldsDirty === 'function') out = _dcrMarkTocFieldsDirty(out);
+      var fault = _dcrXmlFault(out) || _pntlXmlProblem(out);
+      if (fault) throw new Error(fault);
+    }
+    hfOut.forEach(function (h) { var hf = _dcrXmlFault(h.xml) || _pntlXmlProblem(h.xml); if (hf) throw new Error(h.name + ': ' + hf); });
     _rtImportDone(ctx);
-    zip.file('word/document.xml', out);
+    if (out !== xu) zip.file('word/document.xml', out);
+    hfOut.forEach(function (h) { zip.file(h.name, h.xml); });
     res.wrote = true;
   } catch (e) {
     try { console.error('[retest] could not be written into the uploaded report', e); } catch (e2) {}
     zip.file('word/document.xml', snap.doc);
     parts.forEach(function (n) { if (was[n] != null) zip.file(n, was[n]); else if (zip.file(n)) zip.remove(n); });
     Object.keys(zip.files || {}).forEach(function (n) { if (!mediaWas[n]) zip.remove(n); });
-    res.put = []; res.changed = 0; res.wrote = false;
+    res.put = []; res.changed = 0; res.wrote = false; res.status = [];
     res.why = 'it could not be written into this document without breaking it';
   }
   return res;
@@ -66762,12 +67066,19 @@ async function _rtBringRetest(zip, a) {
 window._rtBringRetest = _rtBringRetest;
 function _rtSaid(r) {
   if (!r) return;
-  if (r.why) { toast('The retest could not be put into the uploaded report: ' + r.why + '. Make the report again to have it in, or add it in Word.', 'info', 12000); return; }
+  if (r.why) {
+
+    if (r.onlyStatus) { toast('The statuses changed here could not be written into the uploaded report: ' + r.why + '.', 'info', 12000); return; }
+    toast('The retest could not be put into the uploaded report: ' + r.why + '. Make the report again to have it in, or add it in Word.', 'info', 12000); return;
+  }
   var parts = [];
   var fs = r.put.filter(function (p) { return p !== 'summary' && p !== 'date'; });
   if (fs.length) parts.push(fs.length === 1 ? 'the retest of ' + fs[0] : 'the retests of ' + fs.length + ' findings');
   if (r.put.indexOf('summary') >= 0) parts.push('the retest summary');
   if (r.put.indexOf('date') >= 0) parts.push('the retest date');
+
+  var st = r.status || [];
+  if (st.length) parts.push(st.length === 1 ? 'the status of ' + st[0] : 'the statuses of ' + st.length + ' findings');
   if (parts.length) toast('Written into the report: ' + parts.slice(0, -1).join(', ') + (parts.length > 1 ? ' and ' : '') + parts[parts.length - 1], 'success');
   var why = { edited: 'changed in Word', place: 'no place for it in this document', part: 'it holds something this document cannot take', old: 'already in it from before, so left as it is', gone: 'not in the report made now',
     elsewhere: 'changed in Word, or not found in it' };
@@ -66820,7 +67131,7 @@ async function downloadEditedReport(assessmentId, quiet) {
       var _levelled = 0;
       try { _levelled = _levelRowCells(zip); } catch (e) { console.warn('[Render] row levelling skipped:', e && e.message); }
 
-      if (_repaired || _levelled || (refreshed && refreshed.updated) || (_rtGot && _rtGot.wrote) || (_mkRes && (_mkRes.tracked || _mkRes.comments))) {
+      if (_repaired || _levelled || (refreshed && refreshed.updated) || (_rtGot && _rtGot.wrote) || (_mkRes && (_mkRes.tracked || _mkRes.comments)) || (refreshed && refreshed.healed)) {
         blob = zip.generate({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
       }
     } catch (e) {
@@ -82899,6 +83210,20 @@ function _xmlSafeDeep(v, _seen) {
   return v;
 }
 window._xmlSafeDeep = _xmlSafeDeep;
+function _pntlMarkHeaderParts(zip) {
+  var names = Object.keys(zip.files || {}).filter(function (n) { return /^word\/(?:header|footer)\d*\.xml$/.test(n); }).sort();
+  var done = 0;
+  names.forEach(function (n, i) {
+    var f = zip.file(n);
+    if (!f) return;
+    var x = f.asText();
+    if (x.indexOf(_PNTL_B1) < 0 && x.indexOf(_PNTL_B3) < 0) return;
+    var tag = (/footer/.test(n) ? 'f' : 'h') + ((/(\d+)\.xml$/.exec(n) || [])[1] || '0');
+    zip.file(n, _pntlApplyScalarBookmarks(x, 960000 + i * 1000, function (bm) { return bm + '_' + tag; }));
+    done++;
+  });
+  return done;
+}
 function _fillTemplateZipNow(templateBuf, data) {
   var zip = new PizZip(templateBuf);
   _scanTemplateStyles(zip);
@@ -82935,6 +83260,8 @@ function _fillTemplateZipNow(templateBuf, data) {
   if (Object.keys(_rcMap).length) {
     _injectRichContent(filledZip, _rcMap, _rcImgCache);
   }
+
+  try { _pntlMarkHeaderParts(filledZip); } catch (e) { console.warn('[DOCX] header and footer marks skipped:', e && e.message); }
 
   try {
     var _vdoc = filledZip.file('word/document.xml');
