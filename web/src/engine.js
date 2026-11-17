@@ -8688,7 +8688,7 @@ function _renderFindingRow(f, a, isClient, opts) {
   r += '<td>' + badge(f.severity, f.severity) + '</td>';
 
   if (_colOn('cvss')) {
-    r += '<td class="mono">' + (Number(f.cvss) > 0 ? Number(f.cvss).toFixed(1) : '\u2014') + '</td>';
+    r += '<td class="mono">' + (Number(f.cvss) > 0 ? Number(f.cvss).toFixed(1) : f.severity === 'info' ? '0.0' : '\u2014') + '</td>';
   }
 
   if (_colOn('cwe')) r += '<td class="mono" style="font-size:0.8rem;color:var(--gray)">' + esc(f.cwe || '-') + '</td>';
@@ -78586,7 +78586,7 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
       doc.setTextColor(darkGray[0], darkGray[1], darkGray[2]);
 
       if (_showCvss) {
-        doc.text(Number(f.cvss) > 0 ? Number(f.cvss).toFixed(1) : '\u2014', col3, y + 5.5);
+        doc.text(Number(f.cvss) > 0 ? Number(f.cvss).toFixed(1) : f.severity === 'info' ? '0.0' : '\u2014', col3, y + 5.5);
       }
       var _pdfStatus = (f.status || 'open').replace(/_/g, ' ').toUpperCase();
       var _stC = _pdfStatusColor(f.status);
