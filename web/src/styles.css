@@ -4658,13 +4658,15 @@ body.sg-sorting,body.sg-sorting *{cursor:grabbing!important;user-select:none!imp
    how far it has got, the time, and Stop; once done, what it wrote, kept and
    could not, with Ask again and one Undo. The field being written is lit, and
    glows once as its answer lands. */
-.gen-run{position:sticky;z-index:2;margin:-0.35rem 0 1rem;padding:0.7rem 0.8rem 0.75rem;border-radius:14px;
+.gen-run{position:sticky;z-index:3;margin:-0.35rem 0 1rem;padding:0.7rem 0.8rem 0.75rem;border-radius:14px;
   border:1px solid color-mix(in srgb,var(--accent) 32%,var(--border));
   background:color-mix(in srgb,var(--card) 90%,var(--accent) 10%);
   box-shadow:0 12px 32px rgba(0,0,0,0.28);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
   animation:genIn 0.3s cubic-bezier(0.16,1,0.3,1) both}
 [data-theme="light"] .gen-run{box-shadow:0 10px 26px rgba(0,0,0,0.12)}
 @keyframes genIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+/* 2043m: above the toolbar of the editor being written in (z-index 2 in a
+   dialog), which keeps below it (_edHold, measured again as it changes). */
 .gen-run.is-done{border-color:color-mix(in srgb,var(--green) 38%,var(--border));background:color-mix(in srgb,var(--card) 93%,var(--green) 7%)}
 .gen-run.has-fail{border-color:color-mix(in srgb,var(--amber) 45%,var(--border));background:color-mix(in srgb,var(--card) 93%,var(--amber) 7%)}
 .gen-run.is-undone{border-color:var(--border);background:var(--card)}

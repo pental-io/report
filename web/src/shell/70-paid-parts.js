@@ -64,7 +64,7 @@ var VH_DATE_SOURCES = [
   { v: 'ended',     l: 'End date' },
   { v: 'delivered', l: 'Release date' },
   { v: 'updated',   l: 'Last updated' },
-  { v: 'retest',    l: 'First retest date' },   // 2012
+  { v: 'retest',    l: 'Retest date (the day it is made)' },   // 2012; 0.1.45: as the portal's since v60.77, the day the report is made
   { v: 'none',      l: 'Leave blank' },
 ];
 // And who a row names: the portal's QA reviewer is not one, for the same reason.

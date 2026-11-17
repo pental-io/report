@@ -12489,7 +12489,7 @@ var _RB_JOB = [
   { t: '{end_date}', label: 'End date' },
   { t: '{report_date}', label: 'Report date' },
 
-  { t: '{first_retest_date}', label: 'First retest date' },
+  { t: '{first_retest_date}', label: 'Retest date' },
 ];
 var _RB_PEOPLE = [
   { t: '{lead_tester_name}', label: 'Lead tester' },
@@ -39893,9 +39893,11 @@ function _evAlone(box, img) {
   Array.prototype.slice.call(c.querySelectorAll('img, .img-caption, figcaption')).forEach(function (x) { x.parentNode.removeChild(x); });
   return !_evHasWords(c);
 }
+var _EV_NO_SHOT_SRC = /^(?:[a-z-]*extension|file|about|chrome):/i;
 function _evIsShot(img) {
   if (!img || (img.closest && img.closest('pre, .code-block, td, th, li'))) return false;
   if (img.getAttribute('data-sp')) return true;
+  if (_EV_NO_SHOT_SRC.test(String(img.getAttribute('src') || '').trim())) return false;
   var w = img.naturalWidth || parseInt(img.getAttribute('width'), 10) || 0;
   var h = img.naturalHeight || parseInt(img.getAttribute('height'), 10) || 0;
   return !(w && h && w < 64 && h < 64);
@@ -40515,6 +40517,81 @@ function _evBoxLoose(ed, dry) {
   return res;
 }
 window._evBoxLoose = _evBoxLoose;
+var _EV_LIST_BLOCK = /^(DIV|P|H[1-6]|UL|OL|LI|SECTION|ARTICLE|BLOCKQUOTE|TABLE|PRE|FIGURE|HR|DL|DT|DD)$/;
+function _evListLoose(ed) {
+  var out = { icons: 0, lists: 0 };
+  if (!ed) return out;
+  Array.prototype.slice.call(ed.querySelectorAll('img')).forEach(function (im) {
+    if (im.getAttribute('data-sp') || !_EV_NO_SHOT_SRC.test(String(im.getAttribute('src') || '').trim())) return;
+    if (im.parentNode) { im.parentNode.removeChild(im); out.icons++; }
+  });
+
+  var seq = [];
+  (function walk(host) {
+    Array.prototype.forEach.call(host.childNodes, function (n) {
+      if (n.nodeType === 3) { if (/\S/.test(String(n.nodeValue).replace(/ /g, ' '))) seq.push({ el: n, stop: true }); return; }
+      if (n.nodeType !== 1 || n.tagName === 'BR') return;
+      if (_evIsCode(n) || n.tagName === 'TABLE' || (n.tagName === 'IMG' && _evIsShot(n))) { seq.push({ el: n, stop: true, item: true }); return; }
+      if (!_EV_LIST_BLOCK.test(n.tagName) || _EV_NOT_NOTE.test(n.className || '') || _evIsLabel(n)) { seq.push({ el: n, stop: true }); return; }
+      var kids = Array.prototype.some.call(n.children, function (c) { return _EV_LIST_BLOCK.test(c.tagName) || c.tagName === 'IMG'; });
+      if (kids) { walk(n); return; }
+      var text = String(n.textContent || '').replace(/ /g, ' ').replace(/\s+/g, ' ').trim();
+      if (!text) { seq.push({ el: n, blank: true }); return; }
+      var one = !n.querySelector('br') || !/\S/.test(String(n.innerHTML).split(/<br\s*\/?>/i).slice(1).join('').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '));
+      var short = one && text.split(' ').length <= 5 && !/[.!?:;]$/.test(text) && !_evCodeFlags([text])[0];
+      seq.push(short ? { el: n, line: true } : { el: n, stop: true });
+    });
+  })(ed);
+  var runs = [], cur = [];
+  var close = function (next) {
+
+    var lines = cur.filter(function (x) { return x.line; });
+    if (next && next.item && lines.length) { var last = lines[lines.length - 1]; cur = cur.slice(0, cur.indexOf(last)); lines.pop(); }
+    while (cur.length && !cur[cur.length - 1].line) cur.pop();
+    if (lines.length >= 3) runs.push(cur);
+    cur = [];
+  };
+  seq.forEach(function (x) {
+    if (x.line) { cur.push(x); return; }
+    if (x.blank) { if (cur.length) cur.push(x); return; }
+    close(x);
+  });
+  close(null);
+  runs.forEach(function (run) {
+    var lines = run.filter(function (x) { return x.line; });
+    var first = lines[0].el;
+    if (!first.parentNode) return;
+
+    var mine = run.map(function (x) { return x.el; });
+    var filled = function (n) {
+      if (mine.indexOf(n) >= 0) return true;
+      if (n.nodeType === 3) return !/\S/.test(String(n.nodeValue).replace(/\u00a0/g, ' '));
+      if (n.nodeType !== 1 || n.tagName === 'BR') return n.nodeType !== 1 || n.tagName === 'BR';
+      return n.childNodes.length > 0 && Array.prototype.every.call(n.childNodes, filled);
+    };
+    var at = first;
+    while (at.parentNode && at.parentNode !== ed && filled(at.parentNode)) at = at.parentNode;
+    var p = document.createElement('p');
+    lines.forEach(function (x, i) {
+      if (i) p.appendChild(document.createElement('br'));
+      while (x.el.firstChild) p.appendChild(x.el.firstChild);
+    });
+    at.parentNode.insertBefore(p, at);
+    run.forEach(function (x) {
+      var par = x.el.parentNode;
+      if (par) par.removeChild(x.el);
+
+      while (par && par !== ed && par !== p.parentNode && !String(par.textContent || '').replace(/ /g, ' ').trim() && !par.querySelector('img,table,pre,hr')) {
+        var up = par.parentNode;
+        if (up) up.removeChild(par);
+        par = up;
+      }
+    });
+    out.lists++;
+  });
+  return out;
+}
+window._evListLoose = _evListLoose;
 function _evNoteMd(els) {
   var md = function (n) {
     if (n.nodeType === 3) return String(n.nodeValue).replace(/\u00a0/g, ' ');
@@ -40595,11 +40672,29 @@ function _evNotesFromReply(raw, nums) {
     var su = _evSure(t);
     t = su.text;
     if (su.dropped.length) out.unsure[k] = su.dropped.length;
-    if (t) { out.by[k] = sanitizeHtml(t.split(/\n+/).map(function (l) { return _aiMdInline(l.trim()); }).filter(Boolean).join('<br>')); out.given++; }
+
+    var tHtml = _evNoteTable(f.table);
+    var tx = t ? t.split(/\n+/).map(function (l) { return _aiMdInline(l.trim()); }).filter(Boolean).join('<br>') : '';
+    if (tx || tHtml) { out.by[k] = sanitizeHtml((tx && tHtml ? '<p>' + tx + '</p>' : tx) + tHtml); out.given++; }
     else if (lo.length || su.dropped.length) { out.by[k] = ''; out.given++; }
     if (lo.length && out.by[k] != null) out.left[k] = lo;
   });
   return out;
+}
+function _evNoteTable(tb) {
+  if (!tb || typeof tb !== 'object') return '';
+  var cols = (Array.isArray(tb.columns) ? tb.columns : Array.isArray(tb.headers) ? tb.headers : [])
+    .map(function (c) { return String(c == null ? '' : c).replace(/\s+/g, ' ').trim(); }).slice(0, 8);
+  if (cols.length < 2) return '';
+  var rows = (Array.isArray(tb.rows) ? tb.rows : []).map(function (r) {
+    if (Array.isArray(r)) return r;
+    return r && typeof r === 'object' ? cols.map(function (c) { return r[c]; }) : null;
+  }).filter(Boolean).slice(0, 80);
+  if (!rows.length) return '';
+  var cell = function (v) { return _aiMdInline(String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, 600)); };
+  return '<table><tbody><tr>' + cols.map(function (c) { return '<th>' + (cell(c) || '<br>') + '</th>'; }).join('') + '</tr>'
+    + rows.map(function (r) { return '<tr>' + cols.map(function (c, i) { return '<td>' + (cell(r[i]) || '<br>') + '</td>'; }).join('') + '</tr>'; }).join('')
+    + '</tbody></table>';
 }
 function _evValues(s) {
   return String(s || '').split(/\s+/).map(function (w) { return w.replace(/^[("'\[]+|[)"'\].,;:!?]+$/g, ''); })
@@ -40617,9 +40712,14 @@ var _EV_NUMWORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven
 function _evLeftNorm(t) {
   return String(t == null ? '' : t).toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[\s\u00a0]+/g, ' ').trim();
 }
-function _evTidyWhy(els, html, left) {
+function _evTidyWhy(els, html, left, also) {
   var d = document.createElement('div');
   d.innerHTML = html || '';
+
+  var rowsN = d.querySelectorAll('tr').length;
+  Array.prototype.forEach.call(d.querySelectorAll('th,td'), function (c) { c.appendChild(document.createTextNode(' ')); });
+  Array.prototype.forEach.call(d.querySelectorAll('tr'), function (r) { r.appendChild(document.createElement('br')); });
+  if (rowsN) Array.prototype.forEach.call(d.querySelectorAll('p,table'), function (b) { b.appendChild(document.createElement('br')); });
 
   var was = els.map(function (n) { return _evLinesOf([n]).join(' '); }).join(' '), now = _evLinesOf([d]).join(' ');
   left = (left || []).filter(Boolean);
@@ -40635,8 +40735,11 @@ function _evTidyWhy(els, html, left) {
   };
   var code = function (list) { return all(list, 'code', function (c) { return c.textContent; }); };
   var nowCode = code([d]), nowHref = all([d], 'a[href]', function (a) { return a.getAttribute('href'); });
-  var lostLink = all(els, 'a[href]', function (a) { return a.getAttribute('href'); }).filter(function (h) { return nowHref.indexOf(h) < 0; })[0];
-  if (lostLink) return { why: 'link', what: lostLink };
+
+  var nowW = rowsN ? _evLeftNorm(now) : '';
+  var lostLink = all(els, 'a[href]', function (a) { return { h: a.getAttribute('href'), w: _evLeftNorm(String(a.textContent || '')).replace(/[.,;:!?\s]+$/, '') }; })
+    .filter(function (l) { return nowHref.indexOf(l.h) < 0 && !(rowsN && l.w && l.w.split(' ').every(function (t) { return nowW.indexOf(t) >= 0; })); })[0];
+  if (lostLink) return { why: 'link', what: lostLink.h };
 
   var wasLines = _evLinesOf(els), codeAt = _evCodeFlags(wasLines);
   var nowLines = _evLinesOf([d]).map(function (l) { return l.replace(/\s+/g, ' ').trim(); });
@@ -40656,14 +40759,14 @@ function _evTidyWhy(els, html, left) {
   };
   var lost = _evValues(was).filter(function (w) { return !kept(w); })[0];
   if (lost) return { why: 'changed', what: lost };
-  var added = _evValues(now).filter(function (w) { return was.indexOf(w) < 0 && !(_evLetters(w) && _evHasWord(was, w, true)); })[0];
+  var added = _evValues(now).filter(function (w) { return was.indexOf(w) < 0 && !(_evLetters(w) && _evHasWord(was, w, true)) && !(also && String(also).indexOf(w) >= 0); })[0];
   if (added) return { why: 'added', what: added };
   var lostCode = code(els).filter(function (c) { return nowCode.indexOf(c) < 0 && !_evOnce(now, c) && !(leftT && leftT.indexOf(c) >= 0); })[0];
   if (lostCode) return { why: 'code', what: lostCode };
 
   var n1 = Math.max(0, _evWords(was) - _evWords(leftT)), n2 = _evWords(now);
   if (n2 < Math.ceil(n1 / 2)) return { why: 'shorter' };
-  if (n2 > n1 + Math.max(20, n1)) return { why: 'longer' };
+  if (n2 > n1 + Math.max(20, n1) + 6 * rowsN) return { why: 'longer' };
   return null;
 }
 function _evOnce(text, c) {
@@ -40735,6 +40838,25 @@ function _evNotesSaid(whose, o) {
   return 'the model gave ' + whose + ' notes back as they were';
 }
 function _evPutNote(x, html) {
+
+  if (/<table[\s>]/i.test(html)) {
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    var at = x.el || x.els[0], host = at.parentNode, firstNew = null, tables = [];
+    if (x.el && x.el.tagName === 'LI') {
+      tables = Array.prototype.slice.call(tmp.querySelectorAll('table'));
+      tables.forEach(function (t) { t.parentNode.removeChild(t); });
+      x.el.innerHTML = tmp.innerHTML;
+      var list = x.el.closest('ul,ol') || x.el;
+      tables.reverse().forEach(function (t) { list.parentNode.insertBefore(t, list.nextSibling); });
+      return x.el;
+    }
+    while (tmp.firstChild) { var nn = tmp.firstChild; host.insertBefore(nn, at); if (!firstNew) firstNew = nn; if (nn.nodeType === 1 && nn.tagName === 'TABLE') tables.push(nn); }
+    (x.el ? [x.el] : x.els).forEach(function (n) { if (n.parentNode) n.parentNode.removeChild(n); });
+
+    tables.forEach(function (t) { if (!t.nextElementSibling) { var pb = document.createElement('p'); pb.appendChild(document.createElement('br')); t.parentNode.insertBefore(pb, t.nextSibling); } });
+    return firstNew;
+  }
   if (x.el) { x.el.innerHTML = html; return x.el; }
   var d = document.createElement('div');
   d.innerHTML = html;
@@ -40939,13 +41061,15 @@ async function generateEvidenceLayout(o) {
 
   var before = ed.innerHTML;
   var box = _evBoxLoose(ed), boxKeep = false;
+
+  var lst = o.retest ? _evListLoose(ed) : { icons: 0, lists: 0 };
   var boxSaid = box.lines ? _evBoxedWords(box.lines, box.blocks.length) : '';
   var _evUndoAll = function () {
     if (document.getElementById(_edId) !== ed) return;
     ed.innerHTML = before;
     try { if (typeof resolveStorageImages === 'function') resolveStorageImages(ed); } catch (e3) {}
   };
-  var boxBack = function () { if (!box.lines) return; box = { lines: 0, blocks: [] }; _evUndoAll(); };
+  var boxBack = function () { if (!box.lines && !lst.icons && !lst.lists) return; box = { lines: 0, blocks: [] }; lst = { icons: 0, lists: 0 }; _evUndoAll(); };
   var imgs = _evImages(ed);
   var blocks = _evBlockItems(ed);
 
@@ -40959,7 +41083,7 @@ async function generateEvidenceLayout(o) {
   var loose = _evLooseCode(ed);
   var looseSaid = loose >= 2 ? loose + ' lines of code or commands stand outside a code block and were left as written: select them and press the code button (</>) to have them explained' : '';
 
-  if (!imgs.length && !blocks.length && !notes.length) { if (!o.silent) toast(looseSaid ? 'Nothing to explain yet: the ' + looseSaid.replace(/ and were left as written: /, ': ') + ', then ask again' : _evHasWords(ed) ? 'Nothing to explain or tidy yet: write a sentence or more of your notes, or paste a screenshot, a request, code or output, into ' + _where : 'Paste a screenshot, a request, code or output, or write your notes, into ' + _where + ' first', 'error'); return null; }
+  if (!imgs.length && !blocks.length && !notes.length) { if (!o.silent) toast(looseSaid ? 'Nothing to explain yet: the ' + looseSaid.replace(/ and were left as written: /, ': ') + ', then ask again' : _evHasWords(ed) ? 'Nothing to explain or tidy yet: write a sentence or more of your notes, or paste a screenshot, a request, code or output, into ' + _where : 'Paste a screenshot, a request, code or output, or write your notes, into ' + _where + ' first', 'error'); boxBack(); return null; }
   var sees = _aiCanSeeImages();
   var noSee = 'the model chosen in Settings, AI does not read pictures';
   if (!sees && imgs.length && !bAsk.length && !notes.length) {
@@ -41005,8 +41129,9 @@ async function generateEvidenceLayout(o) {
       items.push({ n: imgs.indexOf(asked[i]) + 1, img: asked[i], data: d || '' });
     }
     var readable = items.filter(function (x) { return x.data; });
-    if (!readable.length && !bAsk.length && !notes.length) throw new Error((items.length === 1 ? 'the screenshot' : 'none of the screenshots') + ' could not be read from here');
-    var sp = _stdFieldPrompt(_pK) + '\n\n' + _AI_REPLY_CONTRACTS.evidence;
+    if (!readable.length && !bAsk.length && !notes.length) throw new Error(items.length === 1 ? 'the screenshot could not be read from here' : 'none of the screenshots could be read from here');
+
+    var sp = _stdFieldPrompt(_pK) + '\n\n' + ((o.retest && _AI_REPLY_CONTRACTS.retest_explain) || _AI_REPLY_CONTRACTS.evidence);
     var titleEl = document.getElementById('mTi');
     var ctx = o.finding
 
@@ -41119,7 +41244,7 @@ async function generateEvidenceLayout(o) {
         var un = _evLeftNorm(u).replace(/[.,;:!?\s]+$/, '');
         if (un && !left.some(function (l) { return _evLeftNorm(l).indexOf(un) >= 0; })) left.push(u);
       });
-      var why = _evTidyWhy(x.els, h, left);
+      var why = _evTidyWhy(x.els, h, left, o.retest ? ctx : '');
       return why ? { n: x.n, x: x, why: why } : null;
     }).filter(Boolean);
     if (nBad.length && !(o.signal && o.signal.aborted)) {
@@ -41207,7 +41332,7 @@ async function generateEvidenceLayout(o) {
       var probe = document.createElement('div');
       probe.innerHTML = h;
       if (!left.length && _evNoteMd([probe]) === x.md) { nSame++; return; }
-      var why = _evTidyWhy(x.els, h, left);
+      var why = _evTidyWhy(x.els, h, left, o.retest ? ctx : '');
       if (why) { nWhy.push(why); return; }
       if (h) _evPutNote(x, _evRecode(x.els, h)); else _evDropNote(x);
 
@@ -41228,7 +41353,7 @@ async function generateEvidenceLayout(o) {
       return { done: 0, unread: unread, kept: kept, blocks: 0, lined: 0, capped: 0, missed: missN, missWords: missWords, refused: refused };
     }
 
-    boxKeep = !!(done || bn || nDone) || !missWords;
+    boxKeep = !!(done || bn || nDone) || (!missWords && !lst.icons && !lst.lists);
     if (!boxKeep) boxBack();
     if (!o.silent) {
       var blind = !sees && imgs.length ? ' The screenshots were not: ' + noSee + '.' : '';
@@ -41355,7 +41480,7 @@ function _rtAiButtonsHtml(edId) {
   var exId = pg ? 'genRtExPgBtn' : 'genRtExBtn';
   return '<div class="rt-ai-acts">'
     + _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="' + exId + '" onmousedown="event.preventDefault();explainRetest(\'' + edId + '\')" onclick="if(event.detail===0)explainRetest(\'' + edId + '\')" style="color:var(--accent)"'
-      + ' title="Writes a line above each screenshot, and each request, block of code, output or table, saying what it shows of the retest, and a caption beneath each screenshot. Your own notes are tidied, every value kept as you wrote it, and a line or caption of your own is kept.">'
+      + ' title="Writes a line above each screenshot, and each request, block of code, output or table, saying what it shows of the retest, and a caption beneath each screenshot. Your own notes are tidied, every value kept as you wrote it, and a list of what was checked again (as a tool gives it) set out as a table, read against what the original test found. A line or caption of your own is kept.">'
       + IC.ai + ' Explain retest</button>', 'retest_explain', exId, 'explaining the retest', o)
     + '</div>';
 }
@@ -41790,6 +41915,11 @@ function _genPanelFor(run) {
     }
   } catch (e) {}
   p.style.top = top + 'px';
+
+  try {
+    if (typeof ResizeObserver === 'function') new ResizeObserver(function () { _edReholdIn(host); }).observe(p);
+    else _edReholdIn(host);
+  } catch (e) {}
   p.addEventListener('click', function (ev) {
     var b = ev.target && ev.target.closest ? ev.target.closest('[data-gen]') : null;
     if (!b || !p.contains(b)) return;
@@ -50734,13 +50864,9 @@ function _vhResolve(row, ctx) {
              : '';
   return { date: date || '', author: author || '' };
 }
-function _vhFirstRetest(findings) {
-  var first = '';
-  (findings || []).forEach(function (f) {
-    var t = f && f.retest_completed_at;
-    if (t && (!first || Date.parse(t) < Date.parse(first))) first = t;
-  });
-  return first ? (fmtDate(first) || '') : '';
+function _vhRetestDate(findings) {
+  var any = (findings || []).some(function (f) { return !!(f && f.retest_completed_at); });
+  return any ? (fmtDate(new Date()) || '') : '';
 }
 function _vhShows(r, ctx) { return !(r && r.k === 'retest') || !!(ctx && ctx.retest); }
 function _vhRowHtml(r, idx) {
@@ -50766,7 +50892,7 @@ function _vhRowHtml(r, idx) {
     h += '<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:0.35rem" onclick="this.closest(\'.vh-row\').remove()">Remove</button>';
   }
 
-  if (r.k === 'retest') h += '<div class="vh-note" style="flex:1 1 100%;font-size:0.7rem;color:var(--gray);padding:0 0 0.2rem 1.6rem">Printed once a finding has been retested, dated the day the first one was.</div>';
+  if (r.k === 'retest') h += '<div class="vh-note" style="flex:1 1 100%;font-size:0.7rem;color:var(--gray);padding:0 0 0.2rem 1.6rem">Printed once a finding has been retested, dated the day the report is made.</div>';
   return h + '</div>';
 }
 function _vhEditorRows(tpl) {
@@ -58336,12 +58462,13 @@ window._SM_DEFAULT_PROMPTS.field_cvss = "You are a CVSS scoring expert. Score th
 window._SM_DEFAULT_PROMPTS.field_category = "You are a vulnerability classification expert. Choose the category from the list provided that best fits this finding's root cause, judging from what the finding shows rather than from its title alone.";
 window._SM_DEFAULT_PROMPTS.field_references = "You are a cybersecurity researcher. List reference pages that would help a client understand and fix this vulnerability: its CWE entry, the relevant OWASP pages, and the vendor's own advisory or guidance where one applies. Include only addresses you are confident exist, preferring stable, well-known sources to articles and blog posts.";
 window._SM_DEFAULT_PROMPTS.field_evidence = "You are a senior penetration tester laying out the evidence for a finding in a client's security assessment report, so that it reads as the evidence section of a professional report: one account of how the issue was identified and confirmed. For each screenshot, write the sentence that goes above it: what the screenshot shows and what it demonstrates, read in the light of the whole finding and of the evidence before and after it, without repeating what the words just before it already say. Then write the caption that goes beneath it, naming in a few words what it shows. For each request and response, block of code, command output or table, write the sentence that goes above it in the same way: what it is and what it shows. Rewrite each of the tester's own notes as the report would put it: complete, formal sentences saying what was done, how, and what it showed, with the spelling, grammar and punctuation mended and shorthand written out. Keep every fact that bears on this finding, with each name, value, host, path, parameter and piece of code exactly as written, and add nothing the notes do not say. Where a note introduces the evidence that follows it, the rewrite still introduces it. Where the notes name a person, such as someone at the client or a colleague, refer to them by their role (the client, the client's IT team, the consultant) rather than by name; an account or user name is a value and stays as written. Leave out of the notes anything that is not evidence for this finding: an issue that belongs in another finding, a to-do or reminder, a question, guess or possibility that was not confirmed, and asides; and give back no rewrite for a note that already reads as report prose. What was not confirmed is not mentioned at all: never turn a question or a guess into a sentence saying that it was not checked, may be so or is still to be confirmed, and never ask a question or speculate in a note, a line or a caption. Refer to what can be seen, such as the request, the response, the parameter, the page or the tool, and draw only on what the evidence and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone.";
-window._SM_DEFAULT_PROMPTS.field_retest_explain = "You are a senior penetration tester laying out the evidence of a retest in a client's security assessment report: what was seen when a finding was tested again after the client's fix, so that it reads as the retest section of a professional report. For each screenshot, write the sentence that goes above it: what the screenshot shows of the issue now, read in the light of the finding and of the evidence before and after it, without repeating what the words just before it already say. Then write the caption that goes beneath it, naming in a few words what it shows. For each request and response, block of code, command output or table, write the sentence that goes above it in the same way: what it is and what it shows now. Where what the original test found, or what an earlier retest found, is supplied, read the retest against it: say what is different now and what is not, as this retest's evidence shows it, and never present that earlier evidence as part of this retest. Rewrite each of the tester's own notes as the report would put it: complete, formal sentences saying what was tested again, how, and what it showed, with the spelling, grammar and punctuation mended and shorthand written out. Keep every fact that bears on the retest, with each name, value, host, path, parameter and piece of code exactly as written, and add nothing the notes do not say. Where a note introduces the evidence that follows it, the rewrite still introduces it. Say that the issue is fixed, or still there, only where the evidence shows it, and never ask a question or speculate. Draw only on what the evidence and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone.";
+window._SM_DEFAULT_PROMPTS.field_retest_explain = "You are a senior penetration tester laying out the evidence of a retest in a client's security assessment report: what was seen when a finding was tested again after the client's fix, so that it reads as the retest section of a professional report. For each screenshot, write the sentence that goes above it: what the screenshot shows of the issue now, read in the light of the finding and of the evidence before and after it, without repeating what the words just before it already say. Then write the caption that goes beneath it, naming in a few words what it shows. For each request and response, block of code, command output or table, write the sentence that goes above it in the same way: what it is and what it shows now. Where what the original test found, or what an earlier retest found, is supplied, read the retest against it: say what is different now and what is not, as this retest's evidence shows it, and never present that earlier evidence as part of this retest. Rewrite each of the tester's own notes as the report would put it: complete, formal sentences saying what was tested again, how, and what it showed, with the spelling, grammar and punctuation mended and shorthand written out. Where a note lists what was checked again, such as components and their versions copied from a tool, set it out as a table instead: each thing, what the original test found of it, what this retest found, and whether it is now remediated, judged against the finding's evidence and description, under one sentence saying what was checked. Keep every fact that bears on the retest, with each name, value, host, path, parameter and piece of code exactly as written, and add nothing the notes do not say. Where a note introduces the evidence that follows it, the rewrite still introduces it. Say that the issue is fixed, or still there, only where the evidence shows it, and never ask a question or speculate. Draw only on what the evidence and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone.";
 window._SM_DEFAULT_PROMPTS.qa_ai_review = "You are a senior penetration tester carrying out the quality assurance review of a security assessment report before it goes to the client. Read the whole report: every finding and its fields, the executive summary and the report's other areas, and, where it is given, the Word report as the client will receive it. Judge the report against each item of the firm's QA checklist, from what the report says. Then check what a careful reviewer checks: that each finding's title, severity, score and wording agree with each other and with its evidence; that its remediation addresses the issue it describes; that its affected assets and references fit it; that the executive summary agrees with the findings; that nothing is missing, contradictory or said twice; and that the spelling, grammar and tone are those of a professional report in British English. Where something should change, say so on the words it is about, and where you can give the exact words to put in their place, suggest the edit, as small as it can be. Leave alone what is fine: a good review raises what matters, not everything that could be said. Draw only on what the report says: do not invent hosts, values, results or findings.";
 window._SM_DEFAULT_PROMPTS.scan_exec_summary = "Senior penetration test report writer. Rewrite the supplied executive summary of an automated vulnerability assessment so it reads as professional consultancy prose for the client.\nRULES: Passive voice. British English. Past tense. No bullets, lists or headings. Wrap each paragraph in <p> tags and use <strong> for the client name, the severities and the counts. No markdown. Write \"it is recommended\" rather than \"it is suggested\". No emotive language or hyperbole, and never \"in simple terms\", \"put simply\" or \"essentially\".\nKeep the draft's shape: an opening paragraph on what was assessed, when, and what was found; a paragraph on what changed since the previous assessment, only if the draft has one; and a closing sentence saying the issues are listed in full below.\nUse only the facts and the draft supplied. Do not invent findings, hosts, dates or numbers, and do not mention screenshots or figures.";
 window._SM_DEFAULT_PROMPTS.scan_finding = "Senior penetration test report writer. Rewrite each supplied finding so it reads as professional consultancy prose in a client report.\nRULES: Passive voice. British English. One tense throughout. Wrap paragraphs in <p> tags. No markdown and no headings; a list only where the source had one.\ntitle: recognisable and specific, in sentence case, without the host name or a severity.\ndescription: what the issue is, in one or two short paragraphs.\nimpact: what it means for the organisation if it is not fixed.\nremediation: what to do, as clear instructions.\nDo not invent CVE numbers, versions, port numbers, host names, CVSS scores or any figure that is not in the source. If a field has no source material, leave it empty rather than making something up. Never write \"in simple terms\", \"put simply\" or \"essentially\". No hyperbole.";
 window._SM_PREVIOUS_PROMPTS = {"field_title":["You are a senior penetration tester. From the evidence, write a concise vulnerability finding title. Return ONLY the title, no quotes and no other text."],"notes":["You are a senior penetration tester writing internal working notes for an assessment. Summarise background, methodology and any requirements that matter to the team. Output plain HTML paragraphs only, no headings and no inline styling. British English. Be concise and factual; this is internal context, not client-facing prose."],"caveats":["You are a senior penetration tester writing the caveats and limitations section of a security assessment report. Output plain HTML only, using <p> for paragraphs and <ul>/<li> for lists, with no headings and no inline styling. British English. State clearly what was and was not covered, any constraints on the testing window, access or environment, and anything that limits the confidence of the findings. Be factual and neutral; do not speculate."],"executive_summary":["Senior penetration test report writer. Write an executive summary accessible to both technical and non-technical audiences.\nRULES: PASSIVE VOICE. British English. Past tense. No bullets or lists. Wrap paragraphs in <p> tags and use <strong> to bold key terms such as the client name, severities, finding categories, and the recommendation verbs. No markdown. Use \"it is recommended\" NOT \"it is suggested\" or \"it was suggested\". NEVER use emotive language, hyperbole, or alarming phrases. NEVER use \"in simple terms\", \"put simply\", \"simply put\", \"in layman's terms\", or \"essentially\". Be factual, direct, and professional throughout. Do NOT mention remediation, fixes, or recommendations until the Recommendations section - category paragraphs should only describe what was found and the risk/impact.\n\nSTRUCTURE (blank line between each):\n1. Opening paragraph (no heading): consultancy, type, client, dates, findings breakdown\n2. Per finding category (grouped by type, ordered by highest severity first): category name alone on line (Title Case, no period), blank line, then paragraph describing each finding - state what the issue is and explain the specific business risk or impact using context from the finding descriptions provided, starting with the most severe\n3. \"Recommendations\" heading alone on line, blank line, then a flowing paragraph stating the actual remediation steps the client should take, derived from the finding remediation guidance provided. Focus on what to do, not why. Use \"it is recommended\" phrasing. Prioritise by severity.\n\nCategory titles and section headings: Title Case, max 5 words, no period, own line.\n\nNEVER include figure references, {{fig}}, or \"Figure N\" in the executive summary. Do not reference screenshots or evidence images.","Senior penetration test report writer. Write an executive summary accessible to both technical and non-technical audiences.\nRULES: PASSIVE VOICE. British English. Past tense. No bullets or lists. Wrap paragraphs in <p> tags and use <strong> to bold key terms such as the client name, severities, finding categories, and the recommendation verbs. No markdown. Use \"it is recommended\" NOT \"it is suggested\" or \"it was suggested\". NEVER use emotive language, hyperbole, or alarming phrases. NEVER use \"in simple terms\", \"put simply\", \"simply put\", \"in layman's terms\", or \"essentially\". Be factual, direct, and professional throughout. Do NOT mention remediation, fixes, or recommendations until the Recommendations section - category paragraphs should only describe what was found and the risk/impact. If Context/Notes are provided, use them to inform the opening paragraph and risk context.\nSTRUCTURE (blank line between each):\n1. Opening paragraph (no heading): consultancy, type, client, dates, findings breakdown\n2. Per finding category (grouped by type, ordered by highest severity first): category name alone on line (Title Case, no period), blank line, then paragraph describing each finding - state what the issue is and explain the specific business risk or impact using context from the finding descriptions provided, starting with the most severe\n3. \"Recommendations\" heading alone on line, blank line, then a flowing paragraph stating the actual remediation steps the client should take, derived from the finding remediation guidance provided. Focus on what to do, not why. Use \"it is recommended\" phrasing. Prioritise by severity.\nCategory titles and section headings: Title Case, max 5 words, no period, own line.","You are a senior penetration test report writer. Write the executive summary of a security assessment report. It is read by directors and managers who may not be technical, and it must remain accurate for the technical team.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual, measured and professional tone. Use \"it is recommended that\" for recommendations. Avoid emotive language, hyperbole and filler such as \"in simple terms\", \"put simply\" or \"essentially\", and do not refer to screenshots, figures or evidence images.\n\nStructure the summary as follows.\n1. An opening paragraph, without a heading: who carried out the assessment, of what, for whom and when, and how many findings were identified at each severity.\n2. A section for each category of finding, the category with the most severe finding first: the category name as a short heading, then a paragraph explaining what was found and the risk it presents to the organisation, most severe finding first. Keep remediation for the final section.\n3. A section headed Recommendations: one paragraph setting out the remediation the organisation should prioritise, in order of severity, drawn from the remediation guidance supplied.\n\nUse only the information supplied, and do not invent findings, hosts, figures or dates. Any background notes are for context: do not quote them or repeat internal remarks."],"retest_summary":["Senior penetration test report writer. Write a retest summary.\nRULES:\n- Passive voice. British English. Past tense.\n- No bullets or lists. Flowing paragraphs only. Wrap each paragraph in <p> tags, and use <strong> to bold key terms such as finding names, severities, and remediation status (e.g. <strong>fully remediated</strong>). No markdown.\n- Be concise. No redundancy. Never repeat the same information twice.\n- ONLY mention statuses that have findings. If zero findings are partially remediated, do NOT mention partial remediation at all. If zero are open, do NOT mention open findings.\n- For each finding, briefly describe what changed (or did not change) and reference the finding by name.\n- Do NOT pad with filler. Every sentence must add new information.\n\nSTRUCTURE:\n1. Opening paragraph: state a retest was conducted, total finding count, then ONLY the non-zero categories (e.g. \"three have been fully remediated and one partially addressed\" - skip any category with zero findings).\n2. One paragraph for remediated findings: name each finding and briefly confirm what fix was observed.\n3. One paragraph for partially remediated findings (ONLY if any exist): name each, describe progress and what remains.\n4. One paragraph for open/unchanged findings (ONLY if any exist): name each, state they remain unaddressed.\n\nEXAMPLE:\n\"Following the original web application assessment, a full retest was conducted across all identified findings. Of the six findings, two have been fully remediated and one partially addressed.\n\nThe reflected cross-site scripting vulnerability now results in an error upon exploitation, confirming input is handled securely, and the finding has been closed. The insecure cookie configuration has also been resolved, with the HttpOnly attribute now applied to the session cookie.\n\nThe missing security headers finding has seen partial progress; several headers have been implemented reducing severity from medium to low, however the Content Security Policy remains misconfigured.\n\nThe remaining three findings - outdated third-party libraries, insecure TLS ciphers, and insecure TLS certificate - are unchanged and have not yet been addressed.\""],"finding_description":["You are a senior penetration tester writing finding descriptions for a security assessment report. Output ONLY HTML content (no markdown). Do NOT add any inline styling: no style attributes, no colours, no font sizes, no font families. The report applies its own styles, so use plain structural tags only (<p>, <ul>, <ol>, <li>, <code>, <pre>) and never set colour or size yourself. Use <p> tags for paragraphs. Be factual, professional, and technical. British English. Describe what the vulnerability is, how it was identified (referencing the evidence provided), and explain why it poses a risk in the given context. Do not include remediation advice - that goes in a separate section.","You are a senior penetration tester writing finding descriptions for a security assessment report. Output ONLY HTML content (no markdown). Do NOT add any inline styling: no style attributes, no colours, no font sizes, no font families. The report applies its own styles, so use plain structural tags only (<p>, <ul>, <ol>, <li>, <code>, <pre>) and never set colour or size yourself. Use <p> tags for paragraphs. Do NOT output any headings or title lines: no <h1>-<h6>, and do not restate the finding name or open with a bold title. The description already sits under its own section heading, so begin directly with prose. Use <code> ONLY for short inline terms (single words or short phrases like function names, parameter names). For ANY multi-line content, commands, HTTP requests, code snippets, or payloads you MUST wrap them in <pre><code>...</code></pre> blocks (never leave code as loose lines of text). Be factual, professional, and technical. British English. Passive voice. Describe what the vulnerability is, how it was identified (referencing the evidence provided), and explain why it poses a risk in the given context. Do not include remediation advice - that goes in a separate section."],"finding_remediation":["You are a senior penetration tester writing remediation guidance for a security assessment report. Output ONLY HTML content (no markdown). Do NOT add any inline styling: no style attributes, no colours, no font sizes, no font families. The report applies its own styles, so use plain structural tags only (<p>, <ul>, <ol>, <li>, <code>, <pre>) and never set colour or size yourself. Use <p> tags for paragraphs, <ul>/<ol> for steps, <code> for code/config references. British English. Provide specific, actionable remediation steps tailored to the technology and context shown in the evidence and description. Reference specific configuration changes, code fixes, or architectural changes. Do not be generic - use the evidence context to give targeted advice.","You are a senior penetration tester writing remediation guidance for a security assessment report. Output ONLY HTML content (no markdown). Do NOT add any inline styling: no style attributes, no colours, no font sizes, no font families. The report applies its own styles, so use plain structural tags only (<p>, <ul>, <ol>, <li>, <code>, <pre>) and never set colour or size yourself. Use <p> tags for paragraphs, <ul>/<ol> for steps. Do NOT output any headings or title lines: no <h1>-<h6>, and do not restate the finding name or open with a title such as \"Remediation Guidance\". The remediation already sits under its own section heading, so begin directly with prose or the list of steps. Use <code> ONLY for short inline terms (single words, function names, parameter names). For ANY multi-line code examples, configuration changes, or command sequences you MUST wrap them in <pre><code>...</code></pre> blocks (never leave code as loose lines of text). British English. Provide specific, actionable remediation steps tailored to the technology and context shown in the evidence and description. Reference specific configuration changes, code fixes, or architectural changes. Do not be generic - use the evidence context to give targeted advice."],"custom_section":["You are a senior penetration tester writing a report section for a security assessment.\nRULES:\n- Passive voice. British English. Past tense.\n- Factual and concise; no marketing language.\n- Use only the assessment context provided; do not invent findings.\n- Return plain prose paragraphs, no headings."],"field_affected_assets":["You are a senior penetration tester listing the assets affected by a finding.\nRULES:\n- Output only the affected hosts, URLs, endpoints or components, one per line.\n- Use the exact identifiers from the evidence provided; do not invent or guess.\n- No commentary, headings or bullets.", "You are a senior penetration tester listing what a finding affects: the specific hosts, URLs, endpoints, parameters, ports or components that the description and evidence show to be affected. Use each identifier exactly as it appears in the material, and do not infer or invent any that are not shown."],"scan_exec_summary":["Senior penetration test report writer. Rewrite the supplied executive summary so it reads as professional consultancy prose.\nRULES: PASSIVE VOICE. British English. Past tense. No bullets or lists. Wrap paragraphs in <p> tags and use <strong> to bold key terms such as the client name, severities and finding names. No markdown. Use \"it is recommended\" rather than \"it is suggested\". Never use emotive language or hyperbole. Never write \"in simple terms\", \"put simply\" or \"essentially\".\nKeep the same structure: an opening paragraph, a short section per category with the category name alone in its own paragraph, then a paragraph headed Recommendations.\nDO NOT invent findings, hosts, dates or numbers. Use only what is supplied. Do not add figure references or mention screenshots."],"scan_finding":["Senior penetration test report writer. Rewrite each supplied finding so it reads as professional consultancy prose in a client report.\nRULES: PASSIVE VOICE. British English. Past or present tense consistently. Wrap paragraphs in <p> tags. No markdown, no headings, no bullets unless the source had a list.\ntitle: keep it recognisable and specific. Sentence case. Do not add the host name or a severity.\ndescription: what the issue IS, in one or two short paragraphs.\nimpact: what it means for the business if it is not fixed.\nremediation: what to do, as clear instruction.\nDO NOT invent CVE numbers, versions, port numbers, host names, CVSS scores or any figure that is not in the source. If a field has no source material, return an empty string for it rather than making something up. Never write \"in simple terms\", \"put simply\" or \"essentially\". Never use hyperbole.\nReturn ONLY a JSON array, one object per input, in the same order, each with keys: title, description, impact, remediation. No preamble, no code fences."],"field_cwe":["You are a CWE classification expert. Analyse the vulnerability and return the single most relevant CWE identifier."],"field_cvss":["You are a CVSS v3.1 scoring expert. Analyse the provided vulnerability details and calculate an accurate CVSS v3.1 Base Score, considering Attack Vector, Attack Complexity, Privileges Required, User Interaction, Scope, and the Confidentiality, Integrity and Availability impacts."],"field_category":["You are a vulnerability classification expert. Select the single best matching category for the finding from the list provided."],"field_references":["You are a cybersecurity researcher. Produce relevant reference URLs for the vulnerability. Only include URLs you are highly confident exist, preferring stable well-known sources such as CWE entries, OWASP pages and vendor advisories."],"field_evidence":["You are a senior penetration tester laying out the evidence for a finding in a client's security assessment report. For each screenshot, write the sentence that goes above it: what the screenshot shows and what it demonstrates, read in the light of the whole finding and of the screenshots before and after it, so that the evidence reads as one account of how the issue was identified and confirmed. Then write the caption that goes beneath it, naming in a few words what it shows. Refer to what can be seen, such as the request, the response, the parameter, the page or the tool, and draw only on what the screenshots and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone.","You are a senior penetration tester laying out the evidence for a finding in a client's security assessment report. For each screenshot, write the sentence that goes above it: what the screenshot shows and what it demonstrates, read in the light of the whole finding and of the evidence before and after it, so that the evidence reads as one account of how the issue was identified and confirmed. Then write the caption that goes beneath it, naming in a few words what it shows. For each request and response, block of code, command output or table, write the sentence that goes above it in the same way: what it is and what it shows. Refer to what can be seen, such as the request, the response, the parameter, the page or the tool, and draw only on what the evidence and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone.","You are a senior penetration tester laying out the evidence for a finding in a client's security assessment report. For each screenshot, write the sentence that goes above it: what the screenshot shows and what it demonstrates, read in the light of the whole finding and of the evidence before and after it, so that the evidence reads as one account of how the issue was identified and confirmed. Then write the caption that goes beneath it, naming in a few words what it shows. For each request and response, block of code, command output or table, write the sentence that goes above it in the same way: what it is and what it shows. Rewrite each of the tester's own notes as clean report prose: mend the spelling, grammar, punctuation and broken or unfinished sentences, keep every fact, name, value, host, path, parameter and piece of code exactly as written, and add nothing; leave out a note that already reads cleanly. Refer to what can be seen, such as the request, the response, the parameter, the page or the tool, and draw only on what the evidence and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone.","You are a senior penetration tester laying out the evidence for a finding in a client's security assessment report, so that it reads as the evidence section of a professional report: one account of how the issue was identified and confirmed. For each screenshot, write the sentence that goes above it: what the screenshot shows and what it demonstrates, read in the light of the whole finding and of the evidence before and after it, without repeating what the words just before it already say. Then write the caption that goes beneath it, naming in a few words what it shows. For each request and response, block of code, command output or table, write the sentence that goes above it in the same way: what it is and what it shows. Rewrite each of the tester's own notes as the report would put it: complete, formal sentences saying what was done, how, and what it showed, with the spelling, grammar and punctuation mended and shorthand written out. Keep every fact that bears on this finding, with each name, value, host, path, parameter and piece of code exactly as written, and add nothing the notes do not say. Where a note introduces the evidence that follows it, the rewrite still introduces it. Leave out of the notes anything that is not evidence for this finding: an issue that belongs in another finding, a to-do or reminder, a question or guess still to be settled, and asides; and give back no rewrite for a note that already reads as report prose. Refer to what can be seen, such as the request, the response, the parameter, the page or the tool, and draw only on what the evidence and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone."]};
 (window._SM_PREVIOUS_PROMPTS.field_retest_explain = window._SM_PREVIOUS_PROMPTS.field_retest_explain || []).push("You are a senior penetration tester laying out the evidence of a retest in a client's security assessment report: what was seen when a finding was tested again after the client's fix, so that it reads as the retest section of a professional report. For each screenshot, write the sentence that goes above it: what the screenshot shows of the issue now, read in the light of the finding and of the evidence before and after it, without repeating what the words just before it already say. Then write the caption that goes beneath it, naming in a few words what it shows. For each request and response, block of code, command output or table, write the sentence that goes above it in the same way: what it is and what it shows now. Rewrite each of the tester's own notes as the report would put it: complete, formal sentences saying what was tested again, how, and what it showed, with the spelling, grammar and punctuation mended and shorthand written out. Keep every fact that bears on the retest, with each name, value, host, path, parameter and piece of code exactly as written, and add nothing the notes do not say. Where a note introduces the evidence that follows it, the rewrite still introduces it. Say that the issue is fixed, or still there, only where the evidence shows it, and never ask a question or speculate. Draw only on what the evidence and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone.");
+(window._SM_PREVIOUS_PROMPTS.field_retest_explain = window._SM_PREVIOUS_PROMPTS.field_retest_explain || []).push("You are a senior penetration tester laying out the evidence of a retest in a client's security assessment report: what was seen when a finding was tested again after the client's fix, so that it reads as the retest section of a professional report. For each screenshot, write the sentence that goes above it: what the screenshot shows of the issue now, read in the light of the finding and of the evidence before and after it, without repeating what the words just before it already say. Then write the caption that goes beneath it, naming in a few words what it shows. For each request and response, block of code, command output or table, write the sentence that goes above it in the same way: what it is and what it shows now. Where what the original test found, or what an earlier retest found, is supplied, read the retest against it: say what is different now and what is not, as this retest's evidence shows it, and never present that earlier evidence as part of this retest. Rewrite each of the tester's own notes as the report would put it: complete, formal sentences saying what was tested again, how, and what it showed, with the spelling, grammar and punctuation mended and shorthand written out. Keep every fact that bears on the retest, with each name, value, host, path, parameter and piece of code exactly as written, and add nothing the notes do not say. Where a note introduces the evidence that follows it, the rewrite still introduces it. Say that the issue is fixed, or still there, only where the evidence shows it, and never ask a question or speculate. Draw only on what the evidence and the material supplied show: do not invent hosts, values, accounts or results. Write in British English, in the past tense and the passive voice, in a factual and measured tone.");
 window._ES_TOGETHER = "Where the engagement had more than one phase, keep to this structure across them all, and say which phase a finding came from where it helps.";
 window._ES_BY_PHASE = "Where the engagement had more than one phase, structure the summary by phase instead: a heading \"Introduction\", then the opening paragraph, which also describes the phases and the scope of each; a heading for each phase, named as it is and in the order given, with that phase's findings grouped by category, most severe first; and a heading \"Conclusion and Recommendations\", with the overall position across all phases and the remediation to prioritise, in order of severity.";
 (window._SM_PREVIOUS_PROMPTS.executive_summary = window._SM_PREVIOUS_PROMPTS.executive_summary || []).push("You are a senior penetration test report writer. Write the executive summary of a security assessment report. It is read by directors and managers who may not be technical, and it must remain accurate for the technical team.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual, measured and professional tone. Use \"it is recommended that\" for recommendations. Avoid emotive language, hyperbole and filler such as \"in simple terms\", \"put simply\" or \"essentially\", and do not refer to screenshots, figures or evidence images.\n\nStructure the summary as follows.\n1. An opening paragraph, without a heading: who carried out the assessment, of what, for whom and when, and how many findings were identified at each severity.\n2. A section for each category of finding, the category with the most severe finding first: the category name as a short heading, then a paragraph explaining what was found and the risk it presents, most severe finding first, as the findings themselves describe it: their descriptions, their impact and the firm's own fields given with them. Keep remediation for the final section.\n3. A section headed Recommendations: one paragraph setting out the remediation the organisation should prioritise, in order of severity, drawn from the remediation guidance supplied.\n\nUse only the information supplied, and do not invent findings, hosts, figures or dates. Any background notes are for context: do not quote them or repeat internal remarks.");
@@ -58367,6 +58494,8 @@ window._AI_REPLY_CONTRACTS = {
   "references": "Reply with ONLY a JSON array of three to six URL strings. No other text and no code fence.",
   "affected_assets": "Reply with ONLY a JSON array of strings, one per affected asset, or an empty array if the material shows none. No other text and no code fence.",
   "evidence": "Reply with ONLY a JSON object of this shape: {\"figures\":[{\"figure\":<the screenshot's number>,\"above\":\"<the sentence that goes above the screenshot>\",\"caption\":\"<the caption that goes beneath it>\"}],\"blocks\":[{\"block\":<the block's number>,\"above\":\"<the sentence that goes above the block>\"}],\"notes\":[{\"note\":<the note's number>,\"text\":\"<the note, rewritten>\",\"left_out\":[\"<each part of the note left out, word for word as the tester wrote it>\"]}]}, with one entry for each screenshot and each block asked about, in the order they are numbered, an entry for each note rewritten, and an empty list for any where there is none. A note all of which is left out is given with an empty text and all of it under left_out. Plain text throughout, with no markdown and no HTML, except that a note keeps any `code`, **bold**, *emphasis* and [link](address) marks it was given; and never a screenshot's or a block's number in a sentence or a caption: say the screenshot below, the request below, or what it shows, since the report numbers the screenshots itself. No other text and no code fence.",
+
+  "retest_explain": "Reply with ONLY a JSON object of this shape: {\"figures\":[{\"figure\":<the screenshot's number>,\"above\":\"<the sentence that goes above the screenshot>\",\"caption\":\"<the caption that goes beneath it>\"}],\"blocks\":[{\"block\":<the block's number>,\"above\":\"<the sentence that goes above the block>\"}],\"notes\":[{\"note\":<the note's number>,\"text\":\"<the note, rewritten>\",\"table\":{\"columns\":[\"<a heading>\"],\"rows\":[[\"<a cell>\"]]},\"left_out\":[\"<each part of the note left out, word for word as the tester wrote it>\"]}]}, with one entry for each screenshot and each block asked about, in the order they are numbered, an entry for each note rewritten, and an empty list for any where there is none. A note all of which is left out is given with an empty text and all of it under left_out. A note that lists things that were checked again, such as components and their versions, hosts, ports, endpoints, parameters or accounts, is given as a table: a row for each thing, with columns for the thing, what the original test found of it where the finding's evidence or description says (an empty cell where they do not), what this retest found, and whether it is now Remediated, Partially Remediated or Not Remediated, judged from the two; its text is then the one sentence that goes above the table, and each name and value in the note stands in the table, its text, or under left_out (a heading the note groups things under may be a column of its own). Any other note has no table. Plain text throughout, the table's cells too, with no markdown and no HTML, except that a note keeps any `code`, **bold**, *emphasis* and [link](address) marks it was given; and never a screenshot's or a block's number in a sentence or a caption: say the screenshot below, the request below, or what it shows, since the report numbers the screenshots itself. No other text and no code fence.",
   "plain": "Respond with ONLY the value, no other text.",
   "cvss31_rules": "Decide each metric from the finding, not from how severe the issue sounds. AV is N only if the issue is reachable across a network, A if it needs the same local network, L if it needs a shell or a local account, P if it needs physical access. AC is H when the attacker needs a race, a particular configuration or information they must first obtain. PR is N only if no account at all is needed, L for an ordinary user account, H for an administrator. UI is R when a victim must click, open or visit something. S is C only when the impact crosses into another component or security boundary. C, I and A are the impact on the affected component: N where the finding shows none, and H only where the whole of that property is lost. Disclosure of information that is not sensitive is C:L, not C:H, and a finding that shows no integrity or availability impact is I:N and A:N, however serious it is.",
   "cvss31": "Reply with ONLY a JSON object of this shape, in which the brackets list the choices for each metric and are not an answer: {\"vector\":\"CVSS:3.1/AV:[N|A|L|P]/AC:[L|H]/PR:[N|L|H]/UI:[N|R]/S:[U|C]/C:[N|L|H]/I:[N|L|H]/A:[N|L|H]\",\"score\":<the base score those metrics give, 0.0 to 10.0>,\"reasoning\":\"<at most 20 words naming what in this finding decided the attack vector and the impacts>\"}. No other text and no code fence.",
@@ -62266,12 +62395,24 @@ function _edHold(el) {
     if (cs.top !== 'auto') upper = Math.max(upper, pt + (parseFloat(cs.top) || 0) + h);
     if (cs.bottom !== 'auto') lower = Math.max(lower, pb + (parseFloat(cs.bottom) || 0) + h);
   }
+
+  Array.prototype.forEach.call(box.querySelectorAll('.gen-run'), function (g) {
+    if (g.parentElement === box || g.contains(tb)) return;
+    var gs = window.getComputedStyle(g);
+    if (gs.position !== 'sticky' || gs.top === 'auto') return;
+    upper = Math.max(upper, pt + (parseFloat(gs.top) || 0) + g.getBoundingClientRect().height);
+  });
   box.style.setProperty('--ed-top', Math.round(upper - pt) + 'px');
   box.style.scrollPaddingTop = Math.round(upper + tb.getBoundingClientRect().height + 8) + 'px';
   box.style.scrollPaddingBottom = Math.round(lower + 8) + 'px';
   tb.classList.add('ed-live');
 }
 document.addEventListener('focusin', function (e) { try { _edHold(e.target); } catch (err) {} });
+function _edReholdIn(el) {
+  var ov = el && el.closest ? el.closest('.modal-overlay') : null;
+  var tb = ov && ov.querySelector('.editor-toolbar.ed-live');
+  if (tb) { try { _edHold(tb); } catch (e) {} }
+}
 function _edDrawLeast(ed) {
   if (ed._edLeast) return;
   if (!('edMin' in ed.dataset)) ed.dataset.edMin = ed.style.minHeight || '';
@@ -63303,6 +63444,11 @@ function _pntlFieldOfRegion(name) {
       var lbl = (typeof _ffLabel === 'function' && _ffLabel(keys[j])) || keys[j];
       return { key: col, label: lbl };
     }
+
+    var _rtLbl = { rt: '', rts: 'Retest status', rtd: 'Retest date' };
+    if (Object.prototype.hasOwnProperty.call(_rtLbl, sfx)) {
+      return { key: 'retest_results', label: _rtLbl[sfx] || (typeof _ffLabel === 'function' && _ffLabel('retest_results')) || 'Retest results' };
+    }
     return { key: '', label: sfx };
   }
   var sm2 = /^(?:s|st)_(.+)$/.exec(String(name || ''));
@@ -64162,6 +64308,94 @@ function _pntlRegionName(regions, f, suffix) {
   }
   return '';
 }
+function _syncRetestOutcome(t) {
+  var k = String(t == null ? '' : t).toLowerCase().replace(/[\s_\-]+/g, ' ').replace(/\.+$/, '').trim();
+  if (!k) return '';
+  if (k === 'partially remediated') return 'part_fixed';
+  for (var i = 0; i < _RETEST_OUTCOME_ORDER.length; i++) {
+    var o = _RETEST_OUTCOMES[_RETEST_OUTCOME_ORDER[i]];
+    if (k === o.words || k === o.label.toLowerCase()) return _RETEST_OUTCOME_ORDER[i];
+  }
+  return '';
+}
+function _syncRetestDateAt(iso, was) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!m) return null;
+  var w = was ? new Date(was) : null;
+  var hm = (w && !isNaN(w.getTime())) ? [w.getHours(), w.getMinutes(), w.getSeconds(), w.getMilliseconds()] : [12, 0, 0, 0];
+  return new Date(+m[1], +m[2] - 1, +m[3], hm[0], hm[1], hm[2], hm[3]).toISOString();
+}
+function _syncRetestChanges(regions, f, imgFor, note) {
+  var out = { found: false, changes: [] };
+  var nmR = _pntlRegionName(regions, f, 'rt'), nmS = _pntlRegionName(regions, f, 'rts'), nmD = _pntlRegionName(regions, f, 'rtd');
+  if (!nmR && !nmS && !nmD) return out;
+  out.found = true;
+  var who = f.title || '(untitled)';
+  if (nmR) {
+    var raw = regions[nmR];
+    var imgs = imgFor ? imgFor(nmR) : null;
+    if (!_syncSameRich(raw, _rtReportHtml(f), imgs)) {
+      out.changes.push({ field: 'retest_results', label: 'Retest results', col: 'retest_results', kind: 'retest_results', sfx: 'rt',
+        clears: !_syncPlainOf(raw).trim() && !/<(img|table|hr)\b/i.test(String(raw || '')),
+        current: _retestDraftOf(f).rest, proposed: raw, images: imgs || [] });
+    }
+  }
+  if (nmS) {
+    var sw = _syncPlainOf(regions[nmS]).replace(/\s+/g, ' ').trim();
+    var was = _retestStatusWords(f.retest_status);
+    if (sw.toLowerCase() !== was.toLowerCase()) {
+      var key = _syncRetestOutcome(sw);
+      var finishing = f.retest_status === 'requested';
+      if (!sw) note(who, 'Retest status', 'it was emptied, and a retest keeps its result');
+      else if (!key) note(who, 'Retest status', '"' + sw + '" is not one of its results (Remediated, Part remediated, Not remediated, Risk accepted)');
+      else if (!finishing && !_retestConcluded(f)) note(who, 'Retest status', '"' + sw + '" ' + (f.retest_status ? 'would change a scan\'s own result, which a document does not' : 'is a result for a finding not retested here'));
+      else if (key !== f.retest_status) {
+        var oc = _RETEST_OUTCOMES[key];
+        out.changes.push({ field: 'retest_status', label: 'Retest status', col: 'retest_status', kind: 'retest_status',
+          current: f.retest_status || '', proposed: key,
+          words: oc.label + (finishing ? '. This finishes the retest in progress, as pressing the result here does.' : '. The finding\'s status follows it, as when the result is pressed here.') });
+      }
+    }
+  }
+  if (nmD) {
+    var dw = _syncPlainOf(regions[nmD]).replace(/\s+/g, ' ').trim();
+    if (dw !== (fmtDate(f.retest_completed_at) || '')) {
+      var iso = dw ? _fsDateIso(dw) : '';
+      if (!dw) note(who, 'Retest date', 'it was emptied, and a retest keeps its date');
+      else if (!iso) note(who, 'Retest date', '"' + dw + '" ' + (_fsDateTwoWays(dw) ? 'reads as two dates: write it as YYYY-MM-DD' : 'is not a date (YYYY-MM-DD, or as the firm writes dates)'));
+      else if (iso !== _isoDay(f.retest_completed_at)) {
+        out.changes.push({ field: 'retest_date', label: 'Retest date', col: 'retest_completed_at', kind: 'retest_date',
+          current: f.retest_completed_at || null, proposed: _syncRetestDateAt(iso, f.retest_completed_at), words: fmtDate(iso) });
+      }
+    }
+  }
+  return out;
+}
+function _syncRetestPatch(row, sets) {
+  var by = {};
+  sets.forEach(function (x) { by[x.ch.kind] = x; });
+  var p = {}, rd = _retestDraftOf(row);
+  var sx = by.retest_status, dx = by.retest_date, rx = by.retest_results;
+  var finishing = !!(sx && row.retest_status === 'requested');
+  if (sx) {
+    p.retest_status = sx.value;
+    p.status = _RETEST_OUTCOMES[sx.value].status;
+    if (finishing) {
+      p.retest_requested = false;
+      p.retest_completed_at = new Date().toISOString();
+      p.retest_completed_by = (S.profile && S.profile.name) || 'Tester';
+    }
+  }
+  if (dx) p.retest_completed_at = dx.value;
+  if (rx) {
+    var fin = _retestUnmark(rx.value);
+    p.retest_results = (rd.draft != null && !finishing) ? _retestDraftOver(fin, rd.draft, rd.saved) : fin;
+  } else if (finishing && rd.draft != null) {
+    p.retest_results = _buildRetestResultsHtml(_retestUnmark(rd.draft), rd.rest);
+  }
+  return p;
+}
+var _SYNC_RT_KINDS = { retest_results: 1, retest_status: 1, retest_date: 1 };
 function _syncBuildProposals(regions, a, imgFor) {
   var items = [], seen = {};
   var vals = (typeof _smParseVals === 'function') ? _smParseVals(a) : {};
@@ -64337,6 +64571,10 @@ function _syncBuildProposals(regions, a, imgFor) {
         clears: !_syncPlainOf(regions[nm]).trim(),
         current: curVals[cf.id] || '', proposed: _pntlCustomFieldValue(cf, regions[nm]), images: imgFor ? imgFor(nm) : [] });
     });
+
+    var _rtc = _syncRetestChanges(regions, f, imgFor, _noteValue);
+    if (_rtc.found) found = true;
+    _rtc.changes.forEach(function (c) { changes.push(c); });
     if (found) seen[f.id] = true;
     if (changes.length) items.push({ kind: 'finding', id: f.id, label: f.title || '(untitled)', changes: changes });
   });
@@ -64617,16 +64855,19 @@ async function _syncApply(assessmentId, accepted, zip) {
       if (sets.length) {
         var _kept = 0, _left = [];
         var fr = await _coUpdate('findings', it.id, function (row) {
-          var p = {}, cfv = null;
+          var p = {}, cfv = null, rts = [];
           _kept = 0; _left = [];
           sets.forEach(function (x) {
-            var now = x.cf ? _qaObj(row.custom_fields)[x.cf] : row[x.col];
+
+            var now = x.cf ? _qaObj(row.custom_fields)[x.cf] : (x.ch.kind === 'retest_results' ? _retestDraftOf(row).rest : row[x.col]);
             if (!_syncStill(now, x.ch.current)) { x.why = _syncWhyLeft(now, x.ch.current); _left.push(x); return; }
             if (x.cf) { if (!cfv) cfv = _coCopy(_qaObj(row.custom_fields)); cfv[x.cf] = x.value; }
+            else if (_SYNC_RT_KINDS[x.ch.kind]) rts.push(x);
             else p[x.col] = x.value;
             _kept++;
           });
           if (cfv) p.custom_fields = cfv;
+          if (rts.length) Object.assign(p, _syncRetestPatch(row, rts));
           return Object.keys(p).length ? { patch: p } : null;
         });
         if (!fr.ok) {
@@ -64901,6 +65142,22 @@ function _syncUnsettled(accepted) {
   });
   return out;
 }
+function _syncHeldHtml(plan) {
+  var h = '';
+  if (plan.unmatchedCategories && plan.unmatchedCategories.length) {
+    h += '<div style="margin-top:0.8rem;font-size:0.75rem;color:var(--yellow);border-top:1px dashed var(--border);padding-top:0.5rem">The document gives a category that is not one of the finding categories: '
+      + esc(plan.unmatchedCategories.join(', ')) + '. Nothing was written for it; choose one on the finding.</div>';
+  }
+  if (plan.unmatchedValues && plan.unmatchedValues.length) {
+    h += '<div style="margin-top:0.8rem;font-size:0.75rem;color:var(--yellow);border-top:1px dashed var(--border);padding-top:0.5rem">The document gives values these fields cannot hold, so nothing was written for them; put them right here: '
+      + plan.unmatchedValues.map(function (x) { return esc(x); }).join('; ') + '.</div>';
+  }
+  if (plan.unmatchedSections && plan.unmatchedSections.length) {
+    h += '<div style="margin-top:0.8rem;font-size:0.75rem;color:var(--gray);border-top:1px dashed var(--border);padding-top:0.5rem">The document also carries these sections by name: '
+      + esc(plan.unmatchedSections.join(', ')) + '. None of them matches a section configured under Settings, so nothing was written for them. Add a section with that name under Settings and upload again, or rename yours to match. Nothing here creates a section for you.</div>';
+  }
+  return h;
+}
 function renderSyncReviewModal() {
   var plan = window._syncPlan;
   if (!plan) return '<div class="modal-header"><h2 class="modal-title">Nothing to review</h2><button class="btn-close" onclick="closeM()">&times;</button></div>'
@@ -64931,11 +65188,19 @@ function renderSyncReviewModal() {
       h += '<p style="font-size:0.8rem;color:var(--gray);margin-top:0.4rem">Download the report from here'
         + ' again, make the edits in that copy, and upload it back.</p>';
     } else {
-      h += '<p>The assessment already matches that document.</p>';
-      h += '<p style="font-size:0.8rem;color:var(--gray);margin-top:0.4rem">' + plan.regionCount
-        + ' marked region(s) were read and compared, and every one of them agrees with what is stored here.'
-        + ' If you expected a change, check that the edits were made in the copy downloaded from this'
-        + ' assessment.</p>';
+
+      var _held = _syncHeldHtml(plan);
+      if (_held) {
+        h += '<p>Nothing in that document can be brought in as it is.</p>';
+        h += '<p style="font-size:0.8rem;color:var(--gray);margin-top:0.4rem">' + plan.regionCount
+          + ' marked region(s) were read and compared. Where the document differs from what is stored here, it gives what cannot be written, said below.</p>' + _held;
+      } else {
+        h += '<p>The assessment already matches that document.</p>';
+        h += '<p style="font-size:0.8rem;color:var(--gray);margin-top:0.4rem">' + plan.regionCount
+          + ' marked region(s) were read and compared, and every one of them agrees with what is stored here.'
+          + ' If you expected a change, check that the edits were made in the copy downloaded from this'
+          + ' assessment.</p>';
+      }
       if (plan.alreadyPending) h += '<p style="font-size:0.8rem;color:var(--gray);margin-top:0.4rem">' + _syncKnownNote(plan.alreadyPending) + '</p>';
       if (plan.missing.length) h += '<p style="color:var(--gray);font-size:0.8rem;margin-top:0.5rem">' + plan.missing.length + ' finding(s) were not marked in the document and were left alone.</p>';
 
@@ -65031,6 +65296,8 @@ function renderSyncReviewModal() {
                       var _tf = _figFrom(_figP, it.id, c.cfId ? 'custom_' + c.cfId : c.field);
                       return _qaDiffHtml(_qaFigWords(c.current, _tf), _qaFigWords(c.proposed, _tf));
                     })() + '</div>'
+                  : c.words != null
+                  ? '<div class="sync-preview">' + esc(c.words) + '</div>'
                   : (c.plain
                       ? '<div class="sync-preview">' + (function () {
                           var _pd = (_ffCustomAll() || []).find(function (x) { return x.id === c.cfId; });
@@ -65071,18 +65338,7 @@ function renderSyncReviewModal() {
       + esc(plan.unmatchedPhases.join(', ')) + '. This assessment has no phase by those names. Tick them above to add them to this assessment and the findings will land in them; '
       + 'leave them and those findings sit under Other. An existing phase whose name is contained in the heading already matches, so "External Infrastructure" catches "External Infrastructure Assessment".</div>';
   }
-  if (plan.unmatchedCategories && plan.unmatchedCategories.length) {
-    h += '<div style="margin-top:0.8rem;font-size:0.75rem;color:var(--yellow);border-top:1px dashed var(--border);padding-top:0.5rem">The document gives a category that is not one of the finding categories: '
-      + esc(plan.unmatchedCategories.join(', ')) + '. Nothing was written for it; choose one on the finding.</div>';
-  }
-  if (plan.unmatchedValues && plan.unmatchedValues.length) {
-    h += '<div style="margin-top:0.8rem;font-size:0.75rem;color:var(--yellow);border-top:1px dashed var(--border);padding-top:0.5rem">The document gives values these fields cannot hold, so nothing was written for them; put them right here: '
-      + plan.unmatchedValues.map(function (x) { return esc(x); }).join('; ') + '.</div>';
-  }
-  if (plan.unmatchedSections && plan.unmatchedSections.length) {
-    h += '<div style="margin-top:0.8rem;font-size:0.75rem;color:var(--gray);border-top:1px dashed var(--border);padding-top:0.5rem">The document also carries these sections by name: '
-      + esc(plan.unmatchedSections.join(', ')) + '. None of them matches a section configured under Settings, so nothing was written for them. Add a section with that name under Settings and upload again, or rename yours to match. Nothing here creates a section for you.</div>';
-  }
+  h += _syncHeldHtml(plan);
   if (plan.missing.length) {
     if (!gone.length) h += '<div style="margin-top:0.8rem;font-size:0.75rem;color:var(--gray);border-top:1px dashed var(--border);padding-top:0.5rem">Left alone: ' + esc(plan.missing.join(', ')) + '. Their markers were not in the document, usually because the block was deleted and retyped rather than edited.</div>';
   }
@@ -65685,6 +65941,14 @@ function _pntlRefreshFromPortal(zip, a) {
     });
   } catch (e) {  }
 
+  try {
+    var _rtDay = _vhRetestDate((typeof _docFindings === 'function') ? _docFindings(a.id, 'report') : (getAssessmentFindings(a.id) || []));
+    if (_rtDay) {
+      considerInline('d_retest', _rtDay, 'Retest date');
+      considerInline('d_vhretest', _rtDay, 'Document controls - Re-test date');
+    }
+  } catch (e) {}
+
   var embedSt = { imgCount: 9000, relId: 9000, newRels: '' };
   (getAssessmentFindings(a.id) || []).forEach(function(f) {
     var nm = _pntlRegionName(regions, f, 'ev');
@@ -65835,6 +66099,689 @@ async function _syncStoreEditedDocx(plan) {
     }
   } catch (e) { try { console.error('[pdf] automatic PDF from the edited report failed', e); } catch (e2) {} }
 }
+var _RT_BOX = { 'w:tbl': 1, 'w:tr': 1, 'w:tc': 1, 'w:sdt': 1, 'w:sdtContent': 1, 'w:customXml': 1 };
+var _RT_PROPS = { 'w:tblPr': 1, 'w:tblGrid': 1, 'w:trPr': 1, 'w:tblPrEx': 1, 'w:tcPr': 1, 'w:sdtPr': 1, 'w:sdtEndPr': 1, 'w:pPr': 1 };
+var _RT_FIXED = { 'w:bookmarkStart': 1, 'w:bookmarkEnd': 1, 'w:sectPr': 1, 'w:proofErr': 1, 'w:permStart': 1, 'w:permEnd': 1 };
+function _rtTagEnd(x, lt) {
+  var q = '';
+  for (var k = lt + 1; k < x.length; k++) {
+    var ch = x.charCodeAt(k);
+    if (q) { if (ch === q) q = ''; continue; }
+    if (ch === 34 || ch === 39) { q = ch; continue; }
+    if (ch === 62) return k;
+  }
+  return -1;
+}
+function _rtCloseOf(x, name, from, limit) {
+  var re = new RegExp('<(/?)' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=[\\s/>])', 'g'), m, depth = 1;
+  re.lastIndex = from;
+  while ((m = re.exec(x))) {
+    if (m.index >= limit) return -1;
+    if (m[1]) { if (!--depth) return m.index; continue; }
+    var e = _rtTagEnd(x, m.index);
+    if (e < 0) return -1;
+    if (x.charCodeAt(e - 1) !== 47) depth++;
+    re.lastIndex = e + 1;
+  }
+  return -1;
+}
+function _rtKids(x, from, to) {
+  var out = [], i = from;
+  while (i < to) {
+    var lt = x.indexOf('<', i);
+    if (lt < 0 || lt >= to) break;
+    if (x.charAt(lt + 1) === '/') break;
+    if (x.substr(lt, 4) === '<!--') { var ce = x.indexOf('-->', lt); if (ce < 0) break; i = ce + 3; continue; }
+    if (x.charAt(lt + 1) === '?' || x.charAt(lt + 1) === '!') { var pe = x.indexOf('>', lt); if (pe < 0) break; i = pe + 1; continue; }
+    var gt = _rtTagEnd(x, lt);
+    if (gt < 0) break;
+    var nm = /^<([^\s\/>]+)/.exec(x.slice(lt, Math.min(gt + 1, lt + 120)));
+    if (!nm) break;
+    var name = nm[1];
+    if (x.charCodeAt(gt - 1) === 47) { out.push({ tag: name, start: lt, end: gt + 1, inner: gt + 1, innerEnd: gt + 1 }); i = gt + 1; continue; }
+    var close = _rtCloseOf(x, name, gt + 1, to);
+    if (close < 0) break;
+    var end = x.indexOf('>', close) + 1;
+    out.push({ tag: name, start: lt, end: end, inner: gt + 1, innerEnd: close });
+    i = end;
+  }
+  return out;
+}
+function _rtUnesc(t) {
+  return String(t).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, function (m, h) { return String.fromCharCode(parseInt(h, 16)); })
+    .replace(/&#(\d+);/g, function (m, d) { return String.fromCharCode(parseInt(d, 10)); }).replace(/&amp;/g, '&');
+}
+function _rtNorm(t) { return String(t == null ? '' : t).replace(/[\s ]+/g, ' ').trim(); }
+function _rtText(frag) {
+  var x = String(frag || '').replace(/<w:delText\b[^>]*>[\s\S]*?<\/w:delText>/g, '').replace(/<w:instrText\b[^>]*>[\s\S]*?<\/w:instrText>/g, '');
+  var out = '', re = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:(?:tab|br|cr)\b[^>]*\/>|<\/w:p>|<\/w:tc>/g, m;
+  while ((m = re.exec(x))) out += (m[1] != null) ? m[1] : ' ';
+  return _rtNorm(_rtUnesc(out));
+}
+function _rtMask(t) {
+  return String(t).replace(/\d+/g, '#').replace(/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/gi, 'M');
+}
+function _rtBmNames(x) {
+  var out = {}, re = /<w:bookmarkStart\b[^>]*\/>/g, m;
+  while ((m = re.exec(x))) {
+    var id = /\bw:id="([^"]*)"/.exec(m[0]), nm = /\bw:name="([^"]*)"/.exec(m[0]);
+    if (id && nm) out[id[1]] = nm[1];
+  }
+  return out;
+}
+function _rtMarksIn(frag, names) {
+  var out = [], re = /<w:bookmarkStart\b[^>]*\bw:name="PNTL_([^"]+)"[^>]*\/>/g, m;
+  while ((m = re.exec(frag))) out.push(m[1]);
+  var be = /^<w:bookmarkEnd\b[^>]*\bw:id="([^"]*)"/.exec(frag);
+  if (be && names && /^PNTL_/.test(names[be[1]] || '')) out.push(names[be[1]].slice(5));
+  return out;
+}
+function _rtOwner(mark) {
+  var f = /^f_([0-9a-f]{8,16})_/.exec(mark);
+  if (f) return 'f:' + f[1];
+  if (mark === 's_retest') return 'summary';
+  if (/^d_/.test(mark)) return 'date';
+  return '';
+}
+function _rtSig(x, el, names) {
+  var frag = x.slice(el.start, el.end);
+  if (el.tag === 'w:bookmarkStart') return 'bs|' + ((/\bw:name="([^"]*)"/.exec(frag) || [])[1] || '');
+  if (el.tag === 'w:bookmarkEnd') return 'be|' + (names[(/\bw:id="([^"]*)"/.exec(frag) || [])[1]] || '');
+  if (_RT_PROPS[el.tag] || el.tag === 'w:sectPr') return el.tag;
+  return el.tag + '|' + _rtText(frag);
+}
+function _rtLcs(a, b, eq) {
+  var n = a.length, m = b.length, pre = 0, suf = 0, out = [], i;
+  while (pre < n && pre < m && eq(a[pre], b[pre], pre, pre)) pre++;
+  while (suf < n - pre && suf < m - pre && eq(a[n - 1 - suf], b[m - 1 - suf], n - 1 - suf, m - 1 - suf)) suf++;
+  for (i = 0; i < pre; i++) out.push([i, i]);
+  var A = a.slice(pre, n - suf), B = b.slice(pre, m - suf);
+  var mid = _rtMyers(A, B, function (p, q, ip, iq) { return eq(p, q, ip + pre, iq + pre); });
+  if (mid === null) return null;
+  mid.forEach(function (p) { out.push([p[0] + pre, p[1] + pre]); });
+  for (i = suf; i > 0; i--) out.push([n - i, m - i]);
+  return out;
+}
+function _rtMyers(a, b, eq) {
+  var n = a.length, m = b.length;
+  if (!n || !m) return [];
+  var max = n + m, lim = Math.min(max, 4000), off = max + 1;
+  var v = new Int32Array(2 * max + 3), trace = [], dEnd = -1;
+  for (var d = 0; d <= lim && dEnd < 0; d++) {
+    trace.push(v.slice(off - d - 1, off + d + 2));
+    for (var k = -d; k <= d; k += 2) {
+      var x = (k === -d || (k !== d && v[off + k - 1] < v[off + k + 1])) ? v[off + k + 1] : v[off + k - 1] + 1;
+      var y = x - k;
+      while (x < n && y < m && eq(a[x], b[y], x, y)) { x++; y++; }
+      v[off + k] = x;
+      if (x >= n && y >= m) { dEnd = d; break; }
+    }
+  }
+  if (dEnd < 0) return null;
+  var pairs = [], x2 = n, y2 = m;
+  for (var d2 = dEnd; d2 >= 0; d2--) {
+    var w = trace[d2], lo = -d2 - 1, k2 = x2 - y2;
+    var pk = (k2 === -d2 || (k2 !== d2 && w[k2 - 1 - lo] < w[k2 + 1 - lo])) ? k2 + 1 : k2 - 1;
+    var px = w[pk - lo], py = px - pk;
+    while (x2 > px && y2 > py) { x2--; y2--; pairs.push([x2, y2]); }
+    if (d2 > 0) { x2 = px; y2 = py; }
+  }
+  return pairs.reverse();
+}
+function _rtBody(x) {
+  var b = /<w:body\b[^>]*>/.exec(x);
+  if (!b) return null;
+  var close = x.lastIndexOf('</w:body>');
+  return close > b.index ? { tag: 'w:body', start: b.index, end: close + 9, inner: b.index + b[0].length, innerEnd: close } : null;
+}
+function _rtLike(x0, e0, x1, e1, n0, n1) {
+  if (e0.tag !== e1.tag) return false;
+  if (e0.tag === 'w:tc' || _RT_PROPS[e0.tag]) return true;
+  var f0 = x0.slice(e0.start, e0.end), f1 = x1.slice(e1.start, e1.end);
+  var m0 = _rtMarksIn(f0, n0), m1 = _rtMarksIn(f1, n1);
+  for (var i = 0; i < m0.length; i++) if (m1.indexOf(m0[i]) >= 0) return true;
+  if (_rtMask(_rtText(f0)) === _rtMask(_rtText(f1))) return true;
+  if (e0.tag === 'w:tbl') {
+    var r0 = _rtKids(x0, e0.inner, e0.innerEnd).filter(function (k) { return k.tag === 'w:tr'; })[0];
+    var r1 = _rtKids(x1, e1.inner, e1.innerEnd).filter(function (k) { return k.tag === 'w:tr'; })[0];
+    return !!(r0 && r1) && _rtMask(_rtText(x0.slice(r0.start, r0.end))) === _rtMask(_rtText(x1.slice(r1.start, r1.end)));
+  }
+  return false;
+}
+function _rtDelta(x0, c0, x1, c1, path, ops, n0, n1) {
+  var k0 = _rtKids(x0, c0.inner, c0.innerEnd), k1 = _rtKids(x1, c1.inner, c1.innerEnd);
+  var s0 = k0.map(function (e) { return _rtSig(x0, e, n0); }), s1 = k1.map(function (e) { return _rtSig(x1, e, n1); });
+  var pairs = _rtLcs(s0, s1, function (a, b) { return a === b; });
+  if (!pairs) return false;
+  var i0 = 0, i1 = 0, ok = true;
+  pairs.concat([[k0.length, k1.length]]).forEach(function (pr) {
+    if (!_rtGap(x0, k0, i0, pr[0], x1, k1, i1, pr[1], path, ops, n0, n1)) ok = false;
+    i0 = pr[0] + 1; i1 = pr[1] + 1;
+  });
+  return ok;
+}
+function _rtGap(x0, k0, a0, b0, x1, k1, a1, b1, path, ops, n0, n1) {
+  if (a0 >= b0 && a1 >= b1) return true;
+  var g0 = k0.slice(a0, b0), g1 = k1.slice(a1, b1), ok = true;
+  var pairs = (g0.length === 1 && g1.length === 1 && g0[0].tag === g1[0].tag) ? [[0, 0]]
+    : _rtLcs(g0, g1, function (e0, e1) { return _rtLike(x0, e0, x1, e1, n0, n1); });
+  if (!pairs) return false;
+  var j0 = 0, j1 = 0, last = a0 - 1;
+  var add = function (to1) {
+
+    var run = [];
+    for (var q = j1; q < to1; q++) run.push(g1[q]);
+    var units = [], pend = [];
+    run.forEach(function (e) {
+      var fr = x1.slice(e.start, e.end);
+      var own = (_rtMarksIn(fr, n1).map(_rtOwner).filter(Boolean)[0]) || '';
+      pend.push(e);
+      if (own) {
+        var u = units.length ? units[units.length - 1] : null;
+        if (u && u.owner === own) u.els = u.els.concat(pend);
+        else units.push({ owner: own, els: pend.slice() });
+        pend = [];
+      }
+    });
+    if (pend.length) {
+      if (units.length) units[units.length - 1].els = units[units.length - 1].els.concat(pend);
+      else units.push({ owner: '', els: pend });
+    }
+    units.forEach(function (u) {
+      if (u.els.every(function (e) { return _RT_FIXED[e.tag]; })) return;
+      var first = u.els[0], lastEl = u.els[u.els.length - 1];
+      ops.push({ kind: 'add', path: path, after: last, xml: x1.slice(first.start, lastEl.end), owner: u.owner,
+        tags: u.els.map(function (e) { return e.tag; }), texts: u.els.map(function (e) { return _rtText(x1.slice(e.start, e.end)); }) });
+    });
+  };
+  pairs.concat([[g0.length, g1.length]]).forEach(function (pr) {
+    for (; j0 < pr[0]; j0++) {
+      var e0 = g0[j0];
+      if (_RT_PROPS[e0.tag] || _RT_FIXED[e0.tag]) continue;
+      var f0 = x0.slice(e0.start, e0.end);
+      ops.push({ kind: 'drop', path: path.concat([a0 + j0]), was: _rtText(f0), owner: (_rtMarksIn(f0, n0).map(_rtOwner).filter(Boolean)[0]) || '' });
+    }
+    add(pr[1]); j1 = pr[1];
+    if (pr[0] < g0.length) {
+      var e0b = g0[pr[0]], e1b = g1[pr[1]];
+      var f0b = x0.slice(e0b.start, e0b.end), f1b = x1.slice(e1b.start, e1b.end);
+      if (f0b !== f1b && !_RT_FIXED[e0b.tag]) {
+        if (_RT_BOX[e0b.tag]) { if (!_rtDelta(x0, e0b, x1, e1b, path.concat([a0 + pr[0]]), ops, n0, n1)) ok = false; }
+        else if (!_RT_PROPS[e0b.tag]) {
+          var own = (_rtMarksIn(f1b, n1).concat(_rtMarksIn(f0b, n0)).map(_rtOwner).filter(Boolean)[0]) || '';
+          ops.push({ kind: 'swap', path: path.concat([a0 + pr[0]]), xml: f1b, was: _rtText(f0b), now: _rtText(f1b), owner: own });
+        }
+      }
+      last = a0 + pr[0]; j0 = pr[0] + 1; j1 = pr[1] + 1;
+    }
+  });
+  return ok;
+}
+function _rtMapper(x0, xu, n0, nu) {
+  var cache = {};
+  function get(path) {
+    var key = path.join('.');
+    if (Object.prototype.hasOwnProperty.call(cache, key)) return cache[key];
+    var c0, cu;
+    if (!path.length) { c0 = _rtBody(x0); cu = _rtBody(xu); }
+    else {
+      var up = get(path.slice(0, -1)), i = path[path.length - 1];
+      if (!up || up.map[i] < 0) return (cache[key] = null);
+      c0 = up.k0[i]; cu = up.ku[up.map[i]];
+      if (!c0 || !cu || c0.tag !== cu.tag) return (cache[key] = null);
+    }
+    if (!c0 || !cu) return (cache[key] = null);
+    var k0 = _rtKids(x0, c0.inner, c0.innerEnd), ku = _rtKids(xu, cu.inner, cu.innerEnd);
+    var s0 = k0.map(function (e) { return _rtSig(x0, e, n0); }), su = ku.map(function (e) { return _rtSig(xu, e, nu); });
+    var mk0 = k0.map(function (e) { return _rtMarksIn(x0.slice(e.start, e.end), n0); });
+    var mku = ku.map(function (e) { return _rtMarksIn(xu.slice(e.start, e.end), nu); });
+    var shared = function (i, j) {
+      for (var q = 0; q < mk0[i].length; q++) if (mku[j].indexOf(mk0[i][q]) >= 0) return true;
+      return false;
+    };
+    var map = []; for (var z = 0; z < k0.length; z++) map.push(-1);
+    var pairs = _rtLcs(s0, su, function (a, b, i, j) { return a === b || (k0[i].tag === ku[j].tag && shared(i, j)); });
+    if (!pairs) return (cache[key] = null);
+    var p0 = 0, pu = 0;
+    pairs.concat([[k0.length, ku.length]]).forEach(function (pr) {
+
+      var g0 = k0.slice(p0, pr[0]), gu = ku.slice(pu, pr[1]);
+      if (g0.length && gu.length) {
+        var lp = _rtLcs(g0, gu, function (e0, eu) { return _rtLike(x0, e0, xu, eu, n0, nu); });
+        (lp || []).forEach(function (q) { map[p0 + q[0]] = pu + q[1]; });
+      }
+      if (pr[0] < k0.length) map[pr[0]] = pr[1];
+      p0 = pr[0] + 1; pu = pr[1] + 1;
+    });
+    return (cache[key] = { c0: c0, cu: cu, k0: k0, ku: ku, map: map });
+  }
+  return get;
+}
+function _rtImportCtx(zF, zU, xu) {
+  var ctx = { zF: zF, zU: zU, rels: {}, relIdsU: {}, relMap: {}, newRels: '', exts: {}, bmMap: {}, numMap: {}, absNew: '', numNew: '',
+    stylesNew: '', styleSeen: {}, bad: '' };
+  var rf = zF.file('word/_rels/document.xml.rels'), ru = zU.file('word/_rels/document.xml.rels');
+  var rx = rf ? rf.asText() : '', ux = ru ? ru.asText() : '';
+  (rx.match(/<Relationship\b[^>]*\/?>/g) || []).forEach(function (r) {
+    var id = /\bId="([^"]+)"/.exec(r), ty = /\bType="([^"]+)"/.exec(r), tg = /\bTarget="([^"]+)"/.exec(r), md = /\bTargetMode="([^"]+)"/.exec(r);
+    if (id && ty && tg) ctx.rels[id[1]] = { type: ty[1], target: tg[1], mode: md ? md[1] : '' };
+  });
+  (ux.match(/\bId="([^"]+)"/g) || []).forEach(function (r) { ctx.relIdsU[r.slice(4, -1)] = 1; });
+  var maxOf = function (re, s) { var mx = 0, m; while ((m = re.exec(s))) mx = Math.max(mx, parseInt(m[1], 10) || 0); return mx; };
+  ctx.bmNext = maxOf(/<w:bookmark(?:Start|End)\b[^>]*\bw:id="(\d+)"/g, xu) + 1;
+  ctx.drawNext = Math.max(maxOf(/<wp:docPr\b[^>]*\bid="(\d+)"/g, xu), maxOf(/<pic:cNvPr\b[^>]*\bid="(\d+)"/g, xu)) + 1;
+  var nf = zU.file('word/numbering.xml');
+  ctx.numU = nf ? nf.asText() : '';
+  ctx.numF = zF.file('word/numbering.xml') ? zF.file('word/numbering.xml').asText() : '';
+  ctx.numNext = Math.max(maxOf(/<w:num\b[^>]*\bw:numId="(\d+)"/g, ctx.numU), 0) + 1;
+  ctx.absNext = Math.max(maxOf(/<w:abstractNum\b[^>]*\bw:abstractNumId="(\d+)"/g, ctx.numU), 0) + 1;
+  ctx.stylesU = zU.file('word/styles.xml') ? zU.file('word/styles.xml').asText() : '';
+  ctx.stylesF = zF.file('word/styles.xml') ? zF.file('word/styles.xml').asText() : '';
+  ctx.relN = 0;
+  return ctx;
+}
+var _RT_MEDIA_TYPES = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', emf: 'image/x-emf', wmf: 'image/x-wmf', tif: 'image/tiff', tiff: 'image/tiff' };
+function _rtRel(ctx, rid) {
+  if (ctx.relMap[rid]) return ctx.relMap[rid];
+  var r = ctx.rels[rid];
+  if (!r) return null;
+  var nid;
+  do { nid = 'rIdPRT' + (++ctx.relN); } while (ctx.relIdsU[nid]);
+  if (r.mode === 'External') {
+    ctx.newRels += '<Relationship Id="' + nid + '" Type="' + r.type + '" Target="' + r.target + '" TargetMode="External"/>';
+  } else if (/\/image$/.test(r.type)) {
+    var src = 'word/' + r.target.replace(/^\/?word\//, '').replace(/^\.\//, '');
+    var f = ctx.zF.file(src);
+    if (!f) return null;
+    var ext = ((/\.([A-Za-z0-9]+)$/.exec(src) || [])[1] || 'png').toLowerCase();
+    var name;
+    do { name = 'media/pntl_rt' + ctx.relN + '_' + Math.floor(Math.random() * 1e6) + '.' + ext; } while (ctx.zU.file('word/' + name));
+    ctx.zU.file('word/' + name, f.asUint8Array());
+    ctx.exts[ext] = 1;
+    ctx.newRels += '<Relationship Id="' + nid + '" Type="' + r.type + '" Target="' + name + '"/>';
+  } else return null;
+  ctx.relIdsU[nid] = 1;
+  return (ctx.relMap[rid] = nid);
+}
+function _rtNum(ctx, n) {
+  if (ctx.numMap[n]) return ctx.numMap[n];
+  var numOf = function (x, id) { return new RegExp('<w:num\\b[^>]*\\bw:numId="' + id + '"[^>]*>([\\s\\S]*?)<\\/w:num>').exec(x); };
+  var absOf = function (x, id) { return new RegExp('<w:abstractNum\\b[^>]*\\bw:abstractNumId="' + id + '"[^>]*>[\\s\\S]*?<\\/w:abstractNum>').exec(x); };
+  var num = numOf(ctx.numF, n);
+  if (!num) return null;
+  var a = /<w:abstractNumId w:val="(\d+)"/.exec(num[1]);
+  if (!a) return null;
+  var abs = absOf(ctx.numF, a[1]);
+  if (!abs) return null;
+
+  var nu = numOf(ctx.numU, n);
+  if (nu && !/<w:lvlOverride\b/.test(num[1])) {
+    var au = /<w:abstractNumId w:val="(\d+)"/.exec(nu[1]), absU = au ? absOf(ctx.numU, au[1]) : null;
+    var plain = function (t) { return t.replace(/\bw:abstractNumId="\d+"/, '').replace(/<w:nsid\b[^>]*\/>|<w:tmpl\b[^>]*\/>/g, '').replace(/\s+/g, ' '); };
+    if (absU && plain(absU[0]) === plain(abs[0])) return (ctx.numMap[n] = String(n));
+  }
+  var na = ctx.absNext++, nn = ctx.numNext++;
+  ctx.absNew += abs[0].replace(/\bw:abstractNumId="\d+"/, 'w:abstractNumId="' + na + '"').replace(/<w:nsid\b[^>]*\/>/g, '').replace(/<w:tmpl\b[^>]*\/>/g, '');
+  ctx.numNew += '<w:num w:numId="' + nn + '"><w:abstractNumId w:val="' + na + '"/>' + num[1].replace(/<w:abstractNumId w:val="\d+"\/>/, '') + '</w:num>';
+  return (ctx.numMap[n] = String(nn));
+}
+function _rtStyle(ctx, sid) {
+  if (!sid || ctx.styleSeen[sid]) return;
+  ctx.styleSeen[sid] = 1;
+  if (ctx.stylesU.indexOf('w:styleId="' + sid + '"') >= 0) return;
+  var st = new RegExp('<w:style\\b[^>]*\\bw:styleId="' + sid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*>[\\s\\S]*?<\\/w:style>').exec(ctx.stylesF);
+  if (!st) return;
+  ctx.stylesNew += st[0];
+  var deps = st[0].match(/<w:(?:basedOn|next|link) w:val="([^"]+)"/g) || [];
+  deps.forEach(function (d) { _rtStyle(ctx, /w:val="([^"]+)"/.exec(d)[1]); });
+}
+function _rtImport(xml, ctx, keep) {
+  var x = String(xml);
+  x = x.replace(/\b(r:(?:embed|id|link|pict))="([^"]+)"/g, function (all, at, rid) {
+    var nid = _rtRel(ctx, rid);
+    if (!nid) { ctx.bad = ctx.bad || 'a part of it this document cannot take'; return all; }
+    return at + '="' + nid + '"';
+  });
+
+  var drop = {};
+  x = x.replace(/<w:bookmarkStart\b[^>]*\/>/g, function (b) {
+    var id = (/\bw:id="(\d+)"/.exec(b) || [])[1], nm = (/\bw:name="([^"]*)"/.exec(b) || [])[1] || '';
+    if (!/^PNTL_/.test(nm) || !keep(nm.slice(5))) { drop[id] = 1; return ''; }
+    if (!ctx.bmMap[id]) ctx.bmMap[id] = String(ctx.bmNext++);
+    return b.replace(/\bw:id="\d+"/, 'w:id="' + ctx.bmMap[id] + '"');
+  });
+  x = x.replace(/<w:bookmarkEnd\b[^>]*\/>/g, function (b) {
+    var id = (/\bw:id="(\d+)"/.exec(b) || [])[1];
+    if (drop[id] || !ctx.bmMap[id]) return '';
+    return b.replace(/\bw:id="\d+"/, 'w:id="' + ctx.bmMap[id] + '"');
+  });
+  x = x.replace(/(<(?:wp:docPr|pic:cNvPr)\b[^>]*\bid=")(\d+)(")/g, function (all, a, id, b) { return a + (ctx.drawNext++) + b; });
+  x = x.replace(/\s+w14:(?:paraId|textId)="[^"]*"/g, '');
+  x = x.replace(/(<w:numId w:val=")(\d+)("\s*\/>)/g, function (all, a, n, b) { var nn = _rtNum(ctx, n); return nn ? a + nn + b : all; });
+  (x.match(/<w:(?:pStyle|rStyle|tblStyle) w:val="[^"]+"/g) || []).forEach(function (t) { _rtStyle(ctx, /w:val="([^"]+)"/.exec(t)[1]); });
+  return x;
+}
+function _rtImportDone(ctx) {
+  var zU = ctx.zU;
+  if (ctx.newRels) {
+    var rf = zU.file('word/_rels/document.xml.rels');
+    var rx = rf ? rf.asText() : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+    zU.file('word/_rels/document.xml.rels', rx.replace('</Relationships>', ctx.newRels + '</Relationships>'));
+  }
+  var exts = Object.keys(ctx.exts);
+  if (exts.length) {
+    var cf = zU.file('[Content_Types].xml');
+    if (cf) {
+      var cx = cf.asText();
+      exts.forEach(function (e) {
+        if (new RegExp('Extension="' + e + '"', 'i').test(cx)) return;
+        cx = cx.replace('</Types>', '<Default Extension="' + e + '" ContentType="' + (_RT_MEDIA_TYPES[e] || 'image/' + e) + '"/></Types>');
+      });
+      zU.file('[Content_Types].xml', cx);
+    }
+  }
+  if (ctx.absNew || ctx.numNew) {
+    if (!ctx.numU) { _ensureDocxDefs(zU); ctx.numU = zU.file('word/numbering.xml') ? zU.file('word/numbering.xml').asText() : ''; }
+    var nx = ctx.numU;
+    if (nx && nx.indexOf('</w:numbering>') > 0) {
+      var firstNum = nx.search(/<w:num\b/);
+      nx = firstNum >= 0 ? nx.slice(0, firstNum) + ctx.absNew + nx.slice(firstNum) : nx.replace('</w:numbering>', ctx.absNew + '</w:numbering>');
+      nx = nx.replace('</w:numbering>', ctx.numNew + '</w:numbering>');
+      zU.file('word/numbering.xml', nx);
+    }
+  }
+  if (ctx.stylesNew && ctx.stylesU.indexOf('</w:styles>') > 0) zU.file('word/styles.xml', ctx.stylesU.replace('</w:styles>', ctx.stylesNew + '</w:styles>'));
+}
+function _rtRootNs(xu, xF) {
+  var ru = /<w:document\b[^>]*>/.exec(xu), rf = /<w:document\b[^>]*>/.exec(xF);
+  if (!ru || !rf) return xu;
+  var add = '';
+  (rf[0].match(/\sxmlns:[A-Za-z0-9_.-]+="[^"]*"/g) || []).forEach(function (d) {
+    var p = /xmlns:([^=]+)=/.exec(d)[1];
+    if (ru[0].indexOf('xmlns:' + p + '=') < 0 && add.indexOf('xmlns:' + p + '=') < 0) add += d;
+  });
+  if (!add) return xu;
+  return xu.slice(0, ru.index) + ru[0].replace(/^<w:document\b/, '<w:document' + add) + xu.slice(ru.index + ru[0].length);
+}
+function _rtStatusKey(t) {
+  var k = String(t || '').trim().toLowerCase().replace(/\s+/g, '_');
+  return /^[a-z_]{2,40}$/.test(k) ? k : '';
+}
+function _rtAsStood(f, plan) {
+  var off = plan && plan.off && plan.off[f.id], st = plan && plan.statusAs && plan.statusAs[f.id];
+  if (!off && !st) return f;
+  var g = Object.assign({}, f);
+  if (off) { g.retest_status = null; g.retest_results = null; g.retests = []; g.retest_completed_at = null; g.retest_requested = false; }
+  if (st) g.status = st;
+  return g;
+}
+function _rtHas(f) { return !!(f && (f.retest_status || (f.retests && f.retests.length))); }
+function _rtAlreadyIn(f, uText) {
+  var parts = String(_rtReportHtml(f) || '').split(/<\/(?:p|div|li|h[1-6]|pre|td|th|blockquote)>|<br\s*\/?>/i)
+    .map(function (h) { return _rtNorm(_rtUnesc(h.replace(/<[^>]+>/g, ' '))); }).filter(function (t) { return t.length >= 20; });
+  return parts.some(function (t) { return uText.indexOf(t) >= 0; });
+}
+async function _rtTwoReports(a, plan) {
+  await _ensurePdfTemplates();
+  await _loadDocxLibs();
+
+  var meta = _rtWith(a.id, function () { return _getDocxTemplateMeta('report'); });
+  var fid = (meta && meta.id) || '';
+  var buf = await _fetchDocxTemplate('report', fid || null);
+  if (!buf) return { why: fid ? 'its Word template could not be fetched' : 'its report has no Word template to draw it from' };
+  var sevWas = _docxSevNow, styleWas = _docxStyleOverride, rtF = _rtResolve(a.id);
+  _docxStyleOverride = (getTemplate('report') || {}).style_map || null;
+  _docxSevNow = _rtWith(a.id, function () { return _rdFileWith(fid, function () {
+    return { colors: Object.assign({}, (getTemplate('report') || {}).severity_colors || {}), style: _sevStyleLayered() };
+  }); });
+  try {
+    var held = {};
+    var dataF = await buildReportData(a.id, 'report', { fileId: fid, imgOut: held });
+    if (!dataF) return { why: 'the report could not be made' };
+    _rtStack.push(rtF);
+    var F;
+    try { F = _fillTemplateZipNow(buf, dataF); } finally { _rtStack.pop(); }
+    var data0 = await buildReportData(a.id, 'report', { fileId: fid, imgCache: held.cache, asStood: plan });
+    if (!data0) return { why: 'the report could not be made' };
+    _rtStack.push(rtF);
+    var F0;
+    try { F0 = _fillTemplateZipNow(buf, data0); } finally { _rtStack.pop(); }
+    return { F: F, F0: F0 };
+  } finally { _docxSevNow = sevWas; _docxStyleOverride = styleWas; }
+}
+async function _rtBringRetest(zip, a) {
+  var res = { put: [], changed: 0, left: [], other: 0, why: '', wrote: false };
+  var df = zip.file('word/document.xml');
+  if (!df || !a) return res;
+  var xu = df.asText();
+  var regions = _pntlRegions(xu);
+  var findings = (typeof _docFindings === 'function') ? _docFindings(a.id, 'report') : (getAssessmentFindings(a.id) || []);
+  var titleOf = {};
+  findings.forEach(function (f) { titleOf[_pntlKey(f.id)] = f.title || 'Finding'; });
+  var retested = findings.filter(_rtHas);
+  var summaryOn = !!(a.retest_summary && _cfHasContent(a.retest_summary))
+    && (typeof _smEnabled !== 'function' || _smEnabled('retest_summary'))
+    && (typeof _smInReport !== 'function' || _smInReport('retest_summary'));
+  if (!retested.length && !summaryOn) return res;
+  var uText = _rtText(xu);
+  var plan = { off: {}, statusAs: {}, noSummary: false, noDate: false }, stale = {}, need = false;
+  retested.forEach(function (f) {
+    var k = _pntlKey(f.id);
+    var nmR = 'f_' + k + '_rt', nmS = 'f_' + k + '_rts', nmD = 'f_' + k + '_rtd';
+
+    var stU = (regions['f_' + k + '_status'] != null ? _rtStatusKey(_pntlInlineText(regions['f_' + k + '_status'])) : '') || 'open';
+    if (nmR in regions || nmS in regions || nmD in regions) {
+
+      var dU = (nmD in regions) ? _pntlInlineText(regions[nmD]) : null;
+      var sU = (nmS in regions) ? _pntlInlineText(regions[nmS]) : null;
+      var again = (dU !== null && dU !== (fmtDate(f.retest_completed_at) || ''))
+        || (sU !== null && sU.toLowerCase() !== _retestStatusWords(f.retest_status).toLowerCase());
+
+      if (!again && (nmR in regions) && Date.parse(f.updated_at || '') > Date.parse(a.edited_docx_at || '')) {
+        var figs = function (t) { return String(t).replace(/\{\{fig\}\}|\bFigure\s+\d+\b/g, 'FIG').replace(/\s+/g, ' ').trim(); };
+        again = figs(_rtText(regions[nmR])) !== figs(_rtNorm(_rtUnesc(String(_rtReportHtml(f) || '').replace(/<\/(?:p|div|li|h[1-6]|pre|td|th|tr|blockquote)>|<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, ''))));
+      }
+      if (!again) return;
+      stale[f.id] = true;
+      if (stU && stU !== f.status) plan.statusAs[f.id] = stU;
+      need = true;
+      return;
+    }
+
+    if (_rtAlreadyIn(f, uText)) {
+      if (Date.parse(f.retest_completed_at || '') > Date.parse(a.edited_docx_at || '')) res.left.push({ what: f.title || 'Finding', why: 'old' });
+      return;
+    }
+    plan.off[f.id] = true;
+    if (stU && stU !== f.status) plan.statusAs[f.id] = stU;
+    need = true;
+  });
+  if (summaryOn && !('s_retest' in regions)) { plan.noSummary = true; need = true; }
+
+  var anyMarked = retested.some(function (f) { var k2 = _pntlKey(f.id); return ['_rt', '_rts', '_rtd'].some(function (sx) { return ('f_' + k2 + sx) in regions; }); });
+  if (!('d_retest' in regions) && !('d_vhretest' in regions) && findings.some(function (f) { return !!f.retest_completed_at; }) && (need || !anyMarked)) { plan.noDate = true; need = true; }
+  if (!need) return res;
+
+  var made;
+  try { made = await _rtTwoReports(a, plan); } catch (e) { made = { why: 'the report could not be made (' + ((e && e.message) || e) + ')' }; }
+  if (!made || !made.F || !made.F0) { res.why = (made && made.why) || 'the report could not be made'; return res; }
+  var xF = made.F.file('word/document.xml').asText(), x0 = made.F0.file('word/document.xml').asText();
+  var nF = _rtBmNames(xF), n0 = _rtBmNames(x0), nU = _rtBmNames(xu);
+  var bF = _rtBody(xF), b0 = _rtBody(x0), bU = _rtBody(xu);
+  if (!bF || !b0 || !bU) { res.why = 'the document could not be read'; return res; }
+  var ops = [];
+  if (!_rtDelta(x0, b0, xF, bF, [], ops, n0, nF)) { res.why = 'the report made now could not be compared with it'; return res; }
+  var get = _rtMapper(x0, xu, n0, nU);
+  var ctx = _rtImportCtx(made.F, zip, xu);
+  var edits = [];
+  var label = function (owner) {
+    if (owner === 'summary') return 'summary';
+    if (owner === 'date') return 'date';
+    var m = /^f:(.+)$/.exec(owner || '');
+    return m ? (titleOf[m[1]] || 'Finding') : '';
+  };
+  var fail = function (op, why) {
+    var l = label(op.owner);
+    if (l) res.left.push({ what: l, why: why });
+    else res.other++;
+  };
+
+  var startOf = function (c) {
+    var at = c.cu.inner;
+    for (var q = 0; q < c.ku.length && _RT_PROPS[c.ku[q].tag]; q++) at = c.ku[q].end;
+    return at;
+  };
+  var placeAfter = function (c, after) {
+    for (var i = after; i >= 0; i--) if (c.map[i] >= 0) return c.ku[c.map[i]].end;
+    return startOf(c);
+  };
+
+  var anchorAt = function (c, after) {
+    for (var i = after; i >= 0; i--) {
+      if (c.map[i] >= 0) return c.ku[c.map[i]].end;
+      var e0 = c.k0[i];
+      if (!_RT_FIXED[e0.tag] && _rtText(x0.slice(e0.start, e0.end))) return -1;
+    }
+    return startOf(c);
+  };
+
+  var bodyEnd = function () {
+    var kids = _rtKids(xu, bU.inner, bU.innerEnd), lastK = kids[kids.length - 1];
+    return (lastK && lastK.tag === 'w:sectPr') ? lastK.start : bU.innerEnd;
+  };
+  var marksU = {};
+  Object.keys(nU).forEach(function (id) { if (/^PNTL_/.test(nU[id])) marksU[nU[id].slice(5)] = 1; });
+  var drops = {};
+
+  var markBefore = function (pos) {
+    var re = /<w:bookmarkStart\b[^>]*\bw:name="PNTL_([^"]+)"[^>]*\/>/g, m, last = '';
+    while ((m = re.exec(xu)) && m.index < pos) last = m[1];
+    return last;
+  };
+  ops.forEach(function (op) {
+    if (op.kind === 'add') {
+      var c = get(op.path);
+      var pos = c ? anchorAt(c, op.after) : -1;
+      if (c && pos < 0 && op.owner !== 'summary') pos = placeAfter(c, op.after);
+
+      if (/^f:/.test(op.owner || '') && pos >= 0 && _rtOwner(markBefore(pos)) !== op.owner) pos = -1;
+
+      if (pos < 0 && op.owner === 'summary' && !op.path.length) { pos = bodyEnd(); c = get([]); }
+      if (pos < 0) { fail(op, 'place'); return; }
+
+      var nxt = c ? c.ku.filter(function (e) { return e.start >= pos; }).slice(0, op.tags.length) : [];
+      var same = nxt.length === op.tags.length && nxt.every(function (e, i) { return e.tag === op.tags[i] && _rtText(xu.slice(e.start, e.end)) === op.texts[i]; });
+      if (same) return;
+      var twin = nxt.length === op.tags.length && nxt.every(function (e, i) { return e.tag === op.tags[i] && _rtMask(_rtText(xu.slice(e.start, e.end))) === _rtMask(op.texts[i]); })
+        && op.texts.join('').length > 0;
+      var gone = {};
+      if (twin) nxt.forEach(function (e) { _rtMarksIn(xu.slice(e.start, e.end), nU).forEach(function (n) { gone[n] = 1; }); });
+      edits.push({ start: pos, end: twin ? nxt[nxt.length - 1].end : pos, xml: op.xml, op: op, keep: function (n) { return !marksU[n] || !!gone[n]; } });
+      return;
+    }
+    var cp = get(op.path.slice(0, -1));
+    var i0 = op.path[op.path.length - 1];
+    var ui = cp ? cp.map[i0] : -1;
+    if (!cp || ui == null || ui < 0) { fail(op, 'place'); return; }
+    var eu = cp.ku[ui], fu = xu.slice(eu.start, eu.end);
+    if (_rtText(fu) !== op.was) { fail(op, 'edited'); return; }
+    if (op.kind === 'drop') {
+
+      if (eu.tag === 'w:p' && cp.cu.tag === 'w:tc') {
+        var dk = op.path.slice(0, -1).join('.');
+        drops[dk] = (drops[dk] || 0) + 1;
+        if (cp.ku.filter(function (e) { return e.tag === 'w:p'; }).length - drops[dk] < 1) return;
+      }
+      edits.push({ start: eu.start, end: eu.end, xml: '', op: op, keep: function () { return false; } });
+      return;
+    }
+    var goneS = {};
+    _rtMarksIn(fu, nU).forEach(function (n) { goneS[n] = 1; });
+    edits.push({ start: eu.start, end: eu.end, xml: op.xml, op: op, keep: function (n) { return !marksU[n] || !!goneS[n]; } });
+  });
+
+  var regF = _pntlRegions(xF), spF = _pntlRegionSpans(xF), spU = _pntlRegionSpans(xu);
+  Object.keys(stale).forEach(function (fid) {
+    var k = _pntlKey(fid), title = titleOf[k] || 'Finding', did = false;
+    ['rt', 'rts', 'rtd'].forEach(function (sx) {
+      var nm = 'f_' + k + '_' + sx;
+      if (!(nm in spU)) return;
+      var inner = regions[nm], want = regF[nm];
+      if (want == null) { res.left.push({ what: title, why: 'gone' }); return; }
+      var eu = _pntlRegionEdges(inner), ef = _pntlRegionEdges(want);
+      if (_pntlRegionIsRich(inner) !== _pntlRegionIsRich(want) || eu.unclosed || ef.unclosed || eu.suffix !== ef.suffix) { res.left.push({ what: title, why: 'place' }); return; }
+      var xml = _pntlRegionIsRich(want) ? want : _pntlInlineReplacement(inner, _pntlInlineText(want));
+      if (xml == null) { res.left.push({ what: title, why: 'place' }); return; }
+      edits.push({ start: spU[nm].start, end: spU[nm].end, xml: xml, op: { kind: 'mark', owner: 'f:' + k }, keep: function () { return false; } });
+    });
+  });
+  if (!edits.length) return res;
+
+  edits.forEach(function (e, i) { e.idx = i; });
+  edits.sort(function (p, q) { return q.start - p.start || q.end - p.end || q.idx - p.idx; });
+  var kept = [], floor = Infinity;
+  edits.forEach(function (e) { if (e.end <= floor) { kept.push(e); floor = Math.min(floor, e.start); } else fail(e.op, 'place'); });
+  var snap = { doc: xu, rels: zip.file('word/_rels/document.xml.rels') ? zip.file('word/_rels/document.xml.rels').asText() : null };
+  var out = xu, heads = false;
+  kept.forEach(function (e) {
+    var piece = e.xml ? _rtImport(e.xml, ctx, e.keep) : '';
+    if (ctx.bad) { fail(e.op, 'part'); ctx.bad = ''; return; }
+    var cand = out.slice(0, e.start) + piece + out.slice(e.end);
+    if (_pntlXmlProblem(cand)) { fail(e.op, 'place'); return; }
+    out = cand;
+    if (/<w:pStyle w:val="[^"]*(?:Heading|heading)[^"]*"/.test(piece) || /<w:outlineLvl\b/.test(piece)) heads = true;
+    var l = label(e.op.owner);
+    if ((e.op.kind === 'add' || e.op.kind === 'mark') && l) { if (res.put.indexOf(l) < 0) res.put.push(l); }
+    else res.changed++;
+  });
+  if (out === xu) return res;
+  var parts = ['word/_rels/document.xml.rels', '[Content_Types].xml', 'word/numbering.xml', 'word/styles.xml'];
+  var was = {};
+  parts.forEach(function (n) { var f = zip.file(n); was[n] = f ? f.asText() : null; });
+  var mediaWas = {};
+  Object.keys(zip.files || {}).forEach(function (n) { mediaWas[n] = 1; });
+  try {
+    out = _rtRootNs(_dcrEnsureRootNs(out), xF);
+    if (heads && typeof _dcrMarkTocFieldsDirty === 'function') out = _dcrMarkTocFieldsDirty(out);
+    var fault = _dcrXmlFault(out) || _pntlXmlProblem(out);
+    if (fault) throw new Error(fault);
+    _rtImportDone(ctx);
+    zip.file('word/document.xml', out);
+    res.wrote = true;
+  } catch (e) {
+    try { console.error('[retest] could not be written into the uploaded report', e); } catch (e2) {}
+    zip.file('word/document.xml', snap.doc);
+    parts.forEach(function (n) { if (was[n] != null) zip.file(n, was[n]); else if (zip.file(n)) zip.remove(n); });
+    Object.keys(zip.files || {}).forEach(function (n) { if (!mediaWas[n]) zip.remove(n); });
+    res.put = []; res.changed = 0; res.wrote = false;
+    res.why = 'it could not be written into this document without breaking it';
+  }
+  return res;
+}
+window._rtBringRetest = _rtBringRetest;
+function _rtSaid(r) {
+  if (!r) return;
+  if (r.why) { toast('The retest could not be put into the uploaded report: ' + r.why + '. Make the report again to have it in, or add it in Word.', 'info', 12000); return; }
+  var parts = [];
+  var fs = r.put.filter(function (p) { return p !== 'summary' && p !== 'date'; });
+  if (fs.length) parts.push(fs.length === 1 ? 'the retest of ' + fs[0] : 'the retests of ' + fs.length + ' findings');
+  if (r.put.indexOf('summary') >= 0) parts.push('the retest summary');
+  if (r.put.indexOf('date') >= 0) parts.push('the retest date');
+  if (parts.length) toast('Written into the report: ' + parts.slice(0, -1).join(', ') + (parts.length > 1 ? ' and ' : '') + parts[parts.length - 1], 'success');
+  var why = { edited: 'changed in Word', place: 'no place for it in this document', part: 'it holds something this document cannot take', old: 'already in it from before, so left as it is', gone: 'not in the report made now',
+    elsewhere: 'changed in Word, or not found in it' };
+  if (r.other) r.left = r.left.concat([{ what: r.other + ' other part' + (r.other === 1 ? '' : 's') + ' the retest changes', why: 'elsewhere' }]);
+  var seen = {}, left = [];
+  r.left.forEach(function (x) {
+    var w = x.what === 'summary' ? 'the retest summary' : x.what === 'date' ? 'the retest date' : x.what;
+    var k = w + '|' + x.why;
+    if (seen[k]) return;
+    seen[k] = 1;
+    left.push(w + ' (' + (why[x.why] || x.why) + ')');
+  });
+  if (left.length) toast('Left as it is in the document: ' + left.slice(0, 4).join('; ') + (left.length > 4 ? ' and ' + (left.length - 4) + ' more' : ''), 'info', 12000);
+}
 async function downloadEditedReport(assessmentId, quiet) {
   var a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; });
   if (!a || !a.edited_docx_path) { if (!quiet) toast('No uploaded report on file', 'error'); return false; }
@@ -65847,7 +66794,7 @@ async function downloadEditedReport(assessmentId, quiet) {
     if (dl.error) { if (!quiet) toast('Could not fetch the uploaded report', 'error'); return false; }
 
     var blob = dl.data;
-    var refreshed = null;
+    var refreshed = null, _rtGot = null;
     try {
       var zip = new window.PizZip(await blob.arrayBuffer());
       var _repaired = _pntlRepairDoc(zip).repaired;
@@ -65855,6 +66802,8 @@ async function downloadEditedReport(assessmentId, quiet) {
         refreshed = _rtWith(a, function () { return _pntlRefreshFromPortal(zip, a); });
       });
       if (!_rfGuard.ok) refreshed = null;
+
+      try { _rtGot = await _rtBringRetest(zip, a); } catch (e) { _rtGot = null; try { console.error('[retest] could not be brought into the uploaded report', e); } catch (e2) {} }
 
       var _mk = (window._docxQaComments && window._docxQaComments.id === assessmentId)
         ? window._docxQaComments
@@ -65871,7 +66820,7 @@ async function downloadEditedReport(assessmentId, quiet) {
       var _levelled = 0;
       try { _levelled = _levelRowCells(zip); } catch (e) { console.warn('[Render] row levelling skipped:', e && e.message); }
 
-      if (_repaired || _levelled || (refreshed && refreshed.updated) || (_mkRes && (_mkRes.tracked || _mkRes.comments))) {
+      if (_repaired || _levelled || (refreshed && refreshed.updated) || (_rtGot && _rtGot.wrote) || (_mkRes && (_mkRes.tracked || _mkRes.comments))) {
         blob = zip.generate({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
       }
     } catch (e) {
@@ -65891,6 +66840,7 @@ async function downloadEditedReport(assessmentId, quiet) {
     if (refreshed && refreshed.updated) {
       toast(refreshed.updated + ' change' + (refreshed.updated === 1 ? '' : 's') + ' made here written into the report', 'success');
     }
+    _rtSaid(_rtGot);
     if (refreshed && refreshed.skipped) {
 
       toast(refreshed.skipped + ' part' + (refreshed.skipped === 1 ? '' : 's')
@@ -65988,7 +66938,8 @@ function _syncSplitTracked(items, regions, assessmentId) {
       if (!f) { out.push(it); return; }
       var plain = [], sug = [], who = {};
       it.changes.forEach(function (ch) {
-        var sfx = ch.cfId ? ('c' + _pntlKey(ch.cfId).slice(0, 6)) : _PNTL_FIELD[ch.field];
+
+        var sfx = ch.cfId ? ('c' + _pntlKey(ch.cfId).slice(0, 6)) : (ch.sfx || _PNTL_FIELD[ch.field]);
         var nm = sfx ? _pntlRegionName(regions, f, sfx) : '';
         var t = nm ? tracked[nm] : null;
         if (t) {
@@ -67064,6 +68015,22 @@ function _stripRetestDateHeader(html) {
   return h.replace(re, '');
 }
 window._stripRetestDateHeader = _stripRetestDateHeader;
+function _rtReportHtml(f) {
+  var retests = (f && f.retests) || [];
+
+  if (!retests.length) return _stripRetestDateHeader(_retestPrintable(f));
+
+  var html = '';
+  retests.forEach(function(rt) {
+    var body = _stripRetestDateHeader(rt.result || rt.notes || '');
+
+    if (body) {
+      html += _RETEST_HTMLISH.test(String(body)) ? body : ('<p>' + _xmlEsc(body) + '</p>');
+    }
+  });
+  return html;
+}
+window._rtReportHtml = _rtReportHtml;
 var _RT_SEP = '<hr style="margin:1.5rem 0;border:none;border-top:1px solid var(--border)">';
 function _buildRetestResultsHtml(newHtml, existingHtml) {
 
@@ -71017,7 +71984,7 @@ function _ffRetestPromptsHtml(lib) {
   h += _tokSlot('');
   h += '</span><span class="g-x"></span></div>';
   h += _ffPromptDisclosure(_stdFieldIsCustom('retest_explain'), row('retest_explain', 'How AI explains the screenshots, code and output in a retest\u2019s results. The finding, what its test found, its remediation, any earlier retests and the retest\u2019s own words are added to it.',
-    'Controls Explain retest: the line AI writes above each screenshot and each request, block of code, output or table in a retest\u2019s results, the caption beneath each screenshot, and how the tester\u2019s notes there are tidied.', (window._AI_REPLY_CONTRACTS || {}).evidence), 'Explain retest prompt');
+    'Controls Explain retest: the line AI writes above each screenshot and each request, block of code, output or table in a retest\u2019s results, the caption beneath each screenshot, and how the tester\u2019s notes there are tidied.', (window._AI_REPLY_CONTRACTS || {}).retest_explain || (window._AI_REPLY_CONTRACTS || {}).evidence), 'Explain retest prompt');
   h += '</div>';
   return h;
 }
@@ -77978,7 +78945,7 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
     contributors: otherAuthors.join('\n'),
     leadAndAuthors: leadName + (otherAuthors.length ? '\n' + otherAuthors.join('\n') : ''),
     qaName: qaReviewerName,
-    retest: _vhFirstRetest(findings),
+    retest: _vhRetestDate(findings),
   };
   var vhData = _vhRows(tpl).filter(function (r) { return _vhShows(r, _vhCtx); }).map(function (r) {
     var x = _vhResolve(r, _vhCtx);
@@ -81932,12 +82899,7 @@ function _xmlSafeDeep(v, _seen) {
   return v;
 }
 window._xmlSafeDeep = _xmlSafeDeep;
-async function _fillTemplateAndDownload(templateBuf, data, filename, _docType, _ctx) {
-
-  var _rtF = (_ctx && _ctx.id && (_docType === 'report' || _docType === 'attestation')) ? _rtResolve(_ctx.id) : null;
-  if (_rtF !== null) _rtStack.push(_rtF);
-  try {
-  _docxRecordVars(_docType || (window._docxCurrentType || 'report'), data);
+function _fillTemplateZipNow(templateBuf, data) {
   var zip = new PizZip(templateBuf);
   _scanTemplateStyles(zip);
   _fixReferencesRow(zip);
@@ -82044,6 +83006,15 @@ async function _fillTemplateAndDownload(templateBuf, data, filename, _docType, _
       filledZip.file('word/settings.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"></w:settings>');
     }
   } catch(e) { console.warn('[Render] TOC refresh skipped:', e && e.message); }
+  return filledZip;
+}
+async function _fillTemplateAndDownload(templateBuf, data, filename, _docType, _ctx) {
+
+  var _rtF = (_ctx && _ctx.id && (_docType === 'report' || _docType === 'attestation')) ? _rtResolve(_ctx.id) : null;
+  if (_rtF !== null) _rtStack.push(_rtF);
+  try {
+  _docxRecordVars(_docType || (window._docxCurrentType || 'report'), data);
+  var filledZip = _fillTemplateZipNow(templateBuf, data);
 
   var _pdfOnly = !!window._docxPdfOnly;
   var _pdfBytes = null;
@@ -87587,7 +88558,7 @@ function _buildPentalVariableCatalogue(docType) {
   add('ref', 'var', 'Reference URL (inside refs_list loop)', '', []);
 
   add('retest_date', 'var', 'When this finding was retested (inside the findings loop). Empty until it has been.', '', []);
-  add('first_retest_date', 'var', 'The day the first finding was retested (any finding in the report). Empty until one has been.', 'A cover\u2019s re-test date', []);
+  add('first_retest_date', 'var', 'The day the report is made, once a finding in it has been retested (2043n). Empty until one has been.', 'A cover\u2019s re-test date', []);
   add('generated_date', 'var', 'The date this document was produced. Not stored: it moves every time the report is downloaded.', '', []);
   add('version', 'var', 'Document version (inside version_history loop)', '', ['0.1', '1.0']);
   add('vh_date', 'var', 'Version date (inside version_history loop)', '', []);
@@ -92031,6 +93002,11 @@ async function buildReportData(assessmentId, docType, _opts) {
   var findings = _docFindings(assessmentId, _dxType);
 
   if (_opts && Array.isArray(_opts.findingIds)) findings = findings.filter(function (f) { return _opts.findingIds.indexOf(f.id) >= 0; });
+
+  if (_opts && _opts.asStood) {
+    findings = findings.map(function (f) { return _rtAsStood(f, _opts.asStood); });
+    if (_opts.asStood.noSummary) a = Object.assign({}, a, { retest_summary: null });
+  }
   var client = (S.data.clients || []).find(function(c) { return c.id === a.client_id; }) || {};
 
   var _rtT = _rtResolve(a);
@@ -92039,7 +93015,9 @@ async function buildReportData(assessmentId, docType, _opts) {
   _setDocxTheme(tpl);
 
   _resetRichContent();
-  var _imgCache = await prefetchEvidenceImages(findings, a);
+
+  var _imgCache = (_opts && _opts.imgCache) || await prefetchEvidenceImages(findings, a);
+  if (_opts && _opts.imgOut) _opts.imgOut.cache = _imgCache;
 
   _rtStack.push(_rtT);
   try {
@@ -92101,11 +93079,14 @@ async function buildReportData(assessmentId, docType, _opts) {
     contributors: _otherAuthors.join('\n'),
     leadAndAuthors: _v02Author,
     qaName: qaName,
-    retest: _vhFirstRetest(findings),
+    retest: (_opts && _opts.asStood && _opts.asStood.noDate) ? '' : _vhRetestDate(findings),
   };
   var versionHistory = _vhRows(tpl).filter(function (r) { return _vhShows(r, _vhCtxD); }).map(function (r) {
     var x = _vhResolve(r, _vhCtxD);
-    return { version: r.v || '', vh_date: x.date || '', vh_author: x.author || '', vh_comment: r.l || '' };
+
+    var vd = x.date || '';
+    if (vd && r.k === 'retest') vd = _pntlScalar('d_vhretest', vd);
+    return { version: r.v || '', vh_date: vd, vh_author: x.author || '', vh_comment: r.l || '' };
   });
 
   var _vhCreation = _vhRows(tpl).filter(function (r) { return r.k === 'creation'; })[0];
@@ -92159,7 +93140,8 @@ async function buildReportData(assessmentId, docType, _opts) {
         _statusRunStyle(f.status, tpl)),
 
       _pb: idx === 0 ? [] : [{}],
-      retest_date: fmtDate(f.retest_completed_at) || '',
+
+      retest_date: (function () { var d = fmtDate(f.retest_completed_at) || ''; return d ? _pntlScalar('f_' + _fk + '_rtd', d) : ''; })(),
 
       description: _richMarker(_stripAiHeadings(f.description || ''), _imgCache, 'f_' + _fk + '_desc'),
       impact: _richMarker(f.impact || '', _imgCache, 'f_' + _fk + '_imp'),
@@ -92202,22 +93184,11 @@ async function buildReportData(assessmentId, docType, _opts) {
         return refs.map(function(r, i) { return { ref: (i > 0 ? '\n' : '') + r }; });
       })(),
 
-      retest_status: _retestStatusWords(f.retest_status),
+      retest_status: (function () { var w = _retestStatusWords(f.retest_status); return w ? _pntlScalar('f_' + _fk + '_rts', w) : ''; })(),
 
       retest_results: (function() {
-        var retests = f.retests || [];
-
-        if (!retests.length) return _richMarker(_stripRetestDateHeader(_retestPrintable(f)), _imgCache);
-
-        var html = '';
-        retests.forEach(function(rt) {
-          var body = _stripRetestDateHeader(rt.result || rt.notes || '');
-
-          if (body) {
-            html += _RETEST_HTMLISH.test(String(body)) ? body : ('<p>' + _xmlEsc(body) + '</p>');
-          }
-        });
-        return html ? _richMarker(html, _imgCache) : '';
+        var html = _rtReportHtml(f);
+        return html ? _richMarker(html, _imgCache, 'f_' + _fk + '_rt') : '';
       })(),
       has_retests: !!(f.retest_status || (f.retests && f.retests.length)),
       finding_index: idx + 1,
@@ -92522,7 +93493,7 @@ async function buildReportData(assessmentId, docType, _opts) {
     version_history: versionHistory,
     document_version: documentVersion,
 
-    first_retest_date: _vhCtxD.retest,
+    first_retest_date: _vhCtxD.retest ? _pntlScalar('d_retest', _vhCtxD.retest) : '',
     severity_scale: sevScale,
     scope_items: scopeItems,
     phases_data: phasesData,
