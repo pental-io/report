@@ -66303,7 +66303,7 @@ function _rtKids(x, from, to) {
     var lt = x.indexOf('<', i);
     if (lt < 0 || lt >= to) break;
     if (x.charAt(lt + 1) === '/') break;
-    if (x.substr(lt, 4) === '<!--') { var ce = x.indexOf('-->', lt); if (ce < 0) break; i = ce + 3; continue; }
+    if (x.startsWith('<!--', lt)) { var ce = x.indexOf('-->', lt); if (ce < 0) break; i = ce + 3; continue; }
     if (x.charAt(lt + 1) === '?' || x.charAt(lt + 1) === '!') { var pe = x.indexOf('>', lt); if (pe < 0) break; i = pe + 1; continue; }
     var gt = _rtTagEnd(x, lt);
     if (gt < 0) break;
@@ -68481,7 +68481,9 @@ function _rtKeepEd() {
   return ed;
 }
 function _rtKeepForget(id) { if (_rtKeep && (!id || _rtKeep.key.split(':')[0] === id)) _rtKeep = null; _rtStoreDrop(id); }
+var _rtFocus = null;
 function _rtKeepBefore() {
+  _rtFocus = null;
   try {
     var ed = _rtKeepEd();
     if (ed && typeof ed.__rtDrawn === 'string') {
@@ -68489,6 +68491,8 @@ function _rtKeepBefore() {
       if (_mkNorm({ h: html }) === ed.__rtDrawn) {
 
         if (_rtKeep && _rtKeep.key === key && !_rtKeep.resumed) _rtKeep = null;
+        var fa = document.activeElement;
+        if (fa && (fa === ed || ed.contains(fa))) _rtFocus = { key: key, who: _rtKeepWho(), caret: _mkCaretOf(ed.parentNode) };
       } else {
         var a = document.activeElement;
         _rtKeep = { key: key, who: _rtKeepWho(), html: html, base: ed.__rtDrawn,
@@ -68508,6 +68512,13 @@ function _rtKeepAfter() {
     ed.__rtDrawn = _mkNorm({ h: ed.innerHTML });
     ed.__rtDrawnHtml = ed.innerHTML;
     var k = _rtKeep;
+
+    var fo = _rtFocus;
+    _rtFocus = null;
+    if (fo && !k && fo.caret && fo.who === _rtKeepWho() && _rtKeepEd() && fo.key === ed.getAttribute('data-rt-keep')) {
+      var fa = document.activeElement;
+      if (!S.modal && (!fa || fa === document.body)) _mkCaretPut(ed.parentNode, fo.caret);
+    }
     if (!k || k.who !== _rtKeepWho() || !_rtKeepEd() || k.key !== ed.getAttribute('data-rt-keep')) return;
     if (_rtKeepWords(k.html) === _rtKeepWords(ed.innerHTML)) { _rtKeep = null; return; }
     if (k.base !== ed.__rtDrawn) {
