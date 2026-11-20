@@ -270,6 +270,130 @@ mac_install_docker() {
   step "Docker Desktop installed"
 }
 
+# 2052: DOCKER ON ANY LINUX. Docker's own installer (get.docker.com) knows
+# Ubuntu, Debian, Raspberry Pi OS, Fedora, CentOS, RHEL, Rocky, Alma and Oracle
+# Linux, and a system that says it is one of them, and stops on the rest (Kali,
+# Arch, Amazon Linux, openSUSE, Alpine and others). Where it stops, Docker comes
+# from this system's own packages. A new server's first updates can hold the
+# package manager for some minutes: waited for, and the install tried again.
+OS_RELEASE=/etc/os-release
+APT_SOURCES=/etc/apt/sources.list.d
+PKG_LOCKS="/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock"
+CLI_PLUGINS=/usr/local/lib/docker/cli-plugins
+os_ids() { [ -r "$OS_RELEASE" ] && ( . "$OS_RELEASE"; printf ' %s %s ' "${ID:-}" "${ID_LIKE:-}" ) | tr '[:upper:]' '[:lower:]'; }
+# Another install holding the package manager, where fuser can tell.
+pkg_locked() {
+  command -v fuser >/dev/null 2>&1 || return 1
+  for _l in $PKG_LOCKS; do
+    [ -e "$_l" ] && $SUDO fuser "$_l" >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+# Until it lets go (ten minutes at most), or two minutes where that cannot be told.
+pkg_wait() {
+  if command -v fuser >/dev/null 2>&1; then _i=0; while pkg_locked && [ $_i -lt 300 ]; do sleep 2; _i=$((_i + 1)); done
+  else sleep 120; fi
+  return 0
+}
+# Whether this Linux is one whose own Docker this installer knows.
+pkg_docker_known() { case "$(os_ids)" in *" amzn "*|*" fedora "*|*" debian "*|*" ubuntu "*|*" arch "*|*" suse "*|*" opensuse "*|*" alpine "*) return 0 ;; esac; return 1; }
+# Debian and what is like it (Kali, Mint, Pop!_OS and others): docker.io. Where
+# Docker's installer has left its own source for a release Docker does not
+# publish (Kali's), the package lists cannot be read: that source is set aside
+# (renamed, not deleted), and they are read again.
+apt_docker() {
+  _src="$APT_SOURCES/docker.list"
+  $SUDO sh -c 'apt-get update -qq' || {
+    [ -f "$_src" ] && grep -q 'download\.docker\.com' "$_src" && $SUDO mv "$_src" "$_src.pental-report-off" && $SUDO sh -c 'apt-get update -qq'
+  } || return 1
+  $SUDO sh -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io'
+}
+# This system's own Docker, and Compose where its packages have it (a Compose
+# they do not have does not keep Docker from being installed).
+pkg_docker() {
+  case "$(os_ids)" in
+    *" amzn "*) if command -v dnf >/dev/null 2>&1; then $SUDO dnf install -y docker; else $SUDO yum install -y docker; fi ;;
+    *" fedora "*) $SUDO dnf install -y moby-engine && { $SUDO dnf install -y docker-compose || true; } ;;
+    *" debian "*|*" ubuntu "*) apt_docker ;;
+    *" arch "*) $SUDO pacman -S --noconfirm --needed docker && { $SUDO pacman -S --noconfirm --needed docker-compose || true; } ;;
+    *" suse "*|*" opensuse "*) $SUDO zypper --non-interactive install docker && { $SUDO zypper --non-interactive install docker-compose || true; } ;;
+    *" alpine "*) $SUDO apk add --no-cache docker && { $SUDO apk add --no-cache docker-cli-compose || true; } ;;
+    *) return 1 ;;
+  esac
+}
+# Docker's installer, downloaded whole before it is run: a download that fails
+# is a failure, not an empty script that does nothing.
+get_docker() {
+  _gd=$(mktemp) || return 1
+  $GET https://get.docker.com > "$_gd" && [ -s "$_gd" ] && $SUDO sh "$_gd"
+  _gr=$?; rm -f "$_gd"; return $_gr
+}
+linux_install_docker() {
+  if pkg_locked; then
+    note "Another install is using the package manager (a new server's first updates, most often): waiting for it."
+    run "Waiting for the package manager" pkg_wait
+  fi
+  _n=1
+  while :; do
+    run "Installing Docker" get_docker && command -v docker >/dev/null 2>&1 && return 0
+    # Docker's installer refuses this Linux, or has no release for it: no use asking again.
+    grep -Eq 'Unsupported distribution|Unsupported operating system|consult SLES|does not have a Release file' "$LOG" 2>/dev/null && break
+    [ $_n -lt 3 ] || break
+    printf 'Trying again (%s of 3).\n' "$((_n + 1))" >>"$LOG"
+    if grep -Eq 'Could not get lock|Unable to acquire the dpkg|is another process using it' "$LOG" 2>/dev/null; then
+      note "Another install is using the package manager (a new server's first updates, most often): waiting for it."
+      run "Waiting for the package manager" pkg_wait
+    else sleep $((10 * _n)); fi
+    _n=$((_n + 1))
+  done
+  pkg_docker_known || { STAGE=docker_install; fail "Docker could not be installed." "Install it from https://docs.docker.com/engine/install/, then run this again."; }
+  note "Docker's own installer did not install it here: installing Docker from this system's packages instead."
+  run "Installing Docker from this system's packages" pkg_docker && command -v docker >/dev/null 2>&1 && return 0
+  STAGE=docker_packages
+  fail "Docker could not be installed, by Docker's own installer or from this system's packages." "Install it from https://docs.docker.com/engine/install/, then run this again."
+}
+# start_docker [--boot]: Docker's service started, and with the computer too
+# where it was installed here: systemd, or OpenRC (Alpine).
+start_docker() {
+  {
+    if command -v systemctl >/dev/null 2>&1; then
+      if [ "${1:-}" = --boot ]; then $SUDO systemctl enable --now docker; else $SUDO systemctl start docker; fi
+    elif command -v rc-service >/dev/null 2>&1; then
+      if [ "${1:-}" = --boot ]; then $SUDO rc-update add docker default; fi
+      $SUDO rc-service docker start
+    elif command -v service >/dev/null 2>&1; then $SUDO service docker start; fi
+  } >>"$LOG" 2>&1 || true
+}
+# Compose from apt: Docker's own package, Ubuntu's, or docker-compose where it
+# is Compose v2 (Debian 13's and Kali's are; Debian 12's is the old v1, which
+# is not installed).
+apt_compose() {
+  $SUDO apt-get update -qq || return 1
+  $SUDO apt-get install -y -qq docker-compose-plugin && return 0
+  $SUDO apt-get install -y -qq docker-compose-v2 && return 0
+  apt-cache policy docker-compose 2>/dev/null | grep -Eq 'Candidate: *[2-9]' && $SUDO apt-get install -y -qq docker-compose
+}
+# Compose from Docker's own releases on GitHub, where this system's packages
+# have no Compose v2 (Amazon Linux's have none, and Debian 12's docker-compose
+# is the old v1): checked against the checksum Docker publishes beside it, and
+# put where Docker looks for it: for everyone, or, for a user of Docker with
+# no sudo, in that user's own Docker folder.
+compose_from_github() {
+  case "$(uname -m)" in x86_64|amd64) _ca=x86_64 ;; aarch64|arm64) _ca=aarch64 ;; armv7l|armv7) _ca=armv7 ;; *) return 1 ;; esac
+  command -v sha256sum >/dev/null 2>&1 || return 1
+  _cp="$CLI_PLUGINS"
+  [ "$(id -u)" = 0 ] || [ -n "$SUDO" ] || _cp="${DOCKER_CONFIG:-$HOME/.docker}/cli-plugins"
+  _cu="https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$_ca"
+  _ct=$(mktemp -d) || return 1
+  _rc=1
+  if $GET "$_cu" > "$_ct/docker-compose" && $GET "$_cu.sha256" > "$_ct/sum" && [ -s "$_ct/docker-compose" ] \
+     && [ "$(sha256sum "$_ct/docker-compose" | cut -d' ' -f1)" = "$(cut -d' ' -f1 < "$_ct/sum")" ]; then
+    $SUDO mkdir -p "$_cp" && $SUDO cp "$_ct/docker-compose" "$_cp/docker-compose" && $SUDO chmod 755 "$_cp/docker-compose" && _rc=0
+  fi
+  rm -rf "$_ct"
+  return $_rc
+}
+
 STAGE=docker
 FRESH=0
 if [ "$OS" = Darwin ]; then
@@ -286,9 +410,8 @@ elif ! command -v docker >/dev/null 2>&1; then
   warn "Docker is not installed."
   want_install "Install it now with Docker's own installer (get.docker.com)? [Y/n]" "https://docs.docker.com/engine/install/"
   [ -n "$SUDO" ] && { $SUDO -v || { STAGE=docker_sudo; fail "Installing Docker needs sudo here, and sudo was not given."; }; }
-  run "Installing Docker" sh -c "$GET https://get.docker.com | $SUDO sh" \
-    || { STAGE=docker_install; fail "Docker could not be installed." "Install it from https://docs.docker.com/engine/install/, then run this again."; }
-  $SUDO systemctl enable --now docker >>"$LOG" 2>&1 || true
+  linux_install_docker
+  start_docker --boot
   step "Docker installed"
 fi
 
@@ -335,31 +458,33 @@ if ! docker info >/dev/null 2>&1; then
   elif [ -n "$SUDO" ]; then
     # Not in the docker group: Docker is asked through sudo, once for the password.
     $SUDO -v || { STAGE=docker_sudo; fail "Docker needs sudo here, and sudo was not given."; }
-    $SUDO systemctl start docker >>"$LOG" 2>&1 || true
+    start_docker
     $SUDO docker info >/dev/null 2>&1 || { STAGE=docker_daemon; fail "Docker is installed but not running." "Start it with: sudo systemctl start docker, then run this again."; }
     DOCKER="$SUDO docker"
   else
-    systemctl start docker >>"$LOG" 2>&1 || true
+    start_docker
     docker info >/dev/null 2>&1 || { STAGE=docker_daemon; fail "Docker is installed but not running." "Start it with: systemctl start docker, then run this again."; }
   fi
 fi
 # Docker from a Linux's own packages can come without Compose: added from the
 # same packages, when this system has them and you say yes.
 if ! $DOCKER compose version >/dev/null 2>&1; then
-  if [ "$OS" = Linux ] && { command -v apt-get >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; }; then
+  if [ "$OS" = Linux ]; then
     warn "Docker Compose v2 is not installed (the 'docker compose' command)."
-    if [ $YES = 1 ]; then WANT=y; elif can_ask; then ask WANT "Install it now with this system's packages? [Y/n]" "y"; else WANT=n; fi
+    if [ $YES = 1 ]; then WANT=y; elif can_ask; then ask WANT "Install it now? [Y/n]" "y"; else WANT=n; fi
     case "$WANT" in
       [nN]*) ;;
       *)
         if [ -n "$SUDO" ]; then $SUDO -v || true; fi
         if command -v apt-get >/dev/null 2>&1; then
-          run "Installing Docker Compose" sh -c "$SUDO apt-get update -qq && { $SUDO apt-get install -y -qq docker-compose-plugin || $SUDO apt-get install -y -qq docker-compose-v2; }" || true
+          run "Installing Docker Compose" apt_compose || true
         elif command -v dnf >/dev/null 2>&1; then
           run "Installing Docker Compose" $SUDO dnf install -y docker-compose-plugin || true
-        else
+        elif command -v yum >/dev/null 2>&1; then
           run "Installing Docker Compose" $SUDO yum install -y docker-compose-plugin || true
         fi
+        # 2052: where this system's packages have no Compose v2, Docker's own release of it.
+        $DOCKER compose version >/dev/null 2>&1 || run "Installing Docker Compose from Docker's releases" compose_from_github || true
         ;;
     esac
     $DOCKER compose version >/dev/null 2>&1 && step "Docker Compose installed"
