@@ -2560,7 +2560,7 @@
     "titles": [],
     "patterns": [
      {
-      "re": "\\b(cross[- ]site scripting|XSS)\\b",
+      "re": "\\b(cross[- ]site scripting|XSS)\\b(?!-Protection)",
       "prio": -1
      }
     ],
@@ -2609,7 +2609,7 @@
     "titles": [],
     "patterns": [
      {
-      "re": "\\b(stored|persistent)\\b.*\\b(cross[- ]site scripting|XSS)\\b|\\b(cross[- ]site scripting|XSS)\\b.*\\b(stored|persistent)\\b",
+      "re": "\\b(stored|persistent|blind)\\b.*\\b(cross[- ]site scripting|XSS)\\b|\\b(cross[- ]site scripting|XSS)\\b.*\\b(stored|persistent|blind)\\b",
       "prio": 1
      }
     ],
@@ -4201,7 +4201,11 @@
     "directoryBrowse"
    ],
    "match": {
-    "ids": {},
+    "ids": {
+     "wpscan": [
+      "wpscan-upload_directory_listing"
+     ]
+    },
     "titles": [],
     "patterns": [
      "\\bdirectory (listing|browsing|indexing)\\b|\\bbrowsable web directories\\b|\\bdirectory index\\b"
@@ -4800,7 +4804,11 @@
     "origin ip"
    ],
    "match": {
-    "ids": {},
+    "ids": {
+     "wpscan": [
+      "wpscan-xmlrpc"
+     ]
+    },
     "titles": [],
     "patterns": [
      {
@@ -20383,7 +20391,12 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "^app can read/write to external storage\\b",
+      "fmt": "mobsf"
+     }
+    ],
     "families": []
    }
   },
@@ -20427,9 +20440,22 @@
     "ios"
    ],
    "match": {
-    "ids": {},
+    "ids": {
+     "mobsf": [
+      "android_kotlin_hardcoded"
+     ]
+    },
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "^files may contain hardcoded sensitive information\\b|^this app may contain hardcoded secrets$",
+      "fmt": "mobsf"
+     },
+     {
+      "re": "^potential api key found$",
+      "fmt": "qark"
+     }
+    ],
     "families": []
    }
   },
@@ -20476,7 +20502,12 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "\\bclear ?text traffic\\b|\\bAllowsArbitraryLoads is allowed\\b",
+      "fmt": "mobsf"
+     }
+    ],
     "families": []
    }
   },
@@ -20522,7 +20553,13 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "\\bconfigured to trust user installed certificates\\b|\\bignores SSL certificate errors\\b",
+      "fmt": "mobsf",
+      "prio": 1
+     }
+    ],
     "families": []
    }
   },
@@ -20564,7 +20601,11 @@
     "ios"
    ],
    "match": {
-    "ids": {},
+    "ids": {
+     "mobsf": [
+      "android_ssl_pinning"
+     ]
+    },
     "titles": [],
     "patterns": [],
     "families": []
@@ -20608,7 +20649,16 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "^(activity|service) \\(.*\\) is not protected\\b",
+      "fmt": "mobsf"
+     },
+     {
+      "re": "^exported tags$",
+      "fmt": "qark"
+     }
+    ],
     "families": []
    }
   },
@@ -20692,7 +20742,16 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "^debug enabled for app\\b",
+      "fmt": "mobsf"
+     },
+     {
+      "re": "^manifest is manually set to debug$",
+      "fmt": "qark"
+     }
+    ],
     "families": []
    }
   },
@@ -20731,7 +20790,16 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "^application data can be backed up\\b",
+      "fmt": "mobsf"
+     },
+     {
+      "re": "^backup is allowed in manifest$",
+      "fmt": "qark"
+     }
+    ],
     "families": []
    }
   },
@@ -20818,7 +20886,12 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "\\bassetlinks\\.json file not found\\b",
+      "fmt": "mobsf"
+     }
+    ],
     "families": []
    }
   },
@@ -20862,7 +20935,16 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "^the app logs information\\b|^binary makes use of logging function$",
+      "fmt": "mobsf"
+     },
+     {
+      "re": "^logging found$",
+      "fmt": "qark"
+     }
+    ],
     "families": []
    }
   },
@@ -20903,7 +20985,11 @@
     "anti-tampering"
    ],
    "match": {
-    "ids": {},
+    "ids": {
+     "mobsf": [
+      "android_root_detection"
+     ]
+    },
     "titles": [],
     "patterns": [],
     "families": []
@@ -20987,7 +21073,11 @@
     "MASVS-PLATFORM"
    ],
    "match": {
-    "ids": {},
+    "ids": {
+     "mobsf": [
+      "android_prevent_screenshot"
+     ]
+    },
     "titles": [],
     "patterns": [],
     "families": []
@@ -21111,9 +21201,18 @@
     "clickjacking"
    ],
    "match": {
-    "ids": {},
+    "ids": {
+     "mobsf": [
+      "android_tapjacking"
+     ]
+    },
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "^tap ?jacking possible$",
+      "fmt": "qark"
+     }
+    ],
     "families": []
    }
   },
@@ -21155,7 +21254,12 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "^this app copies data to clipboard\\b",
+      "fmt": "mobsf"
+     }
+    ],
     "families": []
    }
   },
@@ -21200,7 +21304,12 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "^firebase db is exposed publicly\\b",
+      "fmt": "mobsf"
+     }
+    ],
     "families": []
    }
   },
@@ -21240,7 +21349,12 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "^app can be installed on a vulnerable (unpatched |upatched )?android version\\b",
+      "fmt": "mobsf"
+     }
+    ],
     "families": []
    }
   },
@@ -21287,7 +21401,12 @@
    "match": {
     "ids": {},
     "titles": [],
-    "patterns": [],
+    "patterns": [
+     {
+      "re": "^md5 is a weak hash\\b|\\bECB mode\\b|\\binsecure random number generator\\b|\\binsecure random function",
+      "fmt": "mobsf"
+     }
+    ],
     "families": []
    }
   },

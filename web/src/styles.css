@@ -319,7 +319,9 @@ table.dt.dt-compact th,table.dt.dt-compact td{padding-left:0.6rem;padding-right:
    1685: 0.4rem rather than 0.5rem, every cell alike. With headings held on
    one line a column is as wide as its heading at least, and the extra 0.1rem
    a side is what keeps a twelve-column findings table on a 1280 card. */
-table.dt.dt-tight th,table.dt.dt-tight td{padding-left:0.4rem;padding-right:0.4rem}
+/* 2061: and only as far as it has to, to 0.25rem at least, before it is out
+   of room (`_dtAllot` sets --dt-pad then, the same for every cell). */
+table.dt.dt-tight th,table.dt.dt-tight td{padding-left:var(--dt-pad,0.4rem);padding-right:var(--dt-pad,0.4rem)}
 /* A detail that belongs to the main column's value, shown under it rather
    than in a column of its own: the lead under an engagement, the client under
    a proposal. One style for it everywhere, so it reads as the same thing. */
@@ -2887,6 +2889,22 @@ body.rb-barred{min-height:calc(100vh - var(--rb-bar,3rem))}
 .ph-retest input:not(:checked)~span strong{color:var(--gray)}
 .ph-noretest{font-size:0.6rem;letter-spacing:0.07em;text-transform:uppercase;color:var(--gray);border:1px solid var(--border);border-radius:999px;padding:0.1rem 0.45rem;white-space:nowrap}
 .ph-retest-note{font-size:0.72rem;color:var(--accent);line-height:1.55;margin:0.5rem 0 0;padding-left:0.1rem}
+/* 2046: an engagement's own billing, and an invoice Stripe sends. */
+.ab-fixed{font-size:0.78rem;color:var(--text);line-height:1.55;padding:0.55rem 0.7rem;border:1px solid var(--border);border-radius:8px;background:var(--bg);margin-top:0.55rem}
+.ab-fixed .hint{display:block;margin-top:0.2rem;font-size:0.7rem;color:var(--gray)}
+/* (over .proposal-section p, which the section's paragraphs are otherwise) */
+.proposal-section .ab-label{font-size:0.78rem;font-weight:600;color:var(--text);margin:0.75rem 0 0}
+.proposal-section .ab-note{font-size:0.72rem;color:var(--gray);line-height:1.55;margin:0.4rem 0 0}
+/* Settings, Integrations, Stripe: how the firm's invoices go out (as the
+   Invoice Automation choices are drawn). */
+.set-send-opt{display:flex;gap:0.65rem;align-items:flex-start;padding:0.7rem 0.75rem;border:1px solid var(--border);border-radius:8px;margin-top:0.45rem;cursor:pointer;transition:border-color 0.15s}
+.set-send-opt.on{border-color:var(--accent);background:rgba(var(--accent-rgb),0.04)}
+.set-send-opt input{margin-top:3px;flex-shrink:0;accent-color:var(--accent)}
+.set-send-opt strong{display:block;font-size:0.85rem;font-weight:600;color:var(--text)}
+.set-send-opt em{display:block;font-style:normal;font-size:0.75rem;color:var(--gray);margin-top:2px;line-height:1.45}
+.inv-stripe-chip{font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:4px;white-space:nowrap;background:rgba(99,91,255,0.14);color:#a5a0ff}
+[data-theme="light"] .inv-stripe-chip{color:#4f46e5}
+.inv-stripe-chip.red,[data-theme="light"] .inv-stripe-chip.red{background:rgba(239,68,68,0.12);color:var(--red-text)}
 /* Choosing how a scanner is reached (549). */
 .conn-styles{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:0.6rem;margin:0.6rem 0}
 .conn-style{text-align:left;background:var(--card);border:1px solid var(--border);border-radius:10px;
@@ -5592,6 +5610,9 @@ body.afm-dragging,body.afm-dragging *{cursor:grabbing!important;-webkit-user-sel
   background:rgba(255,255,255,0.2);color:inherit;vertical-align:middle}
 .btn-secondary .dl-count,.btn-ghost .dl-count,.btn-outline .dl-count{background:var(--hover)}
 .dl-caret-n{display:inline-flex;align-items:center}
+/* 2058: a list's document, its caret only as wide as its count and arrow (so a list of documents keeps its room) */
+.dl-compact .dl-count{margin-right:0.1rem;min-width:0.95rem;padding:0 0.22rem}
+.dl-compact>button,.dl-cell{gap:0.3rem}
 .afm-sr{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 @media (prefers-reduced-motion:reduce){.afm-grip,.afm-ghost,.afm-slot-on{transition:none}.afm-menu,.afm-moved{animation:none}}
 /* 1936: THE WORDING OF EMAIL FROM PENTAL'S SERVERS IS PENTAL'S. [stated] Arian: "if pentals email

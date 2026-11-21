@@ -1977,6 +1977,8 @@ function _updatePhaseTotals(opts) {
       window._endDateBasis = _basis;
     }
   }
+
+  if (document.getElementById('aBillingSec') && typeof _aBillingRead === 'function') _aBillingRead();
 }
 function _renderPhaseCards(viewOnly) {
   var phases = window._proposalPhases || [];
@@ -7500,6 +7502,7 @@ function _dtHeadCells(t) {
   return ths.length ? ths : null;
 }
 var _DT_SHORT = 176;
+var _DT_PAD_LEAST = 4;
 function _dtMainHard() { return (typeof window !== 'undefined' && window.innerWidth <= 480) ? 56 : 112; }
 function _dtAllot(t, availKnown) {
   var nat = t._dtNat, min = t._dtMin, cols = t._dtCols;
@@ -7565,6 +7568,20 @@ function _dtAllot(t, availKnown) {
   } else if (deficit > 0) {
     deficit -= take(deficit, function (i) { return min[i]; });
   }
+
+  var give = 0;
+  if (deficit > 0 && t._dtTight) {
+    var per = Math.ceil(deficit * 10 / w.length) / 10;
+    if (per / 2 <= Math.max(0, pad / 2 - _DT_PAD_LEAST) + 0.001) {
+      give = per / 2;
+      w = w.map(function (x, i) { return i === mi ? x : x - per; });
+      if (mi >= 0) main -= per;
+      deficit -= per * w.length;
+      if (deficit < 0 && mi >= 0) { main -= deficit; deficit = 0; }
+    }
+  }
+  if (give) t.style.setProperty('--dt-pad', Math.round((pad / 2 - give) * 100) / 100 + 'px');
+  else t.style.removeProperty('--dt-pad');
 
   var fixed = t._dtFixed || [];
   var align = t._dtAlign || [];
@@ -7702,6 +7719,8 @@ function _dtProbe(j) {
   var t = j.t;
   var p = t.cloneNode(false);
   p.removeAttribute('id');
+
+  p.style.removeProperty('--dt-pad');
   p.appendChild(t.tHead.cloneNode(true));
   var tb = document.createElement('tbody');
   j.pairs = [];
@@ -7924,7 +7943,8 @@ function _dtSize(tables) {
       j.roles = [];
       j.ctl = j.ths.map(function (th, i) {
         ['c-nw', 'c-break'].forEach(function (k) { if (th.classList.contains(k)) j.roles.push([i, k]); });
-        return agg[i].ctl > 0 && agg[i].other === 0;
+
+        return (agg[i].ctl > 0 && agg[i].other === 0) || th.classList.contains('c-mid');
       });
     });
 
@@ -7980,10 +8000,13 @@ function _dtSize(tables) {
         return;
       }
       var tight = _dtAsOne(g, 'T', 'padT');
-      if (g.length === 1 || tight.fits) {
+
+      var gives = 2 * Math.max(0, g[0].padT / 2 - _DT_PAD_LEAST) * g[0].ths.length;
+      var room = Math.min.apply(null, g.map(function (j) { return j.avail; }));
+      if (g.length === 1 || tight.fits || tight.need - gives <= room) {
         g.forEach(function (j) {
           j.use = tight.m; j.tight = true; j.pad = j.padT;
-          j.valid = [g.length === 1 ? 0 : tight.need, g.needN];
+          j.valid = [g.length === 1 ? 0 : tight.need - gives, g.needN];
         });
         return;
       }
@@ -21010,7 +21033,7 @@ async function _loadAllDataInner() {
   + ',self_scan_default_cooldown_hours,self_scan_window_start,self_scan_window_end'
   + ',self_scan_notify,self_scan_report';
 
-  var _settingsCols_staff = _settingsCols_base + ',notes_prompt,caveats_prompt,contractor_rate,public_ip,exec_summary_prompt,finding_desc_prompt,finding_rem_prompt,retest_summary_prompt,email_templates,meeting_auto_invite,contact_integration,meeting_integration,ai_provider,ai_custom_model,ai_custom_url,ai_custom_format,ai_custom_max_tokens,ai_ollama_num_ctx,ai_requests_per_minute,ai_parallel_requests,smtp_host,smtp_port,smtp_user,smtp_oauth_provider,smtp_oauth_user,smtp_from_name,smtp_from_email,auto_start_enabled,auto_start_time,auto_complete_enabled,auto_complete_time,automation_timezone,automation_workdays_only,auto_credentials_enabled,auto_credentials_time,auto_credentials_days,mail_outbox_enabled,mail_outbox_started_at,invoice_automation,invoice_auto_send_days,standard_field_prompts,teams_tenant_id,teams_client_id,teams_user_email,zoom_account_id,zoom_client_id,slack_channel_id,proposal_multi_year_enabled,proposal_subscription_enabled,proposal_custom_titles,plan_max_users,plan_max_clients,scanning_enabled,scan_min_severity,scan_ai_write,scan_client_visible_default,scan_exec_summary_prompt,scan_finding_prompt,scan_default_provider,scan_billing_mode,scan_billing_amount,scan_phase_default,scan_import_maps,cvss_version,date_format,self_scan_enabled,self_scan_default_provider_id,self_scan_type_providers,self_scan_lands,self_scan_billing,self_scan_price_pence,self_scan_stripe_price_id,self_scan_active_providers,self_scan_who,self_scan_target_policy,self_scan_require_auth,self_scan_auth_when,self_scan_auth_text,self_scan_frequencies,self_scan_price_daily_pence,self_scan_price_weekly_pence,self_scan_price_monthly_pence,self_scan_price_annual_pence,self_scan_stripe_sub_price_daily,self_scan_stripe_sub_price_weekly,self_scan_stripe_sub_price_monthly,self_scan_stripe_sub_price_annual,self_scan_self_hosted_only,self_scan_internal_enabled,self_scan_appliances,self_scan_max_targets,self_scan_default_cap,self_scan_default_cooldown_hours,self_scan_default_hour,self_scan_window_start,self_scan_window_end,self_scan_notify,self_scan_report,account_owner_id,scan_fields,vuln_report_fields,final_pdf_names,scan_summary_auto,finding_default_draft,google_place_id,qa_checklist,qa_checklist_on,qa_ai_enabled,qa_ai_prompt,qa_submit_word,qa_submit_ticks';
+  var _settingsCols_staff = _settingsCols_base + ',notes_prompt,caveats_prompt,contractor_rate,public_ip,exec_summary_prompt,finding_desc_prompt,finding_rem_prompt,retest_summary_prompt,email_templates,meeting_auto_invite,contact_integration,meeting_integration,ai_provider,ai_custom_model,ai_custom_url,ai_custom_format,ai_custom_max_tokens,ai_ollama_num_ctx,ai_requests_per_minute,ai_parallel_requests,smtp_host,smtp_port,smtp_user,smtp_oauth_provider,smtp_oauth_user,smtp_from_name,smtp_from_email,auto_start_enabled,auto_start_time,auto_complete_enabled,auto_complete_time,automation_timezone,automation_workdays_only,auto_credentials_enabled,auto_credentials_time,auto_credentials_days,mail_outbox_enabled,mail_outbox_started_at,invoice_automation,invoice_auto_send_days,invoice_send_via,standard_field_prompts,teams_tenant_id,teams_client_id,teams_user_email,zoom_account_id,zoom_client_id,slack_channel_id,proposal_multi_year_enabled,proposal_subscription_enabled,proposal_custom_titles,plan_max_users,plan_max_clients,scanning_enabled,scan_min_severity,scan_ai_write,scan_client_visible_default,scan_exec_summary_prompt,scan_finding_prompt,scan_default_provider,scan_billing_mode,scan_billing_amount,scan_phase_default,scan_import_maps,cvss_version,date_format,self_scan_enabled,self_scan_default_provider_id,self_scan_type_providers,self_scan_lands,self_scan_billing,self_scan_price_pence,self_scan_stripe_price_id,self_scan_active_providers,self_scan_who,self_scan_target_policy,self_scan_require_auth,self_scan_auth_when,self_scan_auth_text,self_scan_frequencies,self_scan_price_daily_pence,self_scan_price_weekly_pence,self_scan_price_monthly_pence,self_scan_price_annual_pence,self_scan_stripe_sub_price_daily,self_scan_stripe_sub_price_weekly,self_scan_stripe_sub_price_monthly,self_scan_stripe_sub_price_annual,self_scan_self_hosted_only,self_scan_internal_enabled,self_scan_appliances,self_scan_max_targets,self_scan_default_cap,self_scan_default_cooldown_hours,self_scan_default_hour,self_scan_window_start,self_scan_window_end,self_scan_notify,self_scan_report,account_owner_id,scan_fields,vuln_report_fields,final_pdf_names,scan_summary_auto,finding_default_draft,google_place_id,qa_checklist,qa_checklist_on,qa_ai_enabled,qa_ai_prompt,qa_submit_word,qa_submit_ticks';
 
   var _settingsCols = isClient ? _settingsCols_base + ',public_ip' : (isCon ? _settingsCols_base + ',ai_parallel_requests,qa_checklist,qa_checklist_on,qa_submit_word,qa_submit_ticks' : _settingsCols_staff);
 
@@ -21086,6 +21109,8 @@ async function _loadAllDataInner() {
       p1.contact_requests = _readPaged(db.from('email_notifications').select('*').eq('notification_type', 'contact_form').order('created_at', { ascending: false }), Infinity);
     }
 
+    if (canManage()) p1.assessment_billing = _readPaged(db.from('assessment_billing').select('*'), Infinity);
+
     p1.contractor_teams = _readPaged(db.from('contractor_teams').select('id,name,created_at').order('name'), Infinity);
     p1.team_links = _readPaged(db.from('profiles').select('id,contractor_team_id').eq('role', 'contractor'), Infinity);
   } else if (isCon) {
@@ -21127,6 +21152,8 @@ async function _loadAllDataInner() {
       .catch(function () { return null; });
     p1.issue_trackers = _readPaged(db.from('issue_trackers').select(_TRACKER_COLS).eq('client_id', cid), Infinity);
     p1.finding_tickets = _readPaged(db.from('finding_tickets').select('*'), Infinity);
+
+    p1.assessment_billing = _readPaged(db.from('assessment_billing').select('*'), Infinity);
   }
 
   if (!_commercialOnly && (isStaff || isCon || isClient)) p1.assets = _readPaged(db.from('assets').select('*'), Infinity);
@@ -21142,7 +21169,7 @@ async function _loadAllDataInner() {
   keys1.forEach(function(k, i) {
     r1[k] = vals1[i];
 
-    if (vals1[i] && vals1[i].error && k !== 'crb' && k !== 'secret_flags' && k !== 'contractor_teams' && k !== 'team_links' && k !== 'my_team' && k !== 'report_templates') {
+    if (vals1[i] && vals1[i].error && k !== 'crb' && k !== 'secret_flags' && k !== 'contractor_teams' && k !== 'team_links' && k !== 'my_team' && k !== 'report_templates' && k !== 'assessment_billing') {
       console.warn('[loadAllData] Phase 1 "' + k + '" returned error:', vals1[i].error.message || vals1[i].error.code || vals1[i].error);
     }
   });
@@ -21421,6 +21448,8 @@ async function _loadAllDataInner() {
 
   S.data.assets = _d(r1.assets);
   if (r1.assets && !r1.assets.error) _rtTableMap.assets = 'assets'; else delete _rtTableMap.assets;
+
+  S.data.assessment_billing = _d(r1.assessment_billing);
 
   var assessmentIds = S.data.assessments.map(function(a) { return a.id; });
 
@@ -22944,17 +22973,14 @@ async function loadBrandingFromDB() {
       try {
         var _isLight = document.documentElement.getAttribute('data-theme') === 'light';
         var _theme = _isLight ? brand.theme_light : brand.theme_dark;
-        var _realBg = (_theme && _theme.bg) || (_isLight ? '#ffffff' : '#0c0c0c');
+
+        var _realBg = (_theme && _theme.bg) || (_isLight ? THEME_DEFAULTS.light.bg : THEME_DEFAULTS.dark.bg);
         var _realAc = brand.accent_color || (TENANT_INFO&&TENANT_INFO.accent_color) || '#991b1b';
         document.documentElement.style.background = _realBg;
         document.body.style.background = _realBg;
 
-        var _spinStyles = document.querySelectorAll('style');
-        _spinStyles.forEach(function(s) {
-          if (s.textContent && s.textContent.indexOf('xspin') !== -1 && s.textContent.indexOf('body::after') !== -1) {
-            s.textContent = s.textContent.replace(/background:[^;}]+/g, 'background:' + _realBg).replace(/border-top-color:[^;}]+/g, 'border-top-color:' + _realAc);
-          }
-        });
+        document.documentElement.style.setProperty('--boot-bg', _realBg);
+        document.documentElement.style.setProperty('--boot-ac', _realAc);
       } catch(e) {}
     }
 
@@ -32131,7 +32157,11 @@ function renderAssessments() {
         var clName = getClientName(a.client_id);
         h += '<div style="display:flex;justify-content:space-between;align-items:center;padding:0.4rem 0;border-bottom:1px solid var(--border);font-size:0.85rem">';
         h += '<div><strong>' + esc(a.name) + '</strong> <span style="color:var(--gray)">' + esc(clName) + '</span></div>';
-        h += '<div class="flex gap-1"><button class="btn btn-ghost btn-sm" onclick="downloadListDoc(\'report\',\'' + a.id + '\')" title="Download PDF" style="border-radius:6px">' + IC.dl + '</button><button class="btn btn-ghost btn-sm" onclick="restoreAssessment(\'' + a.id + '\')" title="Restore" style="color:var(--green);border-radius:6px">' + IC.refresh + '</button>';
+
+        h += '<div class="flex gap-1">' + _docDlBtn(a, 'report', null, 'downloadListDoc(\'report\',\'' + a.id + '\')',
+          function (call) { return '<button class="btn btn-ghost btn-sm" onclick="' + call + '" title="Download PDF" style="border-radius:6px">' + IC.dl + ' Report</button>'; },
+          { label: 'Report', style: 'border-radius:6px', title: 'Download PDF' })
+          + '<button class="btn btn-ghost btn-sm" onclick="restoreAssessment(\'' + a.id + '\')" title="Restore" style="color:var(--green);border-radius:6px">' + IC.refresh + '</button>';
         h += '<button class="btn btn-ghost btn-sm" onclick="deleteAssessment(\'' + a.id + '\')" title="Delete" style="color:var(--red-text);border-radius:6px">' + IC.trash + '</button></div>';
         h += '</div>';
       });
@@ -32241,11 +32271,11 @@ function renderAssessmentTable(list, isC, opts) {
   h += '<th class="c-main">Assessment</th>';
   h += '<th>Dates</th>';
   h += '<th>Status</th>';
-  if (_colFindings) h += '<th>Findings</th>';
+  if (_colFindings) h += '<th class="c-mid">Findings</th>';
   if (_colComments) h += '<th>' + IC.chat + '</th>';
   if (_colProp) h += '<th>Proposal</th>';
   if (_colReport) h += '<th>Report</th>';
-  if (_colLoa) h += '<th>LoA</th>';
+  if (_colLoa) h += '<th>Attestation</th>';
   if (_colInv) h += '<th>Invoice</th>';
   if (_showFb) h += '<th>Feedback</th>';
   if (!isC && canManage()) h += '<th>Actions</th>';
@@ -32302,7 +32332,8 @@ function renderAssessmentTable(list, isC, opts) {
     if (_colLoa) h += '<td>' + renderLoAColumn(a) + '</td>';
     if (_colInv) h += '<td>' + renderInvoiceStatus(a, isC) + '</td>';
     if (_showFb) h += '<td>' + renderFeedbackStatus(a, isC) + '</td>';
-    if (!isC && canManage()) h += '<td><div class="flex gap-1"><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();archiveAssessment(\'' + a.id + '\')" title="Archive" style="color:var(--gray)">' + IC.x + '</button><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();deleteAssessment(\'' + a.id + '\')" title="Delete" style="color:var(--red-text)">' + IC.trash + '</button></div></td>';
+
+    if (!isC && canManage()) h += '<td><div class="flex gap-1"><button class="btn btn-ghost btn-table" onclick="event.stopPropagation();archiveAssessment(\'' + a.id + '\')" title="Archive" style="color:var(--gray)">' + IC.x + '</button><button class="btn btn-ghost btn-table" onclick="event.stopPropagation();deleteAssessment(\'' + a.id + '\')" title="Delete" style="color:var(--red-text)">' + IC.trash + '</button></div></td>';
     h += '</tr>';
   });
 
@@ -32387,6 +32418,51 @@ async function _builtInRefused(slot, id, returnDoc) {
     else await downloadListDoc(slot, id);
   }
   return true;
+}
+function _listDocMore(a, type, rec) {
+  var isClient = !!(S.profile && S.profile.role === 'client');
+  var slot = _docxKeyOf(type);
+  if (rec && !a) a = (S.data.assessments || []).find(function (x) { return x.id === rec.assessment_id; }) || { id: rec.assessment_id };
+  var home = rec ? _docHome(a, rec) : a;
+  var rid = rec ? rec.id : a.id;
+  var FN = { report: 'pdfFromDocxReport', loa: 'pdfFromDocxAttestation', proposal: 'downloadProposal', invoice: 'downloadInvoice', vuln_report: 'pdfFromDocxVulnReport' };
+  var extras = [];
+  try { extras = _docPdfExtraActions(home, type, isClient, FN[slot] || 'downloadListDoc', rid) || []; } catch (e) { extras = []; }
+
+  extras = extras.map(function (x) {
+    return { id: x.id, label: x.label, hint: x.hint, call: 'event.stopPropagation();' + x.call };
+  });
+  var mainCall = null;
+
+  if (isClient && (slot === 'report' || slot === 'loa' || slot === 'invoice')) {
+    var own = false, issued = false;
+    try { own = !!(rec ? _getDocxTemplateMeta(slot) : _rtWith(a.id, function () { return _getDocxTemplateMeta(slot); })); } catch (e) { own = false; }
+    try { issued = slot === 'invoice' ? !!_uploadedPdfs[slot + '_' + rid] : !!_finalPdfRec(slot, rid); } catch (e) { issued = false; }
+    var files = (own && !issued) ? _assDocFiles(home, type, true) : [];
+    if (files.length) {
+      var first = files[0];
+      mainCall = 'event.stopPropagation();downloadAssessmentFile(\'' + esc(first.id) + '\')';
+      extras = extras.filter(function (x) { return x.id !== first.id; });
+    }
+  }
+  return { extras: extras, mainCall: mainCall };
+}
+function _docDlBtn(a, type, rec, call, plain, o) {
+  var more = _listDocMore(a, type, rec);
+  var main = more.mainCall || call;
+  o = o || {};
+  var cmp = o.compact !== false && (o.cls === undefined || o.cls === 'btn-sm' || o.cls === 'btn-table');
+  if (!more.extras.length) return cmp ? String(plain(main)).replace(/^<button class="/, '<button class="dl-cell ') : plain(main);
+  return _renderDocxDownloadButton(_docxKeyOf(type), rec ? rec.id : a.id, 'downloadListDoc', { label: o.label || '', variant: o.variant || 'ghost',
+    cls: o.cls === undefined ? 'btn-sm' : o.cls, style: o.style || '', builtIn: true, extraActions: more.extras, mainCall: main, title: o.title,
+    compact: cmp });
+}
+function _propDlBtn(p, cls, style, title, label, extraCall, a, fn) {
+  var attrs = (style ? ' style="' + style + '"' : '') + (title ? ' title="' + title + '"' : '');
+  return _docDlBtn(a || null, 'proposal', p, (extraCall || '') + (fn || 'downloadProposal') + '(\'' + p.id + '\')',
+    function (call) { return '<button class="' + cls + '" onclick="' + call + '"' + attrs + '>' + IC.dl + (label ? ' ' + esc(label) : '') + '</button>'; },
+    { label: label || '', variant: /btn-secondary/.test(cls) ? 'secondary' : /btn-primary/.test(cls) ? 'primary' : 'ghost',
+      cls: /btn-table/.test(cls) ? 'btn-table' : /btn-sm/.test(cls) ? 'btn-sm' : '', style: style || '', title: title });
 }
 function _qaDiffParts(before, after) {
   var strip = function (v) {
@@ -32760,9 +32836,8 @@ function renderAssessmentDetail() {
 
   var _aJobCode = _assCodeOf(a, (S.data.clients || []).find(function(c) { return c.id === a.client_id; }));
   var reportDelivered = _isDelivered(a);
-  var invoice = (S.data.invoices || []).find(function(inv) { return inv.assessment_id === a.id; });
 
-  if (!invoice && a.proposal_id) invoice = (S.data.invoices || []).find(function(inv) { return inv.proposal_id === a.proposal_id; });
+  var invoice = _engInvoices(a)[0] || null;
   var proposal = null;
   if (a.proposal_id) proposal = (S.data.proposals || []).find(function(p) { return p.id === a.proposal_id; });
   if (!proposal) proposal = (S.data.proposals || []).find(function(p) { return p.assessment_id === a.id; });
@@ -32814,12 +32889,12 @@ function renderAssessmentDetail() {
   }
   if (_verifyBtn) _btns += _verifyBtn;
 
-  if (canManage() && invoicesEnabled() && (canDownload || reportDelivered)) {
+  if (canManage() && invoicesEnabled() && (canDownload || reportDelivered) && (invoice || _engInvoiced(a))) {
     if (!invoice) {
       _btns += '<button class="btn btn-success" onclick="createInvoice(\'' + a.id + '\')">' + IC.doc + ' Generate Invoice</button>';
     } else if (invoice.status === 'draft') {
-      _btns += '<button class="btn btn-primary" onclick="sendInvoice(\'' + invoice.id + '\')">' + IC.send + ' Send Invoice</button>';
-    } else if (invoice.status === 'sent') {
+      _btns += '<button class="btn btn-primary" onclick="sendInvoice(\'' + invoice.id + '\')">' + IC.send + (_invStripeSends(invoice) ? ' Send with Stripe' : ' Send Invoice') + '</button>';
+    } else if (invoice.status === 'sent' || invoice.status === 'overdue') {
       _btns += '<button class="btn btn-ghost" onclick="sendInvoice(\'' + invoice.id + '\')">' + IC.send + ' Resend</button>';
       _btns += '<button class="btn btn-success" onclick="markPaid(\'' + invoice.id + '\')">' + IC.check + ' Mark Paid</button>';
     }
@@ -35769,6 +35844,21 @@ function _docLabelKey(slot) {
   return { loa: 'doc_attestation', attestation: 'doc_attestation', proposal: 'doc_proposal', invoice: 'doc_invoice' }[slot] || 'doc_report';
 }
 window._docLabelKey = _docLabelKey;
+function _engDeal(a) {
+  var b = _engBilling(a), ds = b && b.deal_structure;
+  if (typeof ds === 'string') { try { ds = JSON.parse(ds); } catch (e) { ds = null; } }
+  return ds && typeof ds === 'object' ? ds : null;
+}
+function _engRate(ds) {
+  return ds && parseFloat(ds.custom_day_rate) > 0 ? parseFloat(ds.custom_day_rate) : (parseFloat((S.data.settings || {}).day_rate) || DAY_RATE);
+}
+function _engPrice(a) {
+  var days = _assessmentDays(a);
+  if (!days) return 0;
+  var rate = _engRate(_engDeal(a));
+  if (!(rate > 0)) return 0;
+  return Math.round(days * rate * 100) / 100;
+}
 function _docSlotId(aid, type) {
   if (type !== 'proposal' && type !== 'invoice') return aid;
   var a = (S.data.assessments || []).find(function (x) { return x.id === aid; }) || { id: aid };
@@ -36332,7 +36422,7 @@ function renderClientDetail() {
       h += '<td class="mono" style="font-size:0.8em">' + fmtDate(p.sent_at || p.created_at) + '</td>';
       h += '<td>' + ((canManage() && _canNotifyClient('proposal_sent')) ? '<button class="btn btn-primary btn-table" onclick="resendProposalReminder(\'' + p.id + '\')">' + IC.send + ' Reminder</button>' : '') + '</td>';
       h += '<td><div class="flex gap-1">';
-      h += '<button class="btn btn-ghost btn-table" onclick="downloadProposal(\'' + p.id + '\')" title="PDF">' + IC.dl + '</button>';
+      h += _propDlBtn(p, 'btn btn-ghost btn-table', '', 'PDF', _smDocBtnLabel('doc_proposal'));
       if (canManage()) h += '<button class="btn btn-ghost btn-table" onclick="reopenProposal(\'' + p.id + '\')" title="Reopen as Draft">' + IC.edit + '</button>';
       if (canManage()) h += '<button class="btn btn-ghost btn-table" onclick="archiveProposal(\'' + p.id + '\')" title="Archive" style="color:var(--gray)">' + IC.x + '</button>';
       h += '</div></td>';
@@ -36358,12 +36448,12 @@ function renderClientDetail() {
         h += '<div style="display:flex;align-items:center;gap:0.25rem;flex-wrap:wrap">';
 
         if (_docxAutoPdfOn('proposal')) {
-          h += _renderDocxDownloadButton('proposal', p.id, 'pdfFromDocxProposal', {label:'PDF',style:'font-size:0.65rem;padding:0.15rem 0.35rem'});
+          h += _renderDocxDownloadButton('proposal', p.id, 'pdfFromDocxProposal', {label:_smDocBtnLabel('doc_proposal'),style:'font-size:0.65rem;padding:0.15rem 0.35rem',extraActions:_listDocMore(null, 'proposal', p).extras,compact:true});
           if (_cpPdfReady) h += '<button class="btn btn-primary btn-sm" onclick="sendForSigning(\'' + p.id + '\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.send + ' Send</button>';
         } else {
         h += _renderDocxDownloadButton('proposal', p.id, 'genProposalDOCX', {label:'DOCX',style:'font-size:0.65rem;padding:0.15rem 0.35rem'});
         if (_cpPdfReady) {
-          h += '<button class="btn btn-secondary btn-sm" onclick="downloadProposalPdf(\'' + p.id + '\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.dl + ' PDF</button>';
+          h += _propDlBtn(p, 'btn btn-secondary btn-sm', 'font-size:0.65rem;padding:0.15rem 0.35rem', '', _smDocBtnLabel('doc_proposal'), '', null, 'downloadProposalPdf');
           h += '<button class="btn btn-ghost btn-sm" onclick="uploadFinalPdf(\'proposal\',\'' + p.id + '\',\'Proposal\')" style="font-size:0.6rem;padding:0.1rem 0.3rem">Replace</button>';
           if (canManage()) h += '<button class="btn btn-ghost btn-sm" onclick="deleteFinalPdf(\'proposal\',\'' + p.id + '\')" style="font-size:0.6rem;padding:0.1rem 0.3rem;color:var(--red-text)">Remove</button>';
           h += '<button class="btn btn-primary btn-sm" onclick="sendForSigning(\'' + p.id + '\')" style="font-size:0.65rem;padding:0.15rem 0.35rem">' + IC.send + ' Send</button>';
@@ -36400,7 +36490,7 @@ function renderClientDetail() {
       h += '<td class="mono" style="font-size:0.8em">' + fmtDate(p.signed_at || p.created_at) + '</td>';
       h += '<td></td>';
       h += '<td><div class="flex gap-1" onclick="event.stopPropagation()">';
-      h += '<button class="btn btn-ghost btn-sm" onclick="downloadProposal(\'' + p.id + '\')" title="Download">' + IC.dl + '</button>';
+      h += _propDlBtn(p, 'btn btn-ghost btn-sm', '', 'Download', _smDocBtnLabel('doc_proposal'), '', pAssessment);
       if (canManage()) h += '<button class="btn btn-ghost btn-sm" onclick="duplicateProposal(\'' + p.id + '\')" title="Duplicate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>';
       if (canManage()) h += '<button class="btn btn-ghost btn-sm" onclick="archiveProposal(\'' + p.id + '\')" title="Archive" style="color:var(--gray)">' + IC.x + '</button>';
       h += '</div></td>';
@@ -36447,11 +36537,11 @@ function renderClientDetail() {
   if (_idsOn('assessment')) h += '<th>ID</th>';
   h += '<th class="c-main">Assessment</th>';
   h += '<th>Status</th>';
-  if (_cdColFindings) h += '<th>Findings</th>';
+  if (_cdColFindings) h += '<th class="c-mid">Findings</th>';
   if (_cdColComments) h += '<th>' + IC.chat + '</th>';
   if (_cdColProp) h += '<th>Proposal</th>';
   if (_cdColReport) h += '<th>Report</th>';
-  if (_cdColLoa) h += '<th>LoA</th>';
+  if (_cdColLoa) h += '<th>Attestation</th>';
   if (_showFbCd) h += '<th>Feedback</th>';
   if (canManage()) h += '<th>Actions</th>';
   h += '</tr></thead><tbody>';
@@ -36485,7 +36575,8 @@ function renderClientDetail() {
     if (_cdColReport) h += '<td onclick="event.stopPropagation()">' + renderReportColumn(a) + '</td>';
     if (_cdColLoa) h += '<td onclick="event.stopPropagation()">' + renderLoAColumn(a) + '</td>';
     if (_showFbCd) h += '<td onclick="event.stopPropagation()">' + renderFeedbackStatus(a, false) + '</td>';
-    if (canManage()) h += '<td onclick="event.stopPropagation()"><div class="flex gap-1"><button class="btn btn-ghost btn-sm" onclick="archiveAssessment(\'' + a.id + '\')" title="Archive" style="color:var(--gray)">' + IC.x + '</button><button class="btn btn-ghost btn-sm" onclick="deleteAssessment(\'' + a.id + '\')" title="Delete" style="color:var(--red-text)">' + IC.trash + '</button></div></td>';
+
+    if (canManage()) h += '<td onclick="event.stopPropagation()"><div class="flex gap-1"><button class="btn btn-ghost btn-table" onclick="archiveAssessment(\'' + a.id + '\')" title="Archive" style="color:var(--gray)">' + IC.x + '</button><button class="btn btn-ghost btn-table" onclick="deleteAssessment(\'' + a.id + '\')" title="Delete" style="color:var(--red-text)">' + IC.trash + '</button></div></td>';
     h += '</tr>';
   });
   var _cdColCount = 3 + (_idsOn('assessment') ? 1 : 0) + (_cdColFindings ? 1 : 0) + (_cdColComments ? 1 : 0) + (_cdColProp ? 1 : 0) + (_cdColReport ? 1 : 0) + (_cdColLoa ? 1 : 0) + (_showFbCd ? 1 : 0) + (canManage() ? 1 : 0);
@@ -36538,7 +36629,7 @@ function renderClientDetail() {
       h += '<td>' + (invAss ? (_mayOpenWork() ? '<span class="clickable" onclick="viewAssessment(\'' + invAss.id + '\')">' + esc(invAss.name) + '</span>' : esc(invAss.name)) : '<span style="color:var(--gray)">\u2014</span>') + '</td>';
       h += '<td class="mono">' + _invAmountText(inv) + '</td>';
       h += '<td class="mono" style="font-size:0.85em">' + (inv.due_date ? fmtDate(inv.due_date) : '\u2014') + '</td>';
-      h += '<td>' + statusBadge + '</td>';
+      h += '<td>' + statusBadge + _invStripeChip(inv) + '</td>';
 
       if (_cdIsClient) {
 
@@ -36546,12 +36637,12 @@ function renderClientDetail() {
         h += '<button class="btn btn-ghost btn-table" onclick="openM(\'invoiceview\',\'' + inv.id + '\')" title="View">' + IC.eye + '</button>';
 
         if (_cdDocxOn && _invPdfReady) {
-          h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')" title="Download PDF">' + IC.dl + ' PDF</button>';
+          h += _invPdfBtn(inv, 'downloadInvoicePdf', 'Download PDF');
         } else {
-          h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')" title="Download PDF">' + IC.dl + ' PDF</button>';
+          h += _invPdfBtn(inv, 'downloadInvoice', 'Download PDF');
         }
         if (pst === 'sent' || pst === 'overdue') {
-          if (hasStripe()) h += '<button class="btn btn-primary btn-table" onclick="payInvoice(\'' + inv.id + '\')">' + IC.cash + ' Pay</button>';
+          if (hasStripe() || _invStripeHeld(inv)) h += '<button class="btn btn-primary btn-table" onclick="payInvoice(\'' + inv.id + '\')">' + IC.cash + ' Pay</button>';
           if (hasBankPayment()) h += '<button class="btn btn-success btn-table" onclick="markPaidByBank(\'' + inv.id + '\')" title="I\'ve paid by bank transfer">' + IC.check + ' Bank</button>';
         }
         h += '</div></td>';
@@ -36560,16 +36651,22 @@ function renderClientDetail() {
       }
 
       h += '<td onclick="event.stopPropagation()">';
-      if (pst === 'draft' && _cdDocxOn) {
+      if (pst === 'draft' && _invStripeSends(inv)) {
+
+        h += '<div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap">';
+        h += _invPdfBtn(inv, 'downloadInvoice');
+        if (canManage()) h += '<button class="btn btn-primary btn-table" onclick="sendInvoice(\'' + inv.id + '\')" title="Stripe makes its own invoice from this one and emails it to the client">' + IC.send + ' Send with Stripe</button>';
+        h += '</div>';
+      } else if (pst === 'draft' && _cdDocxOn) {
         h += '<div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap">';
 
         if (_docxAutoPdfOn('invoice')) {
-          h += _renderDocxDownloadButton('invoice', inv.id, 'pdfFromDocxInvoice', {label:'PDF',cls:'btn-table'});
+          h += _renderDocxDownloadButton('invoice', inv.id, 'pdfFromDocxInvoice', {label:_smDocBtnLabel('doc_invoice'),cls:'btn-table',extraActions:_listDocMore(null, 'invoice', inv).extras,compact:true});
           if (_invPdfReady && canManage()) h += '<button class="btn btn-primary btn-table" onclick="sendInvoice(\'' + inv.id + '\')">' + IC.send + ' Send</button>';
         } else {
         h += _renderDocxDownloadButton('invoice', inv.id, 'downloadInvoice', {label:'DOCX',cls:'btn-table'});
         if (_invPdfReady) {
-          h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+          h += _invPdfBtn(inv, 'downloadInvoicePdf');
           if (canManage()) {
             h += '<button class="btn btn-ghost btn-table" onclick="uploadFinalPdf(\'invoice\',\'' + inv.id + '\',\'Invoice\')">Replace</button>';
             h += '<button class="btn btn-ghost btn-table" onclick="deleteFinalPdf(\'invoice\',\'' + inv.id + '\')" style="color:var(--red-text)">Remove</button>';
@@ -36582,33 +36679,35 @@ function renderClientDetail() {
         h += '</div>';
       } else if (pst === 'draft') {
         h += '<div style="display:flex;align-items:center;gap:0.35rem">';
-        h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        h += _invPdfBtn(inv, 'downloadInvoice');
         if (canManage()) h += '<button class="btn btn-primary btn-table" onclick="sendInvoice(\'' + inv.id + '\')">' + IC.send + ' Send</button>';
         h += '</div>';
       } else if (pst === 'sent' || pst === 'overdue') {
         h += '<div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap">';
         if (_cdDocxOn && _invPdfReady) {
-          h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+          h += _invPdfBtn(inv, 'downloadInvoicePdf');
         } else {
-          h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+          h += _invPdfBtn(inv, 'downloadInvoice');
         }
-        if (canManage() && _canNotifyClient('invoice_sent')) h += '<button class="btn btn-primary btn-table" onclick="resendInvoiceReminder(\'' + inv.id + '\')" title="Send payment reminder to client">' + IC.send + ' Reminder</button>';
+
+        var _cdRStripe = _invStripeHeld(inv) && hasStripe();
+        if (canManage() && (_cdRStripe || _canNotifyClient('invoice_sent'))) h += '<button class="btn btn-primary btn-table" onclick="resendInvoiceReminder(\'' + inv.id + '\')" title="' + (_cdRStripe ? 'Stripe emails its invoice to the client again' : 'Send payment reminder to client') + '">' + IC.send + ' Reminder</button>';
         h += '</div>';
       } else if (pst === 'pending_bank_verification') {
         h += '<div style="display:flex;align-items:center;gap:0.35rem">';
-        if (_cdDocxOn && _invPdfReady) h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
-        else h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        if (_cdDocxOn && _invPdfReady) h += _invPdfBtn(inv, 'downloadInvoicePdf');
+        else h += _invPdfBtn(inv, 'downloadInvoice');
         if (canManage()) h += '<button class="btn btn-success btn-table" onclick="confirmBankPayment(\'' + inv.id + '\')" title="Verify bank payment received">' + IC.check + ' Verify</button>';
         h += '</div>';
       } else if (pst === 'pending_payment_confirmation') {
         h += '<div style="display:flex;align-items:center;gap:0.35rem">';
-        if (_cdDocxOn && _invPdfReady) h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
-        else h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        if (_cdDocxOn && _invPdfReady) h += _invPdfBtn(inv, 'downloadInvoicePdf');
+        else h += _invPdfBtn(inv, 'downloadInvoice');
         if (canManage() && (S.profile.role === 'senior' || S.profile.role === 'admin')) h += '<button class="btn btn-success btn-table" onclick="confirmPayment(\'' + inv.id + '\')" title="Confirm payment received">' + IC.check + ' Confirm</button>';
         h += '</div>';
       } else if (pst === 'paid') {
-        if (_cdDocxOn && _invPdfReady) h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoicePdf(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
-        else h += '<button class="btn btn-secondary btn-table" onclick="downloadInvoice(\'' + inv.id + '\')">' + IC.dl + ' PDF</button>';
+        if (_cdDocxOn && _invPdfReady) h += _invPdfBtn(inv, 'downloadInvoicePdf');
+        else h += _invPdfBtn(inv, 'downloadInvoice');
       }
       h += '</td>';
 
@@ -36875,6 +36974,48 @@ function _flibFmt(format, tool) {
   if (/semgrep/.test(f)) return 'semgrep';
   if (/trivy/.test(f)) return 'trivy';
   if (/wapiti/.test(f)) return 'wapiti';
+  if (/bloodhound/.test(f)) return 'bloodhound';
+  if (/pingcastle/.test(f)) return 'pingcastle';
+  if (/certipy/.test(f)) return 'certipy';
+  if (/scubagear/.test(f)) return 'scubagear';
+  if (/prowler/.test(f)) return 'prowler';
+  if (/scoutsuite/.test(f)) return 'scoutsuite';
+  if (/security hub/.test(f)) return 'securityhub';
+  if (/checkov/.test(f)) return 'checkov';
+  if (/kics/.test(f)) return 'kics';
+  if (/tfsec/.test(f)) return 'tfsec';
+  if (/kube-bench/.test(f)) return 'kubebench';
+  if (/kubescape/.test(f)) return 'kubescape';
+  if (/docker bench/.test(f)) return 'dockerbench';
+  if (/grype/.test(f)) return 'grype';
+  if (/gitleaks/.test(f)) return 'gitleaks';
+  if (/trufflehog/.test(f)) return 'trufflehog';
+  if (/detect-secrets/.test(f)) return 'detectsecrets';
+  if (/bandit/.test(f)) return 'bandit';
+  if (/npm audit/.test(f)) return 'npmaudit';
+  if (/pip-audit/.test(f)) return 'pipaudit';
+  if (/osv-scanner/.test(f)) return 'osvscanner';
+  if (/snyk/.test(f)) return 'snyk';
+  if (/retire\.js/.test(f)) return 'retirejs';
+  if (/dependency-check/.test(f)) return 'depcheck';
+  if (/mobsf/.test(f)) return 'mobsf';
+  if (/wpscan/.test(f)) return 'wpscan';
+  if (/nexpose|insightvm/.test(f)) return 'nexpose';
+  if (/masscan/.test(f)) return 'masscan';
+  if (/sslyze/.test(f)) return 'sslyze';
+  if (/sslscan/.test(f)) return 'sslscan';
+  if (/ssh-audit/.test(f)) return 'sshaudit';
+  if (/lynis/.test(f)) return 'lynis';
+  if (/openscap/.test(f)) return 'openscap';
+  if (/kube-hunter/.test(f)) return 'kubehunter';
+  if (/falco/.test(f)) return 'falco';
+  if (/cloudsploit/.test(f)) return 'cloudsploit';
+  if (/defender for cloud/.test(f)) return 'defender';
+  if (/wiz-cli/.test(f)) return 'wizcli';
+  if (/\bwiz\b/.test(f)) return 'wiz';
+  if (/qark/.test(f)) return 'qark';
+  if (/powerpipe|steampipe/.test(f)) return 'powerpipe';
+  if (/azurehound/.test(f)) return 'azurehound';
   return '';
 }
 function _flibIndex(j) {
@@ -37856,6 +37997,9 @@ function getAssessmentValue(a) {
 
   var prop = (S.data.proposals || []).find(function(p) { return p.assessment_id === a.id || p.id === a.proposal_id; });
   if (prop && prop.cost) return prop.cost;
+
+  var _ep = _engPrice(a);
+  if (_ep > 0) return _ep;
 
   var days = a.test_days || 5;
   return days * DAY_RATE;
@@ -46241,7 +46385,8 @@ function renderSettings__portal() {
   h += '<div class="form-row">';
   h += '<div class="form-group"><label class="form-label">Publishable Key <span class="hint">pk_live_... or pk_test_...</span></label>';
   h += '<input type="text" class="form-input mono" id="set_stripe_pk" value="' + esc(s.stripe_publishable_key || '') + '" placeholder="pk_test_..."></div>';
-  h += '<div class="form-group"><label class="form-label">Secret Key <span class="hint">sk_ or rk_ (a restricted key with Checkout Sessions and Subscriptions write, and Invoices read)</span></label>';
+
+  h += '<div class="form-group"><label class="form-label">Secret Key <span class="hint">sk_ or rk_ (a restricted key with Checkout Sessions, Subscriptions, Invoices and Customers write)</span></label>';
   h += '<input type="password" class="form-input mono" id="set_stripe_sk" autocomplete="new-password" data-lpignore="true" data-1p-ignore data-form-type="other" data-bwignore value="" placeholder="' + (S._hasStripeKey ? 'Leave blank to keep current key' : 'sk_test_...') + '">' + (S._hasStripeKey ? '<span style="color:#22c55e;font-size:0.7rem">✓ Configured</span>' : '') + '</div>';
   h += '</div>';
   h += '<div class="form-group"><label class="form-label">Webhook Secret <span class="hint">whsec_...</span></label>';
@@ -46251,15 +46396,29 @@ function renderSettings__portal() {
 
   h += '<p class="hint" style="margin-top:0.25rem">This is how card payments, renewals, refunds and disputes reach your invoices: your own database checks each event with this secret. In Stripe, add a webhook endpoint at <code id="stripe_wh_url" style="font-size:0.75rem;word-break:break-all">' + esc(_whUrl) + '</code>'
     + ' <button type="button" class="btn btn-ghost btn-sm" onclick="_copyRunbookCmd(\'stripe_wh_url\', this)">Copy</button>'
-    + ' with the events <code style="font-size:0.75rem">checkout.session.completed</code>, <code style="font-size:0.75rem">checkout.session.async_payment_succeeded</code>, <code style="font-size:0.75rem">checkout.session.async_payment_failed</code>, <code style="font-size:0.75rem">invoice.paid</code>, <code style="font-size:0.75rem">invoice.payment_failed</code>, <code style="font-size:0.75rem">charge.refunded</code>, <code style="font-size:0.75rem">charge.dispute.created</code>, <code style="font-size:0.75rem">charge.dispute.closed</code> and <code style="font-size:0.75rem">customer.subscription.deleted</code>'
+    + ' with the events <code style="font-size:0.75rem">checkout.session.completed</code>, <code style="font-size:0.75rem">checkout.session.async_payment_succeeded</code>, <code style="font-size:0.75rem">checkout.session.async_payment_failed</code>, <code style="font-size:0.75rem">invoice.paid</code>, <code style="font-size:0.75rem">invoice.payment_failed</code>, <code style="font-size:0.75rem">invoice.voided</code>, <code style="font-size:0.75rem">charge.refunded</code>, <code style="font-size:0.75rem">charge.dispute.created</code>, <code style="font-size:0.75rem">charge.dispute.closed</code> and <code style="font-size:0.75rem">customer.subscription.deleted</code>'
     + (typeof scanningEnabled === 'function' && scanningEnabled() ? ', and the other <code style="font-size:0.75rem">customer.subscription</code> events if you sell scan subscriptions' : '')
     + '. The address names this portal, so use it as shown. Without the webhook, a card payment is still confirmed when the client comes back from paying, where your database can ask Stripe itself (on Supabase, or behind a Pental gateway from version 1.9.0).</p>';
 
   if (S._hasStripeWhsec) {
-    h += '<p class="hint" style="margin-top:0.35rem;padding:0.45rem 0.6rem;border-left:3px solid var(--yellow);background:rgba(234,179,8,0.06);border-radius:4px">If your webhook was made before October 2026, open it in Stripe and add the events above it does not send yet. Refunds, disputes and a payment whose page was closed before it came back reach your invoices only through them.</p>';
+
+    h += '<p class="hint" style="margin-top:0.35rem;padding:0.45rem 0.6rem;border-left:3px solid var(--yellow);background:rgba(234,179,8,0.06);border-radius:4px">If your webhook was made before 19 November 2026, open it in Stripe and add the events above it does not send yet. Refunds, disputes, a payment whose page was closed before it came back, and an invoice Stripe sent being voided there reach your invoices only through them.</p>';
   }
   h += '<div class="form-group"><label class="form-label">Success URL <span class="hint">Where clients return after paying</span></label>';
   h += '<input type="text" class="form-input" id="set_stripe_success_url" value="' + esc(s.stripe_success_url || '') + '" placeholder="' + esc(window.location.origin + window.location.pathname) + '"></div>';
+
+  if (invoicesEnabled()) {
+    var _sv = s.invoice_send_via === 'stripe' ? 'stripe' : 'pental';
+    h += '<div class="form-group"><label class="form-label">Send Invoices As</label>';
+    [{ v: 'pental', t: 'Pental invoices', d: 'Emailed from your portal with their PDF.' },
+     { v: 'stripe', t: 'Stripe invoices', d: 'Stripe makes its own invoice from each one and emails it, and its page takes the payment. Paid there, it is marked paid here. A retainer is still paid through Stripe\'s checkout.' }].forEach(function (o) {
+      var on = _sv === o.v;
+      h += '<label class="set-send-opt' + (on ? ' on' : '') + '"><input type="radio" name="set_invoice_send_via" value="' + o.v + '"' + (on ? ' checked' : '')
+        + ' onchange="document.querySelectorAll(\'.set-send-opt\').forEach(function(l){l.classList.toggle(\'on\',l.querySelector(\'input\').checked)})">'
+        + '<span><strong>' + o.t + '</strong><em>' + o.d + '</em></span></label>';
+    });
+    h += '</div>';
+  }
   h += '<div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.5rem">';
   h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the payment settings above.</div>';
   h += '<button class="btn btn-primary" onclick="savePaymentSettings()">Save Payment Settings</button>';
@@ -50864,6 +51023,123 @@ function _vhResolve(row, ctx) {
              : '';
   return { date: date || '', author: author || '' };
 }
+function _vhDocxCtx(a, findings, leadName, qaName, _opts) {
+  var qaReviewDate = '';
+  var qaComments = (S.data.qa_comments || []).filter(function(c) { return c.assessment_id === a.id; });
+  if (qaComments.length > 0) {
+    qaReviewDate = fmtDate(qaComments[0].created_at);
+  } else if (a.qa_status) {
+    qaReviewDate = fmtDate(a.updated_at);
+  }
+  var _authorIds = {};
+  if (a.lead_id) _authorIds[a.lead_id] = true;
+  (findings || []).forEach(function(f) { if (f.created_by) _authorIds[f.created_by] = true; });
+  var _allAuthors = Object.keys(_authorIds).map(function(uid) { return getTesterName(uid) || ''; }).filter(Boolean);
+  var _otherAuthors = _allAuthors.filter(function(n) { return n !== leadName; });
+  var _v02Author = leadName + (_otherAuthors.length ? '\n' + _otherAuthors.join('\n') : '');
+  return {
+    created: fmtDate(a.created_at) || '',
+    started: fmtDate(a.start_date) || '',
+    qaDate: qaReviewDate,
+    ended: fmtDate(a.end_date) || '',
+    updated: fmtDate(a.updated_at) || '',
+    released: a.delivered_at ? fmtDate(a.delivered_at) : fmtDate(a.updated_at),
+    lead: leadName,
+    contributors: _otherAuthors.join('\n'),
+    leadAndAuthors: _v02Author,
+
+    authorIds: Object.keys(_authorIds),
+    qaName: qaName,
+    retest: (_opts && _opts.asStood && _opts.asStood.noDate) ? '' : _vhRetestDate(findings),
+  };
+}
+function _vhQaNow(a) {
+  if (!a || !(a.qa_status === 'approved' || a.delivered_at)) return null;
+  var meta = null;
+  try { meta = _getDocxTemplateMeta('report'); } catch (e) { meta = null; }
+  var tpl = (typeof _rdFileWith === 'function' ? _rdFileWith((meta && meta.id) || '', function () { return getTemplate('report'); }) : getTemplate('report')) || {};
+  var row = _vhRows(tpl).filter(function (r) { return r && r.k === 'qa_review'; })[0];
+  if (!row) return null;
+  var findings = (typeof _docFindings === 'function') ? _docFindings(a.id, 'report') : (getAssessmentFindings(a.id) || []);
+  var leadName = getTesterName(a.lead_id) || 'Tester';
+  var qaName = '';
+  if (a.qa_assignee) {
+    var qp = (S.data.users || []).find(function (u) { return u.id === a.qa_assignee; });
+    if (qp) qaName = qp.name || '';
+  }
+  var ctx = _vhDocxCtx(a, findings, leadName, qaName);
+  var x = _vhResolve(row, ctx);
+
+  var all = _vhRows(tpl).filter(function (r) { return _vhShows(r, ctx); }).map(function (r) {
+    var y = _vhResolve(r, ctx);
+    return { k: r.k, v: String(r.v || '').trim(), l: String(r.l || '').trim(), date: y.date || '', author: y.author || '' };
+  });
+  return { date: x.date || '', author: x.author || '', row: row, all: all };
+}
+function _vhQaFillOld(zip, a) {
+  var res = { wrote: false, why: '' };
+  var df = zip && zip.file('word/document.xml');
+  if (!df) return res;
+  var x = df.asText();
+  if (x.indexOf('w:name="PNTL_p_vhqa"') >= 0) return res;
+  var q = _vhQaNow(a);
+  if (!q || !q.author || q.author.indexOf('\n') >= 0) return res;
+  var qr = (q.all || []).filter(function (r) { return r.k === 'qa_review'; })[0];
+  if (!qr || !qr.v || !qr.l) return res;
+  var dec = function (t) {
+    return String(t).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+      .replace(/&#(\d+);/g, function (m, n) { return String.fromCharCode(+n); }).replace(/&amp;/g, '&');
+  };
+  var textOf = function (xml) { return dec((String(xml).match(/<w:t\b[^>]*>[^<]*<\/w:t>/g) || []).map(function (t) { return t.replace(/<[^>]+>/g, ''); }).join('')).replace(/\s+/g, ' ').trim(); };
+
+  var rows = [], open = /<w:tr\b[^>]*>/g, m;
+  while ((m = open.exec(x))) {
+    var tok = /<w:tr\b[^>]*>|<\/w:tr>/g, depth = 1, t, end = -1;
+    tok.lastIndex = m.index + m[0].length;
+    while ((t = tok.exec(x))) { if (t[0] === '</w:tr>') { if (--depth === 0) { end = t.index + 7; break; } } else depth++; }
+    if (end < 0) break;
+    var rx = x.slice(m.index, end);
+    if (rx.indexOf('<w:tbl') >= 0) continue;
+    var cells = [], rc = /<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/g, c;
+    while ((c = rc.exec(rx))) cells.push({ at: m.index + c.index, xml: c[0], text: textOf(c[0]) });
+    rows.push({ at: m.index, tbl: Math.max(x.lastIndexOf('<w:tbl>', m.index), x.lastIndexOf('<w:tbl ', m.index)), cells: cells });
+  }
+  var has = function (row, t) { return row.cells.some(function (c) { return c.text === t; }); };
+  var qaRows = rows.filter(function (row) { return has(row, qr.v) && has(row, qr.l); });
+  if (qaRows.length !== 1) { res.why = qaRows.length ? 'its QA row is there more than once' : 'its QA row was not found'; return res; }
+  var qrow = qaRows[0], col = -1, ref = null;
+  (q.all || []).some(function (r) {
+    if (r.k === 'qa_review' || !r.v || !r.l || !r.author || r.author.indexOf('\n') >= 0) return false;
+    return rows.some(function (row) {
+      if (row.tbl !== qrow.tbl || row === qrow || row.cells.length !== qrow.cells.length || !has(row, r.v) || !has(row, r.l)) return false;
+      var at = [];
+      row.cells.forEach(function (c, i) { if (c.text === r.author) at.push(i); });
+      if (at.length !== 1) return false;
+      col = at[0]; ref = row.cells[at[0]];
+      return true;
+    });
+  });
+  if (col < 0) { res.why = 'its person column could not be told'; return res; }
+  var cell = qrow.cells[col];
+  if (cell.text) { res.why = 'its QA row already names somebody'; return res; }
+
+  var rr = /<w:r\b[^>]*>\s*<w:rPr>([\s\S]*?)<\/w:rPr>/.exec(ref.xml);
+  var rpr = rr ? rr[1].replace(/<w:rPrChange\b[\s\S]*?<\/w:rPrChange>/g, '').trim() : '';
+  var esc = String(q.author).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  var run = '<w:r>' + (rpr ? '<w:rPr>' + rpr + '</w:rPr>' : '') + '<w:t xml:space="preserve">' + esc + '</w:t></w:r>';
+  var pm = /<w:p\b[^>]*\/>|<w:p\b[^>]*>[\s\S]*?<\/w:p>/.exec(cell.xml);
+  if (!pm) { res.why = 'its QA row has no paragraph to write in'; return res; }
+  var para = pm[0];
+  var filled = /\/>$/.test(para) && para.indexOf('</w:p>') < 0
+    ? para.replace(/\/>$/, '>') + run + '</w:p>'
+    : para.slice(0, para.lastIndexOf('</w:p>')) + run + '</w:p>';
+  var at0 = cell.at + pm.index;
+  var nx = x.slice(0, at0) + filled + x.slice(at0 + para.length);
+  if (_pntlXmlProblem(nx)) { res.why = 'writing it would break the document'; return res; }
+  zip.file('word/document.xml', nx);
+  res.wrote = true;
+  return res;
+}
 function _vhRetestDate(findings) {
   var any = (findings || []).some(function (f) { return !!(f && f.retest_completed_at); });
   return any ? (fmtDate(new Date()) || '') : '';
@@ -54097,6 +54373,8 @@ function renderAssessmentModal() {
   h += '<p class="hint" style="margin-top:0.25rem;font-size:0.72rem;color:var(--gray)">End date is auto-calculated from total days. You can override it without affecting the days.</p>';
   h += '</div>';
 
+  h += _aBillingHtml(a);
+
   var _assPerspective = a ? (a.test_perspective || 'unauthenticated') : 'unauthenticated';
   h += '<div class="proposal-section"><h4>Testing Perspective</h4>';
   h += '<select class="form-select" id="aPerspective" onchange="_toggleCaptureCreds()">';
@@ -54365,7 +54643,12 @@ async function saveAssessment() {
           return;
         }
         if (!_coRes.ok) { _coSaid('assessments', m.id, _coRes); return; }
-        if (!_coRes.wrote.length) { toast('No changes to save', 'info'); closeM(); return; }
+        if (!_coRes.wrote.length) {
+
+          var _bOnly = await _aBillingSave(m.id, days);
+          if (_bOnly.changed || _bOnly.deal) { _aBillingSaid(_bOnly, 'Billing saved'); closeM(); await refreshAndStay(); return; }
+          toast('No changes to save', 'info'); closeM(); return;
+        }
         data = _aOnly || data;
         result = { data: [Object.assign({ id: m.id }, data, _coRes.row || {})], error: null };
       } else {
@@ -54458,7 +54741,9 @@ async function saveAssessment() {
         } catch (e) { console.warn('[create] staged comment failed:', e); }
       }
 
-      toast(isEdit ? 'Assessment updated' : 'Assessment created', 'success');
+      var _bil = savedId ? await _aBillingSave(savedId, days) : null;
+
+      _aBillingSaid(_bil, isEdit ? 'Assessment updated' : 'Assessment created');
       closeM();
       await refreshAndStay();
 
@@ -54795,6 +55080,7 @@ function _aiFindingLines(list, budget, opts) {
     if (/\d/.test(cwe)) line += '; ' + (/^cwe/i.test(cwe) ? cwe.replace(/^cwe[\s:_-]*/i, 'CWE-') : 'CWE-' + cwe).slice(0, 40);
     if (opts.status !== false) line += '; status: ' + (said[String(f.status || 'open')] || String(f.status).replace(/_/g, ' '));
     if (opts.phase && f.phase) line += '; phase: ' + String(f.phase).slice(0, 60);
+    if (opts.retest) line += _aiRetestSaid(f);
     line += '\n';
     var hosts = '';
     if (f.affected_hosts && opts.hosts !== false) {
@@ -54803,6 +55089,13 @@ function _aiFindingLines(list, budget, opts) {
     }
     var parts = [];
     fields.forEach(function (k) {
+
+      if (k === 'retest_results' && opts.retest) {
+        var rr = _aiRetestRounds(f), at = (rr.length && f.retest_status !== 'requested') ? 1 : 0;
+        if (at) parts.push({ n: names[k], t: rr[0], k: k });
+        if (rr.length > at) parts.push({ n: rr.length - at > 1 ? 'Earlier retests, latest first' : 'Earlier retest', t: rr.slice(at).join(' | '), k: k });
+        return;
+      }
 
       var t = _aiEditorText(String((k === 'retest_results' ? _retestPrintable(f) : f[k]) || ''), '').replace(/\s+/g, ' ').trim();
       if (t) parts.push({ n: names[k] || k, t: t, k: k });
@@ -54849,6 +55142,23 @@ function _aiFindingLines(list, budget, opts) {
   });
   if (left) out += '- and ' + left + ' further finding' + (left === 1 ? '' : 's') + ', not listed here for length.\n';
   return out;
+}
+function _aiRetestHidden(f) {
+  return !!(S && S.profile && S.profile.role === 'client' && !_retestClientVisible(f));
+}
+function _aiRetestSaid(f) {
+  if (!f || _aiRetestHidden(f)) return '';
+  if (_retestConcluded(f)) {
+    var on = f.retest_completed_at ? fmtDate(f.retest_completed_at) : '';
+    return '; retested' + (on ? ' on ' + on : '') + ': ' + _RETEST_OUTCOMES[f.retest_status].words;
+  }
+  return f.retest_status === 'requested' ? '; retest requested, no result yet' : '';
+}
+function _aiRetestRounds(f) {
+  if (!f || _aiRetestHidden(f)) return [];
+  return String(_retestPrintable(f) || '').split(_RT_SEP).map(function (r) {
+    return _aiEditorText(r, '').replace(/\s+/g, ' ').trim();
+  }).filter(Boolean);
 }
 function _aiFindingCustomFields() {
   var cfs = [];
@@ -58451,7 +58761,7 @@ window._SM_DEFAULT_PROMPTS.field_title = "You are a senior penetration tester. N
 window._SM_DEFAULT_PROMPTS.notes = "You are a senior penetration tester writing the internal working notes for an assessment: the background to the engagement, its scope and approach, and the arrangements the team needs to know, such as contacts, access, testing windows and constraints. These notes are for the team, not the client, so be brief, factual and practical. Write in British English. Use only what is supplied, and do not invent details.";
 window._SM_DEFAULT_PROMPTS.caveats = "You are a senior penetration tester writing the caveats and limitations section of a security assessment report. State plainly what was and was not tested, any constraints on time, access, accounts or environment, and anything else that limits how far the results can be relied upon, including that the testing reflects a point in time. Write in British English, in a neutral, factual tone. Use only what is supplied: where nothing specific is known, keep to the general caveats rather than inventing limitations.";
 window._SM_DEFAULT_PROMPTS.assessment_title = "You are a senior penetration tester naming a security assessment, as it will appear on its report and in the client's portal. Write the client's name exactly as it is given, a spaced hyphen, then what is being tested followed by the word Assessment, in title case: for example, \"Acme Ltd - Web and Mobile Application Assessment\". Name what is being tested from the phases, in their order and as that testing is usually called (a Mobile phase is a mobile application test), joining two that share a word into one, as Web Application and Mobile Application become Web and Mobile Application. Add nothing else: no dates, reference, consultancy name or severity.";
-window._SM_DEFAULT_PROMPTS.executive_summary = "You are a senior penetration test report writer. Write the executive summary of a security assessment report. It is read by directors and managers who may not be technical, and it must remain accurate for the technical team.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual, measured and professional tone. Use \"it is recommended that\" for recommendations. Avoid emotive language, hyperbole and filler such as \"in simple terms\", \"put simply\" or \"essentially\", and do not refer to screenshots, figures or evidence images.\n\nStructure the summary as follows.\n1. An opening paragraph, without a heading: who carried out the assessment, of what, for whom and when, and how many findings were identified at each severity.\n2. A section for each category of finding, the category with the most severe finding first: the category name as a short heading, then a paragraph explaining what was found and the risk it presents, most severe finding first, as the findings themselves describe it: their descriptions, their impact and the firm's own fields given with them. Keep remediation for the final section.\n3. A section headed Recommendations: one paragraph setting out the remediation the organisation should prioritise, in order of severity, drawn from the remediation guidance supplied.\nWhere the engagement had more than one phase, keep to this structure across them all, and say which phase a finding came from where it helps.\n\nUse only the information supplied, and do not invent findings, hosts, figures or dates. Any background notes are for context: do not quote them or repeat internal remarks.";
+window._SM_DEFAULT_PROMPTS.executive_summary = "You are a senior penetration test report writer. Write the executive summary of a security assessment report. It is read by directors and managers who may not be technical, and it must remain accurate for the technical team.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual, measured and professional tone. Use \"it is recommended that\" for recommendations. Avoid emotive language, hyperbole and filler such as \"in simple terms\", \"put simply\" or \"essentially\", and do not refer to screenshots, figures or evidence images.\n\nStructure the summary as follows.\n1. An opening paragraph, without a heading: who carried out the assessment, of what, for whom and when, and how many findings were identified at each severity; and where findings were retested, when, and how many were found remediated, part remediated or not remediated, or had their risk accepted.\n2. A section for each category of finding, the category with the most severe finding first: the category name as a short heading, then a paragraph explaining what was found and the risk it presents, most severe finding first, as the findings themselves describe it: their descriptions, their impact and the firm's own fields given with them. Name each finding and the hosts, applications or components it affects, and where a finding was retested, say what the retest found. Keep remediation for the final section.\n3. A section headed Recommendations: one paragraph setting out the remediation the organisation should prioritise, in order of severity, drawn from the remediation guidance supplied, for the findings that remain open or part remediated.\nWhere the engagement had more than one phase, keep to this structure across them all, and say which phase a finding came from where it helps.\n\nUse only the information supplied, and do not invent findings, hosts, figures or dates. Any background notes are for context: do not quote them or repeat internal remarks.";
 window._SM_DEFAULT_PROMPTS.retest_summary = "You are a senior penetration test report writer. Write the retest summary of a security assessment report: what was found when each finding was tested again.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual and concise tone. Every sentence should add information; do not repeat anything.\n\nStructure the summary as follows, leaving out any part that has nothing to report.\n1. An opening paragraph: that a retest was carried out, how many findings were retested, and how many were remediated, partially remediated or remain open.\n2. The remediated findings: name each, and state briefly what was observed that confirms the fix.\n3. The partially remediated findings: name each, the progress observed and what remains.\n4. The findings that remain open: name each.\n\nUse only the findings and retest results supplied, and do not invent fixes, findings or figures.";
 window._SM_DEFAULT_PROMPTS.finding_description = "You are a senior penetration tester writing the description of a finding for a client's security assessment report.\n\nExplain what the vulnerability is, where it was found and how it was identified, drawing on the evidence provided, and why it matters in this context: what an attacker could achieve, and anything that limits or raises the risk.\n\nWrite in British English, in a factual, technical and measured tone, using the passive voice for what was done during testing. Keep it to two to four short paragraphs. Do not include remediation advice, which has a section of its own, and do not restate the finding title. Use only the information provided: do not invent hosts, versions, CVE numbers or results.";
 window._SM_DEFAULT_PROMPTS.finding_remediation = "You are a senior penetration tester writing the remediation guidance for a finding in a client's security assessment report.\n\nGive specific, actionable steps that address the root cause, tailored to the technology and context shown in the description and evidence: name the configuration setting, header, code change or patch where the material supports it, and put the most important step first. Where a full fix may take time, add an interim mitigation, and say how the fix can be confirmed.\n\nWrite in British English, clearly and directly. Avoid generic advice that would apply to any finding, and do not invent product versions, CVE numbers or settings that the material does not support.";
@@ -58472,6 +58782,7 @@ window._SM_PREVIOUS_PROMPTS = {"field_title":["You are a senior penetration test
 window._ES_TOGETHER = "Where the engagement had more than one phase, keep to this structure across them all, and say which phase a finding came from where it helps.";
 window._ES_BY_PHASE = "Where the engagement had more than one phase, structure the summary by phase instead: a heading \"Introduction\", then the opening paragraph, which also describes the phases and the scope of each; a heading for each phase, named as it is and in the order given, with that phase's findings grouped by category, most severe first; and a heading \"Conclusion and Recommendations\", with the overall position across all phases and the remediation to prioritise, in order of severity.";
 (window._SM_PREVIOUS_PROMPTS.executive_summary = window._SM_PREVIOUS_PROMPTS.executive_summary || []).push("You are a senior penetration test report writer. Write the executive summary of a security assessment report. It is read by directors and managers who may not be technical, and it must remain accurate for the technical team.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual, measured and professional tone. Use \"it is recommended that\" for recommendations. Avoid emotive language, hyperbole and filler such as \"in simple terms\", \"put simply\" or \"essentially\", and do not refer to screenshots, figures or evidence images.\n\nStructure the summary as follows.\n1. An opening paragraph, without a heading: who carried out the assessment, of what, for whom and when, and how many findings were identified at each severity.\n2. A section for each category of finding, the category with the most severe finding first: the category name as a short heading, then a paragraph explaining what was found and the risk it presents, most severe finding first, as the findings themselves describe it: their descriptions, their impact and the firm's own fields given with them. Keep remediation for the final section.\n3. A section headed Recommendations: one paragraph setting out the remediation the organisation should prioritise, in order of severity, drawn from the remediation guidance supplied.\n\nUse only the information supplied, and do not invent findings, hosts, figures or dates. Any background notes are for context: do not quote them or repeat internal remarks.");
+(window._SM_PREVIOUS_PROMPTS.executive_summary = window._SM_PREVIOUS_PROMPTS.executive_summary || []).push("You are a senior penetration test report writer. Write the executive summary of a security assessment report. It is read by directors and managers who may not be technical, and it must remain accurate for the technical team.\n\nWrite in British English, in the past tense and mainly the passive voice, in a factual, measured and professional tone. Use \"it is recommended that\" for recommendations. Avoid emotive language, hyperbole and filler such as \"in simple terms\", \"put simply\" or \"essentially\", and do not refer to screenshots, figures or evidence images.\n\nStructure the summary as follows.\n1. An opening paragraph, without a heading: who carried out the assessment, of what, for whom and when, and how many findings were identified at each severity.\n2. A section for each category of finding, the category with the most severe finding first: the category name as a short heading, then a paragraph explaining what was found and the risk it presents, most severe finding first, as the findings themselves describe it: their descriptions, their impact and the firm's own fields given with them. Keep remediation for the final section.\n3. A section headed Recommendations: one paragraph setting out the remediation the organisation should prioritise, in order of severity, drawn from the remediation guidance supplied.\nWhere the engagement had more than one phase, keep to this structure across them all, and say which phase a finding came from where it helps.\n\nUse only the information supplied, and do not invent findings, hosts, figures or dates. Any background notes are for context: do not quote them or repeat internal remarks.");
 function _esLegacyByPhase() {
   var t = (S.data && S.data.settings && S.data.settings.pdf_templates) || {};
   return !!t && t.exec_summary_mode === 'per_phase';
@@ -58484,7 +58795,7 @@ function _esWithByPhase(text) {
 }
 window._esLegacyByPhase = _esLegacyByPhase;
 window._esWithByPhase = _esWithByPhase;
-window._AI_SUMMARY_GROUNDING = "WHAT THE SUMMARY RESTS ON. Each finding is given with its description, its impact where it has one, and the firm's own fields under the firm's own names, such as a business risk, a likelihood or an affected service. Those fields are the tester's own account of the finding and its context: take the risk and the context of each finding from them and from its description, and where they say something, say it as they do rather than in general terms. Do not assume anything that the findings, their fields and the engagement details do not state: not what the organisation does, holds or is obliged to do, not who its users are or what other systems it has, not that an issue was exploited, and no consequence such as financial loss, reputational damage, a data breach or a regulatory penalty that no finding gives. Where nothing supplied says what an issue would mean for the organisation, say what it allows, in the terms the finding uses. Where your other instructions ask for something that nothing supplied supports, leave it out rather than supplying it.";
+window._AI_SUMMARY_GROUNDING = "WHAT THE SUMMARY RESTS ON. Each finding is given with its description, its impact where it has one, and the firm's own fields under the firm's own names, such as a business risk, a likelihood or an affected service. Those fields are the tester's own account of the finding and its context: take the risk and the context of each finding from them and from its description, and where they say something, say it as they do rather than in general terms. Do not assume anything that the findings, their fields and the engagement details do not state: not what the organisation does, holds or is obliged to do, not who its users are or what other systems it has, not that an issue was exploited, and no consequence such as financial loss, reputational damage, a data breach or a regulatory penalty that no finding gives. Where nothing supplied says what an issue would mean for the organisation, say what it allows, in the terms the finding uses. Be specific: refer to each finding by its title, and give the hosts, applications, URLs, accounts, versions, figures and dates that the findings give rather than speaking of them in general terms, but never a password, key or other secret. Where a finding was retested, the result, the day it was recorded and the tester's retest notes are given with it: say what the retest found and when, as they say it, and take the finding's state after its latest retest as its state now. A finding with a retest requested and no result yet has not been retested, so do not say that it has. Any retest summary or other section of the report given is the firm's own account: draw on it where it bears on the findings or the engagement, without repeating it at length, and where it differs from the findings, follow the findings. Where your other instructions ask for something that nothing supplied supports, leave it out rather than supplying it.";
 window._AI_REPLY_CONTRACTS = {
   "html": "Reply with the content only, as HTML: <p> for paragraphs, <ul> or <ol> with <li> for lists, <strong> for emphasis, <code> for short inline terms and <pre><code> for requests, responses, commands, code or any other multi-line text. No headings, no markdown, no inline styles or colours, and no preamble. Never name a screenshot or figure by a number, since the report numbers them in its own order: say the screenshot in the evidence, or what it shows.",
   "summary": "Reply with the summary only, as HTML: each paragraph in its own <p>, any heading the instructions call for as its own paragraph in <p><strong>...</strong></p>, <strong> for emphasis, and <ul> with <li> only where a list is asked for. No other tags, no markdown and no preamble.",
@@ -65647,14 +65958,27 @@ function _pntlHtmlSays(html) {
   var s = String(html == null ? '' : html);
   return /<img\b/i.test(s) || !!s.replace(/<[^>]*>/g, '').replace(/&nbsp;|&#160;/g, ' ').trim();
 }
-function _pntlInlineReplacement(inner, text) {
+function _pntlInlineReplacement(inner, text, rprIfNone) {
 
   var edge = _pntlRegionEdges(inner);
   if (edge.unclosed) return null;
   var pr = /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(String(inner || ''));
   var esc = String(text == null ? '' : text)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return '<w:r>' + (pr ? pr[0] : '') + '<w:t xml:space="preserve">' + esc + '</w:t></w:r>' + edge.suffix;
+
+  return '<w:r>' + (pr ? pr[0] : (rprIfNone || '')) + '<w:t xml:space="preserve">' + esc + '</w:t></w:r>' + edge.suffix;
+}
+function _pntlParaRpr(docXml, at) {
+  var x = String(docXml || '');
+  var p = Math.max(x.lastIndexOf('<w:p>', at), x.lastIndexOf('<w:p ', at));
+  if (p < 0) return '';
+  var seg = x.slice(p, at);
+  if (/<\/w:p>/.test(seg)) return '';
+  var ppr = /<w:pPr>([\s\S]*?)<\/w:pPr>/.exec(seg);
+  var rpr = ppr ? /<w:rPr>([\s\S]*?)<\/w:rPr>/.exec(ppr[1]) : null;
+  if (!rpr) return '';
+  var body = rpr[1].replace(/<w:rPrChange\b[\s\S]*?<\/w:rPrChange>/g, '').replace(/<w:(?:ins|del|moveFrom|moveTo)\b[^>]*\/>/g, '').trim();
+  return body ? '<w:rPr>' + body + '</w:rPr>' : '';
 }
 function _pntlParaOpenAt(docXml, at) {
   var re = /<w:p(?:\s[^>]*)?>|<\/w:p>/g, m, open = -1;
@@ -66088,6 +66412,21 @@ function _pntlRefreshFromPortal(zip, a) {
       considerInline('d_retest', _rtDay, 'Retest date');
       considerInline('d_vhretest', _rtDay, 'Document controls - Re-test date');
     }
+  } catch (e) {}
+
+  try {
+    var _vq = _vhQaNow(a);
+    if (_vq) [['d_vhqa', _vq.date, 'Document controls - QA review date'], ['p_vhqa', _vq.author, 'Document controls - QA reviewer']].forEach(function (q) {
+      var nm = q[0], want = String(q[1] == null ? '' : q[1]).trim();
+      if (!want || !(nm in spans)) return;
+      var inner = regions[nm] || '';
+      out.checked++;
+      if (_pntlRegionIsRich(inner)) { out.skipped++; return; }
+      if (_pntlInlineText(inner) === want) return;
+      var _inlineXml = _pntlInlineReplacement(inner, want, _pntlParaRpr(docXml, spans[nm].start));
+      if (!_inlineXml) { out.skipped++; return; }
+      edits.push({ start: spans[nm].start, end: spans[nm].end, xml: _inlineXml, label: q[2] });
+    });
   } catch (e) {}
 
   var embedSt = { imgCount: 9000, relId: 9000, newRels: '' };
@@ -67114,6 +67453,12 @@ async function downloadEditedReport(assessmentId, quiet) {
       });
       if (!_rfGuard.ok) refreshed = null;
 
+      var _vqOld = null;
+      try {
+        var _vqGuard = _pntlSafeEdit(zip, 'filling in the QA reviewer', function () { _vqOld = _rtWith(a, function () { return _vhQaFillOld(zip, a); }); });
+        if (!_vqGuard.ok) _vqOld = null;
+      } catch (e) { _vqOld = null; }
+
       try { _rtGot = await _rtBringRetest(zip, a); } catch (e) { _rtGot = null; try { console.error('[retest] could not be brought into the uploaded report', e); } catch (e2) {} }
 
       var _mk = (window._docxQaComments && window._docxQaComments.id === assessmentId)
@@ -67131,13 +67476,14 @@ async function downloadEditedReport(assessmentId, quiet) {
       var _levelled = 0;
       try { _levelled = _levelRowCells(zip); } catch (e) { console.warn('[Render] row levelling skipped:', e && e.message); }
 
-      if (_repaired || _levelled || (refreshed && refreshed.updated) || (_rtGot && _rtGot.wrote) || (_mkRes && (_mkRes.tracked || _mkRes.comments)) || (refreshed && refreshed.healed)) {
+      if (_repaired || _levelled || (refreshed && refreshed.updated) || (_vqOld && _vqOld.wrote) || (_rtGot && _rtGot.wrote) || (_mkRes && (_mkRes.tracked || _mkRes.comments)) || (refreshed && refreshed.healed)) {
         blob = zip.generate({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
       }
     } catch (e) {
 
       try { console.error('[sync] could not refresh the uploaded report', e); } catch (e2) {}
       refreshed = null;
+      _vqOld = null;
     }
 
     _qaMarkupToast(_mkRes, (typeof qaEnabled === 'function' && !qaEnabled()) ? undefined
@@ -67152,6 +67498,7 @@ async function downloadEditedReport(assessmentId, quiet) {
       toast(refreshed.updated + ' change' + (refreshed.updated === 1 ? '' : 's') + ' made here written into the report', 'success');
     }
     _rtSaid(_rtGot);
+    if (_vqOld && _vqOld.wrote) toast('Written into the report: the QA reviewer, in its document history', 'success');
     if (refreshed && refreshed.skipped) {
 
       toast(refreshed.skipped + ' part' + (refreshed.skipped === 1 ? '' : 's')
@@ -68075,7 +68422,7 @@ async function _bulkSetFindingVisibility(visible) {
   render();
 }
 window._bulkSetFindingVisibility = _bulkSetFindingVisibility;
-async function _bulkSetFindingDraft(draft, idsIn) {
+async function _bulkSetFindingDraft(draft, idsIn, opts) {
 
   var _given = Array.isArray(idsIn);
   var ids = _given ? idsIn.slice() : _findingSelIds();
@@ -68084,7 +68431,7 @@ async function _bulkSetFindingDraft(draft, idsIn) {
   if (!supabaseClient) { toast('Not connected', 'error'); return; }
 
   var word = draft ? 'drafts' : 'final';
-  if (!(await confirmAsync('Mark ' + ids.length + ' selected finding' + (ids.length === 1 ? '' : 's')
+  if (!(opts && opts.asked) && !(await confirmAsync('Mark ' + ids.length + ' selected finding' + (ids.length === 1 ? '' : 's')
     + ' as ' + word + '?'
     + (draft ? ' A draft is not shown to the client and is not counted as finished work.' : ''),
     { title: draft ? 'Mark as draft?' : 'Mark as final?', confirmText: draft ? 'Mark as draft' : 'Mark as final' }))) return;
@@ -69421,7 +69768,7 @@ async function deleteClient(clientId) {
           });
           assessments.forEach(function(a) { _cEvPaths = _cEvPaths.concat(_collectAssessmentStoragePaths(a)); });
 
-          _cEvPaths = _pathsNotSharedElsewhere(_cEvPaths, { skipClientId: id });
+          _cEvPaths = _pathsNotSharedElsewhere(_cEvPaths, { skipClientId: clientId });
           if (_cEvPaths.length) { await supabaseClient.storage.from('assessment-files').remove(_cEvPaths); }
         } catch(e) { console.warn('Client evidence storage cleanup:', e.message); }
         r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('assessment_files').delete().in('assessment_id', part); }, true); if (r.error) console.warn('files:', r.error.message);
@@ -69478,6 +69825,8 @@ async function deleteAssessment(assessmentId) {
   if (!proposal && assessment && assessment.proposal_id) proposal = (S.data.proposals || []).find(function(p) { return p.id === assessment.proposal_id; });
   var invoice = (S.data.invoices || []).find(function(i) { return i.assessment_id === assessmentId; });
 
+  var _delStripe = (S.data.invoices || []).some(function(i) { return i.assessment_id === assessmentId && _invStripeHeld(i); });
+
   var msg = '<div style="text-align:left">';
   msg += '<p style="margin-bottom:0.75rem"><strong>Permanently delete this assessment?</strong></p>';
   msg += '<p style="margin-bottom:0.5rem;color:var(--red-text)">This will delete:</p>';
@@ -69485,7 +69834,7 @@ async function deleteAssessment(assessmentId) {
   msg += '<li>Assessment: ' + esc(aName) + '</li>';
   if (findingCount) msg += '<li>' + findingCount + ' finding' + (findingCount > 1 ? 's' : '') + '</li>';
   if (proposal) msg += '<li>Associated proposal</li>';
-  if (invoice) msg += '<li>Associated invoice</li>';
+  if (invoice) msg += '<li>Associated invoice' + (_delStripe ? ', and Stripe\'s for it is voided in Stripe' : '') + '</li>';
   msg += '<li>All files, comments, QA data &amp; timeline events</li>';
   msg += '</ul>';
   msg += '<p style="color:var(--red-text);font-weight:600">This action cannot be undone.</p></div>';
@@ -69595,6 +69944,15 @@ function _lcNotice(old, row) {
 }
 var _lcSelf = {};
 function _lcWasMine(id) { return !!(id && _lcSelf[id] && Date.now() - _lcSelf[id] < 20000); }
+function _assessmentDays(a) {
+  if (!a) return 0;
+  var days = 0;
+  if (Array.isArray(a.phases)) a.phases.forEach(function (ph) { days += (parseFloat(ph && ph.test_days) || 0); });
+
+  if (!days) days = parseFloat(a.test_days) || 0;
+  return days;
+}
+window._assessmentDays = _assessmentDays;
 async function markPaid(invoiceId) {
   await markInvoicePaid(invoiceId);
 }
@@ -76196,6 +76554,83 @@ async function notifyTesterAssigned(assessment, testerProfile) {
   });
   await queueEmail(testerProfile.email, m.subject, m.html, 'tester_assigned', assessment.id, null, null, null, m.named);
 }
+function _esRetestTally(findings) {
+  var t = { n: 0, by: { fixed: 0, part_fixed: 0, not_fixed: 0, accepted: 0 }, from: '', to: '', asked: 0 };
+  (findings || []).forEach(function (f) {
+    if (!f || _aiRetestHidden(f)) return;
+    if (_retestConcluded(f)) {
+      t.n++; t.by[f.retest_status]++;
+      var d = f.retest_completed_at ? Date.parse(f.retest_completed_at) : NaN;
+      if (isNaN(d)) return;
+      if (!t.from || d < Date.parse(t.from)) t.from = f.retest_completed_at;
+      if (!t.to || d > Date.parse(t.to)) t.to = f.retest_completed_at;
+    } else if (f.retest_status === 'requested') t.asked++;
+  });
+  return t;
+}
+function _esRetestWhen(t) {
+  if (!t.from) return '';
+  var a = fmtDate(t.from), b = fmtDate(t.to);
+  return a === b ? ' on ' + a : ' between ' + a + ' and ' + b;
+}
+function _esRetestResults(t) {
+  return _RETEST_OUTCOME_ORDER.filter(function (k) { return t.by[k]; }).map(function (k) { return t.by[k] + ' ' + _RETEST_OUTCOMES[k].words; });
+}
+function _esRetestLine(t, total) {
+  var s = t.n ? t.n + ' of ' + total + ' finding' + (total === 1 ? '' : 's') + ' retested' + _esRetestWhen(t) + ' (' + _esRetestResults(t).join(', ') + ')' : '';
+  if (t.asked) s += (s ? '; ' : '') + 'a retest requested for ' + t.asked + (t.n ? ' more' : '') + ' finding' + (t.asked === 1 ? '' : 's') + ', with no result yet';
+  return s;
+}
+function _esRetestProse(t) {
+  var s = '';
+  if (t.n) {
+    var r = _esRetestResults(t);
+    s = 'Of these, ' + t.n + (t.n === 1 ? ' was' : ' were') + ' retested' + _esRetestWhen(t) + ', with the following outcome' + (r.length === 1 ? '' : 's') + ': '
+      + (r.length > 1 ? r.slice(0, -1).join(', ') + ' and ' + r[r.length - 1] : r[0]) + '.';
+  }
+  if (t.asked) s += (s ? ' ' : '') + 'A retest has been requested for ' + t.asked + (t.n ? ' further' : '') + ' finding' + (t.asked === 1 ? '' : 's') + ', with no result yet.';
+  return s;
+}
+var _ES_RETEST_FOUND = { fixed: 'it was found to have been remediated', part_fixed: 'it was found to have been partly remediated',
+  not_fixed: 'it was found not to have been remediated', accepted: 'the risk it presents was recorded as accepted' };
+function _esRetestSentence(f) {
+  if (!f || _aiRetestHidden(f)) return '';
+  if (_retestConcluded(f)) {
+    var on = f.retest_completed_at ? fmtDate(f.retest_completed_at) : '';
+    var w = (_aiRetestRounds(f)[0] || '').split(/\.\s+/).slice(0, 2).join('. ').trim();
+    if (w && !/[.!?]$/.test(w)) w += '.';
+
+    return 'When it was retested' + (on ? ' on ' + on : '') + ', ' + _ES_RETEST_FOUND[f.retest_status] + '. ' + (w ? esc(w) + ' ' : '');
+  }
+  return f.retest_status === 'requested' ? 'A retest has been requested, with no result yet. ' : '';
+}
+function _esRetestClosed(f) {
+  return _retestConcluded(f) && (f.retest_status === 'fixed' || f.retest_status === 'accepted') && !_aiRetestHidden(f);
+}
+function _esReportSections(a) {
+  var out = '', own = 0, vals = _smParseVals(a), order = [];
+  try { order = _smOrder() || []; } catch (e) { order = []; }
+  order.forEach(function (key) {
+    var cs = _smCustomById(key);
+    if (!cs && key !== 'retest_summary' && key !== 'caveats') return;
+    if (cs && !(cs.label && String(cs.label).trim())) return;
+    if (!_smEnabled(key) || !_smInReport(key) || _secIsDraft(a, key)) return;
+    var t = '';
+    if (cs) {
+      var v = vals[key];
+      if (v == null || v === '') return;
+      try { t = String(_fsText(cs, v, { report: true }) || ''); } catch (e) { t = _aiEditorText(String(v), ''); }
+    } else t = _aiEditorText(String(a[key] || ''), '');
+    t = t.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    if (!t) return;
+    var max = key === 'retest_summary' ? 2500 : 1000;
+    if (cs) { max = Math.min(max, 3000 - own); if (max < 200) return; }
+    t = _aiCut(t, max);
+    if (cs) own += t.length;
+    out += '\n\n' + String(_smLabel(key)).slice(0, 60) + ' (a section of the report):\n' + t;
+  });
+  return out;
+}
 async function generateExecSummary(assessmentId) {
 
   var _esSolo = _aiEnabled() ? _genSolo(document.getElementById('genBtn'), [document.getElementById('execSummaryEditor')], 'Writing') : null;
@@ -76238,7 +76673,7 @@ async function generateExecSummary(assessmentId) {
   if (_aiEnabled()) {
     var genBtn = document.getElementById('genBtn');
 
-    var fd = _aiFindingLines(findings, 48000, { cap: 3000, phase: _esMulti });
+    var fd = _aiFindingLines(findings, 48000, { cap: 4000, phase: _esMulti, retest: true, fields: ['description', 'impact', 'retest_results', 'remediation'] });
     var _all = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, _fixed = 0;
     findings.forEach(function (f) {
       var sv = String(f.severity || 'info').toLowerCase();
@@ -76255,6 +76690,9 @@ async function generateExecSummary(assessmentId) {
     var um = 'Consultancy: ' + companyName + '\nClient: ' + clientName + '\nAssessment: ' + (a.name || 'Security Assessment')
       + '\nType: ' + (_displayType(a) || 'Penetration Test') + '\nPeriod: ' + fmtDate(a.start_date) + ' to ' + fmtDate(a.end_date)
       + '\nFindings: ' + total + ' (' + sevStr + ')' + (_fixed ? ', of which ' + _fixed + ' already remediated' : '');
+
+    var _esRt = _esRetestLine(_esRetestTally(findings), total);
+    if (_esRt) um += '\nRetest: ' + _esRt;
     if (_esMulti) {
       um += '\nPhases: ' + _esPhases.map(function(ph, i) { return 'Phase ' + (i+1) + ': ' + (ph.type || 'Assessment') + ' (' + (ph.test_days || 0) + ' days)'; }).join('; ');
     }
@@ -76269,6 +76707,8 @@ async function generateExecSummary(assessmentId) {
     if (!_esNotes) { var _esProp = (S.data.proposals || []).find(function(p) { return p.id === a.proposal_id || p.assessment_id === a.id; }); if (_esProp) _esNotes = _esProp.notes || ''; }
 
     if (_esNotes) um += '\n\nBackground notes (internal, for context only):\n' + _aiEditorText(_esNotes, '').substring(0, 2000);
+
+    um += _esReportSections(a);
 
     var _esOwn = _aiFindingCustomFields().map(function (cf) { return String(cf.label).slice(0, 60); });
     if (_esOwn.length) um += '\n\nThe firm\'s own finding fields, given with each finding below where it has a value: ' + _esOwn.join(', ')
@@ -76322,7 +76762,11 @@ async function generateExecSummary(assessmentId) {
     if (sevList.length > 0) {
       summary += ', comprising ' + sevList.join(', ') + ' severity';
     }
-    summary += '.\n\n';
+    summary += '.';
+
+    var _esRtP = _esRetestProse(_esRetestTally(findings));
+    if (_esRtP) summary += ' ' + _esRtP;
+    summary += '\n\n';
 
     sortedCategories.forEach(function(cat) {
       var catFindings = byCategory[cat];
@@ -76344,6 +76788,7 @@ async function generateExecSummary(assessmentId) {
         try { var ev = f.evidence ? (typeof f.evidence==='string' ? _evBlocks(f.evidence)   : f.evidence) : [];
           if (ev.length) { var caps=ev.map(function(e){return e.caption;}).filter(Boolean); if(caps.length) summary += 'Evidence gathered includes ' + caps.join(', ') + '. '; }
         } catch(e) {}
+        summary += _esRetestSentence(f);
       });
       summary += '\n\n';
     });
@@ -76354,7 +76799,7 @@ async function generateExecSummary(assessmentId) {
   var remSteps = [];
   var _remSevOrder = ['critical','high','medium','low','info'];
   _remSevOrder.forEach(function(sev) {
-    findings.filter(function(f){ return (f.severity||'').toLowerCase() === sev; }).forEach(function(f) {
+    findings.filter(function(f){ return (f.severity||'').toLowerCase() === sev && !_esRetestClosed(f); }).forEach(function(f) {
       if (f.remediation) {
         var raw = f.remediation.replace(/<[^>]*>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&nbsp;/g,' ').trim();
         var sents = raw.split(/\.\s+/);
@@ -79618,7 +80063,8 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
         doc.setTextColor(darkGray[0], darkGray[1], darkGray[2]);
       } else {
         var rText = rLines.join(' ');
-        var rWrapped = doc.splitTextToSize(rText, contentWidth);
+
+        var rWrapped = doc.splitTextToSize(rText, cw);
         rWrapped.forEach(function(line) { checkPage(5); doc.text(line, mg, y); y += 4; });
         y += 3;
       }
@@ -80866,7 +81312,8 @@ function _restoreWhatFile(bucket, path) {
 function _restoreTableWords(table, n) {
   var W = { profiles: ['person', 'people'], clients: ['client', 'clients'], assessments: ['assessment', 'assessments'], findings: ['finding', 'findings'],
     kb_entries: ['Library entry', 'Library entries'], checklists_runbooks: ['checklist', 'checklists'], assessment_comments: ['comment', 'comments'],
-    assessment_files: ['file record', 'file records'], qa_comments: ['QA comment', 'QA comments'], timeline_events: ['timeline entry', 'timeline entries'] };
+    assessment_files: ['file record', 'file records'], qa_comments: ['QA comment', 'QA comments'], timeline_events: ['timeline entry', 'timeline entries'],
+    assessment_billing: ['engagement\'s billing', 'engagements\' billing'] };
   var w = W[table] || [table.replace(/_/g, ' ') + ' row', table.replace(/_/g, ' ') + ' rows'];
   return n === 1 ? w[0] : w[1];
 }
@@ -80903,6 +81350,8 @@ async function exportAllData() {
     findings: S.data.findings || [],
     proposals: S.data.proposals || [],
     invoices: S.data.invoices || [],
+
+    assessment_billing: S.data.assessment_billing || [],
     kb_entries: S.data.library || [],
 
     profiles: (S.data.users || []).map(function(u) { return { id: u.id, auth_user_id: u.auth_user_id, email: u.email, name: u.name, role: u.role, active: u.active, client_id: u.client_id,
@@ -81092,8 +81541,9 @@ async function importAllData(evt, opts) {
       } catch (e) { stats.errors++; stats.what.push('your settings'); console.error('settings import failed:', e); }
     }
 
-    async function _importRows(tableName, rows) {
+    async function _importRows(tableName, rows, on) {
       if (!rows || !rows.length) return;
+      var _on = on || 'id';
       if (statusEl) statusEl.textContent = 'Importing ' + tableName + ' (' + rows.length + ')...';
       var CHUNK = 200;
       for (var j = 0; j < rows.length; j += CHUNK) {
@@ -81110,19 +81560,19 @@ async function importAllData(evt, opts) {
           return row;
         });
 
-        var { error } = await supabaseClient.from(tableName).upsert(chunk, { onConflict: 'id', ignoreDuplicates: true });
+        var { error } = await supabaseClient.from(tableName).upsert(chunk, { onConflict: _on, ignoreDuplicates: true });
         for (var _drop = 0; error && _drop < 20; _drop++) {
           var _m = /Could not find the '([^']+)' column/.exec(String(error.message || ''));
           if (!_m) break;
           console.warn('import ' + tableName + ': this database has no ' + _m[1] + ' column, restoring without it');
           chunk.forEach(function (r) { delete r[_m[1]]; });
-          error = (await supabaseClient.from(tableName).upsert(chunk, { onConflict: 'id', ignoreDuplicates: true })).error;
+          error = (await supabaseClient.from(tableName).upsert(chunk, { onConflict: _on, ignoreDuplicates: true })).error;
         }
 
         if (error && /created_at/.test(String(error.message || ''))) {
           console.warn('import ' + tableName + ': this database stamps created_at itself, restoring without it');
           chunk.forEach(function (r) { delete r.created_at; });
-          error = (await supabaseClient.from(tableName).upsert(chunk, { onConflict: 'id', ignoreDuplicates: true })).error;
+          error = (await supabaseClient.from(tableName).upsert(chunk, { onConflict: _on, ignoreDuplicates: true })).error;
         }
         if (error) { stats.errors += chunk.length; stats.what.push(chunk.length + ' ' + _restoreTableWords(tableName, chunk.length)); console.error('import ' + tableName + ':', error.message); } else { stats.inserted += chunk.length; }
       }
@@ -81173,6 +81623,8 @@ async function importAllData(evt, opts) {
       { key: 'scan_runs', table: 'scan_runs' },
       { key: 'proposals', table: 'proposals' },
       { key: 'invoices', table: 'invoices' },
+
+      { key: 'assessment_billing', table: 'assessment_billing', on: 'assessment_id' },
       { key: 'kb_entries', table: 'kb_entries' },
       { key: 'meetings', table: 'meetings' },
       { key: 'meeting_attendees', table: 'meeting_attendees' },
@@ -81186,7 +81638,10 @@ async function importAllData(evt, opts) {
 
     for (var i = 0; i < tables.length; i++) {
       if (_irvSkip(tables[i].table)) continue;
-      await _importRows(tables[i].table, data[tables[i].key]);
+      var _rows = data[tables[i].key];
+
+      if (tables[i].table === 'assessments' && Array.isArray(_rows)) _rows = _rows.slice().sort(function (x, y) { return (x && x.deal_of ? 1 : 0) - (y && y.deal_of ? 1 : 0); });
+      await _importRows(tables[i].table, _rows, tables[i].on);
     }
 
     if (_zip) {
@@ -86007,6 +86462,10 @@ function _pdfOnlyRun(fn, args, quiet) {
   return run;
 }
 function pdfFromDocxReport(id, templateId) { return _pdfOnlyRun(downloadReport, [id, templateId]); }
+function pdfFromDocxVulnReport(runId, templateId) {
+  return _pdfOnlyRun(_ssVulnReportForPdf, [runId, templateId]);
+}
+window.pdfFromDocxVulnReport = pdfFromDocxVulnReport;
 window.pdfFromDocxReport = pdfFromDocxReport;
 function _pdxDownloadBlob(blob, name) {
   var url = URL.createObjectURL(blob);
@@ -86686,7 +87145,8 @@ function _renderDocxDownloadButton(type, recordId, downloadFn, opts) {
     : _docxAutoPdfOn(type)
     ? _docxTemplatesFor(type, opts.audience === 'client')
     : _rtDocxOffered(type, _listDocxTemplates(type));
-  var label = opts.label || 'DOCX';
+
+  var label = opts.label === '' ? '' : (opts.label || 'DOCX');
 
   var sizeCls = (opts.cls === undefined || opts.cls === null) ? 'btn-sm' : opts.cls;
 
@@ -86717,7 +87177,8 @@ function _renderDocxDownloadButton(type, recordId, downloadFn, opts) {
   extras = extras.filter(function (x) { return !x.isMain; });
 
   if (!others.length && !extras.length && !footer) {
-    return '<button class="' + cls + '"' + mainAttr + ' onclick="' + mainCall + '"' + warm + (style ? ' style="' + style + '"' : '') + '>' + IC.dl + ' ' + esc(label) + '</button>';
+
+    return '<button class="' + cls + (opts.compact ? ' dl-cell' : '') + '"' + mainAttr + ' onclick="' + mainCall + '"' + warm + (style ? ' style="' + style + '"' : '') + '>' + IC.dl + (label ? ' ' + esc(label) : '') + '</button>';
   }
 
   list = others;
@@ -86725,11 +87186,13 @@ function _renderDocxDownloadButton(type, recordId, downloadFn, opts) {
   var pickerId = 'tpd_' + type + '_' + recordId + '_' + _seq;
   var caretId = pickerId + '_btn';
 
-  var mainSplitStyle = (style ? style + ';' : '') + 'border-top-right-radius:0;border-bottom-right-radius:0;border-right:1px solid rgba(255,255,255,0.1)';
-  var caretSplitStyle = (style ? style + ';' : '') + 'border-top-left-radius:0;border-bottom-left-radius:0;padding-left:0.35rem;padding-right:0.35rem';
-  var h = '<span class="docx-dl-split" style="position:relative;display:inline-flex;align-items:stretch">';
+  var mainSplitStyle = (style ? style + ';' : '') + 'border-top-right-radius:0;border-bottom-right-radius:0;border-right:1px solid rgba(255,255,255,0.1)' + (opts.compact ? ';padding-right:0.18rem' : '');
 
-  h += '<button class="' + cls + '"' + mainAttr + ' onclick="' + mainCall + '"' + warm + ' style="' + mainSplitStyle + '">' + IC.dl + ' ' + esc(label) + '</button>';
+  var _cpt = !!opts.compact;
+  var caretSplitStyle = (style ? style + ';' : '') + 'border-top-left-radius:0;border-bottom-left-radius:0;' + (_cpt ? 'padding-left:0.12rem;padding-right:0.18rem;gap:0.05rem' : 'padding-left:0.35rem;padding-right:0.35rem');
+  var h = '<span class="docx-dl-split' + (_cpt ? ' dl-compact' : '') + '" style="position:relative;display:inline-flex;align-items:stretch">';
+
+  h += '<button class="' + cls + '"' + mainAttr + ' onclick="' + mainCall + '"' + warm + ' style="' + mainSplitStyle + '">' + IC.dl + (label ? ' ' + esc(label) : '') + '</button>';
 
   var _caretTitle = (list.length > 1 && extras.length) ? 'Other templates and options'
     : (extras.length ? 'Other download options' : 'Choose template');
@@ -86740,7 +87203,7 @@ function _renderDocxDownloadButton(type, recordId, downloadFn, opts) {
   if (_nMore) _caretTitle = [list.length ? list.length + ' more version' + (list.length === 1 ? '' : 's') : '', _nPdf ? _nPdf + ' more PDF' + (_nPdf === 1 ? '' : 's') : ''].filter(Boolean).join(' and ');
   h += '<button id="' + caretId + '" class="' + cls + (_nMore ? ' dl-caret-n' : '') + '" onclick="_toggleDocxPicker(\'' + pickerId + '\',\'' + caretId + '\',event)" style="' + caretSplitStyle + '" title="' + _caretTitle + '" aria-label="' + _caretTitle + '">';
   if (_nMore) h += '<span class="dl-count" aria-hidden="true">+' + _nMore + '</span>';
-  h += '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>';
+  h += '<svg viewBox="0 0 24 24" width="' + (_cpt ? 8 : 10) + '" height="' + (_cpt ? 8 : 10) + '" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>';
   h += '</button>';
 
   h += '<div id="' + pickerId + '" class="docx-dl-picker" style="display:none;position:fixed;min-width:200px;max-width:300px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,0.35);z-index:200;overflow:hidden">';
@@ -93392,39 +93855,16 @@ async function buildReportData(assessmentId, docType, _opts) {
     else sevCounts.open++;
   });
 
-  var qaReviewDate = '';
-  var qaComments = (S.data.qa_comments || []).filter(function(c) { return c.assessment_id === a.id; });
-  if (qaComments.length > 0) {
-    qaReviewDate = fmtDate(qaComments[0].created_at);
-  } else if (a.qa_status) {
-    qaReviewDate = fmtDate(a.updated_at);
-  }
-  var _authorIds = {};
-  if (a.lead_id) _authorIds[a.lead_id] = true;
-  findings.forEach(function(f) { if (f.created_by) _authorIds[f.created_by] = true; });
-  var _allAuthors = Object.keys(_authorIds).map(function(uid) { return getTesterName(uid) || ''; }).filter(Boolean);
-  var _otherAuthors = _allAuthors.filter(function(n) { return n !== leadName; });
-  var _v02Author = leadName + (_otherAuthors.length ? '\n' + _otherAuthors.join('\n') : '');
-
-  var _vhCtxD = {
-    created: fmtDate(a.created_at) || '',
-    started: fmtDate(a.start_date) || '',
-    qaDate: qaReviewDate,
-    ended: fmtDate(a.end_date) || '',
-    updated: fmtDate(a.updated_at) || '',
-    released: a.delivered_at ? fmtDate(a.delivered_at) : fmtDate(a.updated_at),
-    lead: leadName,
-    contributors: _otherAuthors.join('\n'),
-    leadAndAuthors: _v02Author,
-    qaName: qaName,
-    retest: (_opts && _opts.asStood && _opts.asStood.noDate) ? '' : _vhRetestDate(findings),
-  };
+  var _vhCtxD = _vhDocxCtx(a, findings, leadName, qaName, _opts);
   var versionHistory = _vhRows(tpl).filter(function (r) { return _vhShows(r, _vhCtxD); }).map(function (r) {
     var x = _vhResolve(r, _vhCtxD);
 
     var vd = x.date || '';
     if (vd && r.k === 'retest') vd = _pntlScalar('d_vhretest', vd);
-    return { version: r.v || '', vh_date: vd, vh_author: x.author || '', vh_comment: r.l || '' };
+
+    var va = x.author || '';
+    if (r.k === 'qa_review') { vd = _pntlScalar('d_vhqa', vd); va = _pntlScalar('p_vhqa', va); }
+    return { version: r.v || '', vh_date: vd, vh_author: va, vh_comment: r.l || '' };
   });
 
   var _vhCreation = _vhRows(tpl).filter(function (r) { return r.k === 'creation'; })[0];
@@ -93993,7 +94433,7 @@ async function buildReportData(assessmentId, docType, _opts) {
 
   if (data && typeof data === 'object' && typeof _ftReportExtras === 'function') {
     try {
-      var _ftx = _ftReportExtras(data, a, client, findings, findingsData, { authors: Object.keys(_authorIds), scope: scopeItems, counts: sevCounts });
+      var _ftx = _ftReportExtras(data, a, client, findings, findingsData, { authors: (_vhCtxD && _vhCtxD.authorIds) || [], scope: scopeItems, counts: sevCounts });
       Object.keys(_ftx).forEach(function (k) { if (!(k in data)) data[k] = _ftx[k]; });
     } catch (e) { console.warn('[DOCX] what a converted template asks for was not added:', e && e.message); }
   }
@@ -95191,8 +95631,8 @@ function _fsiButton(aid, phase) {
   if (!canEdit() || !_ffScannerImport()) return '';
 
   return '<button class="btn btn-secondary btn-sm" data-fsi="1" data-aid="' + esc(aid) + '" data-phase="' + esc(phase || '')
-    + '" onclick="_fsiStart(this.getAttribute(\'data-aid\'),this.getAttribute(\'data-phase\'))" title="Bring a scanner export in as findings'
-    + (phase ? ' of this phase' : '') + '. Nessus, Burp, OpenVAS, Qualys, Nmap, SARIF, CSV and more.">'
+    + '" onclick="_fsiStart(this.getAttribute(\'data-aid\'),this.getAttribute(\'data-phase\'))" title="Bring a tool\'s export in as findings'
+    + (phase ? ' of this phase' : '') + '. Nessus, Burp, OpenVAS, Qualys, Nmap, BloodHound, PingCastle, Certipy, ScubaGear, Prowler, ScoutSuite, Security Hub, Checkov, kube-bench, Grype, Snyk, Gitleaks, MobSF, WPScan, Nexpose, Wiz, SARIF, CSV and more.">'
     + IC.upload + ' Import from scanner</button>';
 }
 window._fsiButton = _fsiButton;
@@ -95201,7 +95641,7 @@ function _fsiStart(aid, phase) {
   if (!_ffScannerImport()) { toast('Importing from scanners is switched off in Settings > Findings', 'info'); return; }
   var el = document.createElement('input');
   el.type = 'file';
-  el.accept = '.nessus,.xml,.csv,.json,.jsonl,.sarif';
+  el.accept = '.nessus,.xml,.csv,.json,.jsonl,.sarif,.js,.dat,.zip';
   el.multiple = true;
   el.onchange = function () { _fsiRead(aid, phase || '', el); };
   el.click();
@@ -95216,13 +95656,41 @@ async function _fsiRead(aid, phase, inputEl) {
   if (!a) { toast('That engagement is no longer here', 'error'); return; }
   _showLoading();
 
-  var reads = [], warnings = [];
+  var reads = [], warnings = [], notes = [], parts = [], bh = [];
   for (var i = 0; i < files.length; i++) {
-    var read;
-    try { read = _scanImportParse(await files[i].text(), files[i].name); }
+    try {
+      var opened = await _fsiOpen(files[i]);
+      opened.parts.forEach(function (p) { parts.push(p); });
+      opened.warnings.forEach(function (w) { warnings.push(w); });
+    } catch (e) { warnings.push(files[i].name + ': ' + ((e && e.message) || 'that file could not be read.')); }
+  }
+  for (var pi = 0; pi < parts.length; pi++) {
+    var part = parts[pi], read;
+    var col = _fsiBhJson(part.text);
+    if (col) { bh.push({ name: part.name, data: col, zip: part.zip || '' }); parts[pi] = null; continue; }
+    try { read = _scanImportParse(part.text, part.name); }
     catch (e) { read = { rows: [], format: '', warnings: ['That file could not be read.'] }; }
-    if (!read.rows.length) { warnings.push(files[i].name + ': ' + ((read.warnings || [])[0] || 'no findings were found in it.')); continue; }
-    reads.push({ file: files[i], read: read });
+    parts[pi] = null;
+    if (!read.rows.length) { warnings.push(part.name + ': ' + ((read.warnings || [])[0] || 'no findings were found in it.')); continue; }
+    reads.push({ file: { name: part.name }, read: read });
+  }
+  if (bh.length) {
+
+    var bhZips = bh.map(function (x) { return x.zip; }).filter(function (z, i, a) { return a.indexOf(z) === i; });
+    var bhName = bhZips.length === 1 && bhZips[0] ? bhZips[0] : bh.length === 1 ? bh[0].name : 'BloodHound collection (' + bh.length + ' files)', br;
+    try { br = _scanFinish(_bhRead(bh, { figures: true })); }
+    catch (e) { console.warn('[import] BloodHound:', e); br = { rows: [], format: 'BloodHound', warnings: ['The collection could not be analysed.'] }; }
+    bh = null;
+
+    for (var bi = 0; bi < br.rows.length; bi++) {
+      var brow = br.rows[bi];
+      if (!brow._figs) continue;
+      try { brow.evidence_html = (await _bhFigsHtml(brow._figs)) + (brow.evidence_html || ''); } catch (e) { console.warn('[import] the attack paths could not be drawn:', e && e.message); }
+      delete brow._figs;
+    }
+    if (br.summary) notes.push(br.summary);
+    if (br.rows.length) reads.push({ file: { name: bhName }, read: br });
+    else warnings.push(bhName + ': ' + ((br.warnings || [])[0] || 'no findings were found in it.'));
   }
 
   try { await _flibLoad(); } catch (e) { console.warn('[import] the finding library could not be loaded:', e && e.message); }
@@ -95248,6 +95716,7 @@ async function _fsiRead(aid, phase, inputEl) {
     fileName: multi ? reads.length + ' files' : reads[0].file.name,
     format: multi ? '' : one.format, tool: multi ? '' : (one.tool || ''), warnings: warnings, rows: rows,
     files: reads.map(function (x) { return { name: x.file.name, format: x.read.format, label: x.read.format === 'SARIF' ? (x.read.tool || 'SARIF') : (x.read.format || 'CSV'), n: x.read.rows.length }; }),
+    notes: notes,
     keep: keep, keepWas: keep,
     map: multi ? {} : _scanStoredMap(one.format), mapWas: JSON.stringify((multi ? {} : _scanStoredMap(one.format)) || {}),
     clientName: getClientName(a.client_id), closeGone: false, libWording: true,
@@ -95255,6 +95724,45 @@ async function _fsiRead(aid, phase, inputEl) {
   openM('scanimport');
 }
 window._fsiRead = _fsiRead;
+var _FSI_PART_MAX = 400 * 1024 * 1024;
+function _fsiDecode(u8) {
+  if (u8.length >= 2 && u8[0] === 0xFF && u8[1] === 0xFE) return new TextDecoder('utf-16le').decode(u8.subarray(2));
+  if (u8.length >= 2 && u8[0] === 0xFE && u8[1] === 0xFF) return new TextDecoder('utf-16be').decode(u8.subarray(2));
+  return new TextDecoder('utf-8').decode(u8);
+}
+async function _fsiOpen(file) {
+  var u8 = new Uint8Array(await file.arrayBuffer());
+  var out = { parts: [], warnings: [] };
+  if (!(u8.length > 3 && u8[0] === 0x50 && u8[1] === 0x4B && (u8[2] === 3 || u8[2] === 5))) {
+    out.parts.push({ name: file.name, text: _fsiDecode(u8) });
+    return out;
+  }
+  await _ensureJSZip();
+  var zip;
+  try { zip = await JSZip.loadAsync(u8); }
+  catch (e) { throw new Error(/encrypt/i.test(String(e && e.message)) ? 'that ZIP is protected by a password. Extract it, then choose the files inside.' : 'that ZIP could not be opened.'); }
+  var names = Object.keys(zip.files).filter(function (n) {
+    return !zip.files[n].dir && !/(^|\/)(__MACOSX\/|\.)/.test(n) && (/\.(json|jsonl|xml|nessus|csv|sarif|dat)$/i.test(n)
+      || /(^|\/)scoutsuite_results[^\/]*\.js$/i.test(n));
+  }).sort();
+  if (!names.length) throw new Error('that ZIP has no file in it that can be read as findings.');
+  for (var i = 0; i < names.length; i++) {
+    var ent = zip.files[names[i]], size = ent._data && ent._data.uncompressedSize;
+    if (size > _FSI_PART_MAX) { out.warnings.push(file.name + ': ' + names[i] + ' is too large to read here (' + Math.round(size / 1048576) + ' MB). Collect it in smaller parts and import those together.'); continue; }
+    out.parts.push({ name: names[i].split('/').pop(), text: _fsiDecode(await ent.async('uint8array')), zip: file.name });
+  }
+  return out;
+}
+function _fsiBhJson(text) {
+  var t = String(text || ''), k = 0;
+  while (k < t.length && k < 64 && /[\s\uFEFF]/.test(t.charAt(k))) k++;
+  if (t.charAt(k) !== '{') return null;
+  var probe = t.slice(0, 4096) + ' ' + t.slice(-4096);
+  if (!/"meta"\s*:\s*\{/.test(probe) || !/"type"\s*:\s*"(users|computers|groups|domains|gpos|ous|containers|certtemplates|enterprisecas|rootcas|aiacas|ntauthstores|issuancepolicies|sessions)"/i.test(probe)) return null;
+  var j;
+  try { j = JSON.parse(k ? t.slice(k) : t); } catch (e) { return null; }
+  return _bhFile(j) ? j : null;
+}
 function _fsiRating(cvss) {
   var n = parseFloat(cvss);
   if (!(n > 0)) return null;
@@ -95732,6 +96240,969 @@ function _migSeverity(value, opts) {
     return { severity: null, reason: 'ambiguous_number' };
   }
   return { severity: null, reason: 'unknown' };
+}
+var _BH_FILES = { users: 'User', computers: 'Computer', groups: 'Group', domains: 'Domain', gpos: 'GPO', ous: 'OU', containers: 'Container', certtemplates: 'CertTemplate', enterprisecas: 'EnterpriseCA', rootcas: 'RootCA', aiacas: 'AIACA', ntauthstores: 'NTAuthStore', issuancepolicies: 'IssuancePolicy', sessions: 'Session' };
+function _bhFile(j) {
+  if (!j || typeof j !== 'object' || Array.isArray(j) || !j.meta || typeof j.meta !== 'object') return null;
+  var t = String(j.meta.type || '').toLowerCase();
+  if (!_BH_FILES[t]) return null;
+  var list = Array.isArray(j.data) ? j.data : Array.isArray(j[t]) ? j[t] : Array.isArray(j[j.meta.type]) ? j[j.meta.type] : null;
+  if (!list) return null;
+  return { type: t, list: list, version: parseInt(j.meta.version, 10) || 0 };
+}
+function _bhU(s) { return String(s == null ? '' : s).trim().toUpperCase(); }
+function _bhRid(id) { var m = /^S-1-5-21-\d+-\d+-\d+-(\d+)$/.exec(id); return m ? +m[1] : 0; }
+function _bhDomSid(id) { var m = /^(S-1-5-21-\d+-\d+-\d+)-\d+$/.exec(id); return m ? m[1] : ''; }
+function _bhWk(id) {
+  if (/^S-1-5-21-/.test(id)) return '';
+  var m = /(?:^|-)(S-1-(?:1-0|3-0|5-(?:4|7|9|10|11|18)|5-32-\d+))$/.exec(id);
+  return m ? m[1] : '';
+}
+var _BH_WK = { 'S-1-1-0': 'Everyone', 'S-1-5-11': 'Authenticated Users', 'S-1-5-9': 'Enterprise Domain Controllers', 'S-1-5-7': 'Anonymous Logon', 'S-1-5-4': 'Interactive', 'S-1-5-10': 'Self', 'S-1-5-18': 'Local System', 'S-1-3-0': 'Creator Owner',
+  'S-1-5-32-544': 'Administrators', 'S-1-5-32-545': 'Users', 'S-1-5-32-546': 'Guests', 'S-1-5-32-548': 'Account Operators', 'S-1-5-32-549': 'Server Operators', 'S-1-5-32-550': 'Print Operators', 'S-1-5-32-551': 'Backup Operators', 'S-1-5-32-554': 'Pre-Windows 2000 Compatible Access' };
+var _BH_RID = { 500: 'Administrator', 501: 'Guest', 502: 'krbtgt', 512: 'Domain Admins', 513: 'Domain Users', 514: 'Domain Guests', 515: 'Domain Computers', 516: 'Domain Controllers', 517: 'Cert Publishers', 518: 'Schema Admins', 519: 'Enterprise Admins', 520: 'Group Policy Creator Owners', 521: 'Read-only Domain Controllers', 525: 'Protected Users', 526: 'Key Admins', 527: 'Enterprise Key Admins' };
+var _BH_T0_RID = { 500: 1, 502: 1, 512: 1, 516: 1, 517: 1, 518: 1, 519: 1, 526: 1, 527: 1 };
+var _BH_T0_WK = { 'S-1-5-9': 1, 'S-1-5-32-544': 1, 'S-1-5-32-548': 1, 'S-1-5-32-549': 1, 'S-1-5-32-550': 1, 'S-1-5-32-551': 1 };
+function _bhBroad(id) {
+  var w = _bhWk(id);
+  if (w === 'S-1-1-0' || w === 'S-1-5-11' || w === 'S-1-5-32-545' || w === 'S-1-5-7' || w === 'S-1-5-4') return true;
+  var r = _bhRid(id);
+  return r === 513 || r === 515;
+}
+function _bhSystem(id) { var w = _bhWk(id); return w === 'S-1-5-10' || w === 'S-1-3-0' || w === 'S-1-5-18'; }
+var _BH_CTRL = {
+  GenericAll: '*', WriteDacl: '*', WriteOwner: '*', Owns: '*',
+  GenericWrite: 'User Group Computer GPO CertTemplate',
+  AllExtendedRights: 'User Computer Domain',
+  ForceChangePassword: 'User', AddMember: 'Group', AddSelf: 'Group',
+  AddKeyCredentialLink: 'User Computer', WriteSPN: 'User',
+  ReadLAPSPassword: 'Computer', ReadGMSAPassword: 'User Computer',
+  AddAllowedToAct: 'Computer', WriteAccountRestrictions: 'Computer',
+  WritePKINameFlag: 'CertTemplate', WritePKIEnrollmentFlag: 'CertTemplate'
+};
+function _bhRight(a) {
+  var r = String(a.RightName || ''), t = String(a.AceType || '');
+  if (r === 'ExtendedRight') return t === 'All' ? 'AllExtendedRights' : t === 'User-Force-Change-Password' ? 'ForceChangePassword' : /^GetChanges/.test(t) ? t : '';
+  if (r === 'WriteProperty') return t === 'Member' ? 'AddMember' : t === 'AllowedToAct' ? 'AddAllowedToAct' : t === 'AddKeyCredentialLink' ? t : '';
+  return r;
+}
+function _bhNode(G, id, kind) {
+  var n = G.n[id];
+  if (!n) { n = G.n[id] = { id: id, kind: '', name: '', p: {}, o: null }; G.ids.push(id); }
+  if (kind && !n.kind) n.kind = kind;
+  return n;
+}
+function _bhEdge(G, from, to, kind, note) {
+  if (!from || !to || from === to) return;
+  var k = from + '\u0000' + to + '\u0000' + kind;
+  if (G.ek[k]) return;
+  G.ek[k] = 1;
+  _bhNode(G, from); _bhNode(G, to);
+  (G.out[from] || (G.out[from] = [])).push({ to: to, kind: kind, note: note || '' });
+  (G.inn[to] || (G.inn[to] = [])).push({ from: from, kind: kind, note: note || '' });
+}
+function _bhRefId(r) {
+  if (r == null) return '';
+  if (typeof r === 'string') return _bhU(r);
+  return _bhU(r.ObjectIdentifier || r.MemberId || r.ObjectId || '');
+}
+function _bhList(v) {
+  if (Array.isArray(v)) return v;
+  if (v && Array.isArray(v.Results)) return v.Results;
+  return [];
+}
+function _bhTs(v) { var n = +v; return n > 0 ? n : 0; }
+function _bhModel(files) {
+  var G = { n: {}, ids: [], out: {}, inn: {}, ek: {}, memOf: {}, mem: {}, par: {}, links: {}, ds: {}, types: {}, ver: 0, sess: [], aces: [], caSec: {}, gpoLA: [] };
+  files.forEach(function (f) {
+    G.types[f.type] = (G.types[f.type] || 0) + f.list.length;
+    if (f.version > G.ver) G.ver = f.version;
+    if (f.type === 'sessions') { G.sess = G.sess.concat(f.list); return; }
+    var kind = _BH_FILES[f.type];
+    f.list.forEach(function (o) {
+      if (!o || typeof o !== 'object' || o.IsDeleted === true) return;
+      var p = o.Properties && typeof o.Properties === 'object' ? o.Properties : {};
+      var id = _bhU(o.ObjectIdentifier || p.objectid || p.objectsid);
+      if (!id) return;
+      var n = _bhNode(G, id, kind);
+      n.kind = kind; n.p = p; n.o = o;
+      if (p.domainsid && p.domain) G.ds[_bhU(p.domainsid)] = _bhU(p.domain);
+      if (kind === 'Domain' && (p.name || p.domain)) G.ds[id] = _bhU(p.name || p.domain);
+    });
+  });
+  G.ids.forEach(function (id) {
+    var n = G.n[id];
+    n.dsid = n.kind === 'Domain' ? id : _bhU(n.p.domainsid) || _bhDomSid(id);
+    n.dom = _bhU(n.p.domain) || G.ds[n.dsid] || '';
+    n.en = n.p.enabled === false ? false : n.p.enabled === true ? true : null;
+  });
+  var nameOf = function (id) {
+    var w = _bhWk(id);
+    if (w && _BH_WK[w]) { var d = id.slice(0, id.length - w.length).replace(/-$/, ''); return _bhU(_BH_WK[w] + (d ? '@' + d : '')); }
+    var r = _bhRid(id), dn = G.ds[_bhDomSid(id)];
+    if (r && _BH_RID[r] && dn) return _bhU(_BH_RID[r] + '@' + dn);
+    return dn ? 'UNKNOWN ACCOUNT (' + id + ') IN ' + dn : 'UNKNOWN ACCOUNT (' + id + ')';
+  };
+  G.nameOf = nameOf;
+  var member = function (who, group) {
+    if (!who || !group || who === group) return;
+    _bhNode(G, group, 'Group');
+    var a = G.memOf[who] || (G.memOf[who] = []);
+    if (a.indexOf(group) < 0) { a.push(group); (G.mem[group] || (G.mem[group] = [])).push(who); }
+    _bhEdge(G, who, group, 'MemberOf');
+  };
+
+  var WHOLE = { Domain: 1, CertTemplate: 1, EnterpriseCA: 1 };
+  var acesOf = function (n, list) {
+    (list || []).forEach(function (a) {
+      if (!a) return;
+      var who = _bhU(a.PrincipalSID), r = _bhRight(a);
+      if (!who || !r || _bhSystem(who)) return;
+      var kinds = _BH_CTRL[r];
+      if (!WHOLE[n.kind] && (!kinds || _BH_T0_RID[_bhRid(who)] || _BH_T0_WK[_bhWk(who)])) return;
+      if (WHOLE[n.kind] && !kinds && !/^GetChanges|^Enroll$|^AutoEnroll$/.test(r)) return;
+      G.aces.push({ p: who, r: r, t: n.id, inh: a.IsInherited === true });
+      if (!kinds || who === n.id) return;
+      if (kinds !== '*' && (' ' + kinds + ' ').indexOf(' ' + n.kind + ' ') < 0) return;
+      if (r === 'AllExtendedRights' && n.kind === 'Computer' && n.p.haslaps !== true) return;
+      _bhEdge(G, who, n.id, r);
+    });
+  };
+
+  G.ids.slice().forEach(function (id) {
+    var n = G.n[id], o = n.o;
+    if (!o) return;
+    n.name = _bhU(n.p.name) || nameOf(id);
+    acesOf(n, o.Aces);
+    if (o.ContainedBy && o.ContainedBy.ObjectIdentifier) G.par[id] = _bhU(o.ContainedBy.ObjectIdentifier);
+    (o.ChildObjects || []).forEach(function (c) { var cid = _bhRefId(c); if (cid && !G.par[cid]) G.par[cid] = id; });
+    if (o.Links) G.links[id] = o.Links.map(function (l) { return { gpo: _bhU(l.GUID || l.Guid), enforced: l.IsEnforced === true }; }).filter(function (l) { return l.gpo; });
+    if (n.kind === 'Group') (o.Members || []).forEach(function (m) { member(_bhRefId(m), id); });
+    if ((n.kind === 'User' || n.kind === 'Computer') && o.PrimaryGroupSID) member(id, _bhU(o.PrimaryGroupSID));
+    (o.AllowedToDelegate || []).forEach(function (t) { var tid = _bhRefId(t); if (/^S-1-/.test(tid)) _bhEdge(G, id, tid, 'AllowedToDelegate'); });
+    (o.AllowedToAct || []).forEach(function (t) { _bhEdge(G, _bhRefId(t), id, 'AllowedToAct'); });
+    (o.HasSIDHistory || []).forEach(function (t) { _bhEdge(G, id, _bhRefId(t), 'HasSIDHistory'); });
+    (o.SPNTargets || o.SpnTargets || []).forEach(function (t) { if (t && /sqladmin/i.test(String(t.Service || ''))) _bhEdge(G, id, _bhU(t.ComputerSID), 'SQLAdmin'); });
+    if (n.kind === 'Computer') {
+      var local = id + '-';
+      var admins = [];
+      (o.LocalGroups || []).forEach(function (lg) { if (/-544$/.test(_bhU(lg && lg.ObjectIdentifier))) admins = admins.concat(_bhList(lg.Results)); });
+      admins = admins.concat(_bhList(o.LocalAdmins));
+      admins.forEach(function (m) {
+        var mid = _bhRefId(m), t = String((m && (m.ObjectType || m.MemberType)) || '');
+        if (mid && mid.indexOf(local) !== 0 && !/^Local/.test(t)) _bhEdge(G, mid, id, 'AdminTo');
+      });
+      ['Sessions', 'PrivilegedSessions', 'RegistrySessions'].forEach(function (k) {
+        _bhList(o[k]).forEach(function (s) { var u = _bhU(s && (s.UserSID || s.UserId)); if (u) G.sess.push({ ComputerSID: id, UserSID: u, src: k }); });
+      });
+    }
+    if (o.GPOChanges && typeof o.GPOChanges === 'object') {
+      var la = _bhList(o.GPOChanges.LocalAdmins).map(_bhRefId), ac = _bhList(o.GPOChanges.AffectedComputers).map(_bhRefId);
+
+      ac = ac.filter(function (c) { var cn = G.n[c]; return !(cn && cn.o && (cn.o.IsDC === true || cn.p.isdc === true || /-516$/.test(_bhU(cn.o.PrimaryGroupSID)))); });
+      la.forEach(function (a) { ac.forEach(function (c) { _bhEdge(G, a, c, 'AdminTo'); G.gpoLA.push({ p: a, c: c, via: id }); }); });
+    }
+    if (n.kind === 'EnterpriseCA') {
+      var sec = o.CARegistryData && o.CARegistryData.CASecurity;
+      G.caSec[id] = (sec && Array.isArray(sec.Data) ? sec.Data : []).map(function (a) { return { p: _bhU(a.PrincipalSID), r: String(a.RightName || '') }; }).filter(function (a) { return a.p && a.r; });
+      G.caSec[id].forEach(function (a) { if (a.r === 'ManageCA' && !_bhSystem(a.p)) _bhEdge(G, a.p, id, 'ManageCA'); });
+    }
+  });
+  G.sess.forEach(function (s) {
+    var c = _bhU(s.ComputerSID || s.ComputerId), u = _bhU(s.UserSID || s.UserId);
+    if (c && u && /^S-1-5-21-/.test(u)) _bhEdge(G, c, u, 'HasSession', s.src || 'Sessions');
+  });
+
+  var everyone = G.ids.filter(function (id) { var w = _bhWk(id); return w === 'S-1-1-0' || w === 'S-1-5-11'; });
+  G.ids.forEach(function (id) {
+    var k = G.n[id].kind;
+    if (k === 'User' || k === 'Computer') everyone.forEach(function (g) { member(id, g); });
+  });
+
+  Object.keys(G.par).forEach(function (child) {
+    var c = G.n[child];
+    if (c && c.o && c.o.IsACLProtected !== true) _bhEdge(G, G.par[child], child, 'Contains');
+  });
+  G.ids.forEach(function (id) {
+    var n = G.n[id];
+    if (n.dsid == null) { n.dsid = _bhDomSid(id); n.en = null; }
+    if (!n.dom) n.dom = G.ds[n.dsid] || '';
+    if (!n.name) n.name = nameOf(id);
+  });
+  return G;
+}
+function _bhGroups(G, id) {
+  G._grp = G._grp || {};
+  if (G._grp[id]) return G._grp[id];
+  var seen = {}, out = [], stack = (G.memOf[id] || []).slice();
+  while (stack.length) {
+    var g = stack.pop();
+    if (seen[g]) continue;
+    seen[g] = 1; out.push(g);
+    (G.memOf[g] || []).forEach(function (x) { if (!seen[x]) stack.push(x); });
+  }
+  G._grp[id] = out;
+  return out;
+}
+function _bhMembers(G, id) {
+  var seen = {}, out = [], stack = (G.mem[id] || []).slice();
+  while (stack.length) {
+    var m = stack.pop();
+    if (seen[m]) continue;
+    seen[m] = 1; out.push(m);
+    (G.mem[m] || []).forEach(function (x) { if (!seen[x]) stack.push(x); });
+  }
+  return out;
+}
+function _bhCross(G, A, B) {
+  var broad = function (s) { return s.some(function (x) { var w = _bhWk(x); return w === 'S-1-1-0' || w === 'S-1-5-11'; }); };
+  var expand = function (s) {
+    var e = {};
+    s.forEach(function (x) { e[x] = 1; _bhMembers(G, x).forEach(function (m) { e[m] = 1; }); });
+    return e;
+  };
+  var a = broad(A), b = broad(B);
+  if (a && b) return A.concat(B).filter(function (x, i, l) { return l.indexOf(x) === i && (function (w) { return w === 'S-1-1-0' || w === 'S-1-5-11'; })(_bhWk(x)); });
+  if (a) return B.filter(function (x, i, l) { return l.indexOf(x) === i; });
+  if (b) return A.filter(function (x, i, l) { return l.indexOf(x) === i; });
+  var ea = expand(A), eb = expand(B), both = {};
+  Object.keys(ea).forEach(function (x) { if (eb[x]) both[x] = 1; });
+  return Object.keys(both).filter(function (x) {
+    return !(G.memOf[x] || []).some(function (g) { return both[g]; });
+  });
+}
+function _bhAsOf(G) {
+  var t = 0;
+  G.ids.forEach(function (id) {
+    var p = G.n[id].p;
+    [p.lastlogontimestamp, p.lastlogon, p.pwdlastset, p.whencreated].forEach(function (v) { var x = _bhTs(v); if (x > t) t = x; });
+  });
+  return t;
+}
+function _bhDate(ts) {
+  if (!(ts > 0)) return 'Never';
+  var d = new Date(ts * 1000);
+  return d.getUTCDate() + ' ' + ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][d.getUTCMonth()] + ' ' + d.getUTCFullYear();
+}
+function _bhLastOn(p) { return Math.max(_bhTs(p.lastlogontimestamp), _bhTs(p.lastlogon)); }
+var _BH_EOL = [
+  [/\bwindows nt\b/i, '2004-12-31'], [/\bwindows 2000\b/i, '2010-07-13'], [/\bwindows xp\b/i, '2014-04-08'],
+  [/\bwindows server 2003\b/i, '2015-07-14'], [/\bwindows vista\b/i, '2017-04-11'], [/\bwindows server 2008\b/i, '2020-01-14'],
+  [/\bwindows 7\b/i, '2020-01-14'], [/\bwindows 8(?!\.\d)\b/i, '2016-01-12'], [/\bwindows 8\.1\b/i, '2023-01-10'],
+  [/\bwindows server 2012\b/i, '2023-10-10'], [/\bwindows 10\b(?!.*\b(ltsb|ltsc|iot)\b)/i, '2025-10-14'], [/\bwindows server 2016\b/i, '2027-01-12']
+];
+function _bhEol(os, asof) {
+  var s = String(os || '').replace(/[®™]/g, '').replace(/\s+/g, ' ');
+  for (var i = 0; i < _BH_EOL.length; i++) {
+    if (_BH_EOL[i][0].test(s)) {
+      var end = Date.parse(_BH_EOL[i][1] + 'T00:00:00Z') / 1000;
+      return asof >= end ? _BH_EOL[i][1] : '';
+    }
+  }
+  return '';
+}
+function _bhIsoDate(iso) { return _bhDate(Date.parse(iso + 'T00:00:00Z') / 1000); }
+var _BH_PW_RE = /\b(pass(?:word|wd|wort)?|pwd|pw|kennwort|mot de passe|contrase(?:n|ñ)a)\b\s*(?:is\b|=|:|-)\s*(\S+)/i;
+var _BH_PW_NOT = /^(never|not|no|none|does|doesn|expires?|expired|reset|change[sd]?|required|policy|set|unknown|n\/a|same|in|on|the|a|for|to|of|and|or|with|managed|vault|keepass|lastpass|rotat\w*)$/i;
+function _bhPwIn(s) {
+  var m = _BH_PW_RE.exec(String(s || ''));
+  if (!m) return '';
+  var v = m[2].replace(/[.,;)]+$/, '');
+  if (!v || _BH_PW_NOT.test(v) || v.length < 3) return '';
+  return String(s).slice(0, m.index) + m[1] + ': [value not shown]';
+}
+function _bhAnalyse(files) {
+  var G = _bhModel(files);
+  var asof = _bhAsOf(G) || Math.floor(Date.now() / 1000);
+  var DAY = 86400;
+  var N = function (id) { return G.n[id] || _bhNode(G, id); };
+  var domains = G.ids.filter(function (id) { return G.n[id].kind === 'Domain'; });
+
+  Object.keys(G.ds).forEach(function (sid) { if (domains.indexOf(sid) < 0 && /^S-1-5-21-\d+-\d+-\d+$/.test(sid)) { var d = _bhNode(G, sid, 'Domain'); d.name = d.name || G.ds[sid]; d.dom = G.ds[sid]; d.dsid = sid; domains.push(sid); } });
+  var users = [], computers = [], groups = [];
+  G.ids.forEach(function (id) { var k = G.n[id].kind; if (k === 'User') users.push(id); else if (k === 'Computer') computers.push(id); else if (k === 'Group') groups.push(id); });
+
+  var T0 = {};
+  var t0 = function (id) { if (id) T0[id] = 1; };
+  domains.forEach(t0);
+  G.ids.forEach(function (id) {
+    var n = G.n[id], r = _bhRid(id), w = _bhWk(id);
+    if ((r && _BH_T0_RID[r]) || (w && _BH_T0_WK[w])) t0(id);
+    if (n.p.highvalue === true || n.p.isTierZero === true) t0(id);
+    if (n.kind === 'Container' && /^CN=ADMINSDHOLDER,CN=SYSTEM,/i.test(String(n.p.distinguishedname || ''))) t0(id);
+    if (n.kind === 'Computer' && (n.p.isdc === true || (n.o && (n.o.IsDC === true || /-516$/.test(_bhU(n.o.PrimaryGroupSID)))))) t0(id);
+    if (n.kind === 'EnterpriseCA' || n.kind === 'RootCA' || n.kind === 'NTAuthStore') t0(id);
+    if (n.kind === 'EnterpriseCA' && n.o && n.o.HostingComputer) t0(_bhU(n.o.HostingComputer));
+  });
+
+  var t0Sid = function (p) { var r = _bhRid(p), w = _bhWk(p); if ((r && _BH_T0_RID[r]) || (w && _BH_T0_WK[w])) t0(p); };
+  G.aces.forEach(function (a) { t0Sid(a.p); });
+  Object.keys(G.caSec).forEach(function (ca) { G.caSec[ca].forEach(function (a) { t0Sid(a.p); }); });
+  Object.keys(T0).forEach(function (id) { _bhMembers(G, id).forEach(t0); });
+  var isDC = function (id) { var n = G.n[id]; return !!n && n.kind === 'Computer' && (n.p.isdc === true || (n.o && (n.o.IsDC === true || /-516$/.test(_bhU(n.o.PrimaryGroupSID)))) || _bhGroups(G, id).some(function (g) { return /-516$/.test(g); })); };
+  computers.forEach(function (id) { if (isDC(id)) t0(id); });
+
+  var gpoTo = {};
+  var applyGpos = function (id) {
+    var c = G.par[id], blocked = false, depth = 0;
+    while (c && depth++ < 64) {
+      (G.links[c] || []).forEach(function (l) {
+        if (!G.n[l.gpo] || G.n[l.gpo].kind !== 'GPO') return;
+        if (l.enforced || !blocked) (gpoTo[l.gpo] || (gpoTo[l.gpo] = [])).push({ id: id, via: c });
+      });
+      if (G.n[c] && G.n[c].p.blocksinheritance === true) blocked = true;
+      c = G.par[c];
+    }
+  };
+  users.concat(computers).forEach(applyGpos);
+  Object.keys(gpoTo).forEach(function (g) {
+    gpoTo[g].forEach(function (x) {
+      _bhEdge(G, g, x.id, 'GPLink', G.n[x.via] ? G.n[x.via].name : '');
+      if (T0[x.id]) t0(g);
+    });
+  });
+
+  var aceOn = {};
+  G.aces.forEach(function (a) { (aceOn[a.t] || (aceOn[a.t] = [])).push(a); });
+  var dcsync = {};
+  domains.forEach(function (d) {
+    var gc = [], gca = [], why = {};
+    (aceOn[d] || []).forEach(function (a) {
+      var full = a.r === 'GenericAll' || a.r === 'AllExtendedRights';
+      if (a.r === 'GetChanges' || full) gc.push(a.p);
+      if (a.r === 'GetChangesAll' || full) gca.push(a.p);
+      (why[a.p] || (why[a.p] = [])).push(a.r);
+    });
+    var who = _bhCross(G, gc, gca);
+    who.forEach(function (p) { _bhEdge(G, p, d, 'DCSync'); });
+    dcsync[d] = { who: who, why: why };
+  });
+
+  var cas = G.ids.filter(function (id) { return G.n[id].kind === 'EnterpriseCA'; });
+  var ntauth = {};
+  G.ids.forEach(function (id) { var n = G.n[id]; if (n.kind === 'NTAuthStore') (n.p.certthumbprints || []).forEach(function (t) { ntauth[_bhU(t)] = 1; }); });
+  var caTrusted = function (ca) { var t = _bhU(N(ca).p.certthumbprint); return !!t && !!ntauth[t]; };
+  var caEnrollers = function (ca) {
+    var s = (G.caSec[ca] || []).filter(function (a) { return a.r === 'Enroll'; }).map(function (a) { return a.p; });
+    if (!s.length) s = (aceOn[ca] || []).filter(function (a) { return a.r === 'Enroll' || a.r === 'AllExtendedRights' || a.r === 'GenericAll'; }).map(function (a) { return a.p; });
+    return s;
+  };
+  var tplEnrollers = function (t) { return (aceOn[t] || []).filter(function (a) { return a.r === 'Enroll' || a.r === 'AllExtendedRights' || a.r === 'GenericAll'; }).map(function (a) { return a.p; }); };
+  var published = {};
+  cas.forEach(function (ca) { var o = N(ca).o; ((o && o.EnabledCertTemplates) || []).forEach(function (t) { var tid = _bhRefId(t); (published[tid] || (published[tid] = [])).push(ca); }); });
+  var tplOk = function (p) { return p.requiresmanagerapproval !== true && !(+p.schemaversion > 1 && +p.authorizedsignatures > 0); };
+  var EKU_ANY = '2.5.29.37.0', EKU_AGENT = '1.3.6.1.4.1.311.20.2.1';
+  var esc = { e1: [], e2: [], e3: [], e4: [], e6: [], e7: [] };
+  Object.keys(published).forEach(function (tid) {
+    var t = G.n[tid];
+    if (!t || t.kind !== 'CertTemplate') return;
+    var p = t.p, ekus = (p.effectiveekus || p.ekus || []).map(String);
+    published[tid].forEach(function (ca) {
+      if (!tplOk(p)) return;
+      var who = _bhCross(G, tplEnrollers(tid), caEnrollers(ca)).filter(function (x) { return !T0[x]; });
+      if (!who.length) return;
+      var trusted = caTrusted(ca);
+      if (p.enrolleesuppliessubject === true && p.authenticationenabled === true) {
+        esc.e1.push({ t: tid, ca: ca, who: who, trusted: trusted });
+        if (trusted) who.forEach(function (x) { _bhEdge(G, x, N(ca).dsid, 'ADCSESC1', t.name); });
+      }
+      if (ekus.indexOf(EKU_ANY) >= 0 || !ekus.length) esc.e2.push({ t: tid, ca: ca, who: who, trusted: trusted, any: ekus.indexOf(EKU_ANY) >= 0 });
+      if (ekus.indexOf(EKU_AGENT) >= 0) esc.e3.push({ t: tid, ca: ca, who: who, trusted: trusted });
+    });
+  });
+  var TPL_CTRL = { GenericAll: 1, GenericWrite: 1, WriteDacl: 1, WriteOwner: 1, Owns: 1, WritePKINameFlag: 1, WritePKIEnrollmentFlag: 1 };
+  G.ids.forEach(function (tid) {
+    if (G.n[tid].kind !== 'CertTemplate') return;
+    (aceOn[tid] || []).forEach(function (a) { if (TPL_CTRL[a.r] && !T0[a.p] && !_bhSystem(a.p)) esc.e4.push({ t: tid, p: a.p, r: a.r }); });
+  });
+  cas.forEach(function (ca) {
+    var o = N(ca).o || {}, rd = o.CARegistryData || {}, san = rd.IsUserSpecifiesSanEnabled;
+    if ((san && san.Value === true) || N(ca).p.isuserspecifiessanenabled === true) esc.e6.push({ ca: ca, trusted: caTrusted(ca) });
+    (G.caSec[ca] || []).forEach(function (a) { if ((a.r === 'ManageCA' || a.r === 'ManageCertificates') && !T0[a.p] && !_bhSystem(a.p)) esc.e7.push({ ca: ca, p: a.p, r: a.r }); });
+  });
+
+  users.concat(computers).forEach(function (id) {
+    var n = G.n[id];
+    if (n.p.unconstraineddelegation === true && n.en !== false && !isDC(id) && n.dsid && G.n[n.dsid]) _bhEdge(G, id, n.dsid, 'CoerceToTGT');
+  });
+
+  var dist = {}, next = {}, queue = [];
+  Object.keys(T0).forEach(function (id) { dist[id] = 0; queue.push(id); });
+  for (var qi = 0; qi < queue.length; qi++) {
+    var v = queue[qi];
+    (G.inn[v] || []).forEach(function (e) {
+      if (dist[e.from] != null) return;
+      dist[e.from] = dist[v] + 1;
+      next[e.from] = { to: v, kind: e.kind, note: e.note };
+      queue.push(e.from);
+    });
+  }
+  var pathOf = function (id) {
+    var nodes = [id], edges = [], cur = id, guard = 0;
+    while (!T0[cur] && next[cur] && guard++ < 64) { edges.push({ kind: next[cur].kind, note: next[cur].note }); cur = next[cur].to; nodes.push(cur); }
+    return { nodes: nodes, edges: edges };
+  };
+  var enabledUsersIn = function (g) { return _bhMembers(G, g).filter(function (m) { return G.n[m] && G.n[m].kind === 'User' && G.n[m].en !== false; }).length; };
+  var origins = [];
+  G.ids.forEach(function (id) {
+    var n = G.n[id];
+    if (T0[id] || dist[id] == null || !next[id] || next[id].kind === 'MemberOf') return;
+    if (n.kind !== 'User' && n.kind !== 'Computer' && n.kind !== 'Group') return;
+    if (n.en === false) return;
+    var broad = _bhBroad(id);
+
+    var members = n.kind === 'Group' ? (broad && /S-1-1-0$|S-1-5-11$/.test(id) ? users.filter(function (u) { return G.n[u].en !== false; }).length : enabledUsersIn(id)) : 0;
+    origins.push({ id: id, hops: dist[id], broad: broad, members: members });
+  });
+  origins.sort(function (a, b) {
+    return (b.broad - a.broad) || ((G.n[a.id].kind === 'Group') ? 0 : 1) - ((G.n[b.id].kind === 'Group') ? 0 : 1) || (b.members - a.members) || (a.hops - b.hops) || (G.n[a.id].name < G.n[b.id].name ? -1 : 1);
+  });
+
+  var broadAt = {};
+  origins.forEach(function (o) { if (o.broad) broadAt[o.id] = 1; });
+  var hidden = {};
+  origins = origins.filter(function (o) {
+    var via = pathOf(o.id).nodes.slice(1).filter(function (n) { return broadAt[n]; })[0];
+    if (via) hidden[via] = (hidden[via] || 0) + 1;
+    return !via;
+  });
+
+  return { G: G, T0: T0, asof: asof, domains: domains, users: users, computers: computers, groups: groups, isDC: isDC, dcsync: dcsync, esc: esc, gpoTo: gpoTo, origins: origins, hidden: hidden, pathOf: pathOf, dist: dist, aceOn: aceOn, cas: cas, caTrusted: caTrusted, published: published };
+}
+var _BH_MS_TIER = 'https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/tier-model';
+var _BH_MS_LEAST = 'https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/implementing-least-privilege-administrative-models';
+var _BH_CPO = 'https://specterops.io/assets/resources/Certified_Pre-Owned.pdf';
+var _BH_UAC = 'https://learn.microsoft.com/en-us/troubleshoot/windows-server/active-directory/useraccountcontrol-manipulate-account-properties';
+var _BH_GMSA = 'https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/group-managed-service-accounts/group-managed-service-accounts/group-managed-service-accounts-overview';
+var _BH_KCD = 'https://learn.microsoft.com/en-us/windows-server/security/kerberos/kerberos-constrained-delegation-overview';
+var _BH_PU = 'https://learn.microsoft.com/en-us/windows-server/security/credentials-protection-and-management/protected-users-security-group';
+var _BH_CHECKS = {
+  paths: { t: 'Attack Paths to Tier Zero', s: 'high', c: 'Broken Access Control', w: 'CWE-269', a: 'T1078.002, T1098',
+    d: '<p>Tier Zero is what controls Active Directory: the domain itself, its domain controllers, the built-in administrative groups such as Domain Admins and Enterprise Admins with their members, and the objects that govern them. Control of any of them is control of the domain.</p><p>The BloodHound data shows chains of relationships, such as group memberships, permissions on directory objects, local administrator rights and signed-in sessions, through which principals outside Tier Zero can take control of a Tier Zero object. Each step is one that whoever holds the starting point can act on with freely available tools, so an attacker who compromises any account at the start of a path can follow it to control of the domain.</p>',
+    r: '<ul><li>Break each path at the step that should not exist: remove the permission, group membership or local administrator right shown in the evidence. Start with paths that begin at broad groups such as Domain Users, Authenticated Users and Everyone, which every account can follow.</li><li>Keep Tier Zero accounts signed in only on Tier Zero systems, so that their credentials cannot be taken from other computers, and give administrators separate accounts for each tier.</li><li>Review delegated permissions on organisational units and Group Policy objects, and remove those no longer needed.</li><li>Collect the data again after the changes and confirm that the paths are gone.</li></ul>',
+    u: [_BH_MS_TIER, _BH_MS_LEAST] },
+  dcsync: { t: 'Non-Administrative Principals With DCSync Rights', s: 'high', c: 'Broken Access Control', w: 'CWE-266', a: 'T1003.006, T1558.001',
+    d: '<p>Principals outside the domain\'s administrative groups hold both the Replicating Directory Changes and Replicating Directory Changes All rights on the domain object, directly or through group membership, or a right that includes them. With these rights a principal can ask a domain controller for the password hash of any account, including krbtgt, from anywhere on the network, a technique known as DCSync. Whoever controls one of these principals controls the domain.</p>',
+    r: '<ul><li>Remove the replication rights from every principal that is not a domain controller or a built-in administrative group.</li><li>Where a product needs them, such as Microsoft Entra Connect for password hash synchronisation, grant them to one dedicated account used only by that product, give it a long random password, and protect the account and its server as Tier Zero.</li></ul>',
+    u: ['https://attack.mitre.org/techniques/T1003/006', 'https://learn.microsoft.com/en-us/troubleshoot/windows-server/windows-security/grant-replicating-directory-changes-permission-adma-service'] },
+  kerberoast: { t: 'Kerberoastable Service Accounts', s: 'high', c: 'Security Misconfiguration', w: 'CWE-521', a: 'T1558.003, T1110.002',
+    d: '<p>Enabled user accounts have service principal names (SPNs). Any authenticated domain user can request a Kerberos service ticket for each of them, and part of the ticket is encrypted with a key derived from the account\'s password, so it can be cracked offline, without contacting a domain controller again and without locking the account out. Accounts with weak or old passwords, and accounts that still allow RC4 encryption, are most at risk.</p>',
+    r: '<ul><li>Replace service accounts with group managed service accounts wherever the application supports them.</li><li>Give any remaining service account a long, randomly generated password kept in a password vault, and allow it AES encryption only.</li><li>Remove service principal names that are no longer used, and keep privileged accounts free of them.</li></ul>',
+    u: ['https://www.microsoft.com/security/blog/2024/10/11/microsofts-guidance-to-help-mitigate-kerberoasting', _BH_GMSA, 'https://attack.mitre.org/techniques/T1558/003'] },
+  asrep: { t: 'AS-REP Roastable Accounts', s: 'high', c: 'Security Misconfiguration', w: 'CWE-304', a: 'T1558.004, T1110.002',
+    d: '<p>Enabled accounts have Kerberos pre-authentication turned off (Do not require Kerberos preauthentication). Anyone who can reach a domain controller can request authentication data for these accounts without knowing a password, and part of the reply is encrypted with a key derived from the account\'s password, so it can be cracked offline.</p>',
+    r: '<ul><li>Turn Kerberos pre-authentication back on for every listed account.</li><li>Where an application genuinely needs it off, give the account a long, random password and restrict what the account can reach.</li></ul>',
+    u: [_BH_UAC, 'https://attack.mitre.org/techniques/T1558/004'] },
+  unconstrained: { t: 'Unconstrained Kerberos Delegation', s: 'high', c: 'Security Misconfiguration', w: 'CWE-266', a: 'T1558, T1187',
+    d: '<p>Computer or user accounts other than domain controllers are trusted for unconstrained Kerberos delegation. Users who authenticate to a service running under such an account send it a copy of their ticket-granting ticket, which it keeps in memory. Whoever controls the account, or has administrative access to the computer, can take those tickets and act as those users anywhere in the domain, and by making a domain controller authenticate to the host, can obtain the domain controller\'s own ticket and with it control of the domain.</p>',
+    r: '<ul><li>Remove unconstrained delegation from every listed account, and use constrained or resource-based constrained delegation to named services where delegation is needed.</li><li>Mark privileged accounts as sensitive and unable to be delegated, or add them to the Protected Users group.</li></ul>',
+    u: [_BH_KCD, _BH_PU, _BH_UAC] },
+  constrained: { t: 'Constrained Delegation Allowing Privilege Escalation', s: 'high', c: 'Security Misconfiguration', w: 'CWE-266', a: 'T1558, T1550.003',
+    d: '<p>Accounts may delegate to services on Tier Zero systems, or are configured with protocol transition (Use any authentication protocol), which lets an account obtain a ticket for any user to the services it may delegate to without that user signing in. Where a Tier Zero computer allows resource-based constrained delegation from an account outside Tier Zero, that is listed too. Whoever controls one of these accounts can act as an administrator towards those services.</p>',
+    r: '<ul><li>Remove delegation that is not required, and do not allow delegation to services on domain controllers or other Tier Zero systems.</li><li>Turn off protocol transition where the application does not need it.</li><li>Mark privileged accounts as sensitive and unable to be delegated, or add them to the Protected Users group, and protect the delegating accounts as carefully as the systems they can reach.</li></ul>',
+    u: [_BH_KCD, _BH_UAC, _BH_PU] },
+  acls: { t: 'Dangerous Access Control Entries on Directory Objects', s: 'high', c: 'Broken Access Control', w: 'CWE-732', a: 'T1098, T1484.001',
+    d: '<p>Principals outside Tier Zero hold rights that give control of Tier Zero objects, or broad groups such as Domain Users, Authenticated Users and Everyone hold rights that give control of accounts, groups or computers. Rights such as full control (GenericAll), GenericWrite, WriteDacl, WriteOwner, ownership, resetting a password or adding group members let the holder take over the object, and through it whatever the object controls.</p>',
+    r: '<ul><li>Remove each listed right unless it is required, and grant delegated administration to dedicated groups on the narrowest set of objects.</li><li>Do not give broad groups write or control rights on accounts, groups, computers or policy objects.</li><li>Review the permissions on the domain object, AdminSDHolder and the privileged groups regularly.</li></ul>',
+    u: [_BH_MS_LEAST, 'https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/appendix-c--protected-accounts-and-groups-in-active-directory'] },
+  broadadmin: { t: 'Standard Users With Local Administrator Rights', s: 'high', c: 'Broken Access Control', w: 'CWE-266', a: 'T1078.002, T1003.001',
+    d: '<p>Broad groups such as Domain Users, Authenticated Users, Everyone or Domain Computers are in the local Administrators group of the listed computers, directly or through Group Policy. Every member, which can be every account in the domain, has full control of these computers, including the credentials of anyone signed in to them.</p>',
+    r: '<ul><li>Remove the broad groups from the local Administrators group of these computers, and from any Group Policy that adds them.</li><li>Grant local administrator rights only to dedicated administrative groups for each tier, and manage the built-in local administrator password with LAPS.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/appendix-h--securing-local-administrator-accounts-and-groups', _BH_MS_LEAST] },
+  laps: { t: 'LAPS Not Deployed', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-262', a: 'T1078.003, T1550.002',
+    d: '<p>Enabled Windows computers have no LAPS password recorded in Active Directory, so their local administrator passwords are not managed by LAPS. Such passwords are typically set once by a build image or script, shared across many machines and rarely changed, so the password or hash taken from one computer often opens many others.</p>',
+    r: '<ul><li>Deploy Windows LAPS to every domain-joined workstation and member server, and confirm that each computer has written its password.</li><li>Restrict who can read the stored passwords, and turn on password encryption.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/windows-server/identity/laps/laps-overview', 'https://learn.microsoft.com/en-us/windows-server/identity/laps/laps-scenarios-windows-server-active-directory'] },
+  eol: { t: 'Unsupported Windows Operating System', s: 'critical', c: 'Outdated Components', w: 'CWE-1104', a: 'T1210, T1068',
+    d: '<p>Enabled computer accounts report Windows releases that had passed the end of Microsoft\'s support when the data was collected. Unless they are covered by Extended Security Updates, these computers no longer receive security updates, so every Windows vulnerability disclosed since stays unfixed on them.</p>',
+    r: '<ul><li>Upgrade or replace these systems with a supported release, or isolate any that must remain and cover them with Extended Security Updates where Microsoft offers them.</li><li>Disable or remove the accounts of computers that no longer exist.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/lifecycle/', 'https://learn.microsoft.com/en-us/windows-server/get-started/extended-security-updates-overview'] },
+  pwdnever: { t: 'Accounts With Passwords That Never Expire', s: 'low', c: 'Security Misconfiguration', w: 'CWE-262', a: 'T1078.002',
+    d: '<p>Enabled user accounts have Password never expires set, which exempts them from the domain\'s maximum password age. The setting is common on service and administrative accounts, where it often hides passwords that have not changed for years and are known to former staff or recorded in old scripts.</p>',
+    r: '<ul><li>Review each account, privileged and service accounts first: replace service accounts with group managed service accounts, and change passwords that have not been changed for years.</li><li>Remove the setting where it is not needed.</li></ul>',
+    u: [_BH_UAC, _BH_GMSA] },
+  notreqd: { t: 'Accounts Not Required to Have a Password', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-521', a: 'T1078.002, T1110.003',
+    d: '<p>Enabled user accounts have the PASSWD_NOTREQD flag, which lets them have an empty password whatever the domain\'s password policy requires. The flag is not shown in Active Directory Users and Computers, so it often goes unnoticed. Any of these accounts that does have an empty password can be used by anyone who can reach a domain controller.</p>',
+    r: '<ul><li>Clear the flag on every listed account, for example with <code>Set-ADUser -PasswordNotRequired $false</code>, and make sure each one has a strong password.</li></ul>',
+    u: [_BH_UAC, 'https://attack.mitre.org/techniques/T1110/003'] },
+  protected: { t: 'Privileged Accounts Not in the Protected Users Group', s: 'low', c: 'Security Misconfiguration', w: 'CWE-522', a: 'T1003.001, T1550.002',
+    d: '<p>Enabled Tier Zero user accounts are not members of the Protected Users group. Members of that group do not leave reusable credentials such as NTLM hashes on the computers they sign in to, cannot be delegated, and get shorter Kerberos ticket lifetimes, which makes stolen credentials much harder to use.</p>',
+    r: '<ul><li>Add privileged user accounts to Protected Users, after testing that the services they use do not depend on NTLM, DES, RC4 or delegation.</li><li>Do not add service or computer accounts to the group.</li></ul>',
+    u: [_BH_PU, 'https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/how-to-configure-protected-accounts'] },
+  t0sessions: { t: 'Privileged Accounts Used on Workstations (Tiering Not Enforced)', s: 'high', c: 'Insecure Design', w: 'CWE-653', a: 'T1003.001, T1550.002',
+    d: '<p>Tier Zero accounts were signed in to computers outside Tier Zero when the data was collected. Signing in leaves reusable credential material in the computer\'s memory, so anyone with administrative control of these computers, or malware running on them, can take the privileged account\'s credentials and use them to control the domain.</p>',
+    r: '<ul><li>Use Tier Zero accounts only on domain controllers and privileged access workstations, and administer other systems with separate lower-tier accounts.</li><li>Enforce the separation with logon restrictions or authentication policies, and add privileged accounts to Protected Users.</li></ul>',
+    u: [_BH_MS_TIER, 'https://learn.microsoft.com/en-us/windows-server/identity/securing-privileged-access/reference-tools-logon-types'] },
+  trusts: { t: 'Domain Trust Without SID Filtering', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-346', a: 'T1134.005',
+    d: '<p>The domain trusts another domain or forest through an external or forest trust on which the collection found SID filtering off. Without SID filtering, administrators of the trusted domain, or an attacker who controls it, can add the security identifiers of this domain\'s privileged groups to accounts or forged tickets and use them here.</p>',
+    r: '<ul><li>Turn SID filtering (quarantine) on for external trusts, and keep SID history disabled on forest trusts.</li><li>Remove trusts that are no longer needed, and use selective authentication where only some resources need to be shared.</li></ul>',
+    u: ['https://attack.mitre.org/techniques/T1134/005', 'https://attack.mitre.org/mitigations/M1015'] },
+  krbtgt: { t: 'KRBTGT Password Not Recently Changed', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-324', a: 'T1558.001',
+    d: '<p>The password of the krbtgt account, whose keys sign every Kerberos ticket-granting ticket in the domain, was last changed more than 180 days before the latest date in the data. Anyone who obtained these keys since then, for example from a backup of a domain controller or an earlier compromise, can still forge tickets for any account (golden tickets).</p>',
+    r: '<ul><li>Reset the krbtgt password twice, letting replication complete between the two resets, following Microsoft\'s documented procedure.</li><li>Reset it again on a regular schedule and after any suspected compromise of the domain.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/forest-recovery-guide/ad-forest-recovery-reset-the-krbtgt-password', 'https://attack.mitre.org/techniques/T1558/001'] },
+  guest: { t: 'Guest Account Enabled', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-1188', a: 'T1078.001',
+    d: '<p>The domain\'s built-in Guest account is enabled. By default it has no password, so anyone who can reach the network can sign in with it and use whatever access Guests, Domain Guests and Everyone have.</p>',
+    r: '<ul><li>Disable the Guest account, and keep it disabled through the Accounts: Guest account status policy.</li></ul>',
+    u: ['https://attack.mitre.org/techniques/T1078/001'] },
+  attrpw: { t: 'Passwords Stored in Active Directory Attributes', s: 'high', c: 'Information Disclosure', w: 'CWE-256', a: 'T1552, T1078.002',
+    d: '<p>Attributes of accounts in Active Directory hold what appear to be passwords: in the description, which every authenticated user can read, or in password attributes such as userPassword or unixUserPassword. Anyone in the domain can collect them and sign in as these accounts. The values are not reproduced in this report.</p>',
+    r: '<ul><li>Remove the passwords from the attributes, and change the password of every listed account, since it must be treated as known.</li><li>Keep passwords in a password vault rather than in directory attributes.</li></ul>',
+    u: ['https://attack.mitre.org/techniques/T1552', 'https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html'] },
+  stale: { t: 'Stale or Inactive Accounts Enabled', s: 'low', c: 'Security Misconfiguration', w: 'CWE-286', a: 'T1078.002',
+    d: '<p>Enabled accounts had not signed in for at least 180 days before the latest date in the data, or had never signed in although created more than 180 days before it. Unused accounts often keep old or initial passwords, and activity on them is unlikely to be noticed, which makes them a quiet way in.</p>',
+    r: '<ul><li>Disable accounts that are no longer needed and delete them after a set period, and remove the accounts of computers that no longer exist.</li><li>Review account activity on a schedule, for example every quarter.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/defender-for-identity/security-posture-assessments/accounts', 'https://attack.mitre.org/techniques/T1078/002'] },
+  sidhistory: { t: 'Accounts With SID History', s: 'medium', c: 'Broken Access Control', w: 'CWE-269', a: 'T1134.005',
+    d: '<p>Accounts carry security identifiers in their SID history. SID history exists for migrations between domains, so that a migrated account keeps the access its old identity had, and every SID in it is honoured as if the account were that principal. Entries left after a migration, entries from the same domain, and entries for privileged groups or accounts give access that does not show in the account\'s group memberships, and are a known way to hide privileged access.</p>',
+    r: '<ul><li>Remove SID history from every account whose migration is complete, after confirming that no resource still relies on the old identifiers.</li><li>Investigate any entry that refers to a principal in the same domain or to a privileged account or group, as it may be an attacker\'s persistence.</li></ul>',
+    u: ['https://attack.mitre.org/techniques/T1134/005'] },
+  gpowrite: { t: 'Group Policy Objects Writable by Non-Administrative Principals', s: 'high', c: 'Broken Access Control', w: 'CWE-732', a: 'T1484.001',
+    d: '<p>Principals outside Tier Zero can change Group Policy objects. A Group Policy object\'s settings, such as scheduled tasks, scripts and local group membership, are applied to every computer and user it covers, so whoever can change it can run code as SYSTEM on those computers or as those users. Where a policy covers Tier Zero systems, that is control of the domain.</p>',
+    r: '<ul><li>Remove write and control rights on Group Policy objects from everyone but the administrators responsible for them.</li><li>Check the permissions on the policy files in SYSVOL as well as on the directory objects.</li></ul>',
+    u: ['https://attack.mitre.org/techniques/T1484/001', _BH_MS_LEAST] },
+  esc1: { t: 'AD CS Template Allows a Requester-Supplied Subject (ESC1)', s: 'high', c: 'Security Misconfiguration', w: 'CWE-807', a: 'T1649',
+    d: '<p>Enterprise certification authorities publish certificate templates that let the requester supply the certificate\'s subject, allow authentication, need no manager approval, and can be enrolled in by principals outside Tier Zero. Any of them can request a certificate in the name of any account, including a domain administrator, and authenticate with it as that account.</p>',
+    r: '<ul><li>Clear Supply in the request on these templates, or require manager approval, and limit enrolment to the accounts that need it.</li><li>Remove authentication usages from templates that do not need them, and apply Microsoft\'s strong certificate mapping (KB5014754).</li></ul>',
+    u: [_BH_CPO, 'https://support.microsoft.com/en-us/help/5014754', 'https://attack.mitre.org/techniques/T1649'] },
+  esc23: { t: 'AD CS Template With Any Purpose or Enrolment Agent Usage (ESC2, ESC3)', s: 'high', c: 'Security Misconfiguration', w: 'CWE-266', a: 'T1649',
+    d: '<p>Enterprise certification authorities publish certificate templates that principals outside Tier Zero can enrol in and whose certificates can be used for any purpose (the Any Purpose usage, or no usage at all), or as an enrolment agent (Certificate Request Agent), which can request certificates on behalf of other users. Either lets the requester obtain certificates that authenticate as other accounts, including administrators.</p>',
+    r: '<ul><li>Restrict enrolment on these templates to the accounts that need it, require manager approval, and replace Any Purpose with the specific usages required.</li><li>Configure enrolment agent restrictions on the certification authority, so that agents can enrol only for the users and templates intended.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/defender-for-identity/security-assessment-edit-misconfigured-enrollment-agent', _BH_CPO, 'https://attack.mitre.org/techniques/T1649'] },
+  esc4: { t: 'AD CS Certificate Template With Weak Access Control (ESC4)', s: 'high', c: 'Broken Access Control', w: 'CWE-732', a: 'T1649',
+    d: '<p>Principals outside Tier Zero hold rights on certificate templates that let them change the template, such as full control, write access, or the right to change its permissions or owner. They can reconfigure a template so that it issues authentication certificates for any account, then request one for an administrator.</p>',
+    r: '<ul><li>Remove these rights from everyone but the administrators of the public key infrastructure.</li><li>Review template permissions after every change, and monitor changes to templates.</li></ul>',
+    u: [_BH_CPO, 'https://learn.microsoft.com/en-us/windows-server/identity/ad-cs/secure-delegate-audit-certification-authority', 'https://attack.mitre.org/techniques/T1649'] },
+  esc6: { t: 'AD CS EDITF_ATTRIBUTESUBJECTALTNAME2 Enabled (ESC6)', s: 'high', c: 'Security Misconfiguration', w: 'CWE-807', a: 'T1649',
+    d: '<p>Certification authorities have the EDITF_ATTRIBUTESUBJECTALTNAME2 flag set, so they accept a subject alternative name supplied with any request. Every published template that allows authentication and enrolment by ordinary users then lets them request a certificate that names another account.</p>',
+    r: '<ul><li>Clear the flag with <code>certutil -setreg policy\\EditFlags -EDITF_ATTRIBUTESUBJECTALTNAME2</code> and restart the certificate service.</li><li>Apply Microsoft\'s strong certificate mapping (KB5014754) in full enforcement mode.</li></ul>',
+    u: ['https://learn.microsoft.com/en-gb/defender-for-identity/security-assessment-edit-vulnerable-ca-setting', 'https://support.microsoft.com/en-us/help/5014754', _BH_CPO] },
+  esc7: { t: 'AD CS Certification Authority With Weak Access Control (ESC7)', s: 'high', c: 'Broken Access Control', w: 'CWE-732', a: 'T1649',
+    d: '<p>Principals outside Tier Zero hold the Manage CA or Issue and Manage Certificates rights on an enterprise certification authority. Manage CA lets the holder change the authority\'s configuration, for example to accept a requester-supplied subject or to publish templates, and Issue and Manage Certificates lets the holder approve requests that are waiting for approval. Either can be used to obtain a certificate for an administrator.</p>',
+    r: '<ul><li>Grant Manage CA and Issue and Manage Certificates only to the administrators of the public key infrastructure, and treat those administrators as Tier Zero.</li></ul>',
+    u: [_BH_CPO, 'https://learn.microsoft.com/en-us/windows-server/identity/ad-cs/secure-delegate-audit-certification-authority', 'https://attack.mitre.org/techniques/T1649'] },
+  funclevel: { t: 'Outdated Domain Functional Level', s: 'info', c: 'Security Misconfiguration', w: 'CWE-693', a: '',
+    d: '<p>The domain functional level is below Windows Server 2016, so the domain cannot use the security features introduced at later levels, and the level suggests that older domain controllers remain, or did until recently.</p>',
+    r: '<ul><li>Upgrade or retire domain controllers running older releases, then raise the domain and forest functional levels.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/active-directory-functional-levels'] },
+  maq: { t: 'Users Can Add Computers to the Domain', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-1188', a: 'T1136.002',
+    d: '<p>The domain\'s ms-DS-MachineAccountQuota is above zero, so every authenticated user can create computer accounts in it. A computer account an attacker creates is a domain account they control, which several privilege escalation techniques, such as resource-based constrained delegation attacks, depend on.</p>',
+    r: '<ul><li>Set ms-DS-MachineAccountQuota to 0, and grant the right to join computers to the domain only to the accounts that need it.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/troubleshoot/windows-server/active-directory/default-workstation-numbers-join-domain', 'https://attack.mitre.org/techniques/T1136/002'] },
+  pre2000: { t: 'Pre-Windows 2000 Compatible Access Includes Everyone or Anonymous', s: 'medium', c: 'Broken Access Control', w: 'CWE-732', a: 'T1087.002',
+    d: '<p>The Pre-Windows 2000 Compatible Access group includes Everyone or Anonymous Logon. The group can read user and group information across the domain, so this membership can let unauthenticated users list accounts, groups and other directory data.</p>',
+    r: '<ul><li>Remove Everyone and Anonymous Logon from the group, after checking that no legacy system relies on anonymous access.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/troubleshoot/windows-server/active-directory/anonymous-ldap-operations-active-directory-disabled', 'https://attack.mitre.org/techniques/T1087/002'] },
+  svcpriv: { t: 'Service Accounts With Domain Administrative Rights', s: 'high', c: 'Broken Access Control', w: 'CWE-250', a: 'T1558.003, T1078.002',
+    d: '<p>Tier Zero user accounts have service principal names, so they are service accounts and are Kerberoastable: any domain user can request a ticket for them and attack the password offline. A cracked password gives control of the domain.</p>',
+    r: '<ul><li>Remove service accounts from privileged groups, and grant them only the rights their service needs.</li><li>Replace them with group managed service accounts where possible, and give any that remain a long random password.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-service-accounts', _BH_GMSA] }
+};
+var _BH_KIND = { User: 'User', Computer: 'Computer', Group: 'Group', Domain: 'Domain', GPO: 'Group Policy object', OU: 'Organisational unit', Container: 'Container', CertTemplate: 'Certificate template', EnterpriseCA: 'Certification authority', RootCA: 'Root certification authority', AIACA: 'Certification authority', NTAuthStore: 'NTAuth store', IssuancePolicy: 'Issuance policy' };
+var _BH_EDGE = {
+  MemberOf: 'Is a member of the group, and has its rights.',
+  AdminTo: 'Is a local administrator of the computer.',
+  HasSession: 'The account was signed in to the computer, so whoever controls the computer can take its credentials.',
+  GenericAll: 'Has full control of the object.',
+  GenericWrite: 'Can write the object\'s attributes, which is enough to take it over.',
+  WriteDacl: 'Can change the object\'s permissions, and so give itself full control.',
+  WriteOwner: 'Can make itself the object\'s owner, and so change its permissions.',
+  Owns: 'Owns the object, and so can change its permissions.',
+  AllExtendedRights: 'Holds every extended right on the object, such as resetting its password or reading its LAPS password.',
+  ForceChangePassword: 'Can reset the account\'s password without knowing the current one.',
+  AddMember: 'Can add members to the group.',
+  AddSelf: 'Can add itself to the group.',
+  AddKeyCredentialLink: 'Can add a key credential to the account and authenticate as it.',
+  WriteSPN: 'Can give the account a service principal name and attack its password offline.',
+  ReadLAPSPassword: 'Can read the computer\'s local administrator password.',
+  ReadGMSAPassword: 'Can read the managed service account\'s password.',
+  AddAllowedToAct: 'Can let an account it controls act as any user towards the computer.',
+  WriteAccountRestrictions: 'Can let an account it controls act as any user towards the computer.',
+  WritePKINameFlag: 'Can change how the certificate template sets the subject.',
+  WritePKIEnrollmentFlag: 'Can change the certificate template\'s enrolment settings.',
+  DCSync: 'Holds the replication rights that read every account\'s password hash.',
+  AllowedToDelegate: 'May delegate to services on the computer, and so act as any user towards them.',
+  AllowedToAct: 'Is allowed to act on behalf of any user towards the computer.',
+  HasSIDHistory: 'Carries the principal\'s identifier in its SID history, and so has its rights.',
+  Contains: 'Contains the object, which inherits the permissions set on its container.',
+  GPLink: 'The Group Policy object applies to it, so whoever changes the policy runs code on it or as it.',
+  SQLAdmin: 'Is an administrator of SQL Server on the computer.',
+  CoerceToTGT: 'Is trusted for unconstrained delegation, so it receives a domain controller\'s ticket when one is made to authenticate to it.',
+  ADCSESC1: 'Can enrol in a certificate template that lets the requester name any account.',
+  ManageCA: 'Can change the certification authority\'s configuration.'
+};
+function _bhE(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+var _BH_ROWS_MAX = 250;
+function _bhTable(head, rows, src) {
+  var shown = rows.slice(0, _BH_ROWS_MAX);
+  var html = '<table><thead><tr>' + head.map(function (h) { return '<th>' + _bhE(h) + '</th>'; }).join('') + '</tr></thead><tbody>'
+    + shown.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + _bhE(c) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>';
+  var text = [head.join(' | ')].concat(shown.map(function (r) { return r.join(' | '); })).join('\n');
+  if (rows.length > shown.length) {
+    var more = rows.length - shown.length;
+    html += '<p>' + more + ' more in the ' + _bhE(src || 'BloodHound') + ' data, not listed here.</p>';
+    text += '\n' + more + ' more in the ' + (src || 'BloodHound') + ' data, not listed here.';
+  }
+  return { html: html, text: text };
+}
+function _bhYes(b) { return b ? 'Yes' : 'No'; }
+function _bhPlural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+function _bhRows(A, label) {
+  var G = A.G, T0 = A.T0, asof = A.asof, DAY = 86400, out = [];
+  var N = function (id) { return G.n[id] || _bhNode(G, id); };
+  var nm = function (id) { return N(id).name || id; };
+  var kd = function (id) { var n = N(id); return n.p.gmsa === true || n.p.msa === true ? 'Managed service account' : _BH_KIND[n.kind] || 'Principal'; };
+  var dn = function (dsid) { return (G.n[dsid] && G.n[dsid].kind === 'Domain' && G.n[dsid].name) || G.ds[dsid] || 'Unknown domain'; };
+  var en = function (id) { return N(id).en !== false; };
+  var byDom = function (list, domOf) {
+    var m = {}, order = [];
+    list.forEach(function (x) { var d = domOf(x) || ''; if (!m[d]) { m[d] = []; order.push(d); } m[d].push(x); });
+    return order.map(function (d) { return { d: d, list: m[d] }; });
+  };
+  var domOfId = function (id) { return N(id).dsid; };
+  var row = function (key, asset, sev, html, text, extra) {
+    var c = _BH_CHECKS[key];
+    var r = {
+      title: c.t, severity: sev || c.s, category: c.c, cwe: c.w, attack: c.a, description: c.d, remediation: c.r, refs: c.u.slice(),
+      asset: asset, plugin_id: 'bloodhound:' + key, evidence_html: html || '', evidence: text || ''
+    };
+    if (extra) Object.keys(extra).forEach(function (k) { r[k] = extra[k]; });
+    out.push(_scanRow(r, { Check: c.t, Object: asset, Tool: label }, {}));
+  };
+
+  var perDomain = function (key, items, domOf, intro, head, cells, sev) {
+    byDom(items, domOf).forEach(function (g) {
+      var t = _bhTable(head, g.list.map(cells));
+      var lead = '<p><strong>' + _bhE(dn(g.d)) + '</strong>: ' + _bhE(intro(g.list.length)) + '</p>';
+      row(key, dn(g.d), typeof sev === 'function' ? sev(g.list) : sev, lead + t.html, dn(g.d) + ': ' + intro(g.list.length) + '\n\n' + t.text);
+    });
+  };
+
+  var perComputer = function (key, items, idOf, intro, head, cells, sev) {
+    byDom(items, function (x) { return domOfId(idOf(x)); }).forEach(function (g) {
+      var t = _bhTable(head, g.list.map(cells));
+      var lead = '<p><strong>' + _bhE(dn(g.d)) + '</strong>: ' + _bhE(intro(g.list.length)) + '</p>';
+      var seen = {};
+      g.list.forEach(function (x, i) {
+        var id = idOf(x);
+        if (seen[id]) return;
+        seen[id] = 1;
+        row(key, nm(id), sev, i === 0 ? lead + t.html : '', i === 0 ? dn(g.d) + ': ' + intro(g.list.length) + '\n\n' + t.text : '');
+      });
+    });
+  };
+  var users = A.users.filter(en), computers = A.computers.filter(en);
+  var isGmsa = function (id) { var p = N(id).p; return p.gmsa === true || p.msa === true; };
+  var spns = function (id) { var s = N(id).p.serviceprincipalnames || []; return s.length ? s.slice(0, 3).join(', ') + (s.length > 3 ? ' and ' + (s.length - 3) + ' more' : '') : ''; };
+  var groupsT0 = function (id) { return _bhGroups(G, id).filter(function (g) { return T0[g]; }).map(nm); };
+
+  var drawn = [];
+  byDom(A.origins, function (o) { var p = A.pathOf(o.id); return N(p.nodes[p.nodes.length - 1]).dsid; }).forEach(function (g) {
+    var kinds = {}, figs = [], tails = {};
+    var cells = g.list.map(function (o) {
+      var p = A.pathOf(o.id), text = '';
+      p.nodes.forEach(function (id, i) { text += nm(id) + (i < p.edges.length ? ' (' + p.edges[i].kind + ') → ' : ''); kinds[p.edges[i] ? p.edges[i].kind : ''] = 1; });
+      if (figs.length < 5) {
+        var tail = p.nodes.slice(1).join('|');
+        if (!tails[tail]) {
+          tails[tail] = 1;
+          figs.push({ nodes: p.nodes.map(function (id, i) { return { name: nm(id), kind: kd(id), t0: i === p.nodes.length - 1 }; }), edges: p.edges.map(function (e) { return { kind: e.kind, note: e.note }; }),
+            caption: 'Attack path from ' + nm(o.id) + ' to ' + nm(p.nodes[p.nodes.length - 1]) });
+        }
+      }
+      var who = N(o.id).kind === 'Group' ? (o.members ? _bhPlural(o.members, 'enabled user', 'enabled users') : 'No enabled users') : (N(o.id).kind === 'Computer' ? 'Computer' : 'User');
+      return [nm(o.id), who, String(o.hops), text];
+    });
+    var broad = g.list.filter(function (o) { return o.broad; });
+    var t = _bhTable(['Starting point', 'Who', 'Steps', 'Shortest path'], cells);
+    var legend = Object.keys(kinds).filter(function (k) { return _BH_EDGE[k]; }).sort().map(function (k) { return [k, _BH_EDGE[k]]; });
+    var lt = _bhTable(['Step', 'Meaning'], legend);
+    var more = broad.filter(function (o) { return A.hidden[o.id]; }).map(function (o) { return A.hidden[o.id]; }).reduce(function (x, y) { return x + y; }, 0);
+    var lead = '<p><strong>' + _bhE(dn(g.d)) + '</strong>: ' + _bhE(_bhPlural(g.list.length, 'starting point outside Tier Zero has', 'starting points outside Tier Zero have')) + ' a path to Tier Zero'
+      + (broad.length ? ', including ' + _bhE(broad.map(function (o) { return nm(o.id); }).join(', ')) + ', which every account can use' : '') + '. The shortest path from each is listed'
+      + (figs.length ? ', and ' + (figs.length === 1 ? 'one is' : figs.length + ' are') + ' drawn, each a different route' : '') + '.'
+      + (more ? ' ' + _bhE(_bhPlural(more, 'further starting point reaches', 'further starting points reach')) + ' Tier Zero only through a group every account is in, and ' + (more === 1 ? 'is' : 'are') + ' not listed separately.' : '') + '</p>';
+    row('paths', dn(g.d), broad.length ? 'critical' : 'high', lead + t.html + '<p>What each step means:</p>' + lt.html,
+      dn(g.d) + ': ' + g.list.length + ' starting points with a path to Tier Zero\n\n' + t.text + '\n\n' + lt.text, { _figs: figs });
+    drawn = drawn.concat(figs);
+  });
+
+  var dcs = [];
+  Object.keys(A.dcsync).forEach(function (d) {
+    var x = A.dcsync[d];
+    x.who.forEach(function (p) {
+      if (T0[p] || A.isDC(p)) return;
+      var how = [];
+      Object.keys(x.why).forEach(function (h) {
+        if (h !== p && _bhMembers(G, h).indexOf(p) < 0) return;
+        x.why[h].forEach(function (r) { if (/^GetChanges(All)?$|^GenericAll$|^AllExtendedRights$/.test(r)) how.push(r + (h === p ? '' : ' through ' + nm(h))); });
+      });
+      dcs.push({ d: d, p: p, how: how });
+    });
+  });
+  perDomain('dcsync', dcs, function (x) { return x.d; }, function (n) { return _bhPlural(n, 'principal outside Tier Zero can', 'principals outside Tier Zero can') + ' replicate password hashes from the domain controllers.'; },
+    ['Principal', 'Type', 'Rights'], function (x) { return [nm(x.p), kd(x.p), x.how.join('; ')]; });
+
+  var roast = users.filter(function (id) { var p = N(id).p; return p.hasspn === true && _bhRid(id) !== 502 && !isGmsa(id); });
+  roast.sort(function (a, b) { return (T0[b] ? 1 : 0) - (T0[a] ? 1 : 0) || _bhTs(N(a).p.pwdlastset) - _bhTs(N(b).p.pwdlastset); });
+  perDomain('kerberoast', roast, domOfId, function (n) { return _bhPlural(n, 'enabled account has', 'enabled accounts have') + ' a service principal name.'; },
+    ['Account', 'Service principal names', 'Password last set', 'Tier Zero'], function (id) { return [nm(id), spns(id), _bhDate(_bhTs(N(id).p.pwdlastset)), _bhYes(T0[id])]; });
+  perDomain('svcpriv', roast.filter(function (id) { return T0[id]; }), domOfId, function (n) { return _bhPlural(n, 'Tier Zero account has', 'Tier Zero accounts have') + ' a service principal name.'; },
+    ['Account', 'Service principal names', 'Password last set', 'Tier Zero through'], function (id) { return [nm(id), spns(id), _bhDate(_bhTs(N(id).p.pwdlastset)), groupsT0(id).join(', ') || 'The account itself']; });
+  var asrep = users.filter(function (id) { return N(id).p.dontreqpreauth === true; });
+  perDomain('asrep', asrep, domOfId, function (n) { return _bhPlural(n, 'enabled account does', 'enabled accounts do') + ' not require Kerberos pre-authentication.'; },
+    ['Account', 'Password last set', 'Tier Zero'], function (id) { return [nm(id), _bhDate(_bhTs(N(id).p.pwdlastset)), _bhYes(T0[id])]; });
+
+  var uncon = users.concat(computers).filter(function (id) { return N(id).p.unconstraineddelegation === true && !A.isDC(id); });
+  perDomain('unconstrained', uncon, domOfId, function (n) { return _bhPlural(n, 'account other than a domain controller is', 'accounts other than domain controllers are') + ' trusted for unconstrained delegation.'; },
+    ['Account', 'Type', 'Operating system', 'Last signed in'], function (id) { return [nm(id), kd(id), N(id).p.operatingsystem || '', _bhDate(_bhLastOn(N(id).p))]; });
+  var cons = [];
+  users.concat(computers).forEach(function (id) {
+    if (T0[id]) return;
+    var p = N(id).p, tg = (G.out[id] || []).filter(function (e) { return e.kind === 'AllowedToDelegate'; }).map(function (e) { return e.to; });
+    var toT0 = tg.some(function (t) { return T0[t]; });
+    if (!tg.length && !(p.allowedtodelegate || []).length) return;
+    if (!toT0 && p.trustedtoauth !== true) return;
+    var to = (p.allowedtodelegate || []).length ? p.allowedtodelegate.slice(0, 4).join(', ') + (p.allowedtodelegate.length > 4 ? ' and ' + (p.allowedtodelegate.length - 4) + ' more' : '') : tg.map(nm).join(', ');
+    cons.push({ id: id, d: N(id).dsid, type: 'Constrained', pt: p.trustedtoauth === true, to: to, t0: toT0 });
+  });
+  A.computers.forEach(function (c) {
+    if (!T0[c]) return;
+    (G.inn[c] || []).forEach(function (e) { if (e.kind === 'AllowedToAct' && !T0[e.from]) cons.push({ id: e.from, d: N(c).dsid, type: 'Resource-based', pt: false, to: nm(c), t0: true }); });
+  });
+  perDomain('constrained', cons, function (x) { return x.d; }, function (n) { return _bhPlural(n, 'delegation setting gives', 'delegation settings give') + ' a path to privileged access.'; },
+    ['Account', 'Delegation', 'Protocol transition', 'Can act towards', 'Tier Zero target'], function (x) { return [nm(x.id), x.type, _bhYes(x.pt), x.to, _bhYes(x.t0)]; });
+
+  var CTRL_SHOW = { GenericAll: 'Full control (GenericAll)', GenericWrite: 'GenericWrite', WriteDacl: 'Change permissions (WriteDacl)', WriteOwner: 'Take ownership (WriteOwner)', Owns: 'Owner', AllExtendedRights: 'All extended rights', ForceChangePassword: 'Reset password', AddMember: 'Add members', AddSelf: 'Add itself', AddKeyCredentialLink: 'Add key credential', WriteSPN: 'Write service principal name', ReadLAPSPassword: 'Read LAPS password', ReadGMSAPassword: 'Read managed password', AddAllowedToAct: 'Configure delegation to it', WriteAccountRestrictions: 'Configure delegation to it', WritePKINameFlag: 'Change subject setting', WritePKIEnrollmentFlag: 'Change enrolment setting' };
+  var acl = [], gpo = [], seenAcl = {};
+  G.aces.forEach(function (a) {
+    var kinds = _BH_CTRL[a.r], t = G.n[a.t];
+    if (!kinds || !t || a.p === a.t || T0[a.p] || _bhSystem(a.p)) return;
+    if (kinds !== '*' && (' ' + kinds + ' ').indexOf(' ' + t.kind + ' ') < 0) return;
+    var k = a.p + '|' + a.r + '|' + a.t;
+    if (seenAcl[k]) return;
+    seenAcl[k] = 1;
+    if (t.kind === 'GPO') { gpo.push(a); return; }
+    if (t.kind === 'CertTemplate') return;
+    if (T0[a.t] || (_bhBroad(a.p) && (t.kind === 'User' || t.kind === 'Group' || t.kind === 'Computer'))) acl.push(a);
+  });
+  acl.sort(function (x, y) { return (_bhBroad(y.p) - _bhBroad(x.p)) || (T0[y.t] ? 1 : 0) - (T0[x.t] ? 1 : 0) || (nm(x.p) < nm(y.p) ? -1 : 1); });
+  perDomain('acls', acl, function (a) { return N(a.t).dsid || N(a.p).dsid; }, function (n) { return _bhPlural(n, 'permission gives', 'permissions give') + ' control of a privileged object, or give a broad group control of an object.'; },
+    ['Principal', 'Right', 'Object', 'Object type', 'Tier Zero object', 'Inherited'], function (a) { return [nm(a.p), CTRL_SHOW[a.r] || a.r, nm(a.t), kd(a.t), _bhYes(T0[a.t]), _bhYes(a.inh)]; });
+  perDomain('gpowrite', gpo, function (a) { return N(a.t).dsid; }, function (n) { return _bhPlural(n, 'permission lets', 'permissions let') + ' a principal outside Tier Zero change a Group Policy object.'; },
+    ['Policy', 'Principal', 'Right', 'Applies to', 'Applies to Tier Zero'], function (a) {
+      var to = A.gpoTo[a.t] || [], c = 0, u = 0, t0 = false;
+      to.forEach(function (x) { if (N(x.id).kind === 'Computer') c++; else u++; if (T0[x.id]) t0 = true; });
+      return [nm(a.t), nm(a.p), CTRL_SHOW[a.r] || a.r, _bhPlural(c, 'computer', 'computers') + ', ' + _bhPlural(u, 'user', 'users'), _bhYes(t0)];
+    });
+
+  var bad = [];
+  A.computers.forEach(function (c) {
+    (G.inn[c] || []).forEach(function (e) {
+      if (e.kind !== 'AdminTo' || !_bhBroad(e.from)) return;
+      var via = G.gpoLA.filter(function (x) { return x.p === e.from && x.c === c; })[0];
+      bad.push({ c: c, g: e.from, via: via ? 'Group Policy on ' + nm(via.via) : 'Local Administrators group' });
+    });
+  });
+  perComputer('broadadmin', bad, function (x) { return x.c; }, function (n) { return _bhPlural(n, 'grant of local administrator rights to a broad group.', 'grants of local administrator rights to broad groups.'); },
+    ['Computer', 'Group', 'Granted through'], function (x) { return [nm(x.c), nm(x.g), x.via]; }, 'high');
+  var sess = [];
+  A.computers.forEach(function (c) {
+    if (T0[c]) return;
+    (G.out[c] || []).forEach(function (e) {
+      if (e.kind === 'HasSession' && T0[e.to] && N(e.to).kind === 'User' && en(e.to)) sess.push({ c: c, u: e.to, how: { Sessions: 'Session', PrivilegedSessions: 'Signed-in user', RegistrySessions: 'User registry hive' }[e.note] || 'Session' });
+    });
+  });
+  perComputer('t0sessions', sess, function (x) { return x.c; }, function (n) { return _bhPlural(n, 'Tier Zero sign-in was', 'Tier Zero sign-ins were') + ' found on computers outside Tier Zero.'; },
+    ['Computer', 'Privileged account', 'Found as'], function (x) { return [nm(x.c), nm(x.u), x.how]; }, 'high');
+
+  var laps = computers.filter(function (id) { var p = N(id).p; return p.haslaps === false && /windows/i.test(String(p.operatingsystem || '')) && !A.isDC(id); });
+  perComputer('laps', laps, function (id) { return id; }, function (n) { return _bhPlural(n, 'enabled Windows computer has', 'enabled Windows computers have') + ' no LAPS password.'; },
+    ['Computer', 'Operating system', 'Last signed in'], function (id) { return [nm(id), N(id).p.operatingsystem || '', _bhDate(_bhLastOn(N(id).p))]; }, 'medium');
+  var eol = computers.map(function (id) { return { id: id, end: _bhEol(N(id).p.operatingsystem, asof) }; }).filter(function (x) { return x.end; });
+  perComputer('eol', eol, function (x) { return x.id; }, function (n) { return _bhPlural(n, 'enabled computer runs', 'enabled computers run') + ' a Windows release past the end of support.'; },
+    ['Computer', 'Operating system', 'Support ended', 'Last signed in'], function (x) { return [nm(x.id), N(x.id).p.operatingsystem || '', _bhIsoDate(x.end), _bhDate(_bhLastOn(N(x.id).p))]; }, 'critical');
+
+  var never = users.filter(function (id) { return N(id).p.pwdneverexpires === true && !isGmsa(id); });
+  never.sort(function (a, b) { return (T0[b] ? 1 : 0) - (T0[a] ? 1 : 0) || _bhTs(N(a).p.pwdlastset) - _bhTs(N(b).p.pwdlastset); });
+  perDomain('pwdnever', never, domOfId, function (n) { return _bhPlural(n, 'enabled account has', 'enabled accounts have') + ' a password that never expires.'; },
+    ['Account', 'Password last set', 'Tier Zero', 'Service account'], function (id) { return [nm(id), _bhDate(_bhTs(N(id).p.pwdlastset)), _bhYes(T0[id]), _bhYes(N(id).p.hasspn === true)]; });
+  var nreq = users.filter(function (id) { return N(id).p.passwordnotreqd === true; });
+  perDomain('notreqd', nreq, domOfId, function (n) { return _bhPlural(n, 'enabled account is', 'enabled accounts are') + ' not required to have a password.'; },
+    ['Account', 'Password last set', 'Last signed in', 'Tier Zero'], function (id) { return [nm(id), _bhDate(_bhTs(N(id).p.pwdlastset)), _bhDate(_bhLastOn(N(id).p)), _bhYes(T0[id])]; });
+  var prot = users.filter(function (id) { return T0[id] && _bhRid(id) !== 502 && !isGmsa(id) && !_bhGroups(G, id).some(function (g) { return _bhRid(g) === 525; }); });
+  perDomain('protected', prot, domOfId, function (n) { return _bhPlural(n, 'enabled Tier Zero account is', 'enabled Tier Zero accounts are') + ' not in Protected Users.'; },
+    ['Account', 'Sensitive and cannot be delegated', 'Last signed in'], function (id) { return [nm(id), _bhYes(N(id).p.sensitive === true), _bhDate(_bhLastOn(N(id).p))]; });
+  var kt = A.users.filter(function (id) { return _bhRid(id) === 502 && _bhTs(N(id).p.pwdlastset) > 0 && _bhTs(N(id).p.pwdlastset) < asof - 180 * DAY; });
+  perDomain('krbtgt', kt, domOfId, function () { return 'the krbtgt password was last changed more than 180 days before ' + _bhDate(asof) + ', the latest date in the data.'; },
+    ['Account', 'Password last set', 'Days before the latest date in the data'], function (id) { return [nm(id), _bhDate(_bhTs(N(id).p.pwdlastset)), String(Math.floor((asof - _bhTs(N(id).p.pwdlastset)) / DAY))]; });
+  var guest = A.users.filter(function (id) { return _bhRid(id) === 501 && N(id).en === true; });
+  perDomain('guest', guest, domOfId, function () { return 'the built-in Guest account is enabled.'; },
+    ['Account', 'Enabled', 'Last signed in'], function (id) { return [nm(id), 'Yes', _bhDate(_bhLastOn(N(id).p))]; });
+  var pw = [];
+  A.users.concat(A.computers).forEach(function (id) {
+    var p = N(id).p, said = _bhPwIn(p.description);
+    if (said) pw.push({ id: id, where: 'Description', what: said });
+    [['userpassword', 'userPassword'], ['unixpassword', 'unixUserPassword'], ['unicodepassword', 'unicodePwd'], ['sfupassword', 'msSFU30Password']].forEach(function (k) {
+      var v = p[k[0]];
+      if (v != null && String(v).trim() && String(v) !== '[]') pw.push({ id: id, where: k[1], what: 'The attribute holds a value (not shown)' });
+    });
+  });
+  perDomain('attrpw', pw, function (x) { return N(x.id).dsid; }, function (n) { return _bhPlural(n, 'attribute appears', 'attributes appear') + ' to hold a password.'; },
+    ['Account', 'Enabled', 'Attribute', 'What was found'], function (x) { return [nm(x.id), _bhYes(en(x.id)), x.where, x.what]; });
+  var stale = users.concat(computers).filter(function (id) {
+    var p = N(id).p, last = _bhLastOn(p), made = _bhTs(p.whencreated);
+    if (A.isDC(id) || _bhRid(id) === 502 || _bhRid(id) === 501) return false;
+    return last ? last < asof - 180 * DAY : made > 0 && made < asof - 180 * DAY;
+  });
+  stale.sort(function (a, b) { return (N(a).kind < N(b).kind ? -1 : N(a).kind > N(b).kind ? 1 : 0) || _bhLastOn(N(a).p) - _bhLastOn(N(b).p); });
+  perDomain('stale', stale, domOfId, function (n) { return _bhPlural(n, 'enabled account had', 'enabled accounts had') + ' not signed in for 180 days or more before ' + _bhDate(asof) + ', the latest date in the data.'; },
+    ['Account', 'Type', 'Last signed in', 'Created'], function (id) { return [nm(id), kd(id), _bhDate(_bhLastOn(N(id).p)), _bhDate(_bhTs(N(id).p.whencreated))]; });
+  var sh = [];
+  A.users.concat(A.computers).concat(A.groups).forEach(function (id) {
+    var to = (G.out[id] || []).filter(function (e) { return e.kind === 'HasSIDHistory'; }).map(function (e) { return e.to; });
+    var raw = (N(id).p.sidhistory || []).map(_bhU).filter(function (s) { return to.indexOf(s) < 0; });
+    to = to.concat(raw);
+    if (!to.length) return;
+    sh.push({ id: id, to: to, same: to.some(function (s) { return _bhDomSid(s) && _bhDomSid(s) === N(id).dsid; }), t0: to.some(function (s) { return T0[s]; }) });
+  });
+  perDomain('sidhistory', sh, function (x) { return N(x.id).dsid; }, function (n) { return _bhPlural(n, 'account carries', 'accounts carry') + ' SID history.'; },
+    ['Account', 'SID history', 'Same domain', 'Privileged entry'], function (x) { return [nm(x.id), x.to.map(nm).join(', '), _bhYes(x.same), _bhYes(x.t0)]; },
+    function (l) { return l.some(function (x) { return x.same || x.t0; }) ? 'high' : 'medium'; });
+
+  var trusts = [], levels = [], maq = [], pre = [];
+  A.domains.forEach(function (d) {
+    var n = N(d), o = n.o || {};
+    (o.Trusts || []).forEach(function (t) {
+      var type = String(t.TrustType || ''), dir = String(t.TrustDirection || '');
+      if (/^(External|Forest)$/i.test(type) && /^(Outbound|Bidirectional)$/i.test(dir) && t.SidFilteringEnabled === false) trusts.push({ d: d, t: t });
+    });
+    var fl = String(n.p.functionallevel || '');
+    if (/^(2000|2003|2008|2012)\b/.test(fl)) levels.push({ d: d, fl: fl });
+    var q = n.p.machineaccountquota;
+    if (q != null && +q > 0) maq.push({ d: d, q: +q });
+  });
+  perDomain('trusts', trusts, function (x) { return x.d; }, function (n) { return _bhPlural(n, 'trust has', 'trusts have') + ' SID filtering off.'; },
+    ['Trusted domain', 'Trust type', 'Direction', 'Transitive', 'SID filtering'], function (x) { return [x.t.TargetDomainName || x.t.TargetDomainSid || '', x.t.TrustType, x.t.TrustDirection, _bhYes(x.t.IsTransitive === true), 'Off']; });
+  perDomain('funclevel', levels, function (x) { return x.d; }, function () { return 'the domain functional level is below Windows Server 2016.'; },
+    ['Domain', 'Functional level'], function (x) { return [dn(x.d), x.fl]; });
+  perDomain('maq', maq, function (x) { return x.d; }, function () { return 'every authenticated user can add computers to the domain.'; },
+    ['Domain', 'ms-DS-MachineAccountQuota'], function (x) { return [dn(x.d), String(x.q)]; });
+  A.groups.forEach(function (gid) {
+    if (_bhWk(gid) !== 'S-1-5-32-554') return;
+    (G.mem[gid] || []).forEach(function (m) { var w = _bhWk(m); if (w === 'S-1-1-0' || w === 'S-1-5-7') pre.push({ g: gid, m: m }); });
+  });
+  perDomain('pre2000', pre, function (x) { return N(x.g).dsid; },
+    function () { return 'the Pre-Windows 2000 Compatible Access group includes Everyone or Anonymous Logon.'; },
+    ['Group', 'Member'], function (x) { return [nm(x.g), nm(x.m)]; });
+
+  var who = function (l) { return l.map(nm).join(', '); };
+  perDomain('esc1', A.esc.e1, function (x) { return N(x.ca).dsid; }, function (n) { return _bhPlural(n, 'published template lets', 'published templates let') + ' principals outside Tier Zero name any account in a certificate.'; },
+    ['Template', 'Certification authority', 'Trusted for domain authentication', 'Can enrol'], function (x) { return [nm(x.t), nm(x.ca), _bhYes(x.trusted), who(x.who)]; });
+  var e23 = A.esc.e2.map(function (x) { return { x: x, use: x.any ? 'Any Purpose' : 'No usage restriction' }; }).concat(A.esc.e3.map(function (x) { return { x: x, use: 'Certificate Request Agent' }; }));
+  perDomain('esc23', e23, function (y) { return N(y.x.ca).dsid; }, function (n) { return _bhPlural(n, 'published template gives', 'published templates give') + ' principals outside Tier Zero certificates for any purpose or for enrolling on behalf of others.'; },
+    ['Template', 'Certification authority', 'Usage', 'Can enrol'], function (y) { return [nm(y.x.t), nm(y.x.ca), y.use, who(y.x.who)]; });
+  perDomain('esc4', A.esc.e4, function (x) { return N(x.t).dsid; }, function (n) { return _bhPlural(n, 'permission lets', 'permissions let') + ' a principal outside Tier Zero change a certificate template.'; },
+    ['Template', 'Principal', 'Right', 'Published by'], function (x) { return [nm(x.t), nm(x.p), CTRL_SHOW[x.r] || x.r, (A.published[x.t] || []).map(nm).join(', ') || 'Not published']; });
+  perDomain('esc6', A.esc.e6, function (x) { return N(x.ca).dsid; }, function (n) { return _bhPlural(n, 'certification authority accepts', 'certification authorities accept') + ' a subject alternative name in any request.'; },
+    ['Certification authority', 'Host', 'Trusted for domain authentication'], function (x) { return [nm(x.ca), N(x.ca).p.dnshostname || '', _bhYes(x.trusted)]; });
+  perDomain('esc7', A.esc.e7, function (x) { return N(x.ca).dsid; }, function (n) { return _bhPlural(n, 'right on a certification authority is', 'rights on certification authorities are') + ' held outside Tier Zero.'; },
+    ['Certification authority', 'Principal', 'Right'], function (x) { return [nm(x.ca), nm(x.p), x.r === 'ManageCA' ? 'Manage CA' : 'Issue and Manage Certificates']; });
+
+  return out;
+}
+function _bhRead(list, opts) {
+  var files = [];
+  (list || []).forEach(function (x) { var f = _bhFile(x && x.data); if (f) files.push(f); });
+  if (!files.length) return { rows: [], format: 'BloodHound', warnings: ['No BloodHound collection files were found.'] };
+  var A = _bhAnalyse(files);
+  var rows = _bhRows(A, 'BloodHound');
+  if (!(opts && opts.figures)) rows.forEach(function (r) { delete r._figs; });
+  var has = function (t) { return !!A.G.types[t]; };
+  var warnings = [];
+  if (!has('users')) warnings.push('The collection has no users file, so the account checks were not made.');
+  if (!has('groups')) warnings.push('The collection has no groups file, so group memberships, Tier Zero and the attack paths are incomplete.');
+  if (!has('computers')) warnings.push('The collection has no computers file, so local administrator rights, sessions, LAPS and operating systems were not checked.');
+  if (!has('domains')) warnings.push('The collection has no domains file, so DCSync rights, trusts and the functional level were not checked.');
+  if (has('computers') && !A.G.ids.some(function (id) { return (A.G.out[id] || []).some(function (e) { return e.kind === 'HasSession'; }); })) warnings.push('No sessions were collected, so paths through signed-in accounts are not shown.');
+  var c = function (t) { return A.G.types[t] || 0; };
+  var summary = 'Read ' + [[c('domains'), 'domain', 'domains'], [c('users'), 'user', 'users'], [c('computers'), 'computer', 'computers'], [c('groups'), 'group', 'groups'], [c('gpos'), 'Group Policy object', 'Group Policy objects'], [c('certtemplates'), 'certificate template', 'certificate templates']]
+    .filter(function (x) { return x[0]; }).map(function (x) { return _bhPlural(x[0], x[1], x[2]); }).join(', ') + ' from the BloodHound collection'
+    + (A.origins.length ? '; ' + _bhPlural(A.origins.length, 'starting point has', 'starting points have') + ' a path to Tier Zero' : '; no path to Tier Zero was found') + '.';
+  return { rows: rows, format: 'BloodHound', warnings: warnings, summary: summary };
+}
+var _BH_FONT = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
+function _bhFigSvg(fig, measure) {
+  var PAD = 16, BOXH = 50, GAP = 50, MINW = 280, MAXW = 560;
+  var clip = function (s, font, max) {
+    s = String(s || '');
+    if (measure(s, font) <= max) return s;
+    while (s.length > 4 && measure(s + '...', font) > max) s = s.slice(0, -1);
+    return s + '...';
+  };
+  var nameFont = '600 14px ' + _BH_FONT, kindFont = '11px ' + _BH_FONT, edgeFont = '600 12px ' + _BH_FONT, noteFont = '11px ' + _BH_FONT;
+  var w = MINW;
+  fig.nodes.forEach(function (n) { w = Math.max(w, Math.min(MAXW, measure(n.name, nameFont) + 40)); });
+  var labels = fig.edges.map(function (e) { return { k: e.kind, n: e.note ? clip('via ' + e.note, noteFont, 300) : '' }; });
+  var lw = 0;
+  labels.forEach(function (l) { lw = Math.max(lw, measure(l.k, edgeFont), l.n ? measure(l.n, noteFont) : 0); });
+  var cx = PAD + w / 2;
+  var width = Math.ceil(Math.max(PAD * 2 + w, cx + 14 + lw + PAD));
+  var height = PAD * 2 + fig.nodes.length * BOXH + (fig.nodes.length - 1) * GAP;
+  var e = _bhE;
+  var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '">'
+    + '<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3f3f46"/></marker></defs>'
+    + '<rect width="100%" height="100%" fill="#ffffff"/>';
+  fig.nodes.forEach(function (n, i) {
+    var y = PAD + i * (BOXH + GAP);
+    var start = i === 0, end = n.t0;
+    var fill = end ? '#fdf0f0' : start ? '#f4f4f5' : '#ffffff', stroke = end ? '#b71c1c' : start ? '#3f3f46' : '#a1a1aa';
+    svg += '<rect x="' + PAD + '" y="' + y + '" width="' + w + '" height="' + BOXH + '" rx="8" ry="8" fill="' + fill + '" stroke="' + stroke + '" stroke-width="' + (start || end ? 2 : 1.5) + '"/>'
+      + '<text x="' + cx + '" y="' + (y + 22) + '" text-anchor="middle" font-family=\'' + _BH_FONT + '\' font-size="14" font-weight="600" fill="#18181b">' + e(clip(n.name, nameFont, w - 24)) + '</text>'
+      + '<text x="' + cx + '" y="' + (y + 39) + '" text-anchor="middle" font-family=\'' + _BH_FONT + '\' font-size="11" fill="' + (end ? '#b71c1c' : '#52525b') + '">' + e(n.kind + (end ? ', Tier Zero' : start ? ', starting point' : '')) + '</text>';
+    if (i < fig.nodes.length - 1) {
+      var y1 = y + BOXH + 4, y2 = y + BOXH + GAP - 4, l = labels[i];
+      svg += '<line x1="' + cx + '" y1="' + y1 + '" x2="' + cx + '" y2="' + y2 + '" stroke="#3f3f46" stroke-width="1.6" marker-end="url(#a)"/>'
+        + '<text x="' + (cx + 12) + '" y="' + (y1 + (l.n ? GAP / 2 - 5 : GAP / 2 + 1)) + '" font-family=\'' + _BH_FONT + '\' font-size="12" font-weight="600" fill="#18181b">' + e(l.k) + '</text>'
+        + (l.n ? '<text x="' + (cx + 12) + '" y="' + (y1 + GAP / 2 + 9) + '" font-family=\'' + _BH_FONT + '\' font-size="11" fill="#52525b">' + e(l.n) + '</text>' : '');
+    }
+  });
+  return { svg: svg + '</svg>', width: width, height: height };
+}
+async function _bhFigsHtml(figs) {
+  if (!figs || !figs.length || typeof document === 'undefined') return '';
+  var ctx = null;
+  try { ctx = document.createElement('canvas').getContext('2d'); } catch (e) { ctx = null; }
+  if (!ctx) return '';
+  var measure = function (s, font) { ctx.font = font; return ctx.measureText(String(s)).width; };
+  var html = '';
+  for (var i = 0; i < figs.length; i++) {
+    var d = _bhFigSvg(figs[i], measure);
+    var png = await _bhSvgPng(d.svg, d.width, d.height);
+
+    if (png) html += '<div style="text-align:center;margin:1rem 0"><img src="' + png + '" width="' + d.width + '" alt="' + _bhE(figs[i].caption) + '"><div class="img-caption">{{fig}} - ' + _bhE(figs[i].caption) + '</div></div>';
+  }
+  return html;
+}
+function _bhSvgPng(svg, w, h) {
+  return new Promise(function (resolve) {
+    try {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var k = 2, c = document.createElement('canvas');
+          c.width = Math.ceil(w * k); c.height = Math.ceil(h * k);
+          var x = c.getContext('2d');
+          x.scale(k, k);
+          x.fillStyle = '#ffffff'; x.fillRect(0, 0, w, h);
+          x.drawImage(img, 0, 0, w, h);
+          resolve(c.toDataURL('image/png'));
+        } catch (e) { resolve(''); }
+      };
+      img.onerror = function () { resolve(''); };
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    } catch (e) { resolve(''); }
+  });
 }
 function _sfCfg() {
   var raw = (S.data.settings || {}).scan_fields;

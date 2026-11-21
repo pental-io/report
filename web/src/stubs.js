@@ -13,6 +13,10 @@ var _SCAN_NOT_UPDATED = '';
 var _SCAN_PROVIDER_COLS = null;
 var _SCAN_SEV_ORDER = {};
 var _TRACKER_COLS = '';
+function _aBillingHtml() { return ''; }
+function _aBillingRead() { return; }
+function _aBillingSaid() { return; }
+async function _aBillingSave() { return Promise.resolve(null); }
 function _assInvoiceOf() { return; }
 function _assProposalOf() { return; }
 function _astFindingOwnersHtml() { return ''; }
@@ -42,12 +46,19 @@ function _dsPaintLive() { return; }
 function _dsTabHtml() { return ''; }
 async function _e2eTicketsDue() { return Promise.resolve(null); }
 function _emailSignatureHtml() { return ''; }
+function _engBilling() { return; }
+function _engInvoiced() { return; }
+function _engInvoices() { return []; }
 function _findingTicketsHtml() { return ''; }
 async function _finishDocsConnect() { return; }
 async function _finishXeroConnect() { return Promise.resolve(null); }
 function _invAmountText() { return; }
 function _invGross() { return; }
 function _invMoney() { return; }
+function _invPdfBtn() { return; }
+function _invStripeChip() { return ''; }
+function _invStripeHeld() { return; }
+function _invStripeSends() { return false; }
 function _invTeamShown() { return; }
 function _invTotalText() { return; }
 function _isScanFinding() { return false; }
@@ -110,9 +121,11 @@ function _scanApplyFieldMap() { return; }
 async function _scanCap() { return Promise.resolve(null); }
 function _scanCapNow() { return; }
 function _scanFindingContext() { return {}; }
+function _scanFinish() { return; }
 function _scanImportParse() { return {}; }
 function _scanMapTargets() { return; }
 function _scanProvidersHtml() { return; }
+function _scanRow() { return; }
 function _scanRunAsAssessment() { return null; }
 function _scanRunsForClient() { return []; }
 function _scanRunsWaiting() { return; }
@@ -146,6 +159,7 @@ async function _ssSaveTarget() { return Promise.resolve(null); }
 function _ssTargetWords() { return {}; }
 function _ssTargets() { return; }
 function _ssTypesOffered() { return; }
+async function _ssVulnReportForPdf() { return Promise.resolve(null); }
 function _stripeStateHtml() { return ''; }
 async function _syncPendingPictures() { return; }
 async function _syncRecordChanges() { return 0; }

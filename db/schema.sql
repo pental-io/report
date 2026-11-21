@@ -1126,6 +1126,62 @@ CREATE INDEX IF NOT EXISTS assessments_contractor_team_idx ON public.assessments
 -- unless the firm turns it off in Settings, Contractors).
 ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS contractors_library boolean NOT NULL DEFAULT true;
 
+-- 2046: AN ENGAGEMENT'S OWN BILLING. Whether it is invoiced; and where no
+-- proposal prices it, its price and its deal (one engagement, several years,
+-- or a retainer). One row per engagement, or none (none: invoiced, priced by
+-- its proposal or its days, as before). Whether the firm's invoices go out
+-- as Pental's own or as ones Stripe sends is the firm's, in its settings
+-- (settings.invoice_send_via): [stated] Arian, "send its invoice as should
+-- be an option in settings not in the creation". Its own table, not
+-- columns on the engagement: an engagement's record is read by everyone who
+-- works on it, and its money is not theirs (the rules are with the functions,
+-- AN ENGAGEMENT'S OWN BILLING, AND THE INVOICES STRIPE SENDS). A deal made on
+-- an engagement makes its later engagements, each naming the first
+-- (deal_of). An invoice Stripe sends is kept with Stripe's own invoice beside
+-- it (stripe_invoice_id, stripe_invoice_url), how far sending it has got
+-- (stripe_send_state, stripe_send_step, stripe_send_error, stripe_send_at),
+-- and how it last went (sent_via); the client, as a Stripe customer, once
+-- (clients.stripe_customer_id).
+ALTER TABLE public.assessments ADD COLUMN IF NOT EXISTS deal_of uuid REFERENCES public.assessments(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS assessments_deal_of_idx ON public.assessments (deal_of) WHERE deal_of IS NOT NULL;
+CREATE TABLE IF NOT EXISTS public.assessment_billing (
+  assessment_id uuid PRIMARY KEY REFERENCES public.assessments(id) ON DELETE CASCADE,
+  invoiced boolean NOT NULL DEFAULT true,
+  cost numeric(14,2),
+  deal_structure jsonb,
+  deal_made_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+  CONSTRAINT assessment_billing_cost_check CHECK (cost IS NULL OR cost >= 0),
+  CONSTRAINT assessment_billing_deal_check CHECK (deal_structure IS NULL OR (jsonb_typeof(deal_structure) = 'object'
+    AND COALESCE(deal_structure ->> 'type', 'standard') IN ('standard', 'multi_year', 'subscription')))
+);
+ALTER TABLE public.assessment_billing ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS invoice_send_via text NOT NULL DEFAULT 'pental';
+DO $set_send_via$ BEGIN
+  ALTER TABLE public.settings DROP CONSTRAINT IF EXISTS settings_invoice_send_via_check;
+  ALTER TABLE public.settings ADD CONSTRAINT settings_invoice_send_via_check CHECK (invoice_send_via IN ('pental', 'stripe'));
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'Pental setup: updating the rule % failed, so the earlier one stays (%)', 'settings_invoice_send_via_check', SQLERRM;
+END $set_send_via$;
+ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS stripe_customer_id text;
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS sent_via text;
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS stripe_invoice_id text;
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS stripe_invoice_url text;
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS stripe_send_state text;
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS stripe_send_step text;
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS stripe_send_error text;
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS stripe_send_at timestamptz;
+DO $inv_stripe_send$ BEGIN
+  ALTER TABLE public.invoices DROP CONSTRAINT IF EXISTS invoices_sent_via_check;
+  ALTER TABLE public.invoices ADD CONSTRAINT invoices_sent_via_check CHECK (sent_via IS NULL OR sent_via IN ('pental', 'stripe'));
+  ALTER TABLE public.invoices DROP CONSTRAINT IF EXISTS invoices_stripe_send_state_check;
+  ALTER TABLE public.invoices ADD CONSTRAINT invoices_stripe_send_state_check CHECK (stripe_send_state IS NULL OR stripe_send_state IN ('sending', 'sent', 'failed', 'void'));
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'Pental setup: updating the rule % failed, so the earlier one stays (%)', 'invoices_stripe_send_state_check', SQLERRM;
+END $inv_stripe_send$;
+CREATE INDEX IF NOT EXISTS invoices_stripe_held_idx ON public.invoices (sent_at) WHERE stripe_send_state = 'sent' AND stripe_invoice_id IS NOT NULL;
+
 -- Relax feedback.rating check (master allows >= 0; older BYO had >= 1)
 DO $fb$ BEGIN
   IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'feedback_rating_check') THEN
@@ -4999,6 +5055,9 @@ DECLARE
   v_client_name text;
   -- 1800
   v_overdue uuid[] := ARRAY[]::uuid[];
+  -- 2046
+  v_sres jsonb;
+  v_st record;
 BEGIN
   -- 1800: 'now' is the whole due pass, asked for by the firm's own team (a
   -- change that can make something due at once, or "Run now") rather than by
@@ -5168,10 +5227,33 @@ BEGIN
          WHERE i.status = 'draft' AND i.archived_at IS NULL
            AND a.status = 'delivered' AND a.delivered_at IS NOT NULL
            AND a.delivered_at + make_interval(days => v_inv_days) <= now()
+           -- 2046: not one the firm said it does not invoice.
+           AND public._engagement_invoiced(a.id)
          ORDER BY a.delivered_at, i.id
          LIMIT 100
          FOR UPDATE OF i SKIP LOCKED
       LOOP
+        -- 2046: one sent as Stripe's goes through Stripe, which emails it
+        -- (not in the rows the cron emails). One being sent is left to it;
+        -- one Stripe would not take is tried again a day later, and its
+        -- engagement told once for each reason.
+        IF public._invoice_stripe_sends(v_r.id) THEN
+          SELECT stripe_send_state, stripe_send_error, stripe_send_at INTO v_st FROM public.invoices WHERE id = v_r.id;
+          CONTINUE WHEN v_st.stripe_send_state = 'sending' AND EXISTS (SELECT 1 FROM public._net_jobs nj WHERE nj.kind = 'stripe_invoice'
+                          AND nj.subject ->> 'invoice' = v_r.id::text AND nj.state IN ('planned', 'queued', 'sending'));
+          CONTINUE WHEN v_st.stripe_send_state = 'failed' AND v_st.stripe_send_at > now() - interval '1 day';
+          v_sres := public._stripe_send_start(v_r.id, 'system');
+          IF NOT COALESCE((v_sres ->> 'ok')::boolean, false) THEN
+            IF v_st.stripe_send_error IS DISTINCT FROM left(v_sres ->> 'error', 300) THEN
+              PERFORM public._invoice_timeline(v_r.id, 'Not sent through Stripe after the ' || v_inv_days || ' day delay: ' || COALESCE(v_sres ->> 'error', 'Stripe could not be asked.'),
+                'Stripe invoice not sent');
+            END IF;
+            UPDATE public.invoices SET stripe_send_state = 'failed', stripe_send_error = left(COALESCE(v_sres ->> 'error', 'Stripe could not be asked.'), 300),
+                   stripe_send_at = now()
+             WHERE id = v_r.id;
+          END IF;
+          CONTINUE;
+        END IF;
         UPDATE public.invoices SET status = 'sent', sent_at = now(), updated_at = now()
          WHERE id = v_r.id AND status = 'draft';
         IF FOUND THEN
@@ -17533,6 +17615,17 @@ BEGIN
         -- Setting a new password clears any throttle: the legitimate owner
         -- has just proven control of the mailbox.
         failed_attempts = 0, last_failed_at = NULL, locked_until = NULL;
+  -- 2057: AND THE ONE SIGN-IN READS. [stated] Arian, 20 November 2026: "also
+  -- when password timed out, does the reset password thing not work ?". The
+  -- wait after too many wrong passwords is kept by the address
+  -- (password_login_throttle, below), and rpc_password_login reads it before
+  -- anything else, so the password just set was refused with "Too many
+  -- attempts" until the wait ran out (up to 15 minutes), whatever the sign-in
+  -- page told them to do. The columns above are the account's own, which
+  -- nothing reads now. The address's wait is lifted here, keyed as sign-in
+  -- keys it (whatever capitals the address is typed in).
+  DELETE FROM public.password_login_throttle
+   WHERE email_key = encode(extensions.digest(convert_to(lower(btrim(COALESCE(v_profile.email, ''))), 'UTF8'), 'sha256'), 'hex');
 
   UPDATE public.password_setup_tokens SET used_at = now() WHERE id = v_tok.id;
   -- 1839: a link this database sent, used: its own side is proven.
@@ -34413,7 +34506,10 @@ DECLARE v_sub text := COALESCE(NULLIF(o ->> 'subscription', ''), NULLIF(o #>> '{
   v_sin text := NULLIF(o ->> 'id', ''); v_reason text := COALESCE(o ->> 'billing_reason', ''); v_cur text := lower(COALESCE(o ->> 'currency', ''));
   v_amount bigint; v_first public.invoices; v_next public.invoices; m jsonb; v_year integer; v_new uuid; v_pi text;
 BEGIN
-  IF v_sub IS NULL THEN RETURN jsonb_build_object('ignored', 'not a subscription'); END IF;
+  -- 2046: one with no subscription may be an invoice Stripe sent for one of
+  -- this portal's (_stripe_sent_invoice_paid, which answers as this did for
+  -- any other).
+  IF v_sub IS NULL THEN RETURN public._stripe_sent_invoice_paid(o, p_event); END IF;
   IF public._stripe_other_portal(v_meta) THEN RETURN jsonb_build_object('ignored', 'another portal''s subscription'); END IF;
   IF jsonb_typeof(o -> 'amount_paid') <> 'number' THEN RETURN jsonb_build_object('ignored', 'no amount'); END IF;
   v_amount := (o ->> 'amount_paid')::numeric::bigint;
@@ -34445,11 +34541,22 @@ BEGIN
       SELECT * INTO v_next FROM public.invoices
        WHERE proposal_id = v_first.proposal_id AND id <> v_first.id AND status NOT IN ('paid', 'cancelled')
        ORDER BY due_date ASC NULLS LAST, created_at ASC, id LIMIT 1 FOR UPDATE;
+    -- 2046: a retainer made on an engagement (rpc_engagement_deal_items):
+    -- its years are the first engagement's invoices the deal numbered -Y1,
+    -- -Y2 and on.
+    ELSIF v_first.assessment_id IS NOT NULL AND v_first.invoice_number ~ '-Y[0-9]+$' THEN
+      SELECT * INTO v_next FROM public.invoices
+       WHERE assessment_id = v_first.assessment_id AND proposal_id IS NULL AND id <> v_first.id AND status NOT IN ('paid', 'cancelled')
+         AND invoice_number ~ '-Y[0-9]+$' AND regexp_replace(invoice_number, '-Y[0-9]+$', '') = regexp_replace(v_first.invoice_number, '-Y[0-9]+$', '')
+       ORDER BY due_date ASC NULLS LAST, created_at ASC, id LIMIT 1 FOR UPDATE;
     END IF;
     IF v_next.id IS NULL THEN
       -- None waiting: the year is raised for it, as the last one was.
       SELECT count(*) + 1 INTO v_year FROM public.invoices
-       WHERE (v_first.proposal_id IS NOT NULL AND proposal_id = v_first.proposal_id) OR id = v_first.id;
+       WHERE (v_first.proposal_id IS NOT NULL AND proposal_id = v_first.proposal_id) OR id = v_first.id
+          OR (v_first.proposal_id IS NULL AND v_first.assessment_id IS NOT NULL AND v_first.invoice_number ~ '-Y[0-9]+$'
+              AND assessment_id = v_first.assessment_id AND proposal_id IS NULL AND invoice_number ~ '-Y[0-9]+$'
+              AND regexp_replace(invoice_number, '-Y[0-9]+$', '') = regexp_replace(v_first.invoice_number, '-Y[0-9]+$', ''));
       INSERT INTO public.invoices (invoice_number, client_id, assessment_id, proposal_id, title, amount, status, due_date, description, sent_at,
                                    currency_code, vat_rate)
       VALUES (regexp_replace(v_first.invoice_number, '-Y[0-9]+$', '') || '-Y' || v_year, v_first.client_id, v_first.assessment_id, v_first.proposal_id,
@@ -34672,6 +34779,7 @@ BEGIN
     WHEN v_type = 'checkout.session.async_payment_failed' THEN public._stripe_checkout_failed(o, v_id)
     WHEN v_type = 'invoice.paid' THEN public._stripe_invoice_paid(o, v_id)
     WHEN v_type = 'invoice.payment_failed' THEN public._stripe_invoice_failed(o, v_id)
+    WHEN v_type = 'invoice.voided' THEN public._stripe_sent_invoice_voided(o, v_id)   -- 2046
     WHEN v_type = 'charge.refunded' THEN public._stripe_refunded(o, v_id)
     WHEN v_type LIKE 'charge.dispute.%' THEN public._stripe_disputed(o, v_id, v_type)
     WHEN v_type LIKE 'customer.subscription.%' THEN public._stripe_subscription_changed(o, v_id, v_type)
@@ -34698,10 +34806,18 @@ BEGIN
   v_ids := (SELECT array_agg(DISTINCT x) FROM unnest(COALESCE(p_invoice_ids, ARRAY[]::uuid[])) AS u(x) WHERE x IS NOT NULL);
   IF COALESCE(cardinality(v_ids), 0) = 0 THEN RETURN jsonb_build_object('ok', false, 'error', 'Choose the invoices to pay.'); END IF;
   IF cardinality(v_ids) > 50 THEN RETURN jsonb_build_object('ok', false, 'error', 'Fifty invoices at a time at most.'); END IF;
-  FOR r IN SELECT i.*, COALESCE(p.signed_deal_structure, p.deal_structure) AS deal_structure FROM public.invoices i LEFT JOIN public.proposals p ON p.id = i.proposal_id
+  -- 2046: the deal as the invoice has it, its proposal's or its engagement's
+  -- own (_invoice_deal).
+  FOR r IN SELECT i.*, public._invoice_deal(i.id) AS deal_structure FROM public.invoices i
             WHERE i.id = ANY (v_ids) ORDER BY i.due_date NULLS LAST, i.created_at LOOP
     IF NOT (v_role IN ('admin', 'senior') OR (v_role = 'client' AND v_client IS NOT NULL AND r.client_id = v_client)) THEN
       RETURN jsonb_build_object('ok', false, 'error', 'Not your invoice.');
+    END IF;
+    -- 2046: one Stripe sent is paid on Stripe's own page, so it is never
+    -- paid twice.
+    IF r.stripe_send_state = 'sent' AND r.stripe_invoice_id IS NOT NULL AND r.status IN ('sent', 'overdue') THEN
+      RETURN jsonb_build_object('ok', false, 'code', 'stripe_invoice',
+        'error', 'Invoice ' || r.invoice_number || ' is paid on Stripe''s own page, from the email Stripe sent or its Pay button here.');
     END IF;
     IF r.status NOT IN ('sent', 'overdue') THEN
       RETURN jsonb_build_object('ok', false, 'error', 'Invoice ' || r.invoice_number || ' is not waiting to be paid'
@@ -34930,6 +35046,9 @@ BEGIN
   -- A Stripe invoice (a subscription's payment), asked with the API version
   -- from before 2025-03-31, whose answer still names its payment intent.
   ELSIF p_job.kind = 'stripe_invoice' THEN
+    -- 2046: or a step of an invoice sent as Stripe's (AN ENGAGEMENT'S OWN
+    -- BILLING, AND THE INVOICES STRIPE SENDS, below).
+    IF p_job.subject ? 'step' THEN RETURN public._stripe_send_build(p_job); END IF;
     IF COALESCE(p_job.subject ->> 'stripe_invoice', '') !~ '^in_[A-Za-z0-9_]{6,250}$' THEN
       RETURN jsonb_build_object('error', 'Not a Stripe invoice.', 'code', 'gone');
     END IF;
@@ -35299,6 +35418,8 @@ CREATE OR REPLACE FUNCTION public._stripe_invoice_answer(j public._net_jobs, p_s
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $stinvans$
 DECLARE o jsonb := public._tk_parse(p_content); v_sin text := j.subject ->> 'stripe_invoice'; v_pi text; v_n integer := 0;
 BEGIN
+  -- 2046: a step of an invoice sent as Stripe's.
+  IF j.subject ? 'step' THEN RETURN public._stripe_send_answer(j, p_status, p_content, p_error); END IF;
   IF p_status = 200 AND jsonb_typeof(o) = 'object' AND o ->> 'id' = v_sin THEN
     v_pi := CASE WHEN jsonb_typeof(o -> 'payment_intent') = 'string' THEN o ->> 'payment_intent'
                  WHEN jsonb_typeof(o -> 'payment_intent') = 'object' THEN o #>> '{payment_intent,id}' END;
@@ -35450,6 +35571,8 @@ BEGIN
     UPDATE public._stripe_session_checks SET done_at = now(), outcome = '{"lapsed": true}'::jsonb WHERE session_id = v.session_id;
   END LOOP;
   DELETE FROM public._stripe_session_checks WHERE first_at < now() - interval '4 days';
+  -- 2046: the invoices Stripe holds and has sent, asked after (_stripe_sent_look).
+  BEGIN PERFORM public._stripe_sent_look(); EXCEPTION WHEN undefined_function THEN NULL; END;
   PERFORM public._signin_sweep();
   -- 1977: and an API key's spent exchanges, ended sessions and old writes.
   BEGIN PERFORM public._api_sweep(); EXCEPTION WHEN undefined_function THEN NULL; END;
@@ -36009,6 +36132,795 @@ BEGIN
 END $ststate$;
 REVOKE ALL ON FUNCTION public.rpc_stripe_state() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.rpc_stripe_state() TO authenticated;
+
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- AN ENGAGEMENT'S OWN BILLING, AND THE INVOICES STRIPE SENDS (2046).
+--
+-- [stated] Arian, 19 November 2026, 11:05: "Currently invoices depend on
+-- proposals but if they have invoices on but proposals off it doesn't work
+-- as it can't be set make those features possible on assessment creation as
+-- well and also to enable/ disable the invoice on assessment and also if
+-- stripe is used the option to submit the stripe invoice instead as well.
+-- Idk do this the best way possible." Then, 11:20: "yes and make sure all of
+-- the features actually work properly as well".
+--
+-- A proposal carried all an invoice is made from: the price, the deal (one
+-- engagement, several years, or a retainer) and, once signed, the later
+-- years' engagements and the deal's invoices. With Proposals off there was
+-- nowhere to say any of it: an engagement's invoice was its days at the
+-- firm's day rate, a deal could not be had at all, and nothing said an
+-- engagement was not to be invoiced.
+--
+-- An engagement's own billing is assessment_billing (made with the tables):
+-- whether it is invoiced; where no proposal is behind it, its price and its
+-- deal; and whether its invoice goes as Pental's own or as Stripe's. No row
+-- is the rule as it was. A deal made on an engagement makes what a signed
+-- proposal makes (rpc_engagement_deal_items), its later engagements naming
+-- the first (deal_of), whose row bills them all. An invoice sent as Stripe's
+-- is made in the firm's own Stripe account by this database, step by step,
+-- and sent by Stripe (rpc_invoice_stripe_send); paid there, it is paid here
+-- (invoice.paid, or Stripe asked after it); voided there, it is said here
+-- (invoice.voided); paid or cancelled here, Stripe is told
+-- (_invoice_stripe_follow).
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Who reads an engagement's billing: the firm's administrators and seniors,
+-- and a client their own engagements' (the deal their invoices are paid by);
+-- who changes it: an administrator or a senior. Each with the second factor
+-- fresh. Testers and contractors work on the engagement and read none of it.
+DROP POLICY IF EXISTS assessment_billing_read ON public.assessment_billing;
+CREATE POLICY assessment_billing_read ON public.assessment_billing FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND (public.current_user_role() IN ('admin', 'senior')
+    OR (public.current_user_role() = 'client' AND EXISTS (SELECT 1 FROM public.assessments a
+          WHERE a.id = assessment_billing.assessment_id AND a.client_id = public.current_user_client_id()))));
+DROP POLICY IF EXISTS assessment_billing_write ON public.assessment_billing;
+CREATE POLICY assessment_billing_write ON public.assessment_billing FOR ALL TO authenticated
+  USING (public.mfa_is_fresh() AND public.can_manage())
+  WITH CHECK (public.mfa_is_fresh() AND public.can_manage());
+REVOKE ALL ON public.assessment_billing FROM anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.assessment_billing TO authenticated;
+GRANT ALL ON public.assessment_billing TO service_role;
+
+-- The engagement whose billing an engagement is under: itself, or for a
+-- later year or period of a deal made on an engagement, the first.
+CREATE OR REPLACE FUNCTION public._engagement_deal_home(p_assessment uuid) RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $engdh$
+  SELECT COALESCE(a.deal_of, a.id) FROM public.assessments a WHERE a.id = p_assessment;
+$engdh$;
+REVOKE ALL ON FUNCTION public._engagement_deal_home(uuid) FROM PUBLIC, anon, authenticated;
+
+-- Whether an engagement is invoiced (where nothing says, it is).
+CREATE OR REPLACE FUNCTION public._engagement_invoiced(p_assessment uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $enginv$
+  SELECT COALESCE((SELECT b.invoiced FROM public.assessment_billing b WHERE b.assessment_id = public._engagement_deal_home(p_assessment)), true);
+$enginv$;
+REVOKE ALL ON FUNCTION public._engagement_invoiced(uuid) FROM PUBLIC, anon, authenticated;
+
+-- The deal an invoice belongs to: its proposal's as signed, or with no
+-- proposal, its engagement's own.
+CREATE OR REPLACE FUNCTION public._invoice_deal(p_invoice uuid) RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $invdeal$
+  SELECT CASE WHEN i.proposal_id IS NOT NULL THEN COALESCE(p.signed_deal_structure, p.deal_structure)
+              ELSE (SELECT b.deal_structure FROM public.assessment_billing b WHERE b.assessment_id = public._engagement_deal_home(i.assessment_id)) END
+    FROM public.invoices i LEFT JOIN public.proposals p ON p.id = i.proposal_id WHERE i.id = p_invoice;
+$invdeal$;
+REVOKE ALL ON FUNCTION public._invoice_deal(uuid) FROM PUBLIC, anon, authenticated;
+
+-- Whether an invoice goes out as Stripe's: the firm sends its invoices as
+-- Stripe's (settings.invoice_send_via), Stripe is switched on, and it is not
+-- a retainer's year (a retainer is paid through Stripe's checkout, which then
+-- bills each year itself). With Stripe switched off, it goes out as Pental's,
+-- as the portal then offers only that.
+CREATE OR REPLACE FUNCTION public._invoice_stripe_sends(p_invoice uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $invstsends$
+  SELECT COALESCE((SELECT st.invoice_send_via = 'stripe' AND COALESCE(st.stripe_enabled, false)
+                     FROM public.settings st ORDER BY st.created_at ASC NULLS LAST, st.id LIMIT 1), false)
+     AND i.stripe_subscription_id IS NULL AND COALESCE(public._invoice_deal(i.id) ->> 'type', 'standard') <> 'subscription'
+    FROM public.invoices i WHERE i.id = p_invoice;
+$invstsends$;
+REVOKE ALL ON FUNCTION public._invoice_stripe_sends(uuid) FROM PUBLIC, anon, authenticated;
+
+-- ── The billing row, kept honest ───────────────────────────────────────────
+-- Who changed it and when. An engagement a proposal prices, or a later one
+-- of a deal, has no price or deal of its own. A deal once made (its later
+-- engagements and invoices exist) is not changed afterwards, nor the time it
+-- was made, except by rpc_engagement_deal_items itself.
+CREATE OR REPLACE FUNCTION public._assessment_billing_write() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $abw$
+DECLARE v_making boolean := COALESCE(current_setting('pental.deal_making', true), '') = '1'; v_prop uuid; v_of uuid; v_by uuid;
+BEGIN
+  SELECT a.proposal_id, a.deal_of INTO v_prop, v_of FROM public.assessments a WHERE a.id = NEW.assessment_id;
+  v_by := public.current_profile_id();
+  NEW.updated_at := now();
+  IF v_prop IS NOT NULL OR v_of IS NOT NULL THEN
+    NEW.cost := NULL;
+    NEW.deal_structure := NULL;
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    NEW.updated_by := v_by;
+    -- A deal is made with its later engagements: a restore, which brings
+    -- those back first, brings the time it was made with them.
+    IF NOT v_making AND NOT EXISTS (SELECT 1 FROM public.assessments x WHERE x.deal_of = NEW.assessment_id) THEN NEW.deal_made_at := NULL; END IF;
+    RETURN NEW;
+  END IF;
+  NEW.updated_by := COALESCE(v_by, OLD.updated_by);
+  IF NOT v_making THEN
+    NEW.deal_made_at := OLD.deal_made_at;
+    IF OLD.deal_made_at IS NOT NULL AND NEW.deal_structure IS DISTINCT FROM OLD.deal_structure THEN
+      RAISE EXCEPTION 'This engagement''s deal was made on %, with its later engagements and invoices, so it is not changed here.', to_char(OLD.deal_made_at, 'DD Mon YYYY')
+        USING ERRCODE = '23514';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $abw$;
+REVOKE ALL ON FUNCTION public._assessment_billing_write() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS tr_assessment_billing_write ON public.assessment_billing;
+CREATE TRIGGER tr_assessment_billing_write BEFORE INSERT OR UPDATE ON public.assessment_billing
+  FOR EACH ROW EXECUTE FUNCTION public._assessment_billing_write();
+
+-- ── The rest of a deal made on an engagement ───────────────────────────────
+-- As a signed proposal's is made (_proposal_deal_items, whose arithmetic
+-- this is, line for line): the later years' or periods' engagements, each
+-- naming the first (deal_of) and given the client's next job code, and the
+-- deal's invoices on the first (one for a multi-year deal's whole term; a
+-- retainer's first two years), as drafts for the firm to send. The first is
+-- named for its year or period, as a signed proposal's is. Once per
+-- engagement, and not over an invoice it has already; by those who write
+-- invoices. { ok, deal, assessments, invoices }, or why not.
+CREATE OR REPLACE FUNCTION public.rpc_engagement_deal_items(p_assessment uuid) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $engitems$
+DECLARE a public.assessments; b public.assessment_billing; ds jsonb; v_type text; v_rate numeric; v_days numeric; v_disc numeric; v_years integer; v_freq text;
+  v_months integer; v_future integer := 0; v_start date; v_end date; v_span integer; v_base_job text; v_next_num integer; v_fjob text;
+  v_label text; v_fi integer; v_aids integer := 0; v_invs integer := 0; v_sym text; v_ref text; v_annual numeric; v_per numeric; v_periods integer;
+  v_total numeric; v_desc text; v_freq_label text; v_si integer; v_due date; v_me uuid := public.current_profile_id(); v_first text; v_base_name text;
+  v_has text;
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
+  IF NOT public.can_manage() THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'Only an administrator or a senior makes an engagement''s deal.');
+  END IF;
+  SELECT * INTO a FROM public.assessments WHERE id = p_assessment FOR UPDATE;
+  IF a.id IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'Assessment not found.'); END IF;
+  IF a.proposal_id IS NOT NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'This engagement''s deal is its proposal''s.'); END IF;
+  IF a.deal_of IS NOT NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'This engagement is a later part of another engagement''s deal.'); END IF;
+  SELECT * INTO b FROM public.assessment_billing WHERE assessment_id = a.id FOR UPDATE;
+  ds := b.deal_structure;
+  v_type := COALESCE(ds ->> 'type', 'standard');
+  IF b.assessment_id IS NULL OR NOT b.invoiced OR jsonb_typeof(ds) IS DISTINCT FROM 'object' OR v_type NOT IN ('multi_year', 'subscription') THEN
+    RETURN jsonb_build_object('ok', true, 'deal', 'standard');
+  END IF;
+  IF b.deal_made_at IS NOT NULL OR EXISTS (SELECT 1 FROM public.assessments x WHERE x.deal_of = a.id) THEN
+    RETURN jsonb_build_object('ok', true, 'deal', v_type, 'already', true);
+  END IF;
+  SELECT string_agg(i.invoice_number, ', ' ORDER BY i.created_at) INTO v_has FROM public.invoices i WHERE i.assessment_id = a.id AND i.status <> 'cancelled';
+  IF v_has IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'invoiced',
+      'error', 'This engagement has an invoice already (' || left(v_has, 120) || '), so its deal''s invoices were not made. Cancel or delete it, then save the engagement again.');
+  END IF;
+  SELECT COALESCE(NULLIF(btrim(currency_symbol), ''), '£') INTO v_sym FROM public.settings ORDER BY created_at ASC NULLS LAST, id LIMIT 1;
+  v_rate := COALESCE(CASE WHEN COALESCE(ds ->> 'custom_day_rate', '') ~ '^[0-9]+(\.[0-9]+)?$' THEN (ds ->> 'custom_day_rate')::numeric END,
+                     (SELECT day_rate FROM public.settings ORDER BY created_at ASC NULLS LAST, id LIMIT 1), 1100);
+  v_days := COALESCE(a.test_days, 0);
+  v_disc := LEAST(GREATEST(COALESCE(CASE WHEN COALESCE(ds ->> 'discount_percent', '') ~ '^[0-9]+(\.[0-9]+)?$' THEN (ds ->> 'discount_percent')::numeric END, 0), 0), 100);
+  v_start := COALESCE(a.start_date, current_date);
+  v_end := GREATEST(COALESCE(a.end_date, v_start), v_start);
+  v_span := v_end - v_start;
+  IF v_type = 'multi_year' THEN
+    v_years := LEAST(GREATEST(COALESCE(CASE WHEN COALESCE(ds ->> 'years', '') ~ '^[0-9]{1,2}$' THEN (ds ->> 'years')::integer END, 2), 1), 10);
+    v_future := v_years - 1; v_months := 12;
+    v_first := ' (Year 1/' || v_years || ')';
+  ELSE
+    v_freq := COALESCE(NULLIF(ds ->> 'frequency', ''), 'annual');
+    v_months := CASE v_freq WHEN 'biannual' THEN 6 WHEN 'quarterly' THEN 3 ELSE 12 END;
+    v_future := LEAST(round(12.0 / v_months * 2)::integer - 1, 8);
+    v_first := CASE WHEN v_freq = 'quarterly' THEN ' (Q1)' ELSE ' (Period 1)' END;
+  END IF;
+  -- The first, named for its year or period, as a signed proposal's is.
+  v_base_name := COALESCE(NULLIF(btrim(a.name), ''), 'Security Assessment');
+  IF right(v_base_name, length(v_first)) = v_first THEN
+    v_base_name := left(v_base_name, length(v_base_name) - length(v_first));
+  ELSE
+    UPDATE public.assessments SET name = v_base_name || v_first WHERE id = a.id;
+  END IF;
+  -- The later engagements, each with the client's next job code.
+  SELECT NULLIF(btrim(job_code), '') INTO v_base_job FROM public.clients WHERE id = a.client_id;
+  IF v_base_job IS NOT NULL THEN
+    SELECT COALESCE(max(n), 1) + 1 INTO v_next_num FROM (
+      SELECT CASE WHEN split_part(x.job_code, '-', array_length(string_to_array(x.job_code, '-'), 1)) ~ '^[0-9]{1,6}$'
+                  THEN split_part(x.job_code, '-', array_length(string_to_array(x.job_code, '-'), 1))::integer END AS n
+        FROM (SELECT job_code FROM public.proposals WHERE client_id = a.client_id AND job_code IS NOT NULL
+              UNION ALL SELECT job_code FROM public.assessments WHERE client_id = a.client_id AND job_code IS NOT NULL) x) y;
+  END IF;
+  FOR v_fi IN 1 .. v_future LOOP
+    v_fjob := CASE WHEN v_base_job IS NOT NULL THEN v_base_job || '-' || lpad(v_next_num::text, 3, '0') END;
+    IF v_fjob IS NOT NULL THEN v_next_num := v_next_num + 1; END IF;
+    v_label := CASE WHEN v_type = 'multi_year' THEN ' (Year ' || (v_fi + 1) || '/' || v_years || ')'
+                    WHEN v_freq = 'quarterly' THEN ' (Q' || (v_fi + 1) || ')' ELSE ' (Period ' || (v_fi + 1) || ')' END;
+    INSERT INTO public.assessments (client_id, name, type, status, start_date, end_date, deal_of, job_code, test_perspective, credentials_status,
+                                    phases, notes, scope, test_days, scanning_enabled, caveats, summary_sections, client_section_visibility, report_template)
+    VALUES (a.client_id, v_base_name || v_label, COALESCE(a.type, 'Security Assessment'), 'draft',
+            (v_start + make_interval(months => v_months * v_fi))::date, (v_start + make_interval(months => v_months * v_fi))::date + v_span,
+            a.id, v_fjob, CASE WHEN a.test_perspective = 'authenticated' THEN 'authenticated' ELSE 'unauthenticated' END,
+            CASE WHEN a.test_perspective = 'authenticated' THEN 'awaiting' ELSE 'none' END, a.phases, COALESCE(a.notes, ''), COALESCE(a.scope, ''),
+            a.test_days, COALESCE(a.scanning_enabled, false), COALESCE(a.caveats, ''), a.summary_sections, a.client_section_visibility, a.report_template);
+    v_aids := v_aids + 1;
+  END LOOP;
+  IF v_aids > 0 THEN
+    INSERT INTO public.timeline_events (assessment_id, event, user_id, title)
+    VALUES (a.id, v_aids || ' future assessments scheduled from ' || CASE WHEN v_type = 'multi_year' THEN v_years || '-year deal'
+                                                                  ELSE v_freq || ' subscription' END, v_me, 'Deal scheduled');
+  END IF;
+  -- The deal's invoices, as drafts for the firm to send.
+  v_ref := COALESCE(NULLIF(btrim(a.job_code), ''), 'INV-' || to_char(now(), 'YYYY'));
+  IF v_type = 'multi_year' THEN
+    v_annual := round(v_rate * v_days * (1 - v_disc / 100), 2);
+    v_total := round(v_annual * v_years, 2);
+    INSERT INTO public.invoices (client_id, assessment_id, proposal_id, invoice_number, title, description, amount, due_date, status)
+    VALUES (a.client_id, a.id, NULL, v_ref, v_base_name || ' - ' || v_years || '-Year Deal',
+            v_years || '-year engagement at ' || v_sym || to_char(v_annual, 'FM999,999,999,990.00') || '/year'
+              || CASE WHEN v_disc > 0 THEN ' (' || v_disc || '% discount)' ELSE '' END,
+            v_total, current_date + 30, 'draft');
+    v_invs := 1;
+  ELSE
+    v_periods := 12 / v_months;
+    v_per := round(v_rate * v_days * (1 - v_disc / 100), 2);
+    v_annual := v_per * v_periods;
+    v_freq_label := CASE v_freq WHEN 'biannual' THEN 'Bi-Annual' WHEN 'quarterly' THEN 'Quarterly' ELSE 'Annual' END;
+    v_desc := v_freq_label || ' retainer' || CASE WHEN v_periods > 1 THEN ' (' || v_periods || ' x ' || v_sym || to_char(v_per, 'FM999,999,999,990.00') || '/period)' ELSE '' END
+              || CASE WHEN v_disc > 0 THEN ' [' || v_disc || '% discount]' ELSE '' END;
+    FOR v_si IN 0 .. 1 LOOP
+      v_due := CASE WHEN v_si = 0 THEN current_date + 30 ELSE (v_start + make_interval(years => v_si))::date END;
+      INSERT INTO public.invoices (client_id, assessment_id, proposal_id, invoice_number, title, description, amount, due_date, status)
+      VALUES (a.client_id, a.id, NULL, v_ref || '-Y' || (v_si + 1), v_base_name || ' - Year ' || (v_si + 1) || ' Subscription', v_desc, v_annual, v_due, 'draft');
+      v_invs := v_invs + 1;
+    END LOOP;
+  END IF;
+  INSERT INTO public.timeline_events (assessment_id, event, user_id, title)
+  VALUES (a.id, CASE WHEN v_type = 'multi_year' THEN 'Invoice created for ' || v_years || '-year contract: ' || v_sym || to_char(v_total, 'FM999,999,999,990.00')
+                     ELSE v_invs || ' annual invoices created for ' || lower(v_freq_label) || ' subscription retainer (' || v_sym || to_char(v_annual, 'FM999,999,999,990.00') || '/year)' END,
+          v_me, 'Deal invoiced');
+  PERFORM set_config('pental.deal_making', '1', true);
+  UPDATE public.assessment_billing SET deal_made_at = now() WHERE assessment_id = a.id;
+  PERFORM set_config('pental.deal_making', '', true);
+  RETURN jsonb_build_object('ok', true, 'deal', v_type, 'assessments', v_aids, 'invoices', v_invs);
+END $engitems$;
+REVOKE ALL ON FUNCTION public.rpc_engagement_deal_items(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_engagement_deal_items(uuid) TO authenticated;
+
+-- ── An invoice sent as Stripe's ────────────────────────────────────────────
+-- Made in the firm's own Stripe account, in steps, each a call this database
+-- makes as it makes its other Stripe calls (kind 'stripe_invoice', which
+-- every gateway's call worker since 1.12.0 sends to Stripe's own address,
+-- the key added only as it leaves): the client as a Stripe customer (once,
+-- kept on the client); the invoice, sent for the client to pay, due when
+-- Pental's is, in its currency, naming Pental's invoice in its metadata and
+-- as a reference on it; its line at what Pental's comes to before VAT; the
+-- VAT as a line of its own, so it comes to Pental's total to the penny; made
+-- final, and only if it comes to that total; and sent, when Stripe emails
+-- the client and its page takes the payment. A send begun again where one
+-- stopped asks Stripe first where the invoice it holds stands ('check').
+-- Stripe told an invoice is paid ('paid', paid out of band) or voided
+-- ('void'), and asked after one it holds ('look').
+
+-- An amount in Stripe's units, in words ("1,440.00 GBP").
+CREATE OR REPLACE FUNCTION public._stripe_money_words(p_minor bigint, p_currency text) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_catalog, pg_temp AS $stmw$
+  SELECT CASE WHEN p_minor IS NULL THEN 'nothing'
+    ELSE to_char(public._money_from_stripe(p_minor, p_currency), CASE WHEN public._money_digits(p_currency) = 0 THEN 'FM999,999,999,990' ELSE 'FM999,999,999,990.00' END)
+         || ' ' || upper(COALESCE(p_currency, '')) END;
+$stmw$;
+REVOKE ALL ON FUNCTION public._stripe_money_words(bigint, text) FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public._stripe_rate_words(p_rate numeric) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $strw$
+  SELECT CASE WHEN p_rate IS NULL THEN '0' WHEN p_rate = trunc(p_rate) THEN trunc(p_rate)::text ELSE rtrim(rtrim(p_rate::text, '0'), '.') END;
+$strw$;
+REVOKE ALL ON FUNCTION public._stripe_rate_words(numeric) FROM PUBLIC, anon, authenticated;
+
+-- Whether a client has a Stripe customer kept for it.
+CREATE OR REPLACE FUNCTION public._stripe_customer_ok(p_client uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $stcusok$
+  SELECT COALESCE((SELECT stripe_customer_id ~ '^cus_[A-Za-z0-9_]{6,250}$' FROM public.clients WHERE id = p_client), false);
+$stcusok$;
+REVOKE ALL ON FUNCTION public._stripe_customer_ok(uuid) FROM PUBLIC, anon, authenticated;
+
+-- A step planned, with what Stripe is to be asked worked out now.
+CREATE OR REPLACE FUNCTION public._stripe_send_plan(p_invoice uuid, p_step text, p_by text, p_more jsonb DEFAULT '{}'::jsonb) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $stsplan$
+DECLARE i public.invoices; c public.clients; m jsonb; v_params jsonb := '{}'::jsonb; v_gross bigint; v_vat bigint; v_days integer; v_tenant text; v_what text;
+BEGIN
+  SELECT * INTO i FROM public.invoices WHERE id = p_invoice;
+  IF i.id IS NULL THEN RETURN NULL; END IF;
+  SELECT * INTO c FROM public.clients WHERE id = i.client_id;
+  m := public._invoice_money(i.id);
+  v_tenant := NULLIF(COALESCE(public._pental_bound_tenant()::text, ''), '');
+  v_what := left(COALESCE(NULLIF(btrim(i.title), ''), NULLIF(btrim(i.description), ''), 'Invoice ' || i.invoice_number), 500);
+  IF p_step = 'customer' THEN
+    v_params := jsonb_build_object('email', btrim(c.contact_email), 'name', left(COALESCE(NULLIF(btrim(c.name), ''), 'Client'), 250),
+      'metadata[pental_client_id]', c.id::text, 'metadata[pental_tenant]', v_tenant);
+  ELSIF p_step = 'invoice' THEN
+    v_days := GREATEST(1, LEAST(365, COALESCE(i.due_date, current_date + 30) - current_date));
+    v_params := jsonb_build_object('customer', c.stripe_customer_id, 'collection_method', 'send_invoice', 'days_until_due', v_days::text,
+      'currency', m ->> 'currency', 'auto_advance', 'false', 'pending_invoice_items_behavior', 'exclude',
+      'description', left(COALESCE(NULLIF(btrim(i.description), ''), v_what), 500),
+      'custom_fields[0][name]', 'Reference', 'custom_fields[0][value]', left(btrim(i.invoice_number), 30),
+      'metadata[pental_invoice_id]', i.id::text, 'metadata[pental_invoice_number]', left(i.invoice_number, 60), 'metadata[pental_tenant]', v_tenant);
+  ELSIF p_step IN ('item', 'vat') THEN
+    v_gross := (m ->> 'gross_minor')::bigint;
+    v_vat := public._money_stripe((m ->> 'vat')::numeric, m ->> 'currency');
+    v_params := jsonb_build_object('customer', c.stripe_customer_id, 'invoice', i.stripe_invoice_id, 'currency', m ->> 'currency',
+      'amount', (CASE WHEN p_step = 'item' THEN v_gross - v_vat ELSE v_vat END)::text,
+      'description', CASE WHEN p_step = 'item' THEN v_what ELSE 'VAT (' || public._stripe_rate_words((m ->> 'vat_rate')::numeric) || '%)' END);
+  ELSIF p_step = 'finalize' THEN
+    v_params := jsonb_build_object('auto_advance', 'false');
+  ELSIF p_step = 'paid' THEN
+    v_params := jsonb_build_object('paid_out_of_band', 'true');
+  END IF;
+  IF p_step IN ('check', 'customer', 'invoice', 'item', 'vat', 'finalize', 'send') THEN
+    UPDATE public.invoices SET stripe_send_step = p_step WHERE id = i.id;
+  END IF;
+  RETURN public._net_plan('stripe_invoice', jsonb_build_object('asked_by', COALESCE(p_by, 'system'), 'invoice', i.id::text, 'step', p_step,
+    'stripe_id', i.stripe_invoice_id, 'params', jsonb_strip_nulls(v_params)) || COALESCE(p_more, '{}'::jsonb));
+END $stsplan$;
+REVOKE ALL ON FUNCTION public._stripe_send_plan(uuid, text, text, jsonb) FROM PUBLIC, anon, authenticated;
+
+-- A step's call as it leaves: to Stripe's own address, with the firm's key,
+-- Stripe's API version and, for a change, the job as its idempotency key.
+CREATE OR REPLACE FUNCTION public._stripe_send_build(p_job public._net_jobs) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $stsbuild$
+DECLARE v_key text; v_step text := p_job.subject ->> 'step'; v_sid text := p_job.subject ->> 'stripe_id'; v_path text; v_get boolean;
+BEGIN
+  v_key := public._stripe_key();
+  IF v_key IS NULL THEN RETURN jsonb_build_object('error', 'No Stripe secret key is saved.', 'code', 'config'); END IF;
+  v_get := v_step IN ('check', 'look');
+  IF v_step IN ('finalize', 'send', 'paid', 'void', 'check', 'look') AND COALESCE(v_sid, '') !~ '^in_[A-Za-z0-9_]{6,250}$' THEN
+    RETURN jsonb_build_object('error', 'Not a Stripe invoice.', 'code', 'gone');
+  END IF;
+  IF NOT v_get AND jsonb_typeof(p_job.subject -> 'params') IS DISTINCT FROM 'object' THEN
+    RETURN jsonb_build_object('error', 'Nothing to ask Stripe for.', 'code', 'gone');
+  END IF;
+  v_path := CASE v_step WHEN 'customer' THEN '/customers' WHEN 'invoice' THEN '/invoices' WHEN 'item' THEN '/invoiceitems' WHEN 'vat' THEN '/invoiceitems'
+                        WHEN 'finalize' THEN '/invoices/' || v_sid || '/finalize' WHEN 'send' THEN '/invoices/' || v_sid || '/send'
+                        WHEN 'paid' THEN '/invoices/' || v_sid || '/pay' WHEN 'void' THEN '/invoices/' || v_sid || '/void'
+                        WHEN 'check' THEN '/invoices/' || v_sid WHEN 'look' THEN '/invoices/' || v_sid END;
+  IF v_path IS NULL THEN RETURN jsonb_build_object('error', 'Not a step of sending an invoice.', 'code', 'gone'); END IF;
+  IF v_get THEN
+    RETURN jsonb_build_object('method', 'GET', 'url', public._net_endpoint('stripe') || v_path,
+      'headers', jsonb_build_object('Authorization', 'Bearer ' || v_key, 'Accept', 'application/json', 'Stripe-Version', '2024-06-20'));
+  END IF;
+  RETURN jsonb_build_object('method', 'POST', 'url', public._net_endpoint('stripe') || v_path,
+    'headers', jsonb_build_object('Authorization', 'Bearer ' || v_key, 'Content-Type', 'application/x-www-form-urlencoded', 'Accept', 'application/json',
+                                  'Stripe-Version', '2024-06-20', 'Idempotency-Key', 'pental-' || p_job.id::text),
+    'body', public._xero_form(p_job.subject -> 'params'));
+END $stsbuild$;
+REVOKE ALL ON FUNCTION public._stripe_send_build(public._net_jobs) FROM PUBLIC, anon, authenticated;
+
+-- A step of sending not done: said on the invoice and its engagement, in
+-- Stripe's words where it gave some.
+CREATE OR REPLACE FUNCTION public._stripe_send_failed(p_invoice uuid, p_step text, p_said text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $stsfail$
+BEGIN
+  UPDATE public.invoices SET stripe_send_state = 'failed', stripe_send_error = left(p_said, 300), stripe_send_step = p_step, stripe_send_at = now()
+   WHERE id = p_invoice;
+  PERFORM public._invoice_timeline(p_invoice, 'Not sent through Stripe: ' || p_said, 'Stripe invoice not sent');
+  RETURN jsonb_build_object('ok', false, 'step', p_step, 'error', p_said);
+END $stsfail$;
+REVOKE ALL ON FUNCTION public._stripe_send_failed(uuid, text, text) FROM PUBLIC, anon, authenticated;
+
+-- ── Stripe's invoice, paid or voided there ─────────────────────────────────
+-- Paid (invoice.paid, or Stripe's own answer when asked after it): the
+-- Pental invoice its metadata names and that holds it, if what Stripe's
+-- comes to is what this one comes to, in its currency; otherwise held to be
+-- checked, as a renewal of another amount is. Marked paid in Stripe by the
+-- firm (paid out of band): paid here on that word, and one paid here first,
+-- Stripe told so, recorded only. Paid here already, or cancelled, and now
+-- paid by the client there as well: flagged to be refunded or credited. Not
+-- one of these: answered as before ('not a subscription').
+CREATE OR REPLACE FUNCTION public._stripe_sent_invoice_paid(o jsonb, p_event text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $stsentpaid$
+DECLARE v_meta jsonb := CASE WHEN jsonb_typeof(o -> 'metadata') = 'object' THEN o -> 'metadata' ELSE '{}'::jsonb END;
+  v_sin text := NULLIF(o ->> 'id', ''); v_cur text := lower(COALESCE(o ->> 'currency', '')); i public.invoices; m jsonb;
+  v_total bigint; v_paid bigint; v_pi text; v_oob boolean := COALESCE(o ->> 'paid_out_of_band', '') = 'true';
+BEGIN
+  IF COALESCE(v_meta ->> 'pental_invoice_id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    RETURN jsonb_build_object('ignored', 'not a subscription');
+  END IF;
+  IF public._stripe_other_portal(v_meta) THEN RETURN jsonb_build_object('ignored', 'another portal''s invoice'); END IF;
+  SELECT * INTO i FROM public.invoices WHERE id = (v_meta ->> 'pental_invoice_id')::uuid FOR UPDATE;
+  IF i.id IS NULL OR v_sin IS NULL OR i.stripe_invoice_id IS DISTINCT FROM v_sin THEN RETURN jsonb_build_object('no_match', true); END IF;
+  IF EXISTS (SELECT 1 FROM public.payment_events WHERE invoice_id = i.id AND metadata ->> 'stripe_invoice' = v_sin
+                AND event_type IN ('invoice.paid', 'paid_twice', 'paid_after_cancel', 'amount_mismatch')) THEN
+    RETURN jsonb_build_object('duplicate', true);
+  END IF;
+  v_paid := CASE WHEN jsonb_typeof(o -> 'amount_paid') = 'number' THEN (o ->> 'amount_paid')::numeric::bigint END;
+  v_total := COALESCE(CASE WHEN jsonb_typeof(o -> 'total') = 'number' THEN (o ->> 'total')::numeric::bigint END, v_paid);
+  v_pi := CASE WHEN jsonb_typeof(o -> 'payment_intent') = 'string' THEN o ->> 'payment_intent'
+               WHEN jsonb_typeof(o -> 'payment_intent') = 'object' THEN o #>> '{payment_intent,id}' END;
+  v_pi := COALESCE(NULLIF(v_pi, ''), NULLIF(o #>> '{payments,data,0,payment,payment_intent}', ''));
+  IF v_oob THEN
+    INSERT INTO public.payment_events (invoice_id, event_type, stripe_event_id, amount, currency, metadata)
+    VALUES (i.id, 'invoice.paid', NULLIF(p_event, ''), v_paid, v_cur, jsonb_build_object('stripe_invoice', v_sin, 'paid_out_of_band', true));
+    IF i.status IN ('paid', 'cancelled') THEN RETURN jsonb_build_object('already', i.id); END IF;
+    m := public._invoice_money(i.id);
+    PERFORM set_config('pental.stripe_paying_invoice', v_sin, true);
+    PERFORM set_config('pental.xero_vouch_source', 'stripe', true);
+    PERFORM set_config('pental.xero_vouch_extra', jsonb_build_object('received_amount', (m ->> 'gross')::numeric)::text, true);
+    UPDATE public.invoices SET status = 'paid', paid_at = now(), updated_at = now(), payment_flag = NULL WHERE id = i.id;
+    PERFORM set_config('pental.xero_vouch_source', '', true);
+    PERFORM set_config('pental.xero_vouch_extra', '', true);
+    PERFORM set_config('pental.stripe_paying_invoice', '', true);
+    PERFORM public._invoice_timeline(i.id, 'Marked paid in Stripe, so it is paid here too', 'Invoice paid');
+    RETURN jsonb_build_object('invoice_marked', i.id, 'out_of_band', true);
+  END IF;
+  IF i.status IN ('paid', 'cancelled') THEN
+    UPDATE public.invoices SET payment_flag = CASE WHEN i.status = 'paid' THEN 'paid_twice' ELSE 'paid_after_cancel' END, updated_at = now() WHERE id = i.id;
+    INSERT INTO public.payment_events (invoice_id, event_type, stripe_event_id, amount, currency, metadata)
+    VALUES (i.id, CASE WHEN i.status = 'paid' THEN 'paid_twice' ELSE 'paid_after_cancel' END, NULLIF(p_event, ''), v_paid, v_cur,
+            jsonb_strip_nulls(jsonb_build_object('stripe_invoice', v_sin, 'payment_intent', v_pi)));
+    PERFORM public._invoice_timeline(i.id, CASE WHEN i.status = 'paid' THEN 'Paid again in Stripe after it was already paid: refund or credit the client.'
+                                                ELSE 'Paid in Stripe after it was cancelled: refund or credit the client.' END,
+      CASE WHEN i.status = 'paid' THEN 'Paid twice' ELSE 'Paid after cancelling' END);
+    RETURN jsonb_build_object(CASE WHEN i.status = 'paid' THEN 'paid_twice' ELSE 'paid_after_cancel' END, i.id);
+  END IF;
+  m := public._invoice_money(i.id);
+  IF v_total IS NULL OR v_cur <> (m ->> 'currency') OR v_total <> (m ->> 'gross_minor')::bigint THEN
+    UPDATE public.invoices SET status = 'pending_payment_confirmation', payment_flag = 'amount_mismatch', updated_at = now() WHERE id = i.id;
+    INSERT INTO public.payment_events (invoice_id, event_type, stripe_event_id, amount, currency, metadata)
+    VALUES (i.id, 'amount_mismatch', NULLIF(p_event, ''), COALESCE(v_paid, v_total), v_cur,
+            jsonb_build_object('stripe_invoice', v_sin, 'expected_minor', m ->> 'gross_minor', 'total', v_total));
+    PERFORM public._invoice_timeline(i.id, 'Stripe''s invoice was paid at ' || public._stripe_money_words(v_total, v_cur) || ' where this one comes to '
+      || public._stripe_money_words((m ->> 'gross_minor')::bigint, m ->> 'currency') || ': not marked paid. Check it in Stripe, then confirm or refund it.', 'Card payment to check');
+    RETURN jsonb_build_object('mismatch', true, 'invoice', i.id);
+  END IF;
+  PERFORM set_config('pental.stripe_paying_invoice', v_sin, true);
+  PERFORM public._stripe_pay_invoice(i.id, (m ->> 'gross')::numeric, COALESCE(v_pi, v_sin), NULL, v_pi, NULL, p_event, 'invoice.paid', COALESCE(v_paid, v_total), v_cur,
+    jsonb_strip_nulls(jsonb_build_object('stripe_invoice', v_sin, 'payment_intent', v_pi, 'sent_by_stripe', true)));
+  PERFORM set_config('pental.stripe_paying_invoice', '', true);
+  RETURN jsonb_build_object('invoice_marked', i.id);
+END $stsentpaid$;
+REVOKE ALL ON FUNCTION public._stripe_sent_invoice_paid(jsonb, text) FROM PUBLIC, anon, authenticated;
+
+-- Voided in Stripe (invoice.voided, or Stripe's own answer when asked after
+-- it): this invoice no longer held there, said on the engagement, and left
+-- as it is here for the firm to send again or cancel.
+CREATE OR REPLACE FUNCTION public._stripe_sent_invoice_voided(o jsonb, p_event text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $stsentvoid$
+DECLARE v_meta jsonb := CASE WHEN jsonb_typeof(o -> 'metadata') = 'object' THEN o -> 'metadata' ELSE '{}'::jsonb END;
+  v_sin text := NULLIF(o ->> 'id', ''); i public.invoices;
+BEGIN
+  IF COALESCE(v_meta ->> 'pental_invoice_id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN RETURN jsonb_build_object('ignored', true); END IF;
+  IF public._stripe_other_portal(v_meta) THEN RETURN jsonb_build_object('ignored', 'another portal''s invoice'); END IF;
+  SELECT * INTO i FROM public.invoices WHERE id = (v_meta ->> 'pental_invoice_id')::uuid FOR UPDATE;
+  IF i.id IS NULL OR v_sin IS NULL OR i.stripe_invoice_id IS DISTINCT FROM v_sin THEN RETURN jsonb_build_object('no_match', true); END IF;
+  IF i.status IN ('paid', 'cancelled') OR i.stripe_send_state IN ('void', 'sending') THEN RETURN jsonb_build_object('already', i.id); END IF;
+  UPDATE public.invoices SET stripe_send_state = 'void', stripe_send_at = now() WHERE id = i.id;
+  PERFORM public._invoice_timeline(i.id, 'Stripe''s invoice was voided in Stripe, so it can no longer be paid there. This invoice is still owed here: send it again, or cancel it.', 'Stripe invoice voided');
+  RETURN jsonb_build_object('voided', i.id);
+END $stsentvoid$;
+REVOKE ALL ON FUNCTION public._stripe_sent_invoice_voided(jsonb, text) FROM PUBLIC, anon, authenticated;
+
+-- ── Each step's answer, and the next step asked ────────────────────────────
+CREATE OR REPLACE FUNCTION public._stripe_send_answer(j public._net_jobs, p_status integer, p_content text, p_error text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $stsans$
+DECLARE o jsonb := public._tk_parse(p_content); v_step text := j.subject ->> 'step'; v_by text := COALESCE(j.subject ->> 'asked_by', 'system');
+  v_inv uuid; i public.invoices; m jsonb; v_vat bigint; v_total bigint; v_ok boolean; v_said text; v_cus text; v_again boolean; v_match boolean;
+BEGIN
+  v_ok := COALESCE(p_status = 200 AND jsonb_typeof(o) = 'object', false);
+  v_inv := CASE WHEN COALESCE(j.subject ->> 'invoice', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (j.subject ->> 'invoice')::uuid END;
+  SELECT * INTO i FROM public.invoices WHERE id = v_inv FOR UPDATE;
+  v_said := public._stripe_said(o, p_status, p_error);
+
+  -- Stripe told it is paid, or its invoice voided.
+  IF v_step IN ('paid', 'void') THEN
+    IF v_ok THEN
+      IF v_step = 'void' AND i.id IS NOT NULL AND i.status = 'cancelled' AND i.stripe_invoice_id IS NOT DISTINCT FROM (j.subject ->> 'stripe_id') THEN
+        UPDATE public.invoices SET stripe_send_state = 'void', stripe_send_at = now() WHERE id = i.id;
+      END IF;
+      IF i.id IS NOT NULL AND (j.subject ->> 'quiet') IS DISTINCT FROM 'true' THEN
+        PERFORM public._invoice_timeline(i.id, CASE WHEN v_step = 'paid' THEN 'Stripe told the invoice is paid, so it asks the client for nothing more'
+                                                     ELSE 'Stripe''s invoice voided, so it can no longer be paid there' END, 'Stripe told');
+      END IF;
+      RETURN jsonb_build_object('ok', true, 'step', v_step);
+    END IF;
+    v_said := CASE WHEN v_step = 'paid' THEN 'Stripe could not be told this invoice is paid, so it may still ask the client for it: mark it paid in Stripe. '
+                   ELSE 'Stripe''s invoice could not be voided, so the client can still pay it there: void it in Stripe. ' END || v_said;
+    IF i.id IS NOT NULL THEN
+      PERFORM public._invoice_timeline(i.id, v_said, 'Stripe not told');
+    ELSIF COALESCE(j.subject ->> 'assessment', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+      BEGIN
+        INSERT INTO public.timeline_events (assessment_id, event, title) VALUES ((j.subject ->> 'assessment')::uuid, left(v_said, 500), 'Stripe not told');
+      EXCEPTION WHEN OTHERS THEN NULL;
+      END;
+    END IF;
+    RETURN jsonb_build_object('ok', false, 'step', v_step, 'error', v_said);
+  END IF;
+
+  -- Asked after an invoice it holds: what Stripe says of it, applied.
+  IF v_step = 'look' THEN
+    IF i.id IS NULL THEN RETURN jsonb_build_object('ok', true, 'step', v_step, 'gone', true); END IF;
+    IF NOT v_ok OR o ->> 'id' IS DISTINCT FROM i.stripe_invoice_id THEN RETURN jsonb_build_object('ok', false, 'step', v_step, 'error', v_said); END IF;
+    IF o ->> 'status' = 'paid' THEN RETURN jsonb_build_object('ok', true, 'step', v_step) || COALESCE(public._stripe_sent_invoice_paid(o, NULL), '{}'::jsonb); END IF;
+    IF o ->> 'status' = 'void' THEN RETURN jsonb_build_object('ok', true, 'step', v_step) || COALESCE(public._stripe_sent_invoice_voided(o, NULL), '{}'::jsonb); END IF;
+    RETURN jsonb_build_object('ok', true, 'step', v_step, 'status', o ->> 'status');
+  END IF;
+
+  -- The steps of sending.
+  IF i.id IS NULL THEN RETURN jsonb_build_object('ok', false, 'step', v_step, 'error', 'The invoice is gone.'); END IF;
+  -- An answer to a send since begun again, or stopped, is not this send's.
+  IF i.stripe_send_state IS DISTINCT FROM 'sending' OR i.stripe_send_step IS DISTINCT FROM v_step
+     OR (v_step NOT IN ('customer', 'invoice') AND i.stripe_invoice_id IS DISTINCT FROM (j.subject ->> 'stripe_id')) THEN
+    RETURN jsonb_build_object('ok', true, 'step', v_step, 'stale', true);
+  END IF;
+  -- Paid or cancelled here while it was being sent: stopped, and where
+  -- Stripe holds a final invoice for it already, Stripe told.
+  IF i.status IN ('paid', 'cancelled') THEN
+    IF v_ok AND (v_step IN ('finalize', 'send') OR (v_step = 'check' AND o ->> 'status' IN ('open', 'uncollectible'))) THEN
+      UPDATE public.invoices SET stripe_send_state = 'sent', stripe_send_error = NULL, stripe_send_step = NULL, stripe_send_at = now(),
+             stripe_invoice_url = COALESCE(NULLIF(o ->> 'hosted_invoice_url', ''), stripe_invoice_url) WHERE id = i.id;
+      PERFORM public._stripe_send_plan(i.id, CASE WHEN i.status = 'paid' THEN 'paid' ELSE 'void' END, v_by);
+    ELSE
+      UPDATE public.invoices SET stripe_send_state = NULL, stripe_send_error = NULL, stripe_send_step = NULL, stripe_send_at = now() WHERE id = i.id;
+    END IF;
+    RETURN jsonb_build_object('ok', true, 'step', v_step, 'stopped', i.status);
+  END IF;
+
+  IF NOT v_ok THEN
+    -- The client's customer, gone from Stripe since it was kept: made again, once.
+    IF v_step = 'invoice' AND o #>> '{error,code}' = 'resource_missing' AND o #>> '{error,param}' = 'customer' AND (j.subject ->> 'again') IS DISTINCT FROM 'true' THEN
+      UPDATE public.clients SET stripe_customer_id = NULL WHERE id = i.client_id;
+      PERFORM public._stripe_send_plan(i.id, 'customer', v_by, jsonb_build_object('again', true));
+      RETURN jsonb_build_object('ok', true, 'step', v_step, 'customer', 'made again');
+    END IF;
+    -- The invoice Stripe held, gone (deleted there, or another account's): made afresh.
+    IF v_step = 'check' AND p_status = 404 THEN
+      UPDATE public.invoices SET stripe_invoice_id = NULL, stripe_invoice_url = NULL WHERE id = i.id;
+      PERFORM public._stripe_send_plan(i.id, CASE WHEN public._stripe_customer_ok(i.client_id) THEN 'invoice' ELSE 'customer' END, v_by);
+      RETURN jsonb_build_object('ok', true, 'step', v_step, 'afresh', true);
+    END IF;
+    RETURN public._stripe_send_failed(i.id, v_step, v_said);
+  END IF;
+
+  IF v_step = 'check' THEN
+    IF o ->> 'id' IS DISTINCT FROM i.stripe_invoice_id THEN RETURN public._stripe_send_failed(i.id, v_step, 'Stripe answered for another invoice.'); END IF;
+    m := public._invoice_money(i.id);
+    v_total := CASE WHEN jsonb_typeof(o -> 'total') = 'number' THEN (o ->> 'total')::numeric::bigint END;
+    v_match := v_total IS NOT DISTINCT FROM (m ->> 'gross_minor')::bigint AND lower(COALESCE(o ->> 'currency', '')) = (m ->> 'currency');
+    IF o ->> 'status' = 'paid' THEN
+      UPDATE public.invoices SET stripe_send_state = 'sent', stripe_send_error = NULL, stripe_send_step = NULL, stripe_send_at = now(), sent_via = 'stripe',
+             stripe_invoice_url = COALESCE(NULLIF(o ->> 'hosted_invoice_url', ''), stripe_invoice_url) WHERE id = i.id;
+      RETURN jsonb_build_object('ok', true, 'step', v_step) || COALESCE(public._stripe_sent_invoice_paid(o, NULL), '{}'::jsonb);
+    END IF;
+    IF v_match AND o ->> 'status' = 'draft' THEN
+      PERFORM public._stripe_send_plan(i.id, 'finalize', v_by);
+      RETURN jsonb_build_object('ok', true, 'step', v_step, 'status', 'draft');
+    END IF;
+    IF v_match AND o ->> 'status' = 'open' THEN
+      UPDATE public.invoices SET stripe_invoice_url = COALESCE(NULLIF(o ->> 'hosted_invoice_url', ''), stripe_invoice_url) WHERE id = i.id;
+      PERFORM public._stripe_send_plan(i.id, 'send', v_by);
+      RETURN jsonb_build_object('ok', true, 'step', v_step, 'status', 'open');
+    END IF;
+    -- Stripe's, final for another amount (this one changed since): voided,
+    -- and a new one made and sent.
+    IF o ->> 'status' IN ('open', 'uncollectible') THEN
+      PERFORM public._stripe_send_plan(i.id, 'void', v_by, jsonb_build_object('quiet', true));
+      PERFORM public._invoice_timeline(i.id, 'Stripe''s invoice came to ' || public._stripe_money_words(v_total, o ->> 'currency') || ' where this one now comes to '
+        || public._stripe_money_words((m ->> 'gross_minor')::bigint, m ->> 'currency') || ', so it is voided and a new one sent', 'Stripe invoice replaced');
+    END IF;
+    UPDATE public.invoices SET stripe_invoice_id = NULL, stripe_invoice_url = NULL WHERE id = i.id;
+    PERFORM public._stripe_send_plan(i.id, CASE WHEN public._stripe_customer_ok(i.client_id) THEN 'invoice' ELSE 'customer' END, v_by);
+    RETURN jsonb_build_object('ok', true, 'step', v_step, 'afresh', true);
+  ELSIF v_step = 'customer' THEN
+    v_cus := o ->> 'id';
+    IF COALESCE(v_cus, '') !~ '^cus_[A-Za-z0-9_]{6,250}$' THEN RETURN public._stripe_send_failed(i.id, v_step, 'Stripe made no customer.'); END IF;
+    UPDATE public.clients SET stripe_customer_id = v_cus WHERE id = i.client_id;
+    v_again := (j.subject ->> 'again') = 'true';
+    PERFORM public._stripe_send_plan(i.id, 'invoice', v_by, CASE WHEN v_again THEN jsonb_build_object('again', true) ELSE '{}'::jsonb END);
+  ELSIF v_step = 'invoice' THEN
+    IF COALESCE(o ->> 'id', '') !~ '^in_[A-Za-z0-9_]{6,250}$' THEN RETURN public._stripe_send_failed(i.id, v_step, 'Stripe made no invoice.'); END IF;
+    UPDATE public.invoices SET stripe_invoice_id = o ->> 'id', stripe_invoice_url = NULL WHERE id = i.id;
+    PERFORM public._stripe_send_plan(i.id, 'item', v_by);
+  ELSIF v_step = 'item' THEN
+    m := public._invoice_money(i.id);
+    v_vat := public._money_stripe((m ->> 'vat')::numeric, m ->> 'currency');
+    PERFORM public._stripe_send_plan(i.id, CASE WHEN v_vat > 0 THEN 'vat' ELSE 'finalize' END, v_by);
+  ELSIF v_step = 'vat' THEN
+    PERFORM public._stripe_send_plan(i.id, 'finalize', v_by);
+  ELSIF v_step = 'finalize' THEN
+    -- What Stripe will ask the client for is what this invoice comes to, or
+    -- nothing is sent and Stripe's is voided.
+    m := public._invoice_money(i.id);
+    v_total := CASE WHEN jsonb_typeof(o -> 'total') = 'number' THEN (o ->> 'total')::numeric::bigint END;
+    IF v_total IS DISTINCT FROM (m ->> 'gross_minor')::bigint OR lower(COALESCE(o ->> 'currency', '')) <> (m ->> 'currency') THEN
+      PERFORM public._stripe_send_plan(i.id, 'void', v_by, jsonb_build_object('quiet', true));
+      RETURN public._stripe_send_failed(i.id, v_step, 'Stripe''s invoice came to ' || public._stripe_money_words(v_total, o ->> 'currency') || ' where this one comes to '
+        || public._stripe_money_words((m ->> 'gross_minor')::bigint, m ->> 'currency') || ', so it was not sent, and Stripe''s is voided.');
+    END IF;
+    UPDATE public.invoices SET stripe_invoice_url = NULLIF(o ->> 'hosted_invoice_url', '') WHERE id = i.id;
+    PERFORM public._stripe_send_plan(i.id, 'send', v_by);
+  ELSIF v_step = 'send' THEN
+    UPDATE public.invoices
+       SET sent_at = now(), status = CASE WHEN status = 'draft' THEN 'sent' ELSE status END,
+           sent_via = 'stripe', stripe_invoice_url = COALESCE(NULLIF(o ->> 'hosted_invoice_url', ''), stripe_invoice_url),
+           stripe_send_state = 'sent', stripe_send_error = NULL, stripe_send_step = NULL, stripe_send_at = now(), updated_at = now()
+     WHERE id = i.id;
+    PERFORM public._invoice_timeline(i.id, CASE WHEN i.sent_via = 'stripe' AND i.status <> 'draft' THEN 'Invoice sent to the client again by Stripe'
+                                                ELSE 'Invoice sent to the client by Stripe' END, 'Invoice sent');
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'step', v_step);
+END $stsans$;
+REVOKE ALL ON FUNCTION public._stripe_send_answer(public._net_jobs, integer, text, text) FROM PUBLIC, anon, authenticated;
+
+-- Sending one: begun, or for one Stripe holds already, Stripe asked where
+-- it stands first and then sent again. { ok, state, step } or why not.
+CREATE OR REPLACE FUNCTION public._stripe_send_start(p_invoice uuid, p_by text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $stsstart$
+DECLARE i public.invoices; c public.clients; m jsonb; v_no jsonb; v_ds jsonb; v_step text; s record;
+BEGIN
+  SELECT * INTO i FROM public.invoices WHERE id = p_invoice FOR UPDATE;
+  IF i.id IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'Invoice not found.'); END IF;
+  IF i.status IN ('paid', 'cancelled') THEN RETURN jsonb_build_object('ok', false, 'error', 'This invoice is ' || i.status || '.'); END IF;
+  IF i.status IN ('pending_bank_verification', 'pending_payment_confirmation') THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'A payment of this invoice is being confirmed.');
+  END IF;
+  v_ds := public._invoice_deal(i.id);
+  IF i.stripe_subscription_id IS NOT NULL OR (jsonb_typeof(v_ds) = 'object' AND v_ds ->> 'type' = 'subscription') THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'subscription',
+      'error', 'A retainer is paid through Stripe''s checkout, which then bills each year itself, so it is not sent as a Stripe invoice.');
+  END IF;
+  IF i.stripe_send_state = 'sending' AND EXISTS (SELECT 1 FROM public._net_jobs nj WHERE nj.kind = 'stripe_invoice' AND nj.subject ->> 'invoice' = i.id::text
+                                                    AND nj.state IN ('planned', 'queued', 'sending')) THEN
+    RETURN jsonb_build_object('ok', true, 'state', 'sending', 'already', true);
+  END IF;
+  IF NOT COALESCE((SELECT st.stripe_enabled FROM public.settings st ORDER BY st.created_at ASC NULLS LAST, st.id LIMIT 1), false) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'off',
+      'error', 'Stripe is switched off in Settings, Integrations, so this invoice cannot go out as Stripe''s. Switch it on, or send it as Pental''s.');
+  END IF;
+  -- Not one the firm sends as Stripe's, unless Stripe has it already (sent
+  -- again, or tried again).
+  IF NOT public._invoice_stripe_sends(i.id) AND COALESCE(i.stripe_invoice_id, '') = '' THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'pental',
+      'error', 'Your invoices are sent as Pental''s (Settings, Integrations, Stripe), so this one is not sent as Stripe''s.');
+  END IF;
+  -- A draft is issued now: the firm's currency and VAT rate, as leaving draft
+  -- issues one.
+  IF i.status = 'draft' THEN
+    SELECT currency_code, vat_rate INTO s FROM public.settings ORDER BY created_at ASC NULLS LAST, id LIMIT 1;
+    UPDATE public.invoices SET currency_code = lower(COALESCE(NULLIF(btrim(s.currency_code), ''), NULLIF(btrim(currency_code), ''), 'gbp')),
+           vat_rate = COALESCE(s.vat_rate, vat_rate, 0)
+     WHERE id = i.id;
+  END IF;
+  m := public._invoice_money(i.id);
+  IF COALESCE((m ->> 'gross_minor')::bigint, 0) <= 0 THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'no_amount', 'error', 'Nothing is owed on this invoice. Set its amount, then send it.');
+  END IF;
+  SELECT * INTO c FROM public.clients WHERE id = i.client_id;
+  IF COALESCE(btrim(c.contact_email), '') !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'no_email',
+      'error', 'Stripe emails its invoice to the client''s contact email, and ' || COALESCE(NULLIF(btrim(c.name), ''), 'this client') || ' has none. Add it on the client, then send.');
+  END IF;
+  v_no := public._stripe_cannot();
+  IF v_no IS NOT NULL THEN RETURN v_no; END IF;
+  v_step := CASE WHEN COALESCE(i.stripe_invoice_id, '') ~ '^in_[A-Za-z0-9_]{6,250}$' THEN 'check'
+                 WHEN public._stripe_customer_ok(c.id) THEN 'invoice' ELSE 'customer' END;
+  UPDATE public.invoices SET stripe_send_state = 'sending', stripe_send_error = NULL, stripe_send_at = now() WHERE id = i.id;
+  PERFORM public._stripe_send_plan(i.id, v_step, p_by);
+  RETURN jsonb_build_object('ok', true, 'state', 'sending', 'step', v_step);
+END $stsstart$;
+REVOKE ALL ON FUNCTION public._stripe_send_start(uuid, text) FROM PUBLIC, anon, authenticated;
+
+-- The portal's Send for an invoice sent as Stripe's: by those who send
+-- invoices, with the second factor fresh. Where it has got to is the
+-- invoice's own (rpc_invoice_stripe_state).
+CREATE OR REPLACE FUNCTION public.rpc_invoice_stripe_send(p_invoice uuid) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $stsend$
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
+  IF NOT public.can_manage() THEN RETURN jsonb_build_object('ok', false, 'error', 'Only an administrator or a senior sends invoices.'); END IF;
+  RETURN public._stripe_send_start(p_invoice, auth.uid()::text);
+END $stsend$;
+REVOKE ALL ON FUNCTION public.rpc_invoice_stripe_send(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_invoice_stripe_send(uuid) TO authenticated;
+
+-- Where sending these has got to (the portal asks every second or so while
+-- one is being sent): Stripe's answers applied as they land, and a send
+-- whose next step was never asked (nothing here could ask it) said as
+-- stopped. { invoices: [{ id, status, state, step, error, url, sent_via }] }.
+CREATE OR REPLACE FUNCTION public.rpc_invoice_stripe_state(p_invoice_ids uuid[]) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $stsstate$
+DECLARE v jsonb; v_ids uuid[] := COALESCE(p_invoice_ids, ARRAY[]::uuid[]);
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() OR public.current_user_role() NOT IN ('admin', 'senior') THEN
+    RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501';
+  END IF;
+  IF cardinality(v_ids) > 200 THEN v_ids := v_ids[1:200]; END IF;
+  IF pg_try_advisory_xact_lock(hashtext('pental_net_tick')) THEN
+    PERFORM public._net_settle();
+  END IF;
+  UPDATE public.invoices i SET stripe_send_state = 'failed', stripe_send_at = now(),
+         stripe_send_error = 'The send stopped before Stripe answered. Send it again.'
+   WHERE i.id = ANY (v_ids) AND i.stripe_send_state = 'sending'
+     AND NOT EXISTS (SELECT 1 FROM public._net_jobs nj WHERE nj.kind = 'stripe_invoice' AND nj.subject ->> 'invoice' = i.id::text
+                        AND nj.state IN ('planned', 'queued', 'sending'));
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('id', i.id, 'status', i.status, 'state', i.stripe_send_state, 'step', i.stripe_send_step,
+           'error', i.stripe_send_error, 'url', i.stripe_invoice_url, 'sent_via', i.sent_via) ORDER BY i.id), '[]'::jsonb) INTO v
+    FROM public.invoices i WHERE i.id = ANY (v_ids);
+  RETURN jsonb_build_object('invoices', v);
+END $stsstate$;
+REVOKE ALL ON FUNCTION public.rpc_invoice_stripe_state(uuid[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_invoice_stripe_state(uuid[]) TO authenticated;
+
+-- ── Paid or cancelled here: Stripe told ────────────────────────────────────
+-- An invoice Stripe holds and has sent, paid here some other way (a bank
+-- transfer confirmed, a payment marked by hand, a checkout paid on Pental's
+-- page), is marked paid in Stripe (paid out of band), so Stripe asks the
+-- client for nothing more; one cancelled or deleted here is voided there, so
+-- it can no longer be paid. Not for one Stripe itself paid, and nothing
+-- while the portal is being emptied for a restore. Where Stripe cannot be
+-- asked from here just now, it is said on the engagement.
+CREATE OR REPLACE FUNCTION public._invoice_stripe_follow() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $invstf$
+DECLARE v_can boolean; v_by text;
+BEGIN
+  IF COALESCE(current_setting('pental.wiping', true), '') = 'on' THEN RETURN NULL; END IF;
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.stripe_invoice_id IS NULL OR OLD.stripe_send_state IS DISTINCT FROM 'sent' OR OLD.status IN ('paid', 'cancelled') THEN RETURN NULL; END IF;
+  ELSE
+    IF NEW.stripe_invoice_id IS NULL OR NEW.stripe_send_state IS DISTINCT FROM 'sent' OR NEW.status IS NOT DISTINCT FROM OLD.status THEN RETURN NULL; END IF;
+    IF NEW.status = 'paid' THEN
+      IF COALESCE(current_setting('pental.stripe_paying_invoice', true), '') = NEW.stripe_invoice_id THEN RETURN NULL; END IF;
+    ELSIF NEW.status <> 'cancelled' THEN
+      RETURN NULL;
+    END IF;
+  END IF;
+  v_can := public._net_sender() IS NOT NULL AND public._stripe_key() IS NOT NULL AND public._xero_stood_down() IS NULL;
+  v_by := COALESCE(auth.uid()::text, 'system');
+  IF TG_OP = 'DELETE' THEN
+    IF v_can THEN
+      PERFORM public._net_plan('stripe_invoice', jsonb_build_object('asked_by', v_by, 'invoice', OLD.id::text, 'step', 'void', 'stripe_id', OLD.stripe_invoice_id,
+        'params', '{}'::jsonb, 'assessment', OLD.assessment_id::text));
+    ELSIF OLD.assessment_id IS NOT NULL THEN
+      BEGIN
+        INSERT INTO public.timeline_events (assessment_id, event, title)
+        VALUES (OLD.assessment_id, 'Invoice ' || OLD.invoice_number || ' was deleted here, and Stripe could not be told from here just now: void its invoice in Stripe.', 'Stripe not told');
+      EXCEPTION WHEN OTHERS THEN NULL;
+      END;
+    END IF;
+    RETURN NULL;
+  END IF;
+  IF v_can THEN
+    PERFORM public._stripe_send_plan(NEW.id, CASE WHEN NEW.status = 'paid' THEN 'paid' ELSE 'void' END, v_by);
+  ELSE
+    PERFORM public._invoice_timeline(NEW.id, CASE WHEN NEW.status = 'paid' THEN 'Paid here, and Stripe could not be told from here just now: mark its invoice paid in Stripe.'
+                                                  ELSE 'Cancelled here, and Stripe could not be told from here just now: void its invoice in Stripe.' END, 'Stripe not told');
+  END IF;
+  RETURN NULL;
+END $invstf$;
+REVOKE ALL ON FUNCTION public._invoice_stripe_follow() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS zz_invoice_stripe_follow ON public.invoices;
+CREATE TRIGGER zz_invoice_stripe_follow AFTER UPDATE OF status OR DELETE ON public.invoices
+  FOR EACH ROW EXECUTE FUNCTION public._invoice_stripe_follow();
+
+-- Invoices Stripe holds and has sent, still owed here, asked after in
+-- Stripe about every half hour each (a job of theirs is kept that long), so
+-- one paid or voided there is known here where the firm's webhook does not
+-- send those events. From the clock (_net_tick), five at a time.
+CREATE OR REPLACE FUNCTION public._stripe_sent_look() RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $stslook$
+DECLARE v record; v_n integer := 0;
+BEGIN
+  IF public._net_sender() IS NULL OR public._stripe_key() IS NULL THEN RETURN 0; END IF;
+  FOR v IN SELECT i.id FROM public.invoices i
+            WHERE i.stripe_send_state = 'sent' AND i.stripe_invoice_id IS NOT NULL AND i.status IN ('sent', 'overdue')
+              AND NOT EXISTS (SELECT 1 FROM public._net_jobs nj WHERE nj.kind = 'stripe_invoice' AND nj.subject ->> 'invoice' = i.id::text)
+            ORDER BY i.sent_at NULLS FIRST, i.id LIMIT 5 LOOP
+    PERFORM public._stripe_send_plan(v.id, 'look', 'system');
+    v_n := v_n + 1;
+  END LOOP;
+  RETURN v_n;
+END $stslook$;
+REVOKE ALL ON FUNCTION public._stripe_sent_look() FROM PUBLIC, anon, authenticated;
 
 
 
@@ -49606,9 +50518,9 @@ UPDATE public.settings SET password_login_enabled = true, sso_google_enabled = f
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: 94b2bb89941dc6db @ 2025111502
+-- schema-fingerprint: ca88819ab48265f8 @ 2025112001
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025111502, now())
+VALUES (1, 2025112001, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 
