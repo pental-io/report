@@ -17,7 +17,9 @@
 // over the computer's own connection to it, with a token only the two of them
 // hold (UPDATE_TOKEN in .env). The answer is the version to install when an
 // administrator has pressed Update now, or overnight when updates are
-// automatic; the updater then installs it the way the install command does,
+// automatic (where the computer was off or asleep through the night, the next
+// time it is on, once the release has been out a day: 2067); the updater then
+// installs it the way the install command does,
 // from the release's own tag on GitHub, after a copy of the database, and puts
 // the version before it back if the new one does not start.
 //
@@ -28,7 +30,8 @@
 //   update_latest   the newest release GitHub named, and when it was asked
 //   update_auto     '0' when an administrator turned automatic updates off
 //   update_request  an administrator's Update now, until the updater takes it
-//   update_agent    when the updater last asked, and on what
+//   update_agent    when the updater last asked, and on what; and when it
+//                   last asked in the night (2067)
 //   update_run      the last update: running, done or failed, and from what
 //
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -46,6 +49,20 @@ const AGENT_LIVE_MS = 5 * 60 * 1000;
 const RUN_STALE_MS = 60 * 60 * 1000;
 // Overnight, on the clock of the computer the updater runs on.
 const NIGHT_FROM = 1, NIGHT_TO = 6;
+// 2067: [stated] Arian, offered "a copy that missed the 1am to 6am window would
+// update the next time it's on, once a release has been out a day" (knowing it
+// restarts while someone might be using it): "yes". Missed: the updater did not
+// ask here at any time in the last night, so the computer was off or asleep
+// through it. A copy whose updater did ask then either installed the release
+// or did not yet know of it (this server asks GitHub twice a day), and the
+// next night installs it, as before.
+const CATCH_UP_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const atNight = (hour) => Number.isInteger(hour) && hour >= NIGHT_FROM && hour < NIGHT_TO;
+// 2067: for the daily check-in (lib/usage.js), how long ago the updater last
+// asked, in the words pental.io keeps: within a quarter of an hour, a day, or
+// longer ago; or never.
+const ASKED_LATELY_MS = 15 * 60 * 1000;
 
 const VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
 export function newer(a, b) {
@@ -156,12 +173,41 @@ export class Updates {
     const run = this.runState();
     if (run && run.state === 'running') return null;
     if (this.state.request) return latest.version;
-    if (this.state.auto && Number.isInteger(hour) && hour >= NIGHT_FROM && hour < NIGHT_TO) {
+    if (this.state.auto) {
+      // Overnight on the updater's clock, or (2067) the night missed.
+      if (!atNight(hour) && !this.missedNight(hour)) return null;
       // Not again by itself a version that did not start here: Update now can.
       if (run && run.state === 'failed' && run.version === latest.version) return null;
       return latest.version;
     }
     return null;
+  }
+
+  // 2067: the release has been out a day, and the updater did not ask here at
+  // any time in the last night on its computer's clock. `hour` is that clock's
+  // hour now; the last night began at most that many hours ago, counted from
+  // 1am, and one more (minutes are not sent).
+  missedNight(hour, now = Date.now()) {
+    const latest = this.state.latest;
+    const out = Date.parse((latest && latest.published_at) || '');
+    if (!Number.isFinite(out) || now - out < CATCH_UP_MS) return false;
+    const a = this.state.agent;
+    const asked = a && a.night_at ? Date.parse(a.night_at) : NaN;
+    if (!Number.isFinite(asked)) return true;
+    const back = Number.isInteger(hour) ? ((((hour - NIGHT_FROM) % 24) + 24) % 24 + 1) * HOUR_MS : CATCH_UP_MS;
+    return asked < now - back;
+  }
+
+  // 2067: what the daily check-in says of updating here: whether new releases
+  // install by themselves (an administrator can turn that off), and how long
+  // ago the updater on this computer last asked.
+  checkinFacts(now = Date.now()) {
+    const seen = this.state.agent ? Date.parse(this.state.agent.seen_at) : NaN;
+    const ago = Number.isFinite(seen) ? Math.max(0, now - seen) : null;
+    return {
+      auto: !!this.state.auto,
+      updater: ago === null ? 'never' : ago <= ASKED_LATELY_MS ? 'minutes' : ago <= CATCH_UP_MS ? 'hours' : 'days',
+    };
   }
 
   status() {
@@ -246,7 +292,12 @@ export class Updates {
     if (!this.agentOk(req)) return sendJson(res, 404, { error: 'Not found' });
     const hour = parseInt(url.searchParams.get('hour'), 10);
     const osName = String(url.searchParams.get('os') || '').toLowerCase();
-    this.state.agent = { seen_at: new Date().toISOString(), os: osName === 'darwin' ? 'macos' : osName === 'linux' ? 'linux' : osName.slice(0, 20) };
+    const at = new Date().toISOString();
+    const before = this.state.agent || {};
+    this.state.agent = { seen_at: at, os: osName === 'darwin' ? 'macos' : osName === 'linux' ? 'linux' : osName.slice(0, 20) };
+    // 2067: and when it last asked in the night, for missedNight().
+    const nightAt = atNight(hour) ? at : before.night_at;
+    if (nightAt) this.state.agent.night_at = nightAt;
     await this.setMeta('update_agent', this.state.agent).catch(() => {});
     const v = this.decide(Number.isFinite(hour) ? hour : NaN);
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });

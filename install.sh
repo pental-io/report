@@ -11,14 +11,15 @@
 #
 # It tells pental.io when it has installed or updated Pental Report, or at
 # which step it stopped and why, and the app says once a day that it is running: a
-# random ID made here, the version, the system and the processor, and nothing
-# else. --no-telemetry, or TELEMETRY=off in .env, turns all of it off.
+# random ID made here, the version, the system and the processor (and, from the
+# app, how it updates), and nothing else. --no-telemetry, or TELEMETRY=off in
+# .env, turns all of it off.
 #
 # Copyright (c) Pental Limited.
 # SPDX-License-Identifier: AGPL-3.0-only
 set -eu
 
-VERSION="0.1.48"
+VERSION="0.1.49"
 REPO="pental-io/report"
 IMAGE="ghcr.io/pental-io/report"
 
@@ -669,7 +670,9 @@ fi
 # ── Updates ────────────────────────────────────────────────────────────────
 # The updater (update.sh) asks Pental Report every minute whether to update,
 # and installs a new release when an administrator presses Update Now, or
-# overnight when updates are automatic (Settings, Updates). On Linux a systemd
+# overnight when updates are automatic (Settings, Updates), or, where the
+# computer was off through the night, the next time it is on, once the release
+# has been out a day (2067). On Linux a systemd
 # timer runs it (cron where there is no systemd), as root because it runs
 # Docker; on macOS a launchd agent, as you. Without it, Pental Report still
 # says when a release is out, with the command that installs it.
@@ -753,13 +756,13 @@ else
   if [ -z "$WANT_UPD" ]; then
     if can_ask; then
       say ""
-      ask A "Keep Pental Report up to date by itself? New releases install overnight, after a copy of the database [Y/n]" "y"
+      ask A "Keep Pental Report up to date by itself? New releases install overnight, or the next time it is on, after a copy of the database [Y/n]" "y"
       case "$A" in [nN]*) WANT_UPD=0 ;; *) WANT_UPD=1 ;; esac
     else WANT_UPD=1; fi
   fi
   envset UPDATER "$WANT_UPD"
   if [ "$WANT_UPD" = 1 ]; then
-    if setup_updater; then UPD=on; step "It updates itself: new releases install overnight"
+    if setup_updater; then UPD=on; step "It updates itself: new releases install overnight, or the next time it is on"
     else UPD=none; note "Updates are yours to install: Pental Report says when one is out, with the command"; fi
   else
     remove_updater || true
@@ -802,11 +805,12 @@ say ""
 printf '  %sLives in%s  %s\n' "$D" "$R" "$DIR"
 printf '  %sLogs%s      cd %s && %s compose logs -f report\n' "$D" "$R" "$DIR" "$DOCKER"
 printf '  %sStop%s      cd %s && %s compose stop\n' "$D" "$R" "$DIR" "$DOCKER"
-if [ "$UPD" = on ]; then printf '  %sUpdates%s   install by themselves overnight (Settings, Updates)\n' "$D" "$R"
+if [ "$UPD" = on ]; then printf '  %sUpdates%s   install by themselves overnight, or the next time it is on (Settings, Updates)\n' "$D" "$R"
 else printf '  %sUpdate%s    run this installer again\n' "$D" "$R"; fi
 if [ "$COUNT" = 1 ]; then
   printf '  %sCounting%s  pental.io counts installs and running copies by a random ID, with\n' "$D" "$R"
-  printf '            the version and system only. TELEMETRY=off in .env turns it off.\n'
+  printf '            the version, the system and how it updates only. TELEMETRY=off\n'
+  printf '            in .env turns it off.\n'
 else
   printf '  %sCounting%s  off (TELEMETRY=off in .env)\n' "$D" "$R"
 fi

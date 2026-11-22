@@ -358,6 +358,8 @@ function _rpUpdatesSettingsHtml() {
   if (st.updater) {
     h += '<label class="rp-upd-auto"><input type="checkbox"' + (st.auto ? ' checked' : '') + ' onchange="_rpUpdAuto(this.checked)">'
       + '<span><strong>Install new releases by themselves, overnight.</strong> Between 1am and 6am on the server’s clock, after a copy of the database is made. '
+      // 2067: and the night missed.
+      + 'If the computer is off or asleep through the night, the next time it is on, once the release has been out a day. '
       + 'With this off, Update Now installs one when you choose.</span></label>';
   } else {
     h += '<p class="set-p">' + (st.updaterSeen
@@ -368,7 +370,7 @@ function _rpUpdatesSettingsHtml() {
   // 1985: and, once a day, that it is running (server/lib/usage.js).
   h += '<p class="set-p rp-hint">To know of a new release, this server asks GitHub for the latest one twice a day. '
     + (st.telemetry
-      ? 'Once a day it also tells pental.io that it is running, with a random ID made when it was installed, its version and its system, so Pental knows how many use it. Nothing else is sent. TELEMETRY=off in .env stops that, and UPDATE_CHECK=off stops both.'
+      ? 'Once a day it also tells pental.io that it is running, with a random ID made when it was installed, its version and its system, and whether it updates by itself, so Pental knows how many use it and whether they are kept up to date. Nothing else is sent. TELEMETRY=off in .env stops that, and UPDATE_CHECK=off stops both.'
       : 'Nothing else is sent. UPDATE_CHECK=off in .env turns it off.')
     + '</p>';
   return h + '</div></div>';

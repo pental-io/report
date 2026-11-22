@@ -79,7 +79,7 @@ export async function createServer(env = process.env, { listen = true } = {}) {
   const updates = new Updates({ cfg, db, api, version: REPORTER_VERSION });
   await updates.start();
   // That a copy is running, to pental.io once a day (TELEMETRY=off stops it).
-  const usage = new Usage({ cfg, db, version: REPORTER_VERSION });
+  const usage = new Usage({ cfg, db, version: REPORTER_VERSION, updates });   // 2067: and how it updates
   usage.start();
   const web = new Web({ cfg });
   if (!web.ready()) log.warn('the app is not built yet', { webDir: cfg.webDir });

@@ -10,8 +10,15 @@
 // tells pental.io it is running, which pental.io counts once a day. What it
 // sends is all there is:
 //
-//   {"event":"checkin","id":"<this copy's random ID>","version":"0.1.21",
-//    "os":"linux","arch":"x64"}
+//   {"event":"checkin","id":"<this copy's random ID>","version":"0.1.49",
+//    "os":"linux","arch":"x64","auto":true,"updater":"minutes"}
+//
+// auto and updater (2067) say how it is kept up to date: whether new releases
+// install by themselves (Settings, Updates), and how long ago the updater on
+// this computer last asked whether to update ("minutes", "hours", "days", or
+// "never": Windows has none, nor a Linux install made without sudo). [stated]
+// Arian, on copies not updating by themselves: "yes" to the check-in saying
+// so, for pental.io to show why a copy is behind.
 //
 // The ID is random, made when the copy was installed (INSTALL_ID in .env, from
 // the installer) or else the first time this server ran (pental.meta). The
@@ -36,8 +43,9 @@ const VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
 export const archOf = (a = process.arch) => (a === 'x64' || a === 'arm64' ? a : 'other');
 
 export class Usage {
-  constructor({ cfg, db, version, fetchImpl, arch }) {
+  constructor({ cfg, db, version, fetchImpl, arch, updates }) {
     this.cfg = cfg; this.db = db; this.version = version;
+    this.updates = updates || null;   // 2067: lib/updates.js, for checkinFacts()
     this.fetch = fetchImpl || ((...a) => fetch(...a));
     this.arch = archOf(arch);
     this.timers = [];
@@ -74,6 +82,8 @@ export class Usage {
       version: VERSION.test(String(this.version || '')) ? this.version : null,
       os: /^(linux|macos|windows)$/.test(this.cfg.reportHost || '') ? this.cfg.reportHost : null,
       arch: this.arch,
+      // 2067
+      ...(this.updates ? this.updates.checkinFacts() : {}),
     };
   }
 

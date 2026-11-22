@@ -29,8 +29,9 @@
 #
 # It tells pental.io when it has installed or updated Pental Report, or at
 # which step it stopped and why, and the app says once a day that it is
-# running: a random ID made here, the version, the system and the processor,
-# and nothing else. -NoTelemetry, or TELEMETRY=off in .env, turns all of it off.
+# running: a random ID made here, the version, the system and the processor
+# (and, from the app, how it updates), and nothing else. -NoTelemetry, or
+# TELEMETRY=off in .env, turns all of it off.
 #
 # Copyright (c) Pental Limited.
 # SPDX-License-Identifier: AGPL-3.0-only
@@ -41,7 +42,7 @@ param(
   [switch]$Local,
   [switch]$Tailscale,
   [string]$Dir = '',
-  [string]$Version = '0.1.48',
+  [string]$Version = '0.1.49',
   [switch]$Yes,
   [switch]$NoOpen,
   [switch]$NoTelemetry,
@@ -1007,7 +1008,8 @@ Write-Host '  Stop      ' -ForegroundColor DarkGray -NoNewline; Write-Host "cd `
 Write-Host '  Update    ' -ForegroundColor DarkGray -NoNewline; Write-Host 'run this installer again'
 if ($Counting) {
   Write-Host '  Counting  ' -ForegroundColor DarkGray -NoNewline; Write-Host 'pental.io counts installs and running copies by a random ID, with'
-  Write-Host '            the version and system only. TELEMETRY=off in .env turns it off.'
+  Write-Host '            the version, the system and how it updates only. TELEMETRY=off'
+  Write-Host '            in .env turns it off.'
 } else {
   Write-Host '  Counting  ' -ForegroundColor DarkGray -NoNewline; Write-Host 'off (TELEMETRY=off in .env)'
 }

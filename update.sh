@@ -6,7 +6,9 @@
 # computer's own connection to it and with UPDATE_TOKEN from .env, whether to
 # update; nearly always the answer is no, and it stops there. When an
 # administrator has pressed Update Now, or overnight when updates are
-# automatic, the answer is the version to install, and it:
+# automatic (where the computer was off through the night, the next time it
+# is on, once the release has been out a day), the answer is the version to
+# install, and it:
 #
 #   1. makes a copy of the database in backups/ (the last three are kept);
 #   2. downloads that release from its own tag on GitHub, which cannot be
