@@ -1090,6 +1090,10 @@ mark.qa-sugg.active{box-shadow:inset 0 -1.15em 0 rgba(var(--notification-color-r
 img.sp-hold{width:var(--sp-w);max-width:100%;height:auto;aspect-ratio:var(--sp-ar)}
 .rich-content table,[data-qa-field] table:not(.rich-editor *,.editor-toolbar *){width:100%;border-collapse:collapse;margin:0.75rem 0}
 .rich-content td,.rich-content th,[data-qa-field] td:not(.rich-editor *,.editor-toolbar *),[data-qa-field] th:not(.rich-editor *,.editor-toolbar *){border:1px solid var(--border);padding:0.5rem;font-size:0.85rem;overflow-wrap:anywhere}
+/* 2070: a written table's headings wrap within their columns, as its cells do
+   (the product's own tables keep theirs on one line, th's nowrap), so a tool's
+   table of six columns does not run one heading into the next. */
+.rich-content th,[data-qa-field] th:not(.rich-editor *,.editor-toolbar *){white-space:normal;overflow-wrap:break-word}
 .rich-content .img-caption,[data-qa-field] .img-caption:not(.rich-editor *,.editor-toolbar *){font-size:0.8rem;color:var(--gray);text-align:center;margin-top:0.25rem;font-style:italic}
 /* 1951: a caption's words in the caption's own colours. A paste before 1951 left the editor's background (and the copied page's text colour) on them, which the other theme showed as a box; until that evidence is saved again, it is not drawn. */
 .img-caption [style*="background"]{background:none!important}
@@ -5730,6 +5734,45 @@ body.afm-dragging,body.afm-dragging *{cursor:grabbing!important;-webkit-user-sel
 .fsi-dedupe-n{font-size:0.95rem}
 .fsi-dedupe-n strong{font-size:1.1rem}
 .fsi-from{display:block;margin-top:0.15rem;font-size:0.7rem;color:var(--gray)}
+/* 2070: the AI import: its choice, the findings to tick, each one's evidence. */
+.fsi-ai{margin:0.55rem 0 0.2rem;padding:0.65rem 0.85rem;border:1px solid var(--border);border-radius:10px;background:var(--bg)}
+.fsi-ai label{font-weight:600}
+.fsi-ai-off p{font-size:0.8rem}
+.fsi-ai-bar{display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin:0.4rem 0 0.6rem;padding-bottom:0.5rem;border-bottom:1px solid var(--border)}
+.fsi-ai-list{display:flex;flex-direction:column;gap:0.45rem}
+.fsi-ai-item{border:1px solid var(--border);border-radius:10px;padding:0.55rem 0.75rem;background:var(--card)}
+.fsi-ai-item.off{opacity:0.55}
+.fsi-ai-head{display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap}
+.fsi-ai-head input{flex:none}
+.fsi-ai-title{font-weight:600;font-size:0.88rem;flex:1 1 12rem;min-width:0;overflow-wrap:anywhere;cursor:pointer}
+.fsi-ai-meta{font-size:0.72rem;color:var(--gray);white-space:nowrap}
+.fsi-ai-words{display:flex;align-items:center;gap:0.45rem;margin:0.4rem 0 0 1.6rem;font-size:0.76rem;color:var(--gray)}
+.fsi-ai-words label{font-weight:600}
+.fsi-ai-sel{max-width:20rem;font-size:0.76rem;padding:0.2rem 0.45rem}
+.fsi-ai-more{margin:0.35rem 0 0 1.6rem}
+.fsi-ai-more summary{cursor:pointer;font-size:0.76rem;color:var(--accent)}
+/* 2070: the evidence opened in full, in the window's own scroll (a box of its
+   own scrolling inside it cut a table off part way), wide tables across. */
+.fsi-ai-prev{margin-top:0.45rem;overflow-x:auto;font-size:0.8rem;border-top:1px solid var(--border);padding-top:0.45rem}
+.fsi-ai-prev table{border-collapse:collapse;width:100%;margin:0.35rem 0 0.6rem;table-layout:auto}
+/* Each column as wide as its words, a word broken only where it would not
+   fit at all (an address or a version kept on one line). */
+.fsi-ai-prev th,.fsi-ai-prev td{border:1px solid var(--border);padding:0.3rem 0.45rem;text-align:left;vertical-align:top;overflow-wrap:break-word}
+.fsi-ai-prev .code-block{white-space:pre-wrap;font-family:var(--font-mono);font-size:0.72rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:0.5rem 0.65rem;margin:0.25rem 0 0.6rem;overflow-wrap:anywhere}
+.fsi-ai-note{margin:0 0 0.35rem}
+/* 2071: what a grouped finding brings together, beside it (not in its
+   evidence); Lay out again and the file's table, above its evidence; where to
+   put the grouping right; the firm's choice and instructions in Settings. */
+.fsi-ai-from{display:flex;flex-wrap:wrap;gap:0.25rem 0.35rem;margin:0.35rem 0 0 1.6rem;font-size:0.72rem;color:var(--gray)}
+.fsi-ai-from span{padding:0.05rem 0.45rem;border:1px solid var(--border);border-radius:999px;background:var(--bg);overflow-wrap:anywhere}
+.fsi-ai-lay{display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem;margin-top:0.45rem}
+.fsi-ai-lay:empty{display:none}
+.fsi-ai-fix{margin:-0.15rem 0 0.4rem;font-size:0.76rem}
+.ff-aig{margin-top:0.85rem}
+.ff-aig-lbl{display:block;font-size:0.8rem;font-weight:600;margin-bottom:0.3rem}
+.ff-aig-sel{max-width:20rem}
+.ff-aig-ta{width:100%;min-height:4.2rem;resize:vertical}
+@media (max-width:640px){.fsi-ai-words,.fsi-ai-more,.fsi-ai-from{margin-left:0}.fsi-ai-meta{white-space:normal}}
 .ast-pair{margin-top:0.6rem;font-size:0.8rem;display:flex;flex-wrap:wrap;gap:0.35rem;align-items:center}
 .ast-pair-l{font-weight:700;color:var(--gray);font-size:0.72rem}
 .ast-owner{padding:0.1rem 0.5rem;border-radius:999px;background:rgba(var(--accent-rgb),0.12);color:var(--text)}

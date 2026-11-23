@@ -20802,6 +20802,8 @@ async function loadAllData() {
 
     try { _flibMoveImpactSoon(); } catch (e) {}
 
+    setTimeout(function () { try { _impactMoveSoon(); } catch (e) {} }, 3000);
+
     if (S._bootReady) return;
 
     var _logoSrc = null;
@@ -21342,6 +21344,8 @@ function _workPut(ids, got) {
   ids.forEach(function (id) { _WORK.full[id] = true; });
 
   setTimeout(function () { try { _tlMarkInternal(); } catch (e) {} }, 0);
+
+  setTimeout(function () { try { _impactMoveSoon(); } catch (e) {} }, 0);
 }
 function _workNeed(aid) {
   if (!_workIsLight(aid) || _WORK.wait[aid] || _WORK.failed[aid] || _WORK.need[aid]) return;
@@ -31071,6 +31075,8 @@ function closeM() {
   if (_mIsDismissGesture() && _mIsDirty()) { _closeMAsking(); return; }
 
   try { if (typeof _edPopEl !== 'undefined' && _edPopEl) _edClosePop(); S._cvssKept = null; } catch (e) {}
+
+  try { if (S._scanImport && typeof _fsiAiStop === 'function') _fsiAiStop(S._scanImport); } catch (e) {}
   _mDirty = false; _mTyped = []; _mPaint = null;
   _mBaselineKey = ''; _mModalRef = null;
 
@@ -37532,7 +37538,8 @@ function _flibMoveImpact(j) {
     var e = key && j._ix.byKey[key];
     if (e && e.title === f.title && asWritten(e, f)) jobs.push({ table: 'findings', row: f, patch: { description: sanitizeHtml(e.description || ''), impact: null } });
   });
-  if (!jobs.length) return;
+
+  if (!jobs.length) { try { _impactMoveSoon(); } catch (e) {} return; }
   (async function () {
     for (var i = 0; i < jobs.length; i++) {
       var jb = jobs[i];
@@ -37541,6 +37548,7 @@ function _flibMoveImpact(j) {
         if (r && !r.error && r.data && r.data.length) { jb.row.description = jb.patch.description; jb.row.impact = null; }
       } catch (e) {  }
     }
+    try { _impactMoveSoon(); } catch (e) {}
   })();
 }
 function _flibMoveImpactSoon() {
@@ -37552,6 +37560,71 @@ function _flibMoveImpactSoon() {
     || S.data.findings.some(function (f) { return f && has(f.impact) && String(f.created_at || '') >= '2026-11-03T16:30'; });
 
   if (want && !_flibErr) _flibLoad().catch(function () {});
+}
+var _impactMoving = false, _impactDone = {}, _IMPACT_AT_ONCE = 400;
+function _impactHtmlOf(v) {
+  var s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  return /<[a-z][^>]*>/i.test(s) ? sanitizeHtml(s) : _fsiHtml(s);
+}
+function _fsiWithImpact(desc, imp) {
+  var d = String(desc || ''), i = String(imp || '');
+  var words = function (x) { return x.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase(); };
+  var wi = words(i);
+  if (!wi) return d;
+  if (words(d).indexOf(wi) >= 0) return d;
+  return d + i;
+}
+function _impactMoveSoon() {
+  if (_impactMoving || !S.data || !S.profile || typeof canEdit !== 'function' || !canEdit()) return;
+  if (S.profile.role === 'client') return;
+  var has = function (x) { return !!String(x || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim(); };
+
+  var flibFirst = !_flibImpactMoved && ((S.data.library || []).some(function (k) { return k && k.library_key && has(k.impact); })
+    || (S.data.findings || []).some(function (f) { return f && has(f.impact) && String(f.created_at || '') >= '2026-11-03T16:30'; }));
+  if (flibFirst && !_flibErr) return;
+  var jobs = [];
+  (S.data.findings || []).forEach(function (f) {
+    if (jobs.length >= _IMPACT_AT_ONCE) return;
+    if (!f || !f.id || _impactDone['f:' + f.id] || !has(f.impact)) return;
+    if (_isScanFinding(f)) return;
+    if (typeof _workRowLight === 'function' && _workRowLight(f)) return;
+    jobs.push({ table: 'findings', row: f, key: 'f:' + f.id });
+  });
+  (S.data.library || []).forEach(function (k) {
+    if (jobs.length >= _IMPACT_AT_ONCE) return;
+    if (!k || !k.id || _impactDone['k:' + k.id] || !has(k.impact)) return;
+    jobs.push({ table: 'kb_entries', row: k, key: 'k:' + k.id });
+  });
+  if (!jobs.length) return;
+  _impactMoving = true;
+  var who = S.profile.id;
+  (async function () {
+    try {
+      for (var i = 0; i < jobs.length; i++) {
+        if (!S.profile || S.profile.id !== who) return;
+        var jb = jobs[i], r = jb.row;
+        _impactDone[jb.key] = 1;
+        if (!has(r.impact)) continue;
+        var furniture = typeof _pntlIsFurniture === 'function' && _pntlIsFurniture(r.impact);
+        var patch = { impact: null };
+
+        var d0 = String(r.description || '');
+        if (!furniture) patch.description = _fsiWithImpact(/<[a-z][^>]*>/i.test(d0) ? d0 : _fsiHtml(d0), _impactHtmlOf(r.impact));
+        try {
+          var q = supabaseClient.from(jb.table).update(patch).eq('id', r.id).not('impact', 'is', null);
+          if (r.row_version != null) q = q.eq('row_version', r.row_version);
+          var res = await q.select('id');
+          if (res && !res.error && res.data && res.data.length) {
+            if (patch.description != null) r.description = patch.description;
+            r.impact = null;
+          }
+        } catch (e) {  }
+      }
+    } finally {
+      _impactMoving = false;
+    }
+  })();
 }
 function _flibWant(then) {
   if (_flibWhole || _flibAsk || _flibErr) return;
@@ -39745,6 +39818,8 @@ function _aixKind(key, ref) {
   key = String(key || '');
   if (/^section:/.test(key)) return 'section';
   if (/^scan/.test(key)) return 'scan';
+
+  if (/^ingest_table/.test(key)) return 'ingest_table';
   return (ref && ref.type === 'kb' ? 'kb:' : '') + key;
 }
 function _aixStoreKey() {
@@ -39851,6 +39926,8 @@ var _AIX_EX = {
   notes: 'e.g. Testing paused for a day at the client\u2019s request',
   caveats: 'e.g. Tested from the internet only, with no credentials',
   scan: 'e.g. One paragraph, for the client\u2019s IT lead',
+  ingest: 'e.g. Keep each web server\u2019s TLS weaknesses as one finding, and write for the client\u2019s IT team',
+  ingest_table: 'e.g. One row for each host and port, with the weak cipher suites in one cell',
   rb: 'e.g. The findings start in section 4, and the client\u2019s name is on the cover\u2019s second line',
   _: 'e.g. Two sentences at most'
 };
@@ -39892,6 +39969,8 @@ function _aixOpen(t) {
   var hint0 = scope === 'rb' ? 'Sent with every part of the build.'
     : scope === 'page' ? 'Sent each time you generate this.'
     : key === 'all' ? 'Sent with every field it fills, and each field\u2019s own with it.'
+
+    : key === 'ingest' ? 'Sent with the grouping, each table AI lays out and every finding it writes.'
 
     : 'Applied to what is there now.';
   var hint = hint0 + (scope === 'rb' ? ' Kept with this document.' : scope === 'page' ? ' Kept until the page reloads.' : ' Kept until the dialog closes.');
@@ -41792,6 +41871,92 @@ function _evAiTouched(ed) {
   } catch (e) {}
 }
 window._evAiTouched = _evAiTouched;
+var _EV_EDIT_PROMPT = 'You edit the evidence of a penetration test finding: the tester’s notes, the lines and captions written about its screenshots, and the requests, responses, commands and tool output it holds. Do what the person asks. Keep everything they do not ask you to change as it is, and never add a host, address, version, path, value or result that the evidence does not hold.';
+var _EV_EDIT_CONTRACT = 'Reply with the whole of the evidence, edited, as HTML: <p> for paragraphs, <ul> or <ol> with <li> for lists, <table> with <thead>, <tbody>, <tr>, <th> and <td> for a table, <strong> for emphasis, <code> for short inline terms and <pre><code> for requests, responses, commands, code and any other output of more than one line. No headings, no markdown, no inline styles or colours, and no preamble. Keep each [[IMAGE n]] mark exactly as written, where its screenshot belongs.';
+function _evEditValues(text) {
+  var t = String(text || ''), out = {};
+  var add = function (re) { (t.match(re) || []).forEach(function (v) { out[v.replace(/[).,;:]+$/, '')] = 1; }); };
+  add(/\b\d{1,3}(?:\.\d{1,3}){3}(?:\/\d{1,2})?\b/g);
+  add(/\bCVE-\d{4}-\d{4,}\b/gi);
+  add(/\bv?\d+(?:\.\d+){1,4}(?:[-_.+][A-Za-z0-9]+)*\b/g);
+  add(/https?:\/\/[^\s<>"']+/gi);
+  add(/[A-Za-z]:\\[^\s<>"'|?*]+/g);
+  add(/(?:^|\s)(\/(?:[\w.-]+\/)+[\w.-]*)/g);
+  return Object.keys(out).map(function (v) { return v.trim(); }).filter(function (v) { return v.length >= 3; });
+}
+async function _evEditToInstructions(ed, o, k) {
+  var mref = (S && S.modal) || null;
+  var instr = _aixFor(k.key, null, mref);
+  var cur = _aixEditOf(ed);
+  if (!cur) { toast('Nothing in ' + k.where + ' to edit yet: paste or write it first', 'error'); return null; }
+  if (cur.tooBig) { toast('That is too long to edit at once (' + cur.size.toLocaleString() + ' characters, ' + cur.max.toLocaleString() + ' at most): edit a part of it at a time, or take out what is not needed first', 'error'); return null; }
+  var btn = o.quiet ? null : document.getElementById(o.btnId || 'genEvBtn');
+  var solo = btn ? _genSolo(btn, [ed], 'Editing', { nolock: true }) : null;
+  var wasEditable = ed.getAttribute('contenteditable');
+  ed.setAttribute('contenteditable', 'false');
+  S._evBusy = ed;
+  var beforeText = _fsTextOfHtml(ed.innerHTML);
+  try {
+    var titleEl = document.getElementById('mTi');
+    var ctx = o.finding
+      ? _aiFindingContext({ title: String(o.finding.title || ''), description: _qaAiPlain(o.finding.description || ''), descMax: 1500,
+          severity: String(o.finding.severity || ''), category: String(o.finding.category || ''), cwe: String(o.finding.cwe || ''),
+          assets: Array.isArray(o.finding.affected_hosts) ? o.finding.affected_hosts.join('\n') : String(o.finding.affected_hosts || '') })
+      : _aiFindingContext({ title: titleEl ? titleEl.value.trim() : '', description: _aiEditorText(document.getElementById('mDe'), ''), descMax: 1500 });
+    if (o.about) ctx += '\n' + o.about;
+    var opts = { extra: instr, current: cur };
+
+    if (cur.imgs.length && _aiCanSeeImages()) {
+      var els = Array.prototype.slice.call(ed.querySelectorAll('img'));
+      var datas = await Promise.all(els.map(_evImageData));
+      var imgs = datas.filter(Boolean);
+      if (imgs.length === els.length) { opts.images = imgs; opts.imagesExact = true; }
+    }
+    var raw = await callAI(ctx + '\nThe evidence of this finding is given below as it stands. Edit it as the person asks.',
+      _EV_EDIT_PROMPT + '\n\n' + _EV_EDIT_CONTRACT, null, opts);
+    if (!raw || !String(raw).trim()) throw new Error('the model sent back nothing');
+    if (document.getElementById(k.editorId) !== ed) throw new Error('the finding was drawn again meanwhile: ask again');
+
+    var _evT = _aiUnfence(String(raw).replace(/<think>[\s\S]*?<\/think>/gi, '').trim()).trim(), _evJson = false;
+    if (/^[\[{]/.test(_evT)) { try { JSON.parse(_evT); _evJson = true; } catch (e) {} }
+    var _evProbe = document.implementation.createHTMLDocument('').createElement('div');
+    _evProbe.innerHTML = sanitizeHtml(_aiHtmlFromReply(raw));
+    var _evNone = !String(_evProbe.textContent || '').trim() && !_evProbe.querySelector('img');
+    if (_evJson || (_evNone && String(beforeText || '').trim())) {
+      toast('Nothing changed: what came back from the model was not ' + k.where + ' edited. Ask again.', 'info');
+      return { done: 0, edited: false, notEvidence: true };
+    }
+    _genEdit({ quiet: true }, cur, ed, raw, _evShotCount(), k.label);
+
+    try { _evPreToBlocks(ed); } catch (e) {}
+    var afterText = _fsTextOfHtml(ed.innerHTML);
+    var lost = _evEditValues(beforeText).filter(function (v) { return afterText.indexOf(v) < 0; });
+    var undo = _aixUndoOf(cur, k.label);
+    var said = _evCap(k.where.replace(/^the /, '')) + ' edited to your instructions'
+      + (lost.length ? '. ' + lost.length + (lost.length === 1 ? ' value that was in it is not now: ' : ' values that were in it are not now: ')
+        + lost.slice(0, 6).join(', ') + (lost.length > 6 ? ' and ' + (lost.length - 6) + ' more' : '') : '');
+    toast(said + '.' + (undo ? ' Click here to undo.' : ''), lost.length ? 'info' : 'success', undo ? 12000 : (lost.length ? 10000 : undefined), undo);
+    return { done: 1, edited: true, lost: lost };
+  } catch (e) {
+    toast('AI error: ' + ((e && e.message) || e), 'error');
+    return { error: (e && e.message) || String(e) };
+  } finally {
+    if (S._evBusy === ed) S._evBusy = null;
+    if (wasEditable == null) ed.removeAttribute('contenteditable'); else ed.setAttribute('contenteditable', wasEditable);
+    _genSoloDone(solo);
+  }
+}
+function _evPreToBlocks(ed) {
+  Array.prototype.slice.call(ed.querySelectorAll('pre')).forEach(function (pre) {
+    var only = pre.children.length === 1 && pre.firstElementChild.nodeName === 'CODE' ? pre.firstElementChild : null;
+    var div = document.createElement('div');
+    div.className = 'code-block';
+    div.setAttribute('contenteditable', 'true');
+    var from = only || pre;
+    while (from.firstChild) div.appendChild(from.firstChild);
+    pre.parentNode.replaceChild(div, pre);
+  });
+}
 async function generateEvidenceLayout(o) {
   o = o || {};
 
@@ -41803,6 +41968,12 @@ async function generateEvidenceLayout(o) {
   if (!ed) return null;
 
   if (S._evBusy && S._evBusy === ed) return null;
+
+  if (!o.onlyNew && !o.silent && !o.run) {
+    var _evOwn = '';
+    try { _evOwn = _aixGet(_aixK, (S && S.modal) || null); } catch (e) { _evOwn = ''; }
+    if (_evOwn) return _evEditToInstructions(ed, o, { key: _aixK, where: _where, editorId: _edId, label: _evCap(_where.replace(/^the /, '')) });
+  }
 
   var before = ed.innerHTML;
   var box = _evBoxLoose(ed), boxKeep = false;
@@ -45658,6 +45829,7 @@ function renderSettings__portal() {
   h += '</div>';
   }
 
+  if (!(typeof REPORTER !== 'undefined' && REPORTER)) {
   h += '<div style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--border)">';
   h += '<div style="font-size:0.8rem;font-weight:700;margin-bottom:0.3rem">Importing from scanners</div>';
   h += '<p class="hint" style="margin-bottom:0.6rem">Each findings area, and each phase of an engagement, has an Import from scanner button beside Import from Library. A scanner\u2019s export (Nessus, Burp, OpenVAS, Qualys, Nmap, SARIF, CSV and more) becomes findings there, one per issue with every host it was seen on, in your library\u2019s wording where it has the issue. The file is read in your browser and the findings are saved in your name, as ones you add yourself are. The scanning area keeps its own import either way.</p>';
@@ -45665,7 +45837,21 @@ function renderSettings__portal() {
   h += '<input type="checkbox" id="ff_scanner_import"' + (_ffScannerImport() ? ' checked' : '') + '>';
   h += '<span>Offer Import from scanner in the findings area</span>';
   h += '</label>';
+
+  var _aig = _ffCfg();
+  h += '<div class="ff-aig">';
+  h += '<label class="ff-aig-lbl" for="ff_ai_group">Group into report findings with AI</label>';
+  h += '<select class="form-select ff-aig-sel" id="ff_ai_group">'
+    + '<option value="choose"' + (_aig.ai_group !== 'every' ? ' selected' : '') + '>Choose it in each import</option>'
+    + '<option value="every"' + (_aig.ai_group === 'every' ? ' selected' : '') + '>Ticked in every import</option></select>';
+  h += '<p class="hint" style="margin:0.3rem 0 0">Ticked in every import, a tester can still untick it for a file they want brought in issue by issue. It needs AI, set up under <a href="#" onclick="event.preventDefault();_setGoTab(\'ai\')">AI</a>.</p>';
+  h += '<label class="ff-aig-lbl" for="ff_ai_group_text" style="margin-top:0.75rem">Your instructions for grouping with AI</label>';
+  h += '<textarea class="form-input ff-aig-ta" id="ff_ai_group_text" rows="3" maxlength="3000" spellcheck="true" placeholder="e.g. Keep unsupported operating systems apart from other out-of-date software, and write for the client’s IT team">'
+    + esc(_aig.ai_group_text) + '</textarea>';
+  h += '<p class="hint" style="margin:0.3rem 0 0">Followed every time AI groups a tool’s results into findings: the grouping, each table it lays out and every finding it writes. A tester’s own instructions in the import are added to these, and come first where the two differ.</p>';
   h += '</div>';
+  h += '</div>';
+  }
 
   h += '<div style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--border)">';
   h += '<div style="font-size:0.8rem;font-weight:700;margin-bottom:0.3rem">Exporting findings</div>';
@@ -58811,6 +58997,9 @@ function _ffCfgBase() {
     library_replace: c.library_replace === true,
     scanner_import: c.scanner_import !== false,
 
+    ai_group: c.ai_group === 'every' ? 'every' : 'choose',
+    ai_group_text: String(c.ai_group_text == null ? '' : c.ai_group_text).slice(0, 3000),
+
     categories: Array.isArray(c.categories)
       ? c.categories.map(function (x) { return String(x == null ? '' : x).replace(/\s+/g, ' ').trim(); }).filter(Boolean)
       : [],
@@ -59432,7 +59621,10 @@ window._AI_REPLY_CONTRACTS = {
   "cvss40_rules": "Decide each metric from the finding, not from how severe the issue sounds. AV is N only if the issue is reachable across a network, A if it needs the same local network, L if it needs a shell or a local account, P if it needs physical access. AC is H when the attacker must defeat a security measure the attack cannot control, such as address randomisation. AT is P when the attack depends on conditions of the deployment being present, such as a race or a particular configuration. PR is N only if no account at all is needed, L for an ordinary user account, H for an administrator. UI is P when a victim must take an ordinary action such as visiting a page, and A when they must deliberately do something, such as opening a file or accepting a warning. VC, VI and VA are the impact on the vulnerable system, and SC, SI and SA the impact on other systems beyond it, N when nothing beyond it is affected. Score each impact N where the finding shows none, and H only where the whole of that property is lost.",
   "cvss40": "Reply with ONLY a JSON object of this shape, in which the brackets list the choices for each metric and are not an answer: {\"vector\":\"CVSS:4.0/AV:[N|A|L|P]/AC:[L|H]/AT:[N|P]/PR:[N|L|H]/UI:[N|P|A]/VC:[H|L|N]/VI:[H|L|N]/VA:[H|L|N]/SC:[H|L|N]/SI:[H|L|N]/SA:[H|L|N]\",\"score\":<the CVSS 4.0 base score of that vector, 0.0 to 10.0>,\"reasoning\":\"<at most 20 words naming what in this finding decided the attack vector and the impacts>\"}. No other text and no code fence.",
   "qa_review": "Reply with ONLY a JSON object of this shape: {\"checklist\":[{\"item\":<the item's number>,\"verdict\":\"met\" or \"not_met\" or \"unclear\",\"note\":\"<one or two sentences on why>\"}],\"comments\":[{\"finding\":\"<F and its number, or null>\",\"area\":\"<an area's name in brackets, document for the Word report, appendix and its number, or null>\",\"field\":\"<a finding's field name in brackets, or null>\",\"quote\":\"<the exact words it is about, copied from the text>\",\"comment\":\"<what should change, and why>\"}],\"edits\":[{\"finding\":\"<F and its number, or null>\",\"area\":\"<an area's name in brackets, or null>\",\"field\":\"<a finding's field name in brackets, or null>\",\"find\":\"<the exact words to replace, copied from the field>\",\"replace\":\"<the words to put in their place>\",\"why\":\"<a few words>\"}]}. Give a verdict for every checklist item. A comment or an edit says where it is: a finding and one of its fields, or an area. Copy quote and find exactly as they are written, a phrase or a sentence, never a whole field. Never edit what is marked comment only. At most 25 comments and 25 edits. No other text and no code fence.",
-  "scan_finding": "Return ONLY a JSON array, one object per input finding, in the same order, each with the keys title, description, impact and remediation. No preamble and no code fences." };
+  "scan_finding": "Return ONLY a JSON array, one object per input finding, in the same order, each with the keys title, description, impact and remediation. No preamble and no code fences.",
+
+  "ingest_groups": "Reply with ONLY a JSON object of this shape: {\"findings\":[{\"title\":\"<the finding's title>\",\"issues\":[<the numbers of the issues it brings together>],\"library\":\"<L and the number of the firm's library entry that is this finding, or null>\"}]}. Every issue's number is in exactly one finding. No other text and no code fence.",
+  "ingest_table": "Reply with ONLY a JSON object of this shape: {\"columns\":[\"<a column's heading>\"],\"rows\":[{\"output\":<the number of the host and port the row is for>,\"cells\":[\"<the value>\"]}]}, each row with one value for each column, in the columns' order, and an empty string where its output gives none. No other text and no code fence." };
 function _smIsShippedPrompt(key, text) {
   var t = String(text == null ? '' : text).replace(/\r\n/g, '\n').trim();
   if (!t) return true;
@@ -70741,8 +70933,8 @@ async function importKBEntry(id) {
     severity: k.severity || 'medium',
     cwe: k.cwe || '',
     category: k.category || '',
-    description: k.description || '',
-    impact: k.impact || '',
+
+    description: String(k.impact || '').trim() ? _fsiWithImpact(/<[a-z][^>]*>/i.test(String(k.description || '')) ? String(k.description || '') : _fsiHtml(k.description), _impactHtmlOf(k.impact)) : (k.description || ''),
     remediation: k.remediation || '',
     refs: k.refs || [],
     status: 'open',
@@ -74055,6 +74247,10 @@ function _ffCaptureEdits() {
   if (_libRep) c.library_replace = !!_libRep.checked;
   var _scImp = document.getElementById('ff_scanner_import');
   if (_scImp) c.scanner_import = !!_scImp.checked;
+  var _aiGrp = document.getElementById('ff_ai_group');
+  if (_aiGrp) c.ai_group = _aiGrp.value === 'every' ? 'every' : 'choose';
+  var _aiGrpT = document.getElementById('ff_ai_group_text');
+  if (_aiGrpT) c.ai_group_text = String(_aiGrpT.value || '').slice(0, 3000);
   _ffDefs().forEach(function(d) {
     var lab = document.getElementById('ff_label_' + d.key);
     var en  = document.getElementById('ff_en_' + d.key);
@@ -74795,6 +74991,15 @@ async function saveFindingFieldsConfig() {
       scanner_import: (function () {
         var el = document.getElementById('ff_scanner_import');
         return el ? !!el.checked : _ffScannerImport();
+      })(),
+
+      ai_group: (function () {
+        var el = document.getElementById('ff_ai_group');
+        return el ? (el.value === 'every' ? 'every' : 'choose') : _ffCfg().ai_group;
+      })(),
+      ai_group_text: (function () {
+        var el = document.getElementById('ff_ai_group_text');
+        return el ? String(el.value || '').trim().slice(0, 3000) : _ffCfg().ai_group_text;
       })() });
 
     var _cats = _ffCatRead();
@@ -97261,6 +97466,8 @@ async function _fsiRead(aid, phase, inputEl) {
     keep: keep, keepWas: keep,
     map: multi ? {} : _scanStoredMap(one.format), mapWas: JSON.stringify((multi ? {} : _scanStoredMap(one.format)) || {}),
     clientName: getClientName(a.client_id), closeGone: false, libWording: true,
+
+    ai: _ffCfg().ai_group === 'every' && _fsiAiHas(),
   };
   openM('scanimport');
 }
@@ -97304,11 +97511,32 @@ function _fsiBhJson(text) {
   try { j = JSON.parse(k ? t.slice(k) : t); } catch (e) { return null; }
   return _bhFile(j) ? j : null;
 }
+function _fsiEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function _fsiHtml(t) {
+  var s = String(t == null ? '' : t).trim();
+  if (!s) return '';
+  if (/<(p|ul|ol|li|div|br|table)\b/i.test(s)) return sanitizeHtml(s);
+  return s.split(/\n\s*\n/).map(function (p) { return '<p>' + _fsiEsc(p).replace(/\n/g, '<br>') + '</p>'; }).join('');
+}
 function _fsiRating(cvss) {
   var n = parseFloat(cvss);
   if (!(n > 0)) return null;
   return n >= 9 ? 'critical' : n >= 7 ? 'high' : n >= 4 ? 'medium' : 'low';
 }
+function _fsiAiHas() {
+  return !!(((S.data && S.data.settings) || {}).ai_provider || S._hasAiKey);
+}
+function _fsiAiStop(m) {
+  m = m || S._scanImport;
+  if (!m) return;
+  try { if (m.layCtl) m.layCtl.abort(); } catch (e) {}
+  m.layCtl = null;
+  var run = m.aiRun;
+  if (!run) return;
+  run.stopped = true;
+  try { if (run.ctl) run.ctl.abort(); } catch (e) {}
+}
+window._fsiAiStop = _fsiAiStop;
 var _MVZ_ZIP_IC = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M10 6h1M10 9h1M10 12h1"/><rect x="9" y="14" width="3" height="4" rx="1"/></svg>';
 var _IRV_GROUPS = {
   branding: ['accent_color', 'color_bg', 'color_border', 'color_card', 'color_hover', 'color_muted', 'color_primary', 'color_secondary', 'color_text',
