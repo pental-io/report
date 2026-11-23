@@ -637,6 +637,8 @@ function _pathsSharedElsewhere(opts) {
   var used = {};
   var o = opts || {};
   try {
+
+    if (typeof _workRowLight === 'function' && (S.data.findings || []).some(function (f) { return _workRowLight(f); })) return null;
     (S.data.findings || []).forEach(function (f) {
       if (!f || (o.skipFindingIds && o.skipFindingIds.indexOf(f.id) > -1)) return;
       if (o.skipAssessmentId && f.assessment_id === o.skipAssessmentId) return;
@@ -676,6 +678,23 @@ function _pathsNotSharedElsewhere(paths, opts) {
   return paths.filter(function (p) { return !used[p]; });
 }
 window._pathsNotSharedElsewhere = _pathsNotSharedElsewhere;
+async function _removeUnshared(paths, opts) {
+  if (!paths || !paths.length) return;
+  if (typeof _workRemoveUnshared === 'function' && typeof _workLightIds === 'function' && _workLightIds().length) { _workRemoveUnshared(paths, opts); return; }
+  try {
+    var left = _pathsNotSharedElsewhere(paths, opts);
+    if (left.length) await supabaseClient.storage.from('assessment-files').remove(left);
+  } catch (e) {}
+}
+function _workRemoveUnshared(paths, opts) {
+  if (!paths || !paths.length) return Promise.resolve();
+  var go = function () {
+    var left = _pathsNotSharedElsewhere(paths, opts);
+    if (left.length) return supabaseClient.storage.from('assessment-files').remove(left);
+  };
+  var first = _workLightIds().length ? _workEnsureAll() : Promise.resolve();
+  return first.then(go).catch(function () {});
+}
 function _collectAssessmentStoragePaths(a) {
   var paths = [];
 
@@ -1648,11 +1667,11 @@ function _renderPhaseChecklistsPanel(assessment, phase, phaseIdx, isClient) {
       if (t.description) {
         h += '<div style="font-size:0.78rem;color:var(--gray);margin:0.5rem 0">' + esc(t.description) + '</div>';
       }
-      if (t.source && t.source !== 'custom' && t.source_url) {
+      if (t.source && t.source !== 'custom' && _crbSafeUrl(t.source_url)) {
 
         var _srcHost = '';
         try { _srcHost = new URL(t.source_url).hostname.replace(/^www\./, ''); } catch (e) {}
-        h += '<div style="font-size:0.72rem;margin-bottom:0.5rem"><a href="' + esc(t.source_url) + '" target="_blank" rel="noopener" style="color:var(--accent)">Reference: ' + esc(_srcHost || t.source) + ' &rarr;</a></div>';
+        h += '<div style="font-size:0.72rem;margin-bottom:0.5rem"><a href="' + esc(_crbSafeUrl(t.source_url)) + '" target="_blank" rel="noopener" style="color:var(--accent)">Reference: ' + esc(_srcHost || t.source) + ' &rarr;</a></div>';
       }
 
     if (!items.length) {
@@ -1676,7 +1695,7 @@ function _renderPhaseChecklistsPanel(assessment, phase, phaseIdx, isClient) {
 
         if (it.description && _crbDescLong(it.description)) h += '<details class="crb-det"><summary>Details</summary><div class="crb-rich" style="font-size:0.78rem;color:var(--gray)">' + _crbDisplay(it.description) + '</div></details>';
         else if (it.description) h += '<div class="crb-rich" style="font-size:0.78rem;color:var(--gray);margin-top:2px">' + _crbDisplay(it.description) + '</div>';
-        if (it.ref_url) h += '<div style="font-size:0.72rem;margin-top:2px"><a href="' + esc(it.ref_url) + '" target="_blank" rel="noopener" style="color:var(--accent)">Reference &rarr;</a></div>';
+        if (_crbSafeUrl(it.ref_url)) h += '<div style="font-size:0.72rem;margin-top:2px"><a href="' + esc(_crbSafeUrl(it.ref_url)) + '" target="_blank" rel="noopener" style="color:var(--accent)">Reference &rarr;</a></div>';
         if (auditInfo) {
           var atDate = auditInfo.at ? new Date(auditInfo.at).toLocaleString('en-GB') : '';
           h += '<div style="font-size:0.7rem;color:var(--gray);margin-top:3px;font-style:italic">Ticked by ' + esc(byName || 'Unknown') + (atDate ? ' on ' + esc(atDate) : '') + '</div>';
@@ -2265,7 +2284,7 @@ var S = {
   currentFinding: null,
   currentClient: null,
   modal: null,
-  data: { clients: [], assessments: [], findings: [], proposals: [], invoices: [], library: [], users: [], clientUsers: [], files: [], settings: {}, meetings: [], meeting_attendees: [], assessment_comments: [], qa_comments: [], feedback: [], contractor_payments: [], contact_requests: [], checklists_runbooks: [], assessment_phase_checklist_state: [] },
+  data: { clients: [], assessments: [], findings: [], proposals: [], invoices: [], library: [], users: [], clientUsers: [], files: [], settings: {}, meetings: [], meeting_attendees: [], assessment_comments: [], qa_comments: [], assessment_qa: [], feedback: [], contractor_payments: [], contact_requests: [], checklists_runbooks: [], assessment_phase_checklist_state: [] },
   actionCounts: { qa: 0, qaOpen: 0, revision: 0, signatures: 0, delivery: 0, assignment: 0, retests: 0, retested: 0, invoices: 0, comments: 0, readyToSend: 0, bankVerify: 0 },
   searchQuery: '',
   findingsSort: 'severity',
@@ -4916,12 +4935,21 @@ function fmtDate(d, fmt) {
   if (f === 'iso') return _isoDay(dt);
   if (f === 'dmy') {
 
-    return dt.toLocaleDateString(loc, { day: '2-digit', month: '2-digit', year: 'numeric' });
+    return _dateFormatter(loc, 'dmy', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(dt);
   }
   if (f === 'long') {
-    return dt.toLocaleDateString(loc, { day: "numeric", month: "long", year: "numeric" });
+    return _dateFormatter(loc, 'long', { day: "numeric", month: "long", year: "numeric" }).format(dt);
   }
-  return dt.toLocaleDateString(loc, { day: "numeric", month: "short", year: "numeric" });
+  return _dateFormatter(loc, 'short', { day: "numeric", month: "short", year: "numeric" }).format(dt);
+}
+function _dateFormatter(loc, key, opts) {
+  var made = _dateFormatter.made;
+  if (!made) {
+    made = _dateFormatter.made = {};
+    if (typeof setTimeout === 'function') setTimeout(function () { _dateFormatter.made = null; }, 0);
+  }
+  var k = String(loc) + '|' + key;
+  return made[k] || (made[k] = new Intl.DateTimeFormat(loc, opts));
 }
 function fmtDateTime(d) {
   if (!d) return "";
@@ -5093,11 +5121,17 @@ function generateUniqueJobCode(companyName, existingCodes) {
   }
   return base;
 }
+var _codesGiven = {};
 async function ensureClientJobCode(client) {
   if (client.job_code) return client.job_code;
 
-  var existingCodes = (S.data.clients || []).map(function(c) { return c.job_code || ''; }).filter(Boolean);
-  var code = generateUniqueJobCode(client.name, existingCodes);
+  var code = _codesGiven[client.id];
+  if (!code) {
+    var existingCodes = (S.data.clients || []).map(function(c) { return c.job_code || ''; }).filter(Boolean)
+      .concat(Object.keys(_codesGiven).map(function (k) { return _codesGiven[k]; }));
+    code = generateUniqueJobCode(client.name, existingCodes);
+    _codesGiven[client.id] = code;
+  }
 
   try {
     await supabaseClient.from('clients').update({ job_code: code }).eq('id', client.id);
@@ -5785,9 +5819,8 @@ function _gatherFindingsForExport(assessmentId, phaseFilter) {
   var a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; });
   if (!a) return null;
   var isClientUser = !!(S.profile && S.profile.role === 'client');
-  var all = (S.data.findings || []).filter(function(f) { return f.assessment_id === assessmentId; });
-  if (isClientUser) all = all.filter(function(f) { return f.client_visible === true; });
-  if (isContractor()) all = all.filter(function(f) { return !f.lead_id || f.lead_id === S.profile.id || f.created_by === S.profile.id; });
+
+  var all = (S.data.findings || []).filter(function(f) { return f.assessment_id === assessmentId && _fxXlsxTakes(f); });
   if (phaseFilter) all = all.filter(function(f) { return _normPhase(f.phase) === _normPhase(phaseFilter); });
   all.sort(_findingCmp);
   return { assessment: a, findings: all, isClientUser: isClientUser };
@@ -6273,6 +6306,7 @@ function renderFindingsImportModal() {
   return h;
 }
 function openFindingsImportModal(assessmentId, phase) {
+  if (typeof _workFirst === 'function' && _workFirst([assessmentId], function () { openFindingsImportModal(assessmentId, phase); })) return;
   if (!canEdit()) { toast('Permission denied', 'error'); return; }
   S._ffImp = { assessmentId: assessmentId, phase: phase || null, plan: null, name: '' };
   _ffImportShow();
@@ -6386,6 +6420,7 @@ async function _ffImportApply() {
 }
 window._ffImportApply = _ffImportApply;
 function exportFindingsCsv(assessmentId, phaseFilter) {
+  if (typeof _workFirst === 'function' && _workFirst([assessmentId], function () { exportFindingsCsv(assessmentId, phaseFilter); })) return;
 
   if (typeof _canExportFindings === 'function' && !_canExportFindings()
     && !(typeof _canExportFindingsDoc === 'function' && _canExportFindingsDoc())) {
@@ -6563,6 +6598,7 @@ function _fxButtonHtml(fn, rec, o) {
   return _renderDocxDownloadButton(_FX_SLOT, rec, fn, { label: label, variant: o.variant, style: o.style, templates: tpls, mainId: id, title: title });
 }
 function _fxOneExport(fid, templateId) {
+  if (typeof _workFirst === 'function' && _workFirst(_workAidsOf([fid]), function () { _fxOneExport(fid, templateId); })) return;
   var f = (S.data.findings || []).find(function (x) { return x.id === fid; });
   if (!f) { toast('That finding is not here', 'error'); return null; }
   return exportFindingsDoc(f.assessment_id, [fid], _fxFormat(), { templateId: templateId || '' });
@@ -6589,14 +6625,15 @@ function _fxFilename(a, list, ext, phase) {
   var clShort = _idsOn('assessment') && cl && cl.job_code ? cl.job_code : clFull;
   var d = new Date();
   var ph = one ? '' : String(phase || '');
-  return _buildFilename((one ? 'finding_' : 'findings_') + (ext === 'docx' ? 'docx' : 'pdf'), {
+  var x = (ext === 'docx' || ext === 'xlsx') ? ext : 'pdf';
+  return _buildFilename((one ? 'finding_' : 'findings_') + x, {
     invoice_id: '', job_code: jc, client: clFull, client_short: clShort,
     title: a.name || '', assessment: a.name || '', date: _isoDay(d), year: d.getFullYear(),
     type: one ? 'Finding' : 'Findings',
     finding: one ? String(one.title || 'Finding').replace(/\s+/g, ' ').trim() : '',
     finding_code: one ? (_findCodeOf(one, a) || '') : '',
     phase: ph, phase_dash: ph ? ' - ' : ''
-  }, ext === 'docx' ? 'docx' : 'pdf');
+  }, x);
 }
 window._fxFilename = _fxFilename;
 function _fxDocData(list, data) {
@@ -6612,6 +6649,7 @@ function _fxDocData(list, data) {
   };
 }
 async function exportFindingsDoc(aid, ids, fmt, o) {
+  if (typeof _workEnsureOrSay === 'function' && _workAnyLight(aid ? [aid] : _workAidsOf(ids || []))) await _workEnsureOrSay(aid ? [aid] : _workAidsOf(ids || []));
   o = o || {};
 
   if (!_canExportFindingsDoc()) { toast('Exporting findings is not enabled for your account', 'error'); return null; }
@@ -6643,6 +6681,7 @@ async function exportFindingsDoc(aid, ids, fmt, o) {
 }
 window.exportFindingsDoc = exportFindingsDoc;
 async function _fxDocx(aid, ids, o) {
+  if (typeof _workEnsureOrSay === 'function' && _workAnyLight(aid ? [aid] : _workAidsOf(ids || []))) await _workEnsureOrSay(aid ? [aid] : _workAidsOf(ids || []));
   o = o || {};
   var pdfOnly = !!window._docxPdfOnly;
   _showLoading();
@@ -6668,7 +6707,7 @@ async function _fxDocx(aid, ids, o) {
   } finally { _hideLoading(); }
 }
 window._fxDocx = _fxDocx;
-function _bulkExportFindings(fmt, templateId) {
+function _bulkExportPick() {
   var ids = _findingSelIds();
   if (!ids.length) return null;
   var picked = ids.map(function (id) { return (S.data.findings || []).find(function (x) { return x.id === id; }); }).filter(Boolean);
@@ -6679,10 +6718,77 @@ function _bulkExportFindings(fmt, templateId) {
   var aids = Object.keys(by);
   if (aids.length > 1) { toast('These findings are from ' + aids.length + ' engagements. Tick the findings of one engagement to export them together.', 'info', 8000); return null; }
   var left = picked.length - own.length;
-  if (left) toast('Scan results are exported in the scan\u2019s own report, so ' + left + ' ' + (left === 1 ? 'was' : 'were') + ' left out', 'info', 8000);
-  return exportFindingsDoc(aids[0], own.map(function (f) { return f.id; }), fmt, { templateId: templateId || '' });
+  if (left) toast('Scan results are exported in the scan’s own report, so ' + left + ' ' + (left === 1 ? 'was' : 'were') + ' left out', 'info', 8000);
+  return { aid: aids[0], ids: own.map(function (f) { return f.id; }) };
+}
+function _bulkExportFindings(fmt, templateId) {
+  if (typeof _workFirst === 'function' && _workFirst(_workAidsOf(_findingSelIds()), function () { _bulkExportFindings(fmt, templateId); })) return;
+  var p = _bulkExportPick();
+  if (!p) return null;
+  return exportFindingsDoc(p.aid, p.ids, fmt, { templateId: templateId || '' });
 }
 window._bulkExportFindings = _bulkExportFindings;
+function _fxXlsxTakes(f) {
+  if (!f) return false;
+  if (S.profile && S.profile.role === 'client' && f.client_visible !== true) return false;
+  if (isContractor() && f.lead_id && f.lead_id !== S.profile.id && f.created_by !== S.profile.id) return false;
+  return true;
+}
+window._fxXlsxTakes = _fxXlsxTakes;
+function _fxXlsxPrefs(aid) {
+  return _rtIn(aid, function () {
+    var cl = !!(S.profile && S.profile.role === 'client');
+    var p = _getExportPrefs() || {};
+    var all = _allFindingExportColumns();
+    var cols = Array.isArray(p.columns) ? p.columns.filter(function (k) {
+      var c = all.find(function (x) { return x.key === k; });
+      return !!c && !(c.internalOnly && cl) && !(c.includeInMode && c.includeInMode.indexOf('single') === -1);
+    }) : [];
+    if (!cols.length) cols = _defaultExportColumns(cl, 'single');
+    return { columns: cols, includeSummary: p.includeSummary !== false, includeEvidence: p.includeEvidence !== false };
+  });
+}
+window._fxXlsxPrefs = _fxXlsxPrefs;
+function _fxXlsxNow(aid, ids) {
+  if (typeof _workFirst === 'function' && _workFirst(aid ? [aid] : _workAidsOf(ids || []), function () { _fxXlsxNow(aid, ids); })) return;
+
+  if (typeof _canExportFindings === 'function' && !_canExportFindings()) { toast('Exporting findings to Excel is not enabled for your account', 'error'); return null; }
+  var want = (ids || []).slice();
+  var took = want.filter(function (id) { return _fxXlsxTakes((S.data.findings || []).find(function (x) { return x.id === id; })); });
+  var left = want.length - took.length;
+  if (took.length && left) toast(left + ' of the ticked findings ' + (left === 1 ? 'is not one you lead or wrote, so it was' : 'are not ones you lead or wrote, so they were') + ' left out', 'info', 8000);
+  var cfg = _fxXlsxPrefs(aid);
+  cfg.ids = took;
+  return _fxXlsxRun(aid, null, 'single', cfg);
+}
+window._fxXlsxNow = _fxXlsxNow;
+function _fxOneXlsx(fid) {
+  if (typeof _workFirst === 'function' && _workFirst(_workAidsOf([fid]), function () { _fxOneXlsx(fid); })) return;
+  var f = (S.data.findings || []).find(function (x) { return x.id === fid; });
+  if (!f) { toast('That finding is not here', 'error'); return null; }
+  return _fxXlsxNow(f.assessment_id, [fid]);
+}
+window._fxOneXlsx = _fxOneXlsx;
+function _bulkExportFindingsXlsx() {
+  if (typeof _workFirst === 'function' && _workFirst(_workAidsOf(_findingSelIds()), function () { _bulkExportFindingsXlsx(); })) return;
+  var p = _bulkExportPick();
+  if (!p) return null;
+  return _fxXlsxNow(p.aid, p.ids);
+}
+window._bulkExportFindingsXlsx = _bulkExportFindingsXlsx;
+function _fxXlsxGroups(a, list) {
+  var groups = (_getPhases(a) || []).map(function (ph, i) {
+    var label = ph.type || ('Phase ' + (i + 1));
+    return { label: label, normKey: _normPhase(label), findings: [] };
+  });
+  var other = [];
+  (list || []).forEach(function (f) {
+    var k = _normPhase(f.phase);
+    var g = k ? groups.find(function (x) { return x.normKey === k; }) : null;
+    if (g) g.findings.push(f); else other.push(f);
+  });
+  return { groups: groups.filter(function (g) { return g.findings.length; }), other: other };
+}
 var _EXP_FMT_SAY = {
   xlsx: { say: 'Excel (.xlsx) with full formatting', go: 'Export Excel' },
   pdf: { say: 'PDF', go: 'Export PDF' },
@@ -7267,7 +7373,15 @@ async function _doFindingsExport(assessmentId, phaseFilter, mode) {
   var includeEvidence = !!(document.getElementById('exp_evidence') && document.getElementById('exp_evidence').checked);
   _saveExportPrefs({ columns: selectedCols, format: 'xlsx', includeSummary: includeSummary, includeEvidence: includeEvidence });
   closeM();
-
+  return _fxXlsxRun(assessmentId, phaseFilter, mode, { columns: selectedCols, includeSummary: includeSummary, includeEvidence: includeEvidence });
+}
+async function _fxXlsxRun(assessmentId, phaseFilter, mode, cfg) {
+  if (typeof _workEnsureOrSay === 'function' && _workAnyLight(assessmentId ? [assessmentId] : _workAidsOf((cfg && cfg.ids) || []))) await _workEnsureOrSay(assessmentId ? [assessmentId] : _workAidsOf((cfg && cfg.ids) || []));
+  cfg = cfg || {};
+  var selectedCols = cfg.columns || [];
+  var includeSummary = !!cfg.includeSummary;
+  var includeEvidence = !!cfg.includeEvidence;
+  var ids = Array.isArray(cfg.ids) ? cfg.ids : null;
   var a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; });
   if (!a) { toast('Assessment not found', 'error'); return; }
   var isClientUser = !!(S.profile && S.profile.role === 'client');
@@ -7339,14 +7453,18 @@ async function _doFindingsExport(assessmentId, phaseFilter, mode) {
     }
 
     var gathered = _gatherFindingsForExport(assessmentId, phaseFilter);
-    if (!gathered || !gathered.findings.length) { toast('No findings to export', 'info'); return; }
+    if (gathered && ids) gathered.findings = gathered.findings.filter(function (f) { return ids.indexOf(f.id) >= 0; });
+    if (!gathered || !gathered.findings.length) { toast(ids ? 'None of those findings can be exported from here' : 'No findings to export', 'info'); return; }
 
-    if (includeSummary) {
+    if (includeSummary && ids) {
+      var _byPh = _fxXlsxGroups(a, gathered.findings);
+      _buildSummarySheet(workbook, a, _byPh.groups, _byPh.other);
+    } else if (includeSummary) {
       var summaryLabel = phaseFilter || 'All findings';
       _buildSummarySheet(workbook, a, [{ label: summaryLabel, normKey: _normPhase(summaryLabel), findings: gathered.findings }], []);
     }
 
-    var sheetTitle = phaseFilter || 'Findings';
+    var sheetTitle = phaseFilter || (ids && gathered.findings.length === 1 ? 'Finding' : 'Findings');
     await _buildFindingsSheet(workbook, sheetTitle, gathered.findings, a, activeCols, isClientUser, figCounter, figureCatalog);
 
     if (includeEvidence && figureCatalog.length) {
@@ -7354,7 +7472,8 @@ async function _doFindingsExport(assessmentId, phaseFilter, mode) {
     }
 
     var buf = await workbook.xlsx.writeBuffer();
-    _downloadBlob(buf, _findingsFilename(assessmentId, phaseFilter || '', 'findings_xlsx', 'xlsx'));
+
+    _downloadBlob(buf, ids ? _fxFilename(a, gathered.findings, 'xlsx', '') : _findingsFilename(assessmentId, phaseFilter || '', 'findings_xlsx', 'xlsx'));
     toast('Exported ' + gathered.findings.length + ' finding' + (gathered.findings.length === 1 ? '' : 's'), 'success');
   } catch(e) {
     console.error('Export failed:', e);
@@ -7439,6 +7558,10 @@ function _findingBulkBarHtml(isClient, opts) {
 
     if (!_scanBar && _canExportFindingsDoc()) {
       h += _fxButtonHtml('_bulkExportFindings', _fxFormat(), { prefix: 'Export ', what: 'Download the ticked findings', variant: 'secondary', style: 'white-space:nowrap' });
+    }
+
+    if (!_scanBar && _canExportFindings()) {
+      h += '<button class="btn btn-secondary btn-sm" id="findingBulkXlsx" onclick="_bulkExportFindingsXlsx()" style="white-space:nowrap" title="Download the ticked findings as an Excel file, with the columns and tabs last chosen in Export Findings">' + IC.dl + ' Export Excel</button>';
     }
     if (!isClient && canDeleteFinding()) h += '<button class="btn btn-danger btn-sm" onclick="_bulkDeleteFindings()" style="white-space:nowrap">' + IC.trash + ' Delete</button>';
 
@@ -10371,6 +10494,7 @@ var _rtTableMap = {
   assessment_phase_checklist_state: 'assessment_phase_checklist_state',
   feedback: 'feedback', settings: null,
   assessment_comments: 'assessment_comments', qa_comments: 'qa_comments',
+
   assessment_files: 'files', contractor_payments: 'contractor_payments',
   meetings: 'meetings', meeting_attendees: 'meeting_attendees',
   profiles: 'users', timeline_events: '_timeline',
@@ -10500,7 +10624,7 @@ function _rtHandleChange(payload) {
 
     try { _coTheirsArrived(table, payload.new.id, payload.new, 'UPDATE'); } catch (e) {}
 
-    if (table === 'assessments' && payload.new.id && typeof _qaChangesCache !== 'undefined') {
+    if ((table === 'assessments' || table === 'assessment_qa') && payload.new.id && typeof _qaChangesCache !== 'undefined') {
       delete _qaChangesCache[payload.new.id];
 
       if ((S.page === 'qa-review' && S.qa_review_id === payload.new.id) ||
@@ -10764,7 +10888,7 @@ var _coMyTabs = [];
 var _CO_VERSIONED = ['assessments', 'clients', 'findings', 'proposals', 'invoices', 'kb_entries',
   'feedback', 'meetings', 'checklists_runbooks', 'scan_runs', 'assessment_files',
   'assessment_comments', 'qa_comments', 'settings', 'assessment_phase_checklist_state',
-  'client_scan_targets', 'scan_cadences', 'contractor_payments'];
+  'client_scan_targets', 'scan_cadences', 'contractor_payments', 'assessment_qa'];
 var _coNoVersion = {};
 var _CO_META = ['id', 'row_version', 'row_by', 'updated_at', 'created_at', 'tenant_id', 'created_by'];
 function _coKey(table, id) { return String(table || '') + ':' + String(id || ''); }
@@ -20410,7 +20534,7 @@ async function api(table, method, data, match, opts) {
       var result;
 
       if (normalizedMethod === 'GET' || method === 'select') {
-        result = await _withTimeout(_readPaged(supabaseClient.from(table).select(data || '*'), 10000));
+        result = await _withTimeout(_readPaged(supabaseClient.from(table).select(data || '*'), Infinity));
       } else if (normalizedMethod === 'POST') {
 
         result = await _withTimeout(supabaseClient.from(table).insert(data).select(_writeSelect(table)));
@@ -20571,6 +20695,20 @@ async function _insertClient(data) {
   return { data: null, error: rpcResult.error };
 }
 var _loadAllDataPromise = null;
+function _mfaProvenAt() {
+  var t = 0;
+  try { t = parseInt(localStorage.getItem('pental_mfa_verified') || '0', 10) || 0; } catch (e) {}
+  return t > Date.now() ? 0 : t;
+}
+async function _loadAllDataSince() {
+  var began = Date.now();
+  await _loadAllDataInner();
+  if (_mfaProvenAt() > began) {
+    console.warn('[loadAllData] the second factor was proven while this load was out: reading again');
+    _syncReset();
+    await _loadAllDataInner();
+  }
+}
 var _SHELL_KEYS = [
   'company_name', 'portal_title', 'logo_url', 'logo_url_light', 'favicon_url', 'accent_color',
   'refcode_bold',
@@ -20652,7 +20790,7 @@ async function loadAllData() {
   if (_loadAllDataPromise) return _loadAllDataPromise;
 
   if (!S._bootReady) _bootSafetyArm(15000);
-  _loadAllDataPromise = _loadAllDataInner().finally(function() {
+  _loadAllDataPromise = _loadAllDataSince().finally(function() {
     _loadAllDataPromise = null;
 
     try {
@@ -20760,7 +20898,7 @@ function _syncFull(st, q, probe) {
       var r = rows[i];
       var has = !!r && r.id != null && ('row_version' in r);
       var v = has ? r.row_version : undefined;
-      if (q.cols && r && typeof r === 'object') delete r.row_version;
+      if (q.cols && !q.keepV && r && typeof r === 'object') delete r.row_version;
       if (!has) { ent.rows = null; continue; }
       if (!ent.rows) continue;
       ent.rows.set(r.id, { v: v, s: JSON.stringify(r) });
@@ -20833,7 +20971,7 @@ async function _syncDelta(st, q, ent, probe) {
     if (e.p) { rows.set(ids[k].id, e.p); out.push(JSON.parse(e.p.s)); continue; }
     var row = e.r, rv = row.row_version;
     if (typeof rv === 'number' && rv > max) max = rv;
-    if (q.cols) delete row.row_version;
+    if (q.cols && !q.keepV) delete row.row_version;
     rows.set(row.id, { v: rv, s: JSON.stringify(row) });
     out.push(row);
   }
@@ -20896,17 +21034,24 @@ async function _readPaged(b, max) {
   first.data = rows;
   return first;
 }
-function _syncQ(key, table, shape, cols, max) {
-  return _syncRead({ key: key, table: table, shape: shape, cols: cols || null, max: max,
+function _syncQ(key, table, shape, cols, max, o) {
+  return _syncRead({ key: key, table: table, shape: shape, cols: cols || null, max: max, keepV: !!(o && o.keepV),
     full: function () { return shape(supabaseClient.from(table).select(cols || '*')); },
     fullV: cols ? function () { return shape(supabaseClient.from(table).select(cols + ',row_version')); } : null });
 }
 var _IDS_PER_READ = 150;
 var _IDS_PER_GROUP = 90;
-function _idGroups(ids) {
-  if (ids.length <= _IDS_PER_READ) return [{ tag: '', ids: ids }];
-  var n = 2;
-  while (ids.length / n > _IDS_PER_GROUP) n *= 2;
+var _IDS_HELD_MAX = 120;
+function _idGroups(ids, key) {
+  var n = 1;
+  if (ids.length > _IDS_PER_READ) { n = 2; while (ids.length / n > _IDS_PER_GROUP) n *= 2; }
+  if (key && _sync) {
+    var held = _sync.groupsN ? _sync.groupsN[key] : 0;
+    if (held && held !== n && (held === n * 2 || (held === n / 2 && held >= 2 && ids.length / held <= _IDS_HELD_MAX))) n = held;
+    if (!_sync.groupsN) _sync.groupsN = {};
+    _sync.groupsN[key] = n;
+  }
+  if (n === 1) return [{ tag: '', ids: ids }];
   var lists = [];
   for (var g = 0; g < n; g++) lists.push([]);
   for (var i = 0; i < ids.length; i++) {
@@ -20950,8 +21095,8 @@ function _rowsInOrder(rows, column, asc) {
   });
   return keyed.map(function (x) { return x.r; });
 }
-function _syncQIn(key, table, column, ids, order, asc) {
-  var groups = _idGroups(ids);
+function _syncQIn(key, table, column, ids, order, asc, cols) {
+  var groups = _idGroups(ids, key);
 
   var live = {};
   groups.forEach(function (g) { live[key + g.tag] = true; });
@@ -20960,7 +21105,7 @@ function _syncQIn(key, table, column, ids, order, asc) {
     return _syncQ(key + g.tag, table, function (q) {
       q = q.in(column, g.ids);
       return order ? q.order(order, { ascending: asc }) : q;
-    }, null, Infinity);
+    }, cols || null, Infinity, cols ? { keepV: true } : null);
   };
   if (groups.length === 1) return ask(groups[0]);
   var answered = function (r) { return !!r && !r.error && Array.isArray(r.data); };
@@ -20993,10 +21138,284 @@ function _engagementsCommercial() {
   }, function () { return _syncApi('1:assessments', 'assessments'); });
 }
 function _syncApi(key, table, cols) {
-  return _syncRead({ key: key, table: table, isApi: true, cols: cols || null,
+  return _syncRead({ key: key, table: table, isApi: true, cols: cols || null, max: Infinity,
     shape: function (b) { return b.limit(10000); },
     full: function () { return api(table, 'GET', cols); },
     fullV: cols ? function () { return api(table, 'GET', cols + ',row_version'); } : null });
+}
+var _WORK_MONTHS = 12;
+var _WORK_LIGHT = {
+  findings: 'id,assessment_id,title,severity,status,cwe,category,assets,retest_requested,retest_status,'
+    + 'retest_requested_at,retest_completed_at,retest_completed_by,created_at,updated_at,affected_hosts,cvss,'
+    + 'finding_code,created_by,client_visible,is_draft,phase,archived_at,hidden_on_takeback,client_id,source,'
+    + 'cvss_vector,scan_issue_fingerprint,scan_fingerprint,scan_run_id,scan_last_seen,scan_run_ids,scan_plugin_id,'
+    + 'scan_port,scan_protocol,scan_service,scan_cve,scan_source,row_by,attack,retest_client_visible,resolved_at',
+  assessment_comments: 'id,assessment_id,user_id,user_name,user_role,parent_id,client_visible,created_at,updated_at,row_by',
+  qa_comments: 'id,assessment_id,finding_id,user_id,user_name,resolved,resolved_at,created_at,field,author,parent_id,row_by'
+};
+var _WORK_WORDS = {
+  findings: ['description', 'impact', 'remediation', 'evidence', 'refs', 'qa_comments', 'retest_results', 'custom_fields', 'e2e_refs'],
+  assessment_comments: ['content', 'e2e_refs'],
+  qa_comments: ['comment', 'highlight', 'e2e_refs']
+};
+function _workFresh(who) {
+  return { who: who, old: {}, full: {}, rows: new WeakSet(), wait: {}, failed: {}, need: {}, needT: null, qa: false, pageKey: null };
+}
+var _WORK = _workFresh(null);
+function _workOld(a, now) {
+  if (!a || a.source === 'scan' || !_isDelivered(a)) return false;
+  var d = _lastDelivery(a), t = d && d.at ? new Date(d.at) : null;
+  if (!t || isNaN(t.getTime())) return false;
+  t.setMonth(t.getMonth() + _WORK_MONTHS);
+  return t.getTime() <= (now || Date.now());
+}
+function _workApplies() {
+  return !!(S.profile && S.profile.role !== 'client' && !(typeof isSales === 'function' && isSales()) && !(typeof isMarketing === 'function' && isMarketing()));
+}
+function _workIsLight(aid) { return !!(aid && _WORK.old[aid] && !_WORK.full[aid]); }
+function _workLightIds() { return Object.keys(_WORK.old).filter(function (k) { return !_WORK.full[k]; }); }
+function _workRowLight(r) { return !!(r && typeof r === 'object' && _WORK.rows.has(r)); }
+function _workPageAids() {
+  var p = S.page, out = [], st = S._pendingRestore || {};
+  var add = function (id) { if (typeof id === 'string' && id && out.indexOf(id) < 0) out.push(id); };
+  if (p === 'assessment-detail') add(S.currentAssessment ? S.currentAssessment.id : st.assessmentId);
+  else if (p === 'finding-detail') add(S.currentFinding ? S.currentFinding.assessment_id : st.assessmentId);
+  else if (p === 'qa-review') add(S.qa_review_id);
+  else if (p === 'client-detail') {
+    var cid = S.currentClient ? S.currentClient.id : st.clientId;
+    if (cid) (S.data.assessments || []).forEach(function (a) { if (a && a.client_id === cid) add(a.id); });
+  } else if (p === 'all-findings') return _workLightIds();
+  return out;
+}
+function _workSplit(list) {
+  var whole = [], light = [];
+  var all = (list || []).filter(function (a) { return a && a.id; });
+  if (!_workApplies() || S.page === 'all-findings') return { whole: all.map(function (a) { return a.id; }), light: [] };
+  var keep = {};
+  _workPageAids().forEach(function (id) { keep[id] = 1; });
+  var now = Date.now();
+  all.forEach(function (a) {
+    if (!keep[a.id] && !_WORK.full[a.id] && _workOld(a, now)) light.push(a.id); else whole.push(a.id);
+  });
+  return { whole: whole, light: light };
+}
+function _workReadLight(key, table, ids, order, asc) {
+  var whole = function () {
+    return Promise.resolve(_syncQIn(key + ':whole', table, 'assessment_id', ids, order, asc)).then(function (r) {
+      if (r && typeof r === 'object') r._whole = true;
+      return r;
+    });
+  };
+  return Promise.resolve(_syncQIn(key, table, 'assessment_id', ids, order, asc, _WORK_LIGHT[table])).then(function (r) {
+    return (r && !r.error && Array.isArray(r.data)) ? r : whole();
+  }, whole);
+}
+function _workMark(r) {
+  var rows = (r && Array.isArray(r.data)) ? r.data : [];
+  if (r && !r._whole) rows.forEach(function (x) { if (x && typeof x === 'object') _WORK.rows.add(x); });
+  return rows;
+}
+function _workEnsure(aids, o) {
+  o = o || {};
+  var want = [];
+  (Array.isArray(aids) ? aids : [aids]).forEach(function (id) {
+    if (_workIsLight(id) && want.indexOf(id) < 0) want.push(id);
+  });
+  if (!want.length) return Promise.resolve(true);
+  var waits = [], todo = [];
+  want.forEach(function (id) {
+    if (_WORK.wait[id]) { if (waits.indexOf(_WORK.wait[id]) < 0) waits.push(_WORK.wait[id]); }
+    else if (_WORK.failed[id] && !o.retry) waits.push(Promise.reject(new Error(_WORK.failed[id])));
+    else todo.push(id);
+  });
+  if (todo.length) {
+    var W = _WORK;
+    todo.forEach(function (id) { delete W.failed[id]; });
+    var p = _workRead(todo, W);
+    todo.forEach(function (id) { W.wait[id] = p; });
+    var done = function () { todo.forEach(function (id) { if (W.wait[id] === p) delete W.wait[id]; }); };
+    p.then(done, function (e) {
+      done();
+      var why = (e && e.message) || 'the database did not answer';
+      todo.forEach(function (id) { W.failed[id] = why; });
+    });
+    waits.push(p);
+  }
+  return Promise.all(waits).then(function () { return true; });
+}
+function _workEnsureAll(o) { return _workEnsure(_workLightIds(), o); }
+function _workAidsOf(list) {
+  var aids = [], byId = null;
+  (list || []).forEach(function (x) {
+    var f = x;
+    if (!(x && typeof x === 'object')) {
+      if (!byId) { byId = new Map(); (S.data.findings || []).forEach(function (y) { if (y) byId.set(y.id, y); }); }
+      f = byId.get(x);
+    }
+    if (f && f.assessment_id && aids.indexOf(f.assessment_id) < 0) aids.push(f.assessment_id);
+  });
+  return aids;
+}
+function _workEnsureFindings(list, o) { return _workEnsure(_workAidsOf(list), o); }
+async function _workEnsureOrSay(aids) {
+  if (!(aids || []).some(_workIsLight)) return true;
+  try { return await _workEnsure(aids, { retry: true }); }
+  catch (e) {
+    toast('This was not made: the engagement\u2019s work could not be read (' + ((e && e.message) || e) + '). Try again.', 'error');
+    throw e;
+  }
+}
+function _workAnyLight(aids) { return (aids || []).some(_workIsLight); }
+async function _workReady(aids) {
+  if (!(aids || []).some(_workIsLight)) return true;
+  try { await _workEnsure(aids, { retry: true }); return true; }
+  catch (e) {
+    toast('This was not done: the engagement’s work could not be read (' + ((e && e.message) || e) + '). Try again.', 'error');
+    return false;
+  }
+}
+function _workFirst(aids, again) {
+  var need = (aids || []).filter(_workIsLight);
+  if (!need.length) return false;
+  _showLoading();
+  _workEnsure(need, { retry: true }).then(function () { _hideLoading(); again(); }, function (e) {
+    _hideLoading();
+    toast('This could not be opened: the engagement’s work could not be read (' + ((e && e.message) || e) + '). Try again.', 'error');
+  });
+  return true;
+}
+async function _workRead(ids, W) {
+  var db = supabaseClient;
+  var groups = _idGroups(ids);
+  var read = function (table, order, asc) {
+    return Promise.all(groups.map(function (g) {
+      var q = db.from(table).select('*').in('assessment_id', g.ids);
+      if (order) q = q.order(order, { ascending: asc });
+      return _readPaged(q, Infinity);
+    })).then(function (rs) {
+      var rows = [];
+      for (var i = 0; i < rs.length; i++) {
+        if (!rs[i] || rs[i].error || !Array.isArray(rs[i].data)) throw new Error((rs[i] && rs[i].error && (rs[i].error.message || rs[i].error.code)) || 'the database did not answer');
+        for (var j = 0; j < rs[i].data.length; j++) rows.push(rs[i].data[j]);
+      }
+      return order ? _rowsInOrder(rows, order, asc) : rows;
+    });
+  };
+  var got = await Promise.all([
+    read('findings', null),
+    read('timeline_events', 'created_at', true),
+    read('assessment_comments', 'created_at', true),
+    W.qa ? read('qa_comments', 'created_at', true) : Promise.resolve(null)
+  ]);
+  if (W !== _WORK) return;
+  _workPut(ids, got);
+}
+function _workPut(ids, got) {
+  var set = {};
+  ids.forEach(function (id) { set[id] = 1; });
+  var fill = function (list, answer, sortBy, asc) {
+    var have = new Map(), seen = {};
+    list.forEach(function (r) { if (r && set[r.assessment_id]) have.set(r.id, r); });
+    answer.forEach(function (r) {
+      if (!r || r.id == null) return;
+      seen[r.id] = 1;
+      var x = have.get(r.id);
+      if (x) { Object.assign(x, r); _WORK.rows.delete(x); }
+      else list.push(r);
+    });
+    var out = list.filter(function (r) { return !(r && set[r.assessment_id] && !seen[r.id] && _WORK.rows.has(r)); });
+    return sortBy ? _rowsInOrder(out, sortBy, asc) : out;
+  };
+  S.data.findings = fill(S.data.findings || [], got[0]);
+  var tl = new Map();
+  got[1].forEach(function (t) { var g = tl.get(t.assessment_id); if (!g) { g = []; tl.set(t.assessment_id, g); } g.push(t); });
+  (S.data.assessments || []).forEach(function (a) {
+    if (!a || !set[a.id]) return;
+    var mine = tl.get(a.id) || [], at = {};
+    mine.forEach(function (t) { at[t.id] = 1; });
+
+    (a._timeline || []).forEach(function (t) { if (t && !at[t.id]) mine.push(t); });
+    a._timeline = _rowsInOrder(mine, 'created_at', true);
+  });
+  S.data.assessment_comments = fill(S.data.assessment_comments || [], got[2], 'created_at', true);
+  if (got[3]) S.data.qa_comments = fill(S.data.qa_comments || [], got[3], 'created_at', true);
+  ids.forEach(function (id) { _WORK.full[id] = true; });
+
+  setTimeout(function () { try { _tlMarkInternal(); } catch (e) {} }, 0);
+}
+function _workNeed(aid) {
+  if (!_workIsLight(aid) || _WORK.wait[aid] || _WORK.failed[aid] || _WORK.need[aid]) return;
+  _WORK.need[aid] = 1;
+  if (_WORK.needT) return;
+  var W = _WORK;
+  W.needT = setTimeout(function () {
+    W.needT = null;
+    var ids = Object.keys(W.need);
+    W.need = {};
+    if (W !== _WORK) return;
+
+    _workEnsure(ids).then(function () {
+      try { _rtDueAt = Date.now(); _rtDueTheirs = true; _rtRender(); } catch (e) {}
+    }, function () {});
+  }, 0);
+}
+function _workWaitPage(ids) {
+  var why = '';
+  ids.forEach(function (id) { if (!why && _WORK.failed[id]) why = _WORK.failed[id]; });
+  if (why) {
+    return '<div class="empty-page" data-work-failed><h2>This could not be opened</h2><p>' + esc(why) + '</p>'
+      + '<button class="btn btn-secondary" onclick="_workRetry()">Try again</button></div>';
+  }
+  var page = S.page, key = page + ':' + ids.join(',');
+  if (_WORK.pageKey !== key) {
+    var W = _WORK;
+    W.pageKey = key;
+    var then = function () { if (W.pageKey === key) W.pageKey = null; if (W === _WORK && S.page === page) render(); };
+    _workEnsure(ids).then(then, then);
+  }
+  var words = page === 'all-findings' ? 'Reading the findings of engagements delivered more than a year ago…'
+    : page === 'client-detail' ? 'Reading this client’s earlier engagements…'
+    : 'Opening this engagement’s work…';
+  return '<div class="empty-page work-wait" role="status" aria-live="polite" data-work-wait><span class="work-wait-spin" aria-hidden="true"></span><p>' + words + '</p></div>';
+}
+function _workRetry() {
+  var ids = _workPageAids();
+  ids.forEach(function (id) { delete _WORK.failed[id]; });
+  _workEnsure(ids, { retry: true }).then(function () { render(); }, function () { render(); });
+  render();
+}
+window._workRetry = _workRetry;
+function _workOnlyRead(f, missing) {
+  _workNeed(f.assessment_id);
+  var words = {}, colOf = {};
+  _WORK_WORDS.findings.forEach(function (c) { words[c] = 1; });
+  try { _ffDefs().forEach(function (d) { colOf[d.key] = d.col; }); } catch (e) {}
+  return (missing || []).filter(function (m) {
+    if (m.key === 'title') return true;
+    if (String(m.key).indexOf('cf_') === 0) return false;
+    return !words[colOf[m.key] || m.key];
+  });
+}
+function _workWriteRefused(table, method, url, body) {
+  if (!_WORK_WORDS[table] || (method !== 'PATCH' && method !== 'POST' && method !== 'PUT') || typeof body !== 'string' || !body) return false;
+  if (!_workLightIds().length) return false;
+  var words = _WORK_WORDS[table];
+  var rows;
+  try { var b = JSON.parse(body); rows = Array.isArray(b) ? b : [b]; } catch (e) { return false; }
+  if (!rows.some(function (r) { return r && typeof r === 'object' && words.some(function (c) { return c in r; }); })) return false;
+  var list = (table === 'findings' ? S.data.findings : table === 'assessment_comments' ? S.data.assessment_comments : S.data.qa_comments) || [];
+  var light = {};
+  list.forEach(function (r) { if (_workRowLight(r)) light[r.id] = 1; });
+  var ids = [], q = String(url).split('?')[1] || '', m;
+
+  try { q = decodeURIComponent(q.replace(/\+/g, '%20')); } catch (e) {}
+  var re = /(?:^|&)id=(?:eq\.([0-9a-f-]{36})|in\.\(([^)]*)\))/g;
+  while ((m = re.exec(q))) {
+    if (m[1]) ids.push(m[1]);
+    else ids = ids.concat(m[2].split(',').map(function (s) { return s.replace(/"/g, '').trim(); }));
+  }
+  rows.forEach(function (r) { if (r && r.id) ids.push(String(r.id)); });
+  return ids.some(function (id) { return light[id]; });
 }
 async function _loadAllDataInner() {
   if (!S.profile) return;
@@ -21453,20 +21872,36 @@ async function _loadAllDataInner() {
 
   var assessmentIds = S.data.assessments.map(function(a) { return a.id; });
 
+  if (_WORK.who !== _sync.who) _WORK = _workFresh(_sync.who);
+  _WORK.qa = !isClient;
+
   if (assessmentIds.length && !_commercialOnly) {
     var p2 = {};
 
-    var _ofThese = function (key, table, order, asc) { return _syncQIn(key, table, 'assessment_id', assessmentIds, order, asc); };
+    var _wk = _workSplit(S.data.assessments);
+    var _wholeIds = _wk.whole, _lightIds = _wk.light;
+    var _none = function () { return Promise.resolve({ data: [], error: null, count: null, status: 200, statusText: 'OK' }); };
+    var _ofThese = function (key, table, order, asc) { return _wholeIds.length ? _syncQIn(key, table, 'assessment_id', _wholeIds, order, asc) : _none(); };
+    var _ofAll = function (key, table, order, asc) { return _syncQIn(key, table, 'assessment_id', assessmentIds, order, asc); };
     p2.timeline = _ofThese('2:timeline', 'timeline_events', 'created_at', true);
 
     p2.findings = _ofThese('2:findings', 'findings', null);
     p2.scan_findings = _syncQ('2:scan_findings', 'findings', function (q) {
       return q.not('scan_run_id', 'is', null).is('assessment_id', null);
     }, null, Infinity);
-    p2.files = _ofThese('2:files', 'assessment_files', 'created_at', false);
+
+    p2.files = _ofAll('2:files', 'assessment_files', 'created_at', false);
     p2.comments = _ofThese('2:comments', 'assessment_comments', 'created_at', true);
     if (!isClient) {
       p2.qa_comments = _ofThese('2:qa_comments', 'qa_comments', 'created_at', true);
+
+      p2.assessment_qa = _syncQIn('2:assessment_qa', 'assessment_qa', 'id', assessmentIds, null);
+    }
+
+    if (_lightIds.length) {
+      p2.findings_light = _workReadLight('2:light:findings', 'findings', _lightIds, null);
+      p2.comments_light = _workReadLight('2:light:comments', 'assessment_comments', _lightIds, 'created_at', true);
+      if (!isClient) p2.qa_comments_light = _workReadLight('2:light:qa_comments', 'qa_comments', _lightIds, 'created_at', true);
     }
 
     if (isCon) {
@@ -21475,7 +21910,7 @@ async function _loadAllDataInner() {
         p2.proposals = _syncQIn('2:proposals', 'proposals', 'client_id', _conClientIds, null);
         p2.invoices = _syncQIn('2:invoices', 'invoices', 'client_id', _conClientIds, null);
       }
-      p2.feedback = _ofThese('2:feedback', 'feedback', 'created_at', false);
+      p2.feedback = _ofAll('2:feedback', 'feedback', 'created_at', false);
       var _qaIds = S.data.assessments.map(function(a) { return a.qa_assignee; }).filter(Boolean);
 
       S.data.assessments.forEach(function (a) { if (a.lead_id && _qaIds.indexOf(a.lead_id) < 0) _qaIds.push(a.lead_id); });
@@ -21501,7 +21936,10 @@ async function _loadAllDataInner() {
       a._timeline = (_tlByA.get(a.id) || []).slice();
     });
 
-    S.data.findings = _d(r2.findings);
+    var _WK = _WORK, _oldNow = {};
+    _lightIds.forEach(function (id) { _oldNow[id] = 1; delete _WK.full[id]; });
+    _WK.rows = new WeakSet();
+    S.data.findings = _d(r2.findings).concat(_workMark(r2.findings_light));
     var _sf = _d(r2.scan_findings);
     if (_sf && _sf.length) {
       var _have = {};
@@ -21509,8 +21947,19 @@ async function _loadAllDataInner() {
       _sf.forEach(function (f) { if (!_have[f.id]) S.data.findings.push(f); });
     }
     S.data.files = _d(r2.files);
-    S.data.assessment_comments = _d(r2.comments);
-    if (!isClient) S.data.qa_comments = _d(r2.qa_comments);
+
+    S.data.assessment_comments = _lightIds.length
+      ? _rowsInOrder(_d(r2.comments).concat(_workMark(r2.comments_light)), 'created_at', true) : _d(r2.comments);
+    if (!isClient) S.data.qa_comments = _lightIds.length
+      ? _rowsInOrder(_d(r2.qa_comments).concat(_workMark(r2.qa_comments_light)), 'created_at', true) : _d(r2.qa_comments);
+    _WK.old = _oldNow;
+
+    if (!isClient) {
+      var _aqr = r2.assessment_qa;
+      _AQA.on = !!(_aqr && !_aqr.error && Array.isArray(_aqr.data));
+      S.data.assessment_qa = _AQA.on ? _aqr.data : [];
+      if (_AQA.on) _rtTableMap.assessment_qa = 'assessment_qa'; else delete _rtTableMap.assessment_qa;
+    } else { _AQA.on = false; S.data.assessment_qa = []; delete _rtTableMap.assessment_qa; }
 
     if (isCon) {
       S.data.proposals = _d(r2.proposals);
@@ -21530,6 +21979,13 @@ async function _loadAllDataInner() {
     S.data.files = [];
     S.data.assessment_comments = [];
     S.data.qa_comments = [];
+    _WORK.old = {};
+
+    S.data.assessment_qa = [];
+    if (!isClient && !_commercialOnly) {
+      try { _AQA.on = (await _dbSchemaVersion()) >= _AQA.since; } catch (e) { _AQA.on = false; }
+      if (_AQA.on) _rtTableMap.assessment_qa = 'assessment_qa'; else delete _rtTableMap.assessment_qa;
+    } else { _AQA.on = false; delete _rtTableMap.assessment_qa; }
 
     S.data.assessments.forEach(function (a) { a._timeline = []; });
     if (isCon) {
@@ -21543,6 +21999,7 @@ async function _loadAllDataInner() {
 
   if (typeof _avatarsP !== 'undefined' && _avatarsP) { try { await _avatarsP; } catch (_e) {} }
 
+  if (!isClient) setTimeout(function () { try { _tlMarkInternal(); } catch (e) {} }, 4000);
   _patchProposalAuth();
   _loadPhaseTypes();
   calculateActionCounts();
@@ -21891,6 +22348,21 @@ function calculateActionCounts() {
     }).length;
 
     ac.qaOpen = 0;
+
+    var _qaOpenN = null;
+    var _qaOpenCount = function (aid) {
+      if (typeof aid !== 'string') return _qaOpenComments(aid).length;
+      if (!_qaOpenN) {
+        var all = S.data.qa_comments || [], m = new Map();
+        for (var i = 0; i < all.length; i++) {
+          var c = all[i];
+          if (typeof c.assessment_id !== 'string' || c.parent_id || c.resolved) continue;
+          m.set(c.assessment_id, (m.get(c.assessment_id) || 0) + 1);
+        }
+        _qaOpenN = m;
+      }
+      return _qaOpenN.get(aid) || 0;
+    };
     if (qaEnabled()) _activeAssessments.forEach(function (a2) {
       var mine = a2.lead_id === S.profile.id || a2.qa_assignee === S.profile.id || canManage() || _conOnWork(a2);
       if (!mine) return;
@@ -21898,7 +22370,7 @@ function calculateActionCounts() {
       try {
         n += (getQAChanges(a2.id) || []).filter(function (c) { return _qaIsPendingSuggestion(c); }).length;
       } catch (e) {}
-      try { n += _qaOpenComments(a2.id).length; } catch (e) {}
+      try { n += _qaOpenCount(a2.id); } catch (e) {}
       ac.qaOpen += n;
     });
 
@@ -21954,6 +22426,55 @@ function getAssessmentFindings(aid) {
     });
   }
   return byAssess.sort(_findingCmp);
+}
+function _findingsByEngagement() {
+  var byA = null, byRun = null;
+  function group() {
+    var all = S.data.findings || [];
+    var A = new Map(), R = new Map();
+    for (var i = 0; i < all.length; i++) {
+      var f = all[i];
+      if (typeof f.assessment_id === 'string') {
+        var g = A.get(f.assessment_id);
+        if (g) g.push(f); else A.set(f.assessment_id, [f]);
+      }
+
+      var runs = [];
+      if (Array.isArray(f.scan_run_ids)) {
+        for (var j = 0; j < f.scan_run_ids.length; j++) {
+          var r = f.scan_run_ids[j];
+          if (typeof r === 'string' && runs.indexOf(r) < 0) runs.push(r);
+        }
+      }
+      if (typeof f.scan_run_id === 'string' && runs.indexOf(f.scan_run_id) < 0) runs.push(f.scan_run_id);
+      for (var k = 0; k < runs.length; k++) {
+        var h = R.get(runs[k]);
+        if (h) h.push(f); else R.set(runs[k], [f]);
+      }
+    }
+    byA = A; byRun = R;
+  }
+  return function (aid) {
+    if (typeof aid !== 'string') return getAssessmentFindings(aid);
+    if (!byA) group();
+    return (byA.get(aid) || byRun.get(aid) || []).slice().sort(_findingCmp);
+  };
+}
+function _rowsByEngagementOnce(rowsNow) {
+  var all = null, by = null;
+  return function (aid) {
+    if (!by) {
+      var rows = rowsNow() || [], m = new Map();
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (typeof r.assessment_id !== 'string') continue;
+        var g = m.get(r.assessment_id);
+        if (g) g.push(r); else m.set(r.assessment_id, [r]);
+      }
+      all = rows; by = m;
+    }
+    return typeof aid === 'string' ? (by.get(aid) || []) : all;
+  };
 }
 function _workAssessments() {
   return (S.data.assessments || []).filter(function (a) { return a && a.source !== 'scan'; });
@@ -22030,6 +22551,7 @@ async function toggleSectionVisibility(assessmentId, section, visible) {
   } finally { _hideLoading(); }
 }
 async function toggleFindingDraft(findingId, draft) {
+  if (typeof _workReady === 'function' && _workAnyLight(_workAidsOf([findingId])) && !(await _workReady(_workAidsOf([findingId])))) return;
   if (S.profile.role === 'client' || !canEdit()) { toast('Permission denied', 'error'); return; }
   var f = (S.data.findings || []).find(function (x) { return x.id === findingId; });
   var _wasDraft = false;
@@ -22819,7 +23341,7 @@ async function logout() {
   } catch(e) {}
   S.user = null;
   S.profile = null;
-  S.data = { clients: [], assessments: [], findings: [], proposals: [], invoices: [], kb: [], users: [], clientUsers: [], feedback: [], files: [], assessment_comments: [], qa_comments: [], contractor_payments: [], meetings: [], meeting_attendees: [], contact_requests: [], settings: {} };
+  S.data = { clients: [], assessments: [], findings: [], proposals: [], invoices: [], kb: [], users: [], clientUsers: [], feedback: [], files: [], assessment_comments: [], qa_comments: [], assessment_qa: [], contractor_payments: [], meetings: [], meeting_attendees: [], contact_requests: [], settings: {} };
   _syncReset();
   S.page = 'dashboard';
 
@@ -23627,7 +24149,7 @@ function _setupAuthListener() {
       window._subData = null;
       S.user = null;
       S.profile = null;
-      S.data = { clients: [], assessments: [], findings: [], proposals: [], invoices: [], kb: [], users: [], clientUsers: [], feedback: [], files: [], assessment_comments: [], qa_comments: [], contractor_payments: [], meetings: [], meeting_attendees: [], contact_requests: [], settings: {} };
+      S.data = { clients: [], assessments: [], findings: [], proposals: [], invoices: [], kb: [], users: [], clientUsers: [], feedback: [], files: [], assessment_comments: [], qa_comments: [], assessment_qa: [], contractor_payments: [], meetings: [], meeting_attendees: [], contact_requests: [], settings: {} };
       _syncReset();
 
       _suppressRender = false;
@@ -27664,6 +28186,11 @@ function renderPage() {
   if (!canAccessPage(S.page)) {
     S.page = _defaultPage();
   }
+
+  try {
+    var _wkNeed = _workPageAids().filter(_workIsLight);
+    if (_wkNeed.length) return _workWaitPage(_wkNeed);
+  } catch (e) {}
   switch (S.page) {
     case 'dashboard': return renderDashboard();
     case 'assessments': return renderAssessments();
@@ -27824,6 +28351,7 @@ async function refreshAndStay(o) {
   }
 }
 async function openM(t, id, extra) {
+  if (t === 'finding' && id && typeof _workFirst === 'function' && _workFirst(_workAidsOf([id]), function () { openM(t, id, extra); })) return;
 
   if ((t === 'finding' || t === 'kb') && id) {
     try {
@@ -28168,6 +28696,8 @@ var _E2E_COLS = {
                 'summary_sections', 'section_drafts', 'qa_ai_review'],
   assessment_comments: ['content'],
   qa_comments: ['comment', 'highlight'],
+
+  assessment_qa: ['qa_notes', 'qa_comments', 'qa_ai_review'],
   timeline_events: ['title', 'details', 'event'],
   tickets: ['subject', 'message', 'responses'],
   assets: ['name', 'label', 'notes', 'details', 'owner_name', 'owner_email', 'owner_team', 'tags'],
@@ -28178,6 +28708,7 @@ var _E2E_COLS = {
 var _E2E_JSON = {
   findings: { evidence: 'a', assets: 'a', refs: 'a', custom_fields: 'o', qa_comments: 'a' },
   assessments: { artifacts: 'a', appendices: 'a', qa_comments: 'a', summary_sections: 'o', section_drafts: 'o', qa_ai_review: 'o' },
+  assessment_qa: { qa_comments: 'a', qa_ai_review: 'o' },
   tickets: { responses: 'a' },
   assets: { details: 'o', tags: 'a' },
   scan_results: { refs: 'a', raw: 'o' }
@@ -28207,7 +28738,7 @@ var E2E = {
   cacheBytes: 0,
   lockedN: 0,
   statusAt: 0, statusP: null, grantsDue: false,
-  clientOf: { findings: {}, assessments: {}, scan_runs: {}, qa_comments: {}, assessment_comments: {}, timeline_events: {}, scan_results: {}, tickets: {}, assets: {} },
+  clientOf: { findings: {}, assessments: {}, scan_runs: {}, qa_comments: {}, assessment_comments: {}, timeline_events: {}, scan_results: {}, tickets: {}, assets: {}, assessment_qa: {} },
   noted: [], noteT: null,
   stash: null,
   loops: null
@@ -29044,6 +29575,8 @@ function _e2eStateRow(list, id) {
 }
 async function _e2eClientOf(table, id) {
   if (!id) return null;
+
+  if (table === 'assessment_qa') return _e2eClientOf('assessments', id);
   var c = E2E.clientOf[table] && E2E.clientOf[table][id];
   if (c) return c;
   if (table === 'assessments') { var a = _e2eStateRow('assessments', id); if (a && a.client_id) return a.client_id; }
@@ -29277,6 +29810,15 @@ async function _e2eFetch(base, input, init) {
   var m = /\/(rest|storage)\/v1\/([^?#]*)/.exec(url);
   if (!m) return base(input, init);
   var method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+
+  if (m[1] === 'rest' && typeof _workWriteRefused === 'function') {
+    var _wkRef = false;
+    try { _wkRef = _workWriteRefused(m[2], method, url, init && init.body); } catch (e) { _wkRef = false; }
+    if (_wkRef) {
+      return new Response(JSON.stringify({ code: 'PWORK', message: 'This was not saved: this engagement’s work had not been read in full on this page. Open the engagement and try again.', details: null, hint: null }),
+        { status: 409, statusText: 'Conflict', headers: { 'content-type': 'application/json' } });
+    }
+  }
   try {
     if (m[1] === 'storage') return await _e2eStorage(base, input, init, method, decodeURIComponent(m[2]));
     var path = m[2];
@@ -29311,7 +29853,14 @@ async function _e2eFetch(base, input, init) {
     if (e && e.e2eRefused) return _e2eRefused(e.message);
     throw e;
   }
-  var res = await base(input, init);
+
+  var _setc = m[1] === 'rest' && m[2] === 'settings' && (method === 'GET' || method === 'HEAD') && _setcAsk();
+  var res = await base(_setc ? _setcInput(input, url) : input, init);
+  if (_setc && res.status === 404) {
+    var _t404 = '';
+    try { _t404 = await res.clone().text(); } catch (e) {}
+    if (_t404.indexOf('PGRST205') >= 0) { _SETC.gone = true; res = await base(input, init); }
+  }
 
   if ((E2E.availKnown && !E2E.avail) || method === 'HEAD' || res.status === 204 || res.status === 205 || res.status === 304) return res;
   var ct = res.headers.get('content-type') || '';
@@ -29338,6 +29887,12 @@ async function _e2eFetch(base, input, init) {
   data = await _e2eOpenDeep(data);
   if (m[2].indexOf('rpc/') !== 0) _e2eLearn(m[2], data);
   return new Response(JSON.stringify(data), { status: res.status, statusText: res.statusText, headers: headers });
+}
+var _SETC = { gone: false };
+function _setcAsk() { return !_SETC.gone && !!(typeof S !== 'undefined' && S && S.profile && S.profile.role === 'client'); }
+function _setcInput(input, url) {
+  var u = url.replace(/\/rest\/v1\/settings(?=[?#]|$)/, '/rest/v1/settings_client');
+  return typeof input === 'string' ? u : new Request(u, input);
 }
 function _e2eRefused(msg) {
   return new Response(JSON.stringify({ code: 'PE2E0', message: msg, details: null, hint: null }),
@@ -29446,7 +30001,7 @@ async function _e2eStorage(base, input, init, method, rest) {
   }
 }
 var _E2E_SWEEP = ['assessments', 'findings', 'qa_comments', 'assessment_comments', 'timeline_events', 'tickets',
-                  'assets', 'scan_runs', 'scan_results', 'co_live'];
+                  'assets', 'scan_runs', 'scan_results', 'co_live', 'assessment_qa'];
 var _E2E_SWEEP_SETTLE_MS = 10000;
 var _E2E_SWEEP_QUIET_MS = 30 * 60000;
 var _E2E_SWEEP_BUSY_MS = 5 * 60000;
@@ -29734,6 +30289,8 @@ async function _e2eKbReapply(k) {
     var fk = _e2eTitleKey(f.title);
     return fk === key || aliases.indexOf(fk) >= 0;
   });
+
+  try { await _workEnsureFindings(hits, { retry: true }); } catch (e) {}
   var n = 0, failed = 0;
   for (var i = 0; i < hits.length; i++) {
     var f = hits[i], kc = Number(k.cvss) || 0, fc = Number(f.cvss) || 0;
@@ -31866,6 +32423,8 @@ async function viewAssessment(id) {
     var a = (S.data.assessments || []).find(function(x) { return x.id === id; });
     if (!a) { toast('Assessment not found', 'error'); return; }
 
+    try { await _workEnsure([id], { retry: true }); } catch (e) {}
+
     var _vaPics = null;
     try { prefetchAssessmentImages(a.id); _vaPics = _storageImagesReady(_collectAssessmentStoragePaths(a), 900); } catch (e) { _vaPics = null; }
     try {
@@ -31884,7 +32443,7 @@ async function viewAssessment(id) {
   } finally { _hideLoading(); }
 }
 var _viewFindingTok = 0;
-function viewFinding(fid, aid, _waited) {
+function viewFinding(fid, aid, _waited, _wkRead) {
   if (!_mayOpenWork()) { toast('Findings are for the testing team', 'info'); return; }
 
   if (!_waited && !(S.page === 'finding-detail' && S.currentFinding && S.currentFinding.id === fid)
@@ -31899,6 +32458,20 @@ function viewFinding(fid, aid, _waited) {
 
   if (!f) { toast('That finding is not here', 'error'); return; }
   if (!a) { toast('That finding is not attached to anything that can be opened', 'error'); return; }
+
+  if (!_waited && !_wkRead && typeof _workIsLight === 'function' && _workIsLight(f.assessment_id)) {
+    var _wkTok = ++_viewFindingTok;
+    var _wkFrom = S.page + '|' + (S.currentFinding ? S.currentFinding.id : '') + '|' + (S.modal ? S.modal.type : '');
+    _showLoading();
+    var _wkGo = function () {
+      _hideLoading();
+      if (_wkTok !== _viewFindingTok) return;
+      if (S.page + '|' + (S.currentFinding ? S.currentFinding.id : '') + '|' + (S.modal ? S.modal.type : '') !== _wkFrom) return;
+      viewFinding(fid, aid, false, true);
+    };
+    _workEnsure([f.assessment_id], { retry: true }).then(_wkGo, _wkGo);
+    return;
+  }
 
   var _vfTok = ++_viewFindingTok;
   if (!_waited) {
@@ -31940,6 +32513,10 @@ async function viewClient(id) {
   try {
     var c = (S.data.clients || []).find(function(x) { return x.id === id; });
     if (!c) { toast('Client not found', 'error'); return; }
+
+    try {
+      await _workEnsure((S.data.assessments || []).filter(function (a) { return a && a.client_id === id; }).map(function (a) { return a.id; }), { retry: true });
+    } catch (e) {}
     S.currentClient = c;
     S.page = 'client-detail';
     pushNavHistory();
@@ -32280,9 +32857,14 @@ function renderAssessmentTable(list, isC, opts) {
   if (_showFb) h += '<th>Feedback</th>';
   if (!isC && canManage()) h += '<th>Actions</th>';
   h += '</tr></thead><tbody>';
+
+  var _afOf = _findingsByEngagement();
+  var _cmOf = _rowsByEngagementOnce(function () { return S.data.assessment_comments; });
+  var _readIds = null;
+  var _readIdsNow = function () { return _readIds || (_readIds = _getReadNotifIds()); };
   list.forEach(function(a) {
     var clName = isC ? null : getClientName(a.client_id);
-    var af = getAssessmentFindings(a.id);
+    var af = _afOf(a.id);
 
     if (isC) af = isDeliveredApproved(a) ? af : af.filter(function(f) { return f.client_visible; });
     var aCode = _assCodeOf(a, (S.data.clients || []).find(function(c) { return c.id === a.client_id; }));
@@ -32300,13 +32882,13 @@ function renderAssessmentTable(list, isC, opts) {
     h += '<td>' + renderMergedStatus(a, isC) + '</td>';
     if (_colFindings) h += '<td>' + af.length + '</td>';
 
-    var _cmts = (S.data.assessment_comments || []).filter(function(c) {
+    var _cmts = _cmOf(a.id).filter(function(c) {
       if (c.assessment_id !== a.id) return false;
       if (isC && c.client_visible === false) return false;
       return true;
     });
     var _myId = S.profile ? S.profile.id : '';
-    var _rIds = _getReadNotifIds();
+    var _rIds = _readIdsNow();
 
     var _viewerIsLead = (_myId && a.lead_id === _myId);
     var _viewerIsClientOwner = (isC && S.profile && S.profile.client_id && a.client_id === S.profile.client_id);
@@ -32345,7 +32927,7 @@ function renderAssessmentTable(list, isC, opts) {
   if (!list.length) h += '<div class="empty">No assessments yet</div>';
   list.forEach(function(a) {
     var clName = isC ? null : getClientName(a.client_id);
-    var af = getAssessmentFindings(a.id);
+    var af = _afOf(a.id);
     if (isC) af = isDeliveredApproved(a) ? af : af.filter(function(f) { return f.client_visible; });
     var aCode = _assCodeOf(a, (S.data.clients || []).find(function(c) { return c.id === a.client_id; }));
     h += '<div class="mob-card" style="cursor:pointer" onclick="viewAssessment(\'' + a.id + '\')">';
@@ -32358,7 +32940,7 @@ function renderAssessmentTable(list, isC, opts) {
     h += '</div>';
     h += '<div class="mob-card-badges">' + renderMergedStatus(a, isC) + _credPill(a, isC);
     if (af.length) h += ' <span class="badge" style="font-size:0.7rem">' + af.length + ' finding' + (af.length !== 1 ? 's' : '') + '</span>';
-    var _mobCmts = (S.data.assessment_comments || []).filter(function(c) {
+    var _mobCmts = _cmOf(a.id).filter(function(c) {
       if (c.assessment_id !== a.id) return false;
       if (isC && c.client_visible === false) return false;
       return true;
@@ -32368,7 +32950,7 @@ function renderAssessmentTable(list, isC, opts) {
     var _mobIsClientOwner = (isC && S.profile && S.profile.client_id && a.client_id === S.profile.client_id);
     var _mobShouldNotify = _mobIsLead || _mobIsClientOwner;
     var _mobUnread = _mobShouldNotify
-      ? _mobCmts.filter(function(c) { return c.user_id !== _mobMyId && _getReadNotifIds().indexOf(c.id) < 0; }).length
+      ? _mobCmts.filter(function(c) { return c.user_id !== _mobMyId && _readIdsNow().indexOf(c.id) < 0; }).length
       : 0;
     if (_mobUnread > 0) h += ' <span class="badge" style="font-size:0.7rem;background:rgba(var(--notification-color-rgb,249,115,22),0.15);color:var(--text);border:1px solid rgba(var(--notification-color-rgb,249,115,22),0.4)">' + _mobUnread + ' new comment' + (_mobUnread !== 1 ? 's' : '') + '</span>';
     else if (_mobCmts.length) h += ' <span class="badge" style="font-size:0.7rem">' + _mobCmts.length + ' comment' + (_mobCmts.length !== 1 ? 's' : '') + '</span>';
@@ -32390,6 +32972,7 @@ var _LIST_DOCS = {
   invoice: { slot: 'invoice', client: function (id) { return downloadInvoice(id); },     built: function (id) { return genInvoicePDF(id); },     fromWord: function (id) { return pdfFromDocxInvoice(id); },     name: function (id) { return _invoiceFilename(id, 'pdf'); } },
 };
 async function downloadListDoc(kind, id) {
+
   var d = _LIST_DOCS[kind] || _LIST_DOCS.report;
   if (S.profile && S.profile.role === 'client') return d.client(id);
   await _ensurePdfTemplates();
@@ -32721,6 +33304,12 @@ function _qaEditorOpen() {
       if (els[i].style && els[i].style.display !== 'none') return els[i];
     }
   } catch (e) {}
+  return null;
+}
+var _AQA = { on: false, since: 2025112301 };
+function _aqaRow(aid) {
+  var l = (S && S.data && S.data.assessment_qa) || [];
+  for (var i = 0; i < l.length; i++) if (l[i] && l[i].id === aid) return l[i];
   return null;
 }
 function _qaListOf(v) {
@@ -33452,10 +34041,7 @@ function renderAssessmentDetail() {
       if (ev.indexOf('letter of attestation') >= 0) return false;
 
       if (isClient) {
-        if (ev.indexOf('sent back for revision') >= 0 || ev.indexOf('qa changes requested') >= 0) return false;
-        if (ev.indexOf('fixing qa') >= 0) return false;
-
-        if (ev.indexOf('from delivery') >= 0 || ev.indexOf('taken back') >= 0) return false;
+        if (t.internal === true || _tlInternal(ev)) return false;
         if (!_isDelivered(a) && ev.indexOf('report delivered') >= 0) return false;
       }
       return true;
@@ -34708,6 +35294,14 @@ function formatExecSummary(text) {
 
   return html;
 }
+function _fdSwitches(f) {
+  var mk = false;
+  try { mk = _findingMissingOnRecord(f).length > 0; } catch (e) { mk = false; }
+  var h = '<label class="tpl-toggle fd-switch" title="' + (mk ? 'A required field is empty, so this is a draft until it is filled in.' : 'Whether this finding is still a draft.') + '">'
+    + '<input type="checkbox" data-fd-draft' + (f.is_draft || mk ? ' checked' : '') + (mk ? ' disabled' : '')
+    + ' onchange="toggleFindingDraft(\'' + f.id + '\',this.checked)"><span class="tpl-toggle-track"></span><span class="fd-switch-label">Draft</span></label>';
+  return h;
+}
 function renderFindingDetail() {
   if (_isPendingDetailRestore('finding-detail')) return _renderRestorePlaceholder();
   var f = S.currentFinding;
@@ -34796,11 +35390,18 @@ function renderFindingDetail() {
 
   h += '<div style="margin-left:auto;display:flex;align-items:center;gap:0.4rem">';
 
-  if (canEdit() && (!isContractor() || f.created_by === S.profile.id || _conOnWork((S.data.assessments || []).find(function (x) { return x.id === f.assessment_id; })))) h += '<button class="btn btn-ghost btn-sm" onclick="openM(\'finding\',\'' + f.id + '\',\'' + f.assessment_id + '\')" style="font-size:0.75rem">' + IC.edit + ' Edit</button>';
+  var _fdEdits = canEdit() && (!isContractor() || f.created_by === S.profile.id || _conOnWork((S.data.assessments || []).find(function (x) { return x.id === f.assessment_id; })));
+
+  if (_fdEdits && !(typeof _isScanFinding === 'function' && _isScanFinding(f))) h += _fdSwitches(f);
+  if (_fdEdits) h += '<button class="btn btn-ghost btn-sm" onclick="openM(\'finding\',\'' + f.id + '\',\'' + f.assessment_id + '\')" style="font-size:0.75rem">' + IC.edit + ' Edit</button>';
   if (canEdit() && _libUseOn()) h += '<button class="btn btn-ghost btn-sm" onclick="addToKB(\'' + f.id + '\')" style="font-size:0.75rem">' + IC.library + ' Library</button>';
 
   if (!(typeof _isScanFinding === 'function' && _isScanFinding(f)) && _canExportFindingsDoc()) {
     h += _fxButtonHtml('_fxOneExport', f.id, { what: 'Download this finding', variant: 'ghost', style: 'font-size:0.75rem', ids: { pdf: 'fdPdfBtn', docx: 'fdDocxBtn' } });
+  }
+
+  if (!(typeof _isScanFinding === 'function' && _isScanFinding(f)) && _canExportFindings() && _fxXlsxTakes(f)) {
+    h += '<button class="btn btn-ghost btn-sm" id="fdXlsxBtn" onclick="_fxOneXlsx(\'' + f.id + '\')" style="font-size:0.75rem" title="Download this finding as an Excel file, with the columns and tabs last chosen in Export Findings">' + IC.dl + ' Excel</button>';
   }
 
   if ((isClient || canEdit()) && _retestAskable(f) && _canRetestFinding(f)) {
@@ -38201,9 +38802,10 @@ function emptyAssessmentArchive() {
         if (_archFiles.length) { await supabaseClient.storage.from('assessment-files').remove(_archFiles.map(function(f) { return f.storage_path; })); }
       } catch(e) { console.warn('Archive storage cleanup:', e.message); }
 
+      try { await _workEnsure(ids, { retry: true }); } catch (e) {}
       try {
         var _evPaths = [];
-        (S.data.findings || []).filter(function(f) { return ids.indexOf(f.assessment_id) >= 0; }).forEach(function(f) {
+        (S.data.findings || []).filter(function(f) { return ids.indexOf(f.assessment_id) >= 0 && !(typeof _workRowLight === 'function' && _workRowLight(f)); }).forEach(function(f) {
           _evPaths = _evPaths.concat(_collectFindingStoragePaths(f));
         });
         if (_evPaths.length) { await supabaseClient.storage.from('assessment-files').remove(_evPaths); }
@@ -38215,8 +38817,7 @@ function emptyAssessmentArchive() {
           _aPaths = _aPaths.concat(_collectAssessmentStoragePaths(a));
         });
 
-        _aPaths = _pathsNotSharedElsewhere(_aPaths, {});
-        if (_aPaths.length) { await supabaseClient.storage.from('assessment-files').remove(_aPaths); }
+        await _removeUnshared(_aPaths, {});
       } catch(e) { console.warn('Assessment storage cleanup:', e.message); }
       await _inParts(ids, function (part) { return supabaseClient.from('assessment_files').delete().in('assessment_id', part); }, true);
       await _inParts(ids, function (part) { return supabaseClient.from('timeline_events').delete().in('assessment_id', part); }, true);
@@ -44712,6 +45313,7 @@ function renderSettings__portal() {
     { key: 'attestation_pdf',  label: 'Letter of Attestation (PDF)', on: _attestationOn() },
     { key: 'findings_xlsx',       label: 'Findings Export (Excel)', on: assessmentsEnabled() },
     { key: 'findings_xlsx_multi', label: 'Findings Export, All Phases (Excel)', on: assessmentsEnabled() },
+    { key: 'finding_xlsx',  label: 'Finding Export (Excel)', on: assessmentsEnabled() },
 
     { key: 'finding_pdf',   label: 'Finding Export (PDF)', on: assessmentsEnabled() },
     { key: 'finding_docx',  label: 'Finding Export (Word)', on: assessmentsEnabled() },
@@ -52064,6 +52666,7 @@ var _CO_TABLE_DATA = {
   checklists_runbooks: 'checklists_runbooks', assessment_phase_checklist_state: 'assessment_phase_checklist_state',
   client_scan_targets: 'client_scan_targets', scan_cadences: 'scan_cadences',
   contractor_payments: 'contractor_payments', feedback: 'feedback',
+  assessment_qa: 'assessment_qa',
 };
 var _CO_SECTION_DIALOGS = {
   exec: 'exec_summary', execsummary: 'exec_summary', retestsummary: 'retest_summary',
@@ -52773,6 +53376,15 @@ function _crbDisplay(v) {
 
   return _crbIsHtml(t) ? _figNumber(renderHtmlContent(t), 0) : _escHtml(t).replace(/\r?\n/g, '<br>');
 }
+function _safeHref(u, teams) {
+  var s = String(u == null ? '' : u).trim();
+  if (!s) return '';
+  var sch = s.replace(/[\x00-\x20\x7f]+/g, '').toLowerCase();
+  if (/^(https?:|mailto:)/.test(sch)) return s;
+  if (teams && /^msteams:/.test(sch)) return s;
+  return '';
+}
+window._safeHref = _safeHref;
 function _crbSafeUrl(u) {
   var s = String(u == null ? '' : u).trim();
   if (!s) return '';
@@ -54890,7 +55502,7 @@ function renderViewContractorModal() {
 
   if (u.teams_link || u.slack_link) {
     h += '<div class="pf-links">';
-    if (u.teams_link) h += '<a href="' + esc(u.teams_link) + '" target="_blank" rel="noopener" class="btn btn-secondary btn-sm"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 10h8M8 14h5"/></svg> Teams</a>';
+    if (_safeHref(u.teams_link, true)) h += '<a href="' + esc(_safeHref(u.teams_link, true)) + '" target="_blank" rel="noopener" class="btn btn-secondary btn-sm"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 10h8M8 14h5"/></svg> Teams</a>';
     if (u.slack_link) {
       var slackUrl = u.slack_link.startsWith('http') ? u.slack_link : 'https://slack.com';
       h += '<a href="' + esc(slackUrl) + '" target="_blank" rel="noopener" class="btn btn-secondary btn-sm"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2c-1.1 0-2 .9-2 2v3.5h3.5c1.1 0 2-.9 2-2s-.9-2-2-2h-1.5z"/></svg> ' + esc(u.slack_link) + '</a>';
@@ -55192,6 +55804,7 @@ function _aiEngagementLines(a, client, o) {
 }
 window._aiEngagementLines = _aiEngagementLines;
 async function generateRetestSummary(assessmentId) {
+  if (typeof _workReady === 'function' && _workAnyLight([assessmentId]) && !(await _workReady([assessmentId]))) return;
 
   var _rsSolo = _genSolo(document.getElementById('genRetestBtn'), [document.getElementById('retestSummaryEditor')], 'Writing');
   try {
@@ -55236,6 +55849,7 @@ async function generateRetestSummary(assessmentId) {
 } finally { _genSoloDone(_rsSolo); }
 }
 async function generateSectionAI(assessmentId, key, editorId, btnId) {
+  if (typeof _workReady === 'function' && _workAnyLight([assessmentId]) && !(await _workReady([assessmentId]))) return;
   var a = (S.data.assessments || []).find(function (x) { return x.id === assessmentId; }) || S.currentAssessment;
   if (!a) { toast('Assessment not found', 'error'); return; }
   if (!_aiEnabled()) { toast('Set up an AI provider in Settings, AI first', 'error'); return; }
@@ -58417,6 +59031,8 @@ function _findingMissingOnRecord(f, tid) {
     var v = cfv && typeof cfv === 'object' ? cfv[cf.id] : null;
     if (!_ffStripToText(v)) out.push({ key: 'cf_' + cf.id, label: cf.label });
   });
+
+  if (typeof _workRowLight === 'function' && _workRowLight(f)) out = _workOnlyRead(f, out);
   return out;
 }
 function _findingTitleHtml(f) {
@@ -58581,6 +59197,9 @@ function _ffLabelDefault(key) {
 
   if (key === 'phase') return 'Phase';
   if (key === 'retest_results' || key === 'retest') return 'Retest Results';
+
+  if (key === 'client_visible') return 'Client Visible';
+  if (key === 'is_draft') return 'Draft';
   var d = _ffDefs().find(function(x) { return x.key === key; });
   return d ? d.label : key;
 }
@@ -59757,6 +60376,8 @@ function renderFindingModal() {
 
   h += '<div class="modal-footer"><div class="m-foot-l">';
   if (m.id && canDeleteFinding()) h += _findingDeleteBtn(m.id, aid);
+
+  if (_fmVisOn(fi)) h += _fmVisSwitch(m, fi);
   h += _mSavedNote() + '</div>';
   h += '<button class="btn btn-secondary" onclick="closeM()">Cancel</button>';
   var _fArgs = "_mId(),'" + aid + "'";
@@ -59775,6 +60396,24 @@ function renderFindingModal() {
   setTimeout(_setupFinding, 100);
 
   return h;
+}
+function _fmVisOn(fi) {
+  return false;
+}
+function _fmVisSwitch(m, fi) {
+  var on = !!(fi && fi.client_visible);
+  return '<label class="tpl-toggle fm-vis" title="Whether the client sees this finding in their portal. Saved with the finding.">'
+    + '<input type="checkbox" id="mClientVis"' + (on ? ' checked' : '') + '>'
+    + '<span class="tpl-toggle-track"></span><span class="fm-vis-label">Client Visible</span></label>';
+}
+function _fmAskShow(rid, sev) {
+  return new Promise(function (resolve) {
+    confirmDialog('Make this finding visible?',
+      'This <strong>' + esc(_rtIn(rid, function () { return _sevName(sev || ''); }).toUpperCase()) + '</strong> finding will be visible to the client. '
+      + 'They can be emailed about it now, or see it without an email.',
+      function () { resolve('email'); }, function () { resolve(null); },
+      { confirmText: 'Show and email', altText: 'Show, don\u2019t email', cancelText: 'Cancel', onAlt: function () { resolve('quiet'); } });
+  });
 }
 function _findingDeleteBtn(fid, aid) {
   return '<button type="button" class="btn btn-ghost btn-sm" data-mleft onclick="deleteFinding(\'' + fid + '\',\'' + aid + '\')" style="color:var(--red-text)">' + IC.trash + ' Delete</button>';
@@ -60064,6 +60703,8 @@ async function saveFinding(id, aid, _opts) {
 
   var _fPhase = _readFld('mPhase');
 
+  var _fVis = (function () { var el = document.getElementById('mClientVis'); return el ? { had: true, value: !!el.checked } : { had: false, value: false }; })();
+
   var _cfRaw = [];
   (_ffCustomEnabled() || []).forEach(function(_d) {
     var _el = document.getElementById('cfld_' + _d.id);
@@ -60207,6 +60848,29 @@ async function saveFinding(id, aid, _opts) {
 
   if (_fPhase.had) data.phase = _fPhase.value;
 
+  var _visEmail = false;
+  if (_fVis.had) {
+    var _visRow = id ? (S.data.findings || []).find(function (x) { return x.id === id; }) : null;
+    var _visWas = !!(_visRow && _visRow.client_visible);
+    if (id) {
+      try {
+        var _visHeld = _coBaseline('findings', id);
+        if (_visHeld && _visHeld.values && _coHas(_visHeld.values, 'client_visible')) _visWas = !!_visHeld.values.client_visible;
+      } catch (e) {}
+    }
+    if (id || _fVis.value) data.client_visible = _fVis.value;
+    if (_fVis.value && _visRow && _visRow.hidden_on_takeback) data.hidden_on_takeback = false;
+    var _visSev = String(data.severity || (_visRow && _visRow.severity) || '').toLowerCase();
+    if (_fVis.value && !_visWas && (_visSev === 'critical' || _visSev === 'high') && _emailsOn('critical_finding')) {
+
+      var _visAns = null;
+      _hideLoading();
+      try { _visAns = await _fmAskShow(id || aid, _visSev); } finally { _showLoading(); }
+      if (!_visAns) return;
+      _visEmail = _visAns === 'email';
+    }
+  }
+
   try {
     var result;
     if (id) {
@@ -60287,6 +60951,14 @@ async function saveFinding(id, aid, _opts) {
 
     if (S.currentAssessment && S.currentAssessment.id === aid) {
       S.currentAssessment = (S.data.assessments || []).find(function(a) { return a.id === aid; });
+    }
+
+    if (_visEmail && (id ? !!(_co && _co.wrote && _co.wrote.indexOf('client_visible') >= 0) : true)) {
+      try {
+        var _visA = (S.data.assessments || []).find(function (x) { return x.id === aid; });
+        var _visF = (S.data.findings || []).find(function (x) { return x.id === savedData.id; }) || savedData;
+        if (_visA && _visF) Promise.resolve(notifyCriticalFinding(_visA, _visF)).catch(function () {});
+      } catch (e) {}
     }
 
     pendingEvidence = [];
@@ -60479,11 +61151,83 @@ function execCmd(cmd, val) {
   }
 
   var _cssCmd = (cmd === 'foreColor' || cmd === 'hiliteColor' || cmd === 'backColor');
+
+  var _pre = null;
+  try { _pre = _edCmdBefore(cmd); } catch (e) { _pre = null; }
   if (_cssCmd) { try { document.execCommand('styleWithCSS', false, true); } catch (e) {} }
   document.execCommand(cmd, false, val || null);
   if (_cssCmd) { try { document.execCommand('styleWithCSS', false, false); } catch (e) {} }
 
   try { _edCleanNesting(_edCurrent()); } catch (e) {}
+  if (_pre) { try { _edCmdAfter(cmd, _pre); } catch (e) {} }
+}
+function _edCmdBefore(cmd) {
+  var isList = (cmd === 'insertUnorderedList' || cmd === 'insertOrderedList');
+  if (!isList && cmd !== 'insertHorizontalRule') return null;
+  var ed = _edCurrent();
+  var sel = window.getSelection();
+  if (!ed || !sel || !sel.rangeCount) return null;
+  var r = sel.getRangeAt(0);
+  if (!ed.contains(r.commonAncestorContainer)) return null;
+  var at = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+  var blk = at && at.closest ? at.closest('p,div,li,h1,h2,h3,h4,h5,h6,blockquote,td,th') : null;
+  if (blk && (blk === ed || !ed.contains(blk))) blk = null;
+  var pre = { ed: ed, chars: null, atEnd: false, hrs: [] };
+  if (cmd === 'insertHorizontalRule') {
+    pre.hrs = Array.prototype.slice.call(ed.querySelectorAll('hr'));
+    pre.atEnd = !!(blk && _edAtEdge(blk, r, 1));
+    return pre;
+  }
+  if (r.collapsed && blk) {
+    var x = document.createRange();
+    x.setStart(blk, 0); x.setEnd(r.startContainer, r.startOffset);
+    pre.chars = x.toString().length;
+  }
+  return pre;
+}
+function _edCmdAfter(cmd, pre) {
+  var ed = pre.ed;
+  if (!ed || !ed.isConnected) return;
+  var sel = window.getSelection();
+  if (cmd === 'insertHorizontalRule') {
+    var hr = Array.prototype.slice.call(ed.querySelectorAll('hr')).filter(function (h) { return pre.hrs.indexOf(h) < 0; })[0];
+    if (!hr) return;
+    if (hr.hasAttribute('id') && /^(null)?$/.test(hr.getAttribute('id'))) hr.removeAttribute('id');
+    if (hr.parentNode !== ed) return;
+    var nx = _edSibling(hr, 1);
+    var line = (nx && nx.nodeType === 1 && !pre.atEnd) ? nx : (_edBlankLine(nx) ? nx : null);
+    if (!line) {
+      line = document.createElement('p');
+      line.appendChild(document.createElement('br'));
+      ed.insertBefore(line, hr.nextSibling);
+    }
+    _edCaretTo(line, false);
+    return;
+  }
+  if (!sel || !sel.rangeCount) return;
+  var r = sel.getRangeAt(0);
+  var at = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+  if (!at || !ed.contains(at)) return;
+  var blk = at.closest('p,div,li,h1,h2,h3,h4,h5,h6,blockquote,td,th,pre');
+  if (!blk || blk === ed || !ed.contains(blk)) {
+    try { document.execCommand('formatBlock', false, '<p>'); } catch (e) {}
+    sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    r = sel.getRangeAt(0);
+    at = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+    blk = at && at.closest ? at.closest('p,div,li,h1,h2,h3,h4,h5,h6,blockquote,td,th,pre') : null;
+  }
+  if (pre.chars !== null && r.collapsed && blk && blk !== ed && ed.contains(blk)) _edCaretAtChar(blk, pre.chars);
+}
+function _edCaretAtChar(el, n) {
+  var w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT), t, last = null, left = n;
+  while ((t = w.nextNode())) {
+    last = t;
+    var len = (t.nodeValue || '').length;
+    if (left <= len) { try { window.getSelection().collapse(t, left); } catch (e) {} return; }
+    left -= len;
+  }
+  if (last) { try { window.getSelection().collapse(last, (last.nodeValue || '').length); } catch (e) {} }
 }
 var _edPopEl = null;
 var _edSavedRange = null;
@@ -60980,6 +61724,35 @@ function _edCodeNewline(cb, sel) {
   at.setStartAfter(nl);
   at.collapse(true);
   sel.removeAllRanges(); sel.addRange(at);
+}
+function _edHeadingEnter(ed) {
+  var hd = _edCaretEl();
+  hd = hd && hd.closest ? hd.closest('h1,h2,h3,h4,h5,h6') : null;
+  if (!hd || hd === ed || !ed.contains(hd)) return false;
+  var sel = window.getSelection();
+  if (!sel || !sel.rangeCount || !sel.isCollapsed || !_edHasContent(hd) || !_edAtEdge(hd, sel.getRangeAt(0), 1)) return false;
+  try {
+    document.execCommand('insertParagraph');
+    document.execCommand('formatBlock', false, '<p>');
+  } catch (e) { return false; }
+  return true;
+}
+function _edListOut(ed) {
+  var sel = window.getSelection();
+  if (!sel || !sel.rangeCount || !sel.isCollapsed) return false;
+  var r = sel.getRangeAt(0);
+  var at = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+  var li = at && at.closest ? at.closest('li') : null;
+  if (!li || !ed.contains(li)) return false;
+  var list = li.parentNode;
+  if (!list || !/^(UL|OL)$/.test(list.nodeName) || list.parentNode !== ed) return false;
+  if (list.firstElementChild !== li || li.querySelector('ul,ol')) return false;
+  if (!_edAtEdge(li, r, -1)) return false;
+  try {
+    document.execCommand('outdent');
+    document.execCommand('formatBlock', false, '<p>');
+  } catch (e) { return false; }
+  return true;
 }
 function _edCodeKey(e, ed) {
   if (!ed || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return false;
@@ -61482,6 +62255,8 @@ document.addEventListener('keydown', function(e) {
 
     if (_bEd && _edCodeKey(e, _bEd)) { e.preventDefault(); return; }
 
+    if (_bEd && _edListOut(_bEd)) { e.preventDefault(); return; }
+
     if (_bEd) { try { setTimeout(function () { _edTidyEmptied(_bEd); }, 0); } catch (_e) {} }
   }
 
@@ -61497,6 +62272,8 @@ document.addEventListener('keydown', function(e) {
         return;
       }
       if (e.shiftKey) return;
+
+      if (_edHeadingEnter(el)) { e.preventDefault(); return; }
 
       var node = window.getSelection().anchorNode;
       var inList = false;
@@ -61759,37 +62536,555 @@ function confirmTable() {
   editor.focus();
 
   var table = document.createElement('table');
-  table.style.width = '100%';
-  table.style.borderCollapse = 'collapse';
-  table.style.margin = '0.5rem 0';
-
   for (var r = 0; r < rows; r++) {
     var row = table.insertRow();
-    for (var c = 0; c < cols; c++) {
-      var cell = row.insertCell();
-      cell.style.border = '1px solid var(--border)';
-      cell.style.padding = '0.5rem';
-      cell.textContent = r === 0 ? 'Header ' + (c + 1) : 'Cell';
-      if (r === 0) {
-        cell.style.fontWeight = 'bold';
-        cell.style.background = 'rgba(255,255,255,0.05)';
-      }
-    }
+    for (var c = 0; c < cols; c++) row.appendChild(_tbNewCell(r === 0 && rows > 1 ? 'th' : 'td'));
   }
 
   var sel = window.getSelection();
-  if (sel.rangeCount) {
-    var range = sel.getRangeAt(0);
-    range.deleteContents();
-    range.insertNode(table);
-    range.setStartAfter(table);
-    range.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(range);
-  } else {
-    editor.appendChild(table);
+  var blk = null;
+  if (sel.rangeCount && editor.contains(sel.getRangeAt(0).startContainer)) {
+    blk = sel.getRangeAt(0).startContainer;
+    while (blk && blk.parentNode !== editor) blk = blk.parentNode;
+  }
+  var empty = function (n) { return n.nodeType === 3 ? !String(n.textContent).trim() : !String(n.textContent || '').replace(/\u00a0/g, ' ').trim() && !(n.querySelector && n.querySelector('img,table,hr')); };
+  if (blk && blk !== editor && blk.nodeType === 1 && empty(blk) && blk.tagName !== 'HR') editor.replaceChild(table, blk);
+  else if (blk && blk !== editor) editor.insertBefore(table, blk.nextSibling);
+  else editor.appendChild(table);
+
+  var nx = table.nextSibling;
+  while (nx && nx.nodeType === 3 && !String(nx.textContent).trim()) nx = nx.nextSibling;
+  if (!nx || (nx.nodeType === 1 && nx.tagName === 'TABLE')) {
+    var after = document.createElement('p'); after.appendChild(document.createElement('br'));
+    table.parentNode.insertBefore(after, table.nextSibling);
+  }
+  _tbCaretIn(table.rows[0].cells[0], false);
+  _tbChanged(editor);
+}
+var _TB = { bar: null, cell: null, sel: null, drag: null, edge: null, size: null };
+function _tbEditorOf(n) {
+  while (n && n.nodeType !== 1) n = n.parentNode;
+  var ed = n && n.closest ? n.closest('.rich-editor') : null;
+  return ed && ed.isContentEditable ? ed : null;
+}
+function _tbCellOf(n) {
+  while (n && n.nodeType !== 1) n = n.parentNode;
+  var c = n && n.closest ? n.closest('td,th') : null;
+  return c && _tbEditorOf(c) ? c : null;
+}
+function _tbTableOf(cell) { return cell ? cell.closest('table') : null; }
+function _tbNewCell(tag) {
+  var td = document.createElement(tag || 'td');
+  td.appendChild(document.createElement('br'));
+  return td;
+}
+function _tbHeadRow(tr) {
+  return !!(tr && tr.cells.length) && Array.prototype.every.call(tr.cells, function (c) { return c.tagName === 'TH'; });
+}
+function _tbGrid(table) {
+  var rows = Array.prototype.slice.call(table.rows), grid = [], cols = 0;
+  rows.forEach(function (tr, r) {
+    grid[r] = grid[r] || [];
+    var c = 0;
+    Array.prototype.forEach.call(tr.cells, function (td) {
+      while (grid[r][c]) c++;
+      var cs = Math.max(1, parseInt(td.getAttribute('colspan'), 10) || 1);
+      var rs = Math.max(1, Math.min(parseInt(td.getAttribute('rowspan'), 10) || 1, rows.length - r));
+      var slot = { cell: td, r: r, c: c, rs: rs, cs: cs };
+      for (var i = 0; i < rs; i++) { grid[r + i] = grid[r + i] || []; for (var j = 0; j < cs; j++) grid[r + i][c + j] = slot; }
+      c += cs;
+    });
+  });
+  grid.forEach(function (row) { if (row.length > cols) cols = row.length; });
+  return { rows: rows, grid: grid, cols: cols };
+}
+function _tbPos(G, cell) {
+  for (var r = 0; r < G.grid.length; r++) {
+    var row = G.grid[r] || [];
+    for (var c = 0; c < row.length; c++) if (row[c] && row[c].cell === cell) return row[c];
+  }
+  return null;
+}
+function _tbOrder(G) {
+  var out = [];
+  G.grid.forEach(function (row, r) { row.forEach(function (s, c) { if (s && s.r === r && s.c === c) out.push(s.cell); }); });
+  return out;
+}
+function _tbBefore(G, r, c) {
+  var row = G.grid[r] || [];
+  for (var k = c; k < row.length; k++) if (row[k] && row[k].r === r && row[k].c === k) return row[k].cell;
+  return null;
+}
+function _tbSpan(cell, name, n) {
+  if (n > 1) cell.setAttribute(name, String(n)); else cell.removeAttribute(name);
+}
+function _tbHasWords(cell) {
+  return !!(String(cell.textContent || '').replace(/ /g, ' ').trim() || cell.querySelector('img,table,pre,ul,ol'));
+}
+function _tbCaretIn(el, atEnd) {
+  try {
+    var r = document.createRange();
+    r.selectNodeContents(el);
+    r.collapse(!atEnd);
+    var s = window.getSelection();
+    s.removeAllRanges(); s.addRange(r);
+  } catch (e) {}
+}
+function _tbChanged(ed) {
+  try { if (ed) ed.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+}
+function _tbTidy(table) {
+  for (var guard = 0; guard < 50; guard++) {
+    var G = _tbGrid(table), hit = -1;
+    for (var r = 0; r < G.rows.length; r++) if (!G.rows[r].cells.length) { hit = r; break; }
+    if (hit < 0) return;
+    var seen = [];
+    (G.grid[hit] || []).forEach(function (s) { if (s && seen.indexOf(s.cell) < 0) { seen.push(s.cell); _tbSpan(s.cell, 'rowspan', s.rs - 1); } });
+    G.rows[hit].parentNode.removeChild(G.rows[hit]);
   }
 }
+function _tbWidths(table, cols) {
+  var cg = null;
+  for (var i = 0; i < table.children.length; i++) if (table.children[i].tagName === 'COLGROUP') { cg = table.children[i]; break; }
+  if (!cg) return null;
+  var list = Array.prototype.map.call(cg.querySelectorAll('col'), function (c) { var m = /([\d.]+)%/.exec(c.style.width || c.getAttribute('width') || ''); return m ? parseFloat(m[1]) : 0; });
+  if (list.length !== cols || list.some(function (w) { return !(w > 0); })) return null;
+  return list;
+}
+function _tbSetWidths(table, list) {
+  var cg = null;
+  for (var i = 0; i < table.children.length; i++) if (table.children[i].tagName === 'COLGROUP') { cg = table.children[i]; break; }
+  if (!list) { if (cg) cg.parentNode.removeChild(cg); return; }
+  if (!cg) { cg = document.createElement('colgroup'); table.insertBefore(cg, table.firstChild); }
+  while (cg.firstChild) cg.removeChild(cg.firstChild);
+  var sum = list.reduce(function (a, b) { return a + b; }, 0) || 1;
+  list.forEach(function (w) { var col = document.createElement('col'); col.style.width = (Math.round(w / sum * 1000) / 10) + '%'; cg.appendChild(col); });
+}
+function _tbMeasure(table, G) {
+  var kept = _tbWidths(table, G.cols);
+  if (kept) return kept;
+  var px = [];
+  for (var c = 0; c < G.cols; c++) {
+    px[c] = 0;
+    for (var r = 0; r < G.grid.length; r++) { var s = (G.grid[r] || [])[c]; if (s && s.cs === 1) { px[c] = s.cell.getBoundingClientRect().width; break; } }
+  }
+  var known = px.filter(function (w) { return w > 0; });
+  var avg = known.length ? known.reduce(function (a, b) { return a + b; }, 0) / known.length : 1;
+  px = px.map(function (w) { return w > 0 ? w : avg; });
+  var tot = px.reduce(function (a, b) { return a + b; }, 0) || 1;
+  return px.map(function (w) { return w / tot * 100; });
+}
+function _tbAddRow(table, cell, below) {
+  var G = _tbGrid(table), p = _tbPos(G, cell);
+  if (!p) return null;
+  var at = below ? p.r + p.rs : p.r;
+  var tr = document.createElement('tr'), seen = [];
+  for (var c = 0; c < G.cols; c++) {
+    var up = at > 0 ? (G.grid[at - 1] || [])[c] : null, down = (G.grid[at] || [])[c];
+    if (up && down && up.cell === down.cell) {
+      if (seen.indexOf(up.cell) < 0) { seen.push(up.cell); _tbSpan(up.cell, 'rowspan', up.rs + 1); }
+      continue;
+    }
+    tr.appendChild(_tbNewCell('td'));
+  }
+  var ref = G.rows[at] || null;
+  if (ref) ref.parentNode.insertBefore(tr, ref);
+  else G.rows[G.rows.length - 1].parentNode.appendChild(tr);
+  return tr;
+}
+function _tbAddCol(table, cell, right) {
+  var G = _tbGrid(table), p = _tbPos(G, cell);
+  if (!p) return;
+  var at = right ? p.c + p.cs : p.c, seen = [];
+  var widths = _tbWidths(table, G.cols);
+  G.rows.forEach(function (tr, r) {
+    var row = G.grid[r] || [];
+    var left = at > 0 ? row[at - 1] : null, here = row[at];
+    if (left && here && left.cell === here.cell) {
+      if (seen.indexOf(left.cell) < 0) { seen.push(left.cell); _tbSpan(left.cell, 'colspan', left.cs + 1); }
+      return;
+    }
+    tr.insertBefore(_tbNewCell(_tbHeadRow(tr) ? 'th' : 'td'), _tbBefore(G, r, at));
+  });
+  if (widths) {
+    var from = Math.min(Math.max(right ? at - 1 : at, 0), widths.length - 1), half = widths[from] / 2;
+    widths[from] = half;
+    widths.splice(at, 0, half);
+    _tbSetWidths(table, widths);
+  }
+}
+function _tbDelRows(table, r1, r2) {
+  var G = _tbGrid(table);
+  if (r1 <= 0 && r2 >= G.rows.length - 1) return _tbDelTable(table);
+  var done = [];
+  for (var c = 0; c < G.cols; c++) {
+    for (var r = r1; r <= r2; r++) {
+      var s = (G.grid[r] || [])[c];
+      if (!s || done.indexOf(s.cell) >= 0) continue;
+      done.push(s.cell);
+      var above = Math.max(0, r1 - s.r), below = Math.max(0, s.r + s.rs - 1 - r2), keep = above + below;
+      if (!keep) continue;
+      _tbSpan(s.cell, 'rowspan', keep);
+      if (above) continue;
+      G.rows[r2 + 1].insertBefore(s.cell, _tbBefore(G, r2 + 1, s.c + s.cs));
+    }
+  }
+  for (var k = r2; k >= r1; k--) G.rows[k].parentNode.removeChild(G.rows[k]);
+  return null;
+}
+function _tbDelCols(table, c1, c2) {
+  var G = _tbGrid(table);
+  if (c1 <= 0 && c2 >= G.cols - 1) return _tbDelTable(table);
+  var widths = _tbWidths(table, G.cols), done = [];
+  for (var r = 0; r < G.rows.length; r++) {
+    for (var c = c1; c <= c2; c++) {
+      var s = (G.grid[r] || [])[c];
+      if (!s || done.indexOf(s.cell) >= 0) continue;
+      done.push(s.cell);
+      var keep = Math.max(0, c1 - s.c) + Math.max(0, s.c + s.cs - 1 - c2);
+      if (!keep) s.cell.parentNode.removeChild(s.cell);
+      else _tbSpan(s.cell, 'colspan', keep);
+    }
+  }
+  if (widths) { widths.splice(c1, c2 - c1 + 1); _tbSetWidths(table, widths.length ? widths : null); }
+  _tbTidy(table);
+  return null;
+}
+function _tbRect(G, a, b) {
+  var R = { r1: Math.min(a.r, b.r), r2: Math.max(a.r + a.rs - 1, b.r + b.rs - 1), c1: Math.min(a.c, b.c), c2: Math.max(a.c + a.cs - 1, b.c + b.cs - 1) };
+  for (var grew = true, guard = 0; grew && guard < 100; guard++) {
+    grew = false;
+    for (var r = R.r1; r <= R.r2; r++) for (var c = R.c1; c <= R.c2; c++) {
+      var s = (G.grid[r] || [])[c];
+      if (!s) continue;
+      if (s.r < R.r1) { R.r1 = s.r; grew = true; }
+      if (s.c < R.c1) { R.c1 = s.c; grew = true; }
+      if (s.r + s.rs - 1 > R.r2) { R.r2 = s.r + s.rs - 1; grew = true; }
+      if (s.c + s.cs - 1 > R.c2) { R.c2 = s.c + s.cs - 1; grew = true; }
+    }
+  }
+  return R;
+}
+function _tbRectCells(G, R) {
+  var out = [];
+  for (var r = R.r1; r <= R.r2; r++) for (var c = R.c1; c <= R.c2; c++) {
+    var s = (G.grid[r] || [])[c];
+    if (s && out.indexOf(s.cell) < 0) out.push(s.cell);
+  }
+  return out;
+}
+function _tbMerge(table, R) {
+  var G = _tbGrid(table);
+  var cells = _tbRectCells(G, R);
+  if (cells.length < 2) return null;
+  var keep = G.grid[R.r1][R.c1].cell;
+  if (!_tbHasWords(keep)) while (keep.firstChild) keep.removeChild(keep.firstChild);
+  cells.forEach(function (x) {
+    if (x === keep) return;
+    if (_tbHasWords(x)) {
+      if (keep.firstChild) keep.appendChild(document.createElement('br'));
+      while (x.firstChild) keep.appendChild(x.firstChild);
+    }
+    x.parentNode.removeChild(x);
+  });
+  if (!keep.firstChild) keep.appendChild(document.createElement('br'));
+  _tbSpan(keep, 'colspan', R.c2 - R.c1 + 1);
+  _tbSpan(keep, 'rowspan', R.r2 - R.r1 + 1);
+  _tbTidy(table);
+  return keep;
+}
+function _tbSplit(table, cell) {
+  var G = _tbGrid(table), p = _tbPos(G, cell);
+  if (!p || (p.rs === 1 && p.cs === 1)) return;
+  var tag = cell.tagName.toLowerCase(), at = cell;
+  cell.removeAttribute('colspan'); cell.removeAttribute('rowspan');
+  for (var j = 1; j < p.cs; j++) { var n = _tbNewCell(tag); at.parentNode.insertBefore(n, at.nextSibling); at = n; }
+  for (var i = 1; i < p.rs; i++) {
+    var r = p.r + i, tr = G.rows[r], before = _tbBefore(G, r, p.c + p.cs);
+    for (var k = 0; k < p.cs; k++) tr.insertBefore(_tbNewCell(_tbHeadRow(tr) ? 'th' : 'td'), before);
+  }
+}
+function _tbToggleHead(table) {
+  var tr = table.rows[0];
+  if (!tr) return;
+  var toTh = !_tbHeadRow(tr);
+  Array.prototype.slice.call(tr.cells).forEach(function (c) {
+    var n = document.createElement(toTh ? 'th' : 'td');
+    for (var a = 0; a < c.attributes.length; a++) n.setAttribute(c.attributes[a].name, c.attributes[a].value);
+    while (c.firstChild) n.appendChild(c.firstChild);
+    c.parentNode.replaceChild(n, c);
+  });
+}
+function _tbDelTable(table) {
+  var p = document.createElement('p');
+  p.appendChild(document.createElement('br'));
+  table.parentNode.replaceChild(p, table);
+  _tbCaretIn(p, false);
+  return p;
+}
+function _tbSelClear() {
+  _TB.sel = null;
+  Array.prototype.forEach.call(document.querySelectorAll('.tb-sel'), function (c) { c.classList.remove('tb-sel'); if (!c.className) c.removeAttribute('class'); });
+}
+function _tbSelSet(table, a, b) {
+  _tbSelClear();
+  var G = _tbGrid(table), pa = _tbPos(G, a), pb = _tbPos(G, b);
+  if (!pa || !pb) return;
+  var R = _tbRect(G, pa, pb), cells = _tbRectCells(G, R);
+  _TB.sel = { table: table, rect: R, cells: cells };
+  cells.forEach(function (c) { c.classList.add('tb-sel'); });
+  try { window.getSelection().removeAllRanges(); } catch (e) {}
+}
+var _TB_ICON = {
+  rowAbove: '<path d="M3 13h18v8H3zM12 3v7M8.5 6.5L12 3l3.5 3.5"/>',
+  rowBelow: '<path d="M3 3h18v8H3zM12 21v-7M8.5 17.5L12 21l3.5-3.5"/>',
+  colLeft: '<path d="M13 3h8v18h-8zM3 12h7M6.5 8.5L3 12l3.5 3.5"/>',
+  colRight: '<path d="M3 3h8v18H3zM21 12h-7M17.5 8.5L21 12l-3.5 3.5"/>',
+  delRow: '<path d="M3 8h18v8H3zM9 10.5l6 3M15 10.5l-6 3"/>',
+  delCol: '<path d="M8 3h8v18H8zM10.5 9l3 6M13.5 9l-3 6"/>',
+  merge: '<path d="M3 5h18v14H3zM7 12h10M9.5 9.5L7 12l2.5 2.5M14.5 9.5L17 12l-2.5 2.5"/>',
+  split: '<path d="M3 5h18v14H3zM12 5v14M5 12h3M16 12h3"/>',
+  head: '<path d="M3 4h18v16H3zM3 9h18"/><path d="M4 5h16v3H4z" fill="currentColor" stroke="none"/>',
+  delTable: '<path d="M3 4h18v16H3zM3 10h18M9 4v16M15 4v16"/><path d="M14 14l6 6M20 14l-6 6"/>'
+};
+var _TB_BUTTONS = [
+  ['rowAbove', 'Add a row above'], ['rowBelow', 'Add a row below'],
+  ['colLeft', 'Add a column to the left'], ['colRight', 'Add a column to the right'],
+  ['delRow', 'Delete the row'], ['delCol', 'Delete the column'],
+  ['merge', 'Merge the chosen cells (drag across cells, or Shift and click, to choose them)'], ['split', 'Split the merged cell'],
+  ['head', 'First row as headings'], ['delTable', 'Delete the table']
+];
+function _tbBar() {
+  if (_TB.bar && document.body.contains(_TB.bar)) return _TB.bar;
+  var b = document.createElement('div');
+  b.className = 'tb-bar';
+  b.setAttribute('role', 'toolbar');
+  b.setAttribute('aria-label', 'Table');
+  b.innerHTML = _TB_BUTTONS.map(function (x, i) {
+    return (i === 2 || i === 4 || i === 6 || i === 8 ? '<span class="tb-sep"></span>' : '')
+      + '<button type="button" data-tb="' + x[0] + '" title="' + esc(x[1]) + '" aria-label="' + esc(x[1]) + '">'
+      + '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + _TB_ICON[x[0]] + '</svg></button>';
+  }).join('');
+
+  b.addEventListener('mousedown', function (e) { e.preventDefault(); });
+  b.addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-tb]');
+    if (btn && !btn.disabled) _tbDo(btn.getAttribute('data-tb'));
+  });
+  document.body.appendChild(b);
+  _TB.bar = b;
+  return b;
+}
+function _tbCurrent() {
+  if (_TB.sel && document.body.contains(_TB.sel.table)) return { table: _TB.sel.table, cell: _TB.sel.cells[0] };
+  var s = window.getSelection();
+  var cell = s && s.rangeCount ? _tbCellOf(s.getRangeAt(0).startContainer) : null;
+  return cell ? { table: _tbTableOf(cell), cell: cell } : null;
+}
+function _tbBarPlace() {
+  var cur = _tbCurrent();
+  var b = _TB.bar;
+  if (!cur || !cur.table || !document.body.contains(cur.table)) { if (b) b.classList.remove('on'); return; }
+  b = _tbBar();
+  var G = _tbGrid(cur.table), p = _tbPos(G, cur.cell);
+  var many = !!(_TB.sel && _TB.sel.cells.length > 1);
+  b.querySelector('[data-tb="merge"]').disabled = !many;
+  b.querySelector('[data-tb="split"]').disabled = !(p && (p.rs > 1 || p.cs > 1)) || many;
+  var hb = b.querySelector('[data-tb="head"]');
+  hb.setAttribute('aria-pressed', _tbHeadRow(cur.table.rows[0]) ? 'true' : 'false');
+  b.classList.add('on');
+  var tr = cur.table.getBoundingClientRect(), h = b.offsetHeight || 34, w = b.offsetWidth || 360;
+  var top = tr.top - h - 6;
+  if (top < 8) top = Math.min(Math.max(8, tr.top + 4), Math.max(8, tr.bottom - h - 4));
+  var left = Math.min(Math.max(8, tr.left), Math.max(8, window.innerWidth - w - 8));
+  b.style.top = Math.round(top) + 'px';
+  b.style.left = Math.round(left) + 'px';
+}
+function _tbDo(what) {
+  var cur = _tbCurrent();
+  if (!cur || !cur.table) return;
+  var table = cur.table, ed = _tbEditorOf(table), G = _tbGrid(table), p = _tbPos(G, cur.cell);
+  if (!p) return;
+  var R = _TB.sel && _TB.sel.table === table ? _TB.sel.rect : { r1: p.r, r2: p.r + p.rs - 1, c1: p.c, c2: p.c + p.cs - 1 };
+  var go = null;
+  if (what === 'rowAbove' || what === 'rowBelow') {
+    var tr = _tbAddRow(table, what === 'rowBelow' ? G.grid[R.r2][R.c1].cell : G.grid[R.r1][R.c1].cell, what === 'rowBelow');
+    go = tr && tr.cells[0];
+  } else if (what === 'colLeft' || what === 'colRight') {
+    _tbAddCol(table, what === 'colRight' ? G.grid[R.r1][R.c2].cell : G.grid[R.r1][R.c1].cell, what === 'colRight');
+    var G2 = _tbGrid(table);
+    var s2 = (G2.grid[R.r1] || [])[what === 'colRight' ? R.c2 + 1 : R.c1];
+    go = s2 && s2.cell;
+  } else if (what === 'delRow') {
+    var stay = _tbDelRows(table, R.r1, R.r2);
+    if (!stay && document.body.contains(table)) { var G3 = _tbGrid(table), s3 = (G3.grid[Math.min(R.r1, G3.rows.length - 1)] || [])[R.c1] || (G3.grid[0] || [])[0]; go = s3 && s3.cell; }
+  } else if (what === 'delCol') {
+    _tbDelCols(table, R.c1, R.c2);
+    if (document.body.contains(table)) { var G4 = _tbGrid(table), s4 = (G4.grid[R.r1] || [])[Math.min(R.c1, G4.cols - 1)]; go = s4 && s4.cell; }
+  } else if (what === 'merge') {
+    go = _tbMerge(table, R);
+  } else if (what === 'split') {
+    _tbSplit(table, cur.cell); go = cur.cell;
+  } else if (what === 'head') {
+    _tbToggleHead(table);
+    var G5 = _tbGrid(table), s5 = (G5.grid[p.r] || [])[p.c]; go = s5 && s5.cell;
+  } else if (what === 'delTable') {
+    _tbDelTable(table);
+  }
+  _tbSelClear();
+  if (go && document.body.contains(go)) _tbCaretIn(go, true);
+  _tbChanged(ed);
+  _tbBarPlace();
+}
+window._tbDo = _tbDo;
+function _tbStepOut(table, after) {
+  var sib = after ? table.nextSibling : table.previousSibling;
+  while (sib && sib.nodeType === 3 && !String(sib.textContent).trim()) sib = after ? sib.nextSibling : sib.previousSibling;
+  if (sib && !(sib.nodeType === 1 && sib.tagName === 'TABLE')) return false;
+  var p = document.createElement('p');
+  p.appendChild(document.createElement('br'));
+  table.parentNode.insertBefore(p, after ? table.nextSibling : table);
+  _tbCaretIn(p, false);
+  _tbChanged(_tbEditorOf(p));
+  return true;
+}
+function _tbAtEdge(cell, end) {
+  var s = window.getSelection();
+  if (!s || !s.rangeCount || !s.isCollapsed) return false;
+  var r = document.createRange(), cur = s.getRangeAt(0);
+  try {
+    if (end) { r.setStart(cur.endContainer, cur.endOffset); r.setEnd(cell, cell.childNodes.length); }
+    else { r.setStart(cell, 0); r.setEnd(cur.startContainer, cur.startOffset); }
+  } catch (e) { return false; }
+  var f = r.cloneContents();
+  return !String(f.textContent || '').replace(/ /g, ' ').trim() && !(f.querySelector && f.querySelector('img'));
+}
+function _tbKey(e) {
+  if (e.defaultPrevented || e.isComposing) return;
+  if (_TB.sel && (e.key === 'Delete' || e.key === 'Backspace')) {
+    e.preventDefault();
+    var t = _TB.sel.table, ed = _tbEditorOf(t);
+    _TB.sel.cells.forEach(function (c) { while (c.firstChild) c.removeChild(c.firstChild); c.appendChild(document.createElement('br')); });
+    var first = _TB.sel.cells[0];
+    _tbSelClear();
+    _tbCaretIn(first, false);
+    _tbChanged(ed);
+    _tbBarPlace();
+    return;
+  }
+  if (_TB.sel && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); _tbSelClear(); _tbBarPlace(); return; }
+  if (_TB.sel && !/^(Shift|Control|Alt|Meta)$/.test(e.key)) { _tbSelClear(); _tbBarPlace(); }
+  var s = window.getSelection();
+  var cell = s && s.rangeCount ? _tbCellOf(s.getRangeAt(0).startContainer) : null;
+  if (!cell || e.ctrlKey || e.metaKey || e.altKey) return;
+  var table = _tbTableOf(cell), G = _tbGrid(table), p = _tbPos(G, cell);
+  if (!p) return;
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    var order = _tbOrder(G), i = order.indexOf(cell);
+    if (e.shiftKey) { if (i > 0) _tbCaretIn(order[i - 1], true); return; }
+    if (i < order.length - 1) { _tbCaretIn(order[i + 1], true); return; }
+    var tr = _tbAddRow(table, cell, true);
+    if (tr && tr.cells[0]) _tbCaretIn(tr.cells[0], false);
+    _tbChanged(_tbEditorOf(table));
+    _tbBarPlace();
+    return;
+  }
+  var last = p.r + p.rs === G.rows.length, first = p.r === 0;
+  var order2 = _tbOrder(G);
+  if ((e.key === 'ArrowDown' && last && _tbAtEdge(cell, true)) || (e.key === 'ArrowRight' && order2[order2.length - 1] === cell && _tbAtEdge(cell, true))) {
+    if (_tbStepOut(table, true)) { e.preventDefault(); _tbBarPlace(); }
+  } else if ((e.key === 'ArrowUp' && first && _tbAtEdge(cell, false)) || (e.key === 'ArrowLeft' && order2[0] === cell && _tbAtEdge(cell, false))) {
+    if (_tbStepOut(table, false)) { e.preventDefault(); _tbBarPlace(); }
+  }
+}
+function _tbEdgeAt(e) {
+  var cell = _tbCellOf(e.target);
+  if (!cell) return null;
+  var table = _tbTableOf(cell), G = _tbGrid(table), p = _tbPos(G, cell);
+  if (!p) return null;
+  var rc = cell.getBoundingClientRect();
+  if (Math.abs(e.clientX - rc.right) <= 5 && p.c + p.cs < G.cols) return { table: table, col: p.c + p.cs - 1 };
+  if (Math.abs(e.clientX - rc.left) <= 5 && p.c > 0) return { table: table, col: p.c - 1 };
+  return null;
+}
+function _tbDown(e) {
+  if (e.button !== 0) return;
+  if (_TB.bar && _TB.bar.contains(e.target)) return;
+  var edge = _tbEdgeAt(e);
+  if (edge) {
+    e.preventDefault();
+    var G = _tbGrid(edge.table);
+    _TB.size = { table: edge.table, col: edge.col, widths: _tbMeasure(edge.table, G), rect: edge.table.getBoundingClientRect() };
+    _tbSelClear();
+    document.documentElement.classList.add('tb-sizing');
+    return;
+  }
+  var cell = _tbCellOf(e.target);
+  if (e.shiftKey && cell) {
+    var s = window.getSelection();
+    var from = (_TB.sel && _TB.sel.table === _tbTableOf(cell)) ? _TB.sel.cells[0] : (s && s.rangeCount ? _tbCellOf(s.getRangeAt(0).startContainer) : null);
+    if (from && from !== cell && _tbTableOf(from) === _tbTableOf(cell)) {
+      e.preventDefault();
+      _tbSelSet(_tbTableOf(cell), from, cell);
+      _tbBarPlace();
+      return;
+    }
+  }
+  if (_TB.sel) _tbSelClear();
+  _TB.drag = cell ? { table: _tbTableOf(cell), a: cell } : null;
+}
+function _tbMove(e) {
+  if (_TB.size) {
+    var S2 = _TB.size, w = S2.widths.slice(), k = S2.col;
+    var at = (e.clientX - S2.rect.left) / (S2.rect.width || 1) * 100;
+    var before = 0;
+    for (var i = 0; i < k; i++) before += w[i];
+    var pair = w[k] + w[k + 1];
+    var left = Math.min(Math.max(at - before, 4), pair - 4);
+    w[k] = left; w[k + 1] = pair - left;
+    _tbSetWidths(S2.table, w);
+    S2.now = w;
+    return;
+  }
+  if (_TB.drag && (e.buttons & 1)) {
+    var cell = _tbCellOf(e.target);
+    if (cell && cell !== _TB.drag.a && _tbTableOf(cell) === _TB.drag.table) { _tbSelSet(_TB.drag.table, _TB.drag.a, cell); _tbBarPlace(); }
+    else if (_TB.sel && cell === _TB.drag.a) { _tbSelSet(_TB.drag.table, _TB.drag.a, cell); _tbBarPlace(); }
+    return;
+  }
+
+  var edge = !e.buttons ? _tbEdgeAt(e) : null;
+  var ed = edge ? _tbEditorOf(edge.table) : null;
+  if (_TB.edge && _TB.edge !== ed) { _TB.edge.classList.remove('tb-edge'); _TB.edge = null; }
+  if (ed) { ed.classList.add('tb-edge'); _TB.edge = ed; }
+}
+function _tbUp() {
+  if (_TB.size) {
+    var t = _TB.size.table;
+    _TB.size = null;
+    document.documentElement.classList.remove('tb-sizing');
+    _tbChanged(_tbEditorOf(t));
+    _tbBarPlace();
+  }
+  _TB.drag = null;
+}
+(function () {
+  if (typeof document === 'undefined' || document._pntlTableBound) return;
+  document._pntlTableBound = true;
+  document.addEventListener('selectionchange', function () { if (!_TB.size) _tbBarPlace(); });
+
+  document.addEventListener('keydown', function (e) { if (_tbEditorOf(e.target)) _tbKey(e); }, true);
+  document.addEventListener('pointerdown', _tbDown, true);
+  document.addEventListener('pointermove', _tbMove, true);
+  document.addEventListener('pointerup', _tbUp, true);
+
+  document.addEventListener('focusout', function (e) {
+    if (_TB.sel && _tbEditorOf(e.target) && !(e.relatedTarget && _TB.bar && _TB.bar.contains(e.relatedTarget))) { _tbSelClear(); _tbBarPlace(); }
+  });
+  window.addEventListener('scroll', function () { if (_TB.bar && _TB.bar.classList.contains('on')) _tbBarPlace(); }, true);
+  window.addEventListener('resize', function () { if (_TB.bar && _TB.bar.classList.contains('on')) _tbBarPlace(); });
+})();
 function _edReveal(ed, node) {
   try {
     if (!ed || !document.body.contains(ed)) return;
@@ -63000,15 +64295,16 @@ async function deleteFinding(id, assessmentId) {
     try {
       var _delF = (S.data.findings || []).find(function(x) { return x.id === id; });
 
-      var _storagePaths = _delF ? _pathsNotSharedElsewhere(
-        _collectFindingStoragePaths(_delF), { skipFindingIds: [id] }) : [];
+      if (_delF) { try { await _workEnsure([_delF.assessment_id], { retry: true }); } catch (e) {} }
+
+      var _ownPaths = (_delF && !(typeof _workRowLight === 'function' && _workRowLight(_delF))) ? _collectFindingStoragePaths(_delF) : [];
 
       var _del = await _deleteFindingRow(id);
       if (_del.error || !_del.data || !_del.data.length) {
         toast('The finding was not deleted' + (_del.error ? ': ' + _errMsg(_del.error) : '.'), 'error');
         return;
       }
-      if (_storagePaths.length) { try { await supabaseClient.storage.from('assessment-files').remove(_storagePaths); } catch(e) { } }
+      if (_ownPaths.length) await _removeUnshared(_ownPaths, { skipFindingIds: [id] });
       toast('Finding deleted', 'success');
       closeM();
       S.route = 'assessment'; S.routeId = assessmentId;
@@ -64117,42 +65413,83 @@ function _wpsFragmentToHtml(xml, rels, imgSink, alignOf, captionSink, orderedOf,
     return lead + pre + '<p' + _pc + (al ? ' style="text-align:' + al + '"' : '') + '>' + inner + '</p>';
   }
   function tableToHtml(tXml) {
-    var h = '<table><tbody>';
-    var pos = 0;
+
+    var model = [], pos = 0;
     while (true) {
       var trAt = tXml.indexOf('<w:tr', pos);
       if (trAt < 0) break;
       var tr = takeElement(tXml, trAt, 'w:tr');
       if (!tr) break;
       pos = tr.end;
-      h += '<tr>';
-      var cpos = 0;
+      var row = [], gcol = 0, cpos = 0;
+
+      var headRow = /<w:trPr>[\s\S]*?<w:tblHeader\b(?![^>]*w:val="(?:0|false|off)")[^>]*\/>[\s\S]*?<\/w:trPr>/.test(tr.inner.slice(0, (tr.inner.indexOf('<w:tc') + 1 || tr.inner.length + 1) - 1));
+      row.head = headRow;
       while (true) {
         var tcAt = tr.inner.indexOf('<w:tc', cpos);
         if (tcAt < 0) break;
         var tc = takeElement(tr.inner, tcAt, 'w:tc');
         if (!tc) break;
         cpos = tc.end;
-
-        if (/<w:vMerge\/>/.test(tc.inner)) continue;
         var span = /<w:gridSpan w:val="(\d+)"/.exec(tc.inner);
-        var fill = /<w:shd\b[^>]*w:fill="(?!auto)([0-9A-Fa-f]{6})"/.exec(tc.inner);
-        var body = '', ppos = 0;
-        while (true) {
-          var pAt = tc.inner.indexOf('<w:p', ppos);
-          if (pAt < 0) break;
-          if (/^<w:pPr|^<w:proofErr/.test(tc.inner.slice(pAt))) { ppos = pAt + 4; continue; }
-          var pe = takeElement(tc.inner, pAt, 'w:p');
-          if (!pe) break;
-          ppos = pe.end;
-          body += runsToHtml(pe.inner);
+        var cs = span ? Math.max(1, parseInt(span[1], 10) || 1) : 1;
+        var vm = /<w:vMerge(?:\s+w:val="(\w+)")?\s*\/>/.exec(tc.inner);
+        var cell = { col: gcol, cs: cs, vm: vm ? (vm[1] === 'restart' ? 'restart' : 'continue') : '', rs: 1 };
+        gcol += cs;
+
+        if (cell.vm !== 'continue') {
+          var fill = /<w:shd\b[^>]*w:fill="(?!auto)([0-9A-Fa-f]{6})"/.exec(tc.inner);
+          var body = '', ppos = 0;
+          while (true) {
+            var pAt = tc.inner.indexOf('<w:p', ppos);
+            if (pAt < 0) break;
+            if (/^<w:pPr|^<w:proofErr/.test(tc.inner.slice(pAt))) { ppos = pAt + 4; continue; }
+            var pe = takeElement(tc.inner, pAt, 'w:p');
+            if (!pe) break;
+            ppos = pe.end;
+            body += runsToHtml(pe.inner);
+          }
+          cell.body = body;
+          cell.fill = fill ? fill[1].toLowerCase() : '';
+          if (headRow && cell.fill === 'efefef') cell.fill = '';
         }
-        h += '<td' + (span ? ' colspan="' + span[1] + '"' : '')
-          + (fill ? ' style="background-color:#' + fill[1].toLowerCase() + '"' : '')
-          + '>' + (body || '') + '</td>';
+        row.push(cell);
       }
-      h += '</tr>';
+      model.push(row);
     }
+
+    model.forEach(function (row, ri) {
+      row.forEach(function (cell) {
+        if (cell.vm !== 'restart') return;
+        for (var rj = ri + 1; rj < model.length; rj++) {
+          var under = model[rj].filter(function (x) { return x.col === cell.col; })[0];
+          if (!under || under.vm !== 'continue') break;
+          cell.rs++;
+        }
+      });
+    });
+    var h = '<table>';
+    var grid = /<w:tblGrid>([\s\S]*?)<\/w:tblGrid>/.exec(tXml);
+    if (grid) {
+      var ws = (grid[1].match(/<w:gridCol\b[^>]*w:w="(\d+)"/g) || []).map(function (g) { return parseInt(/w:w="(\d+)"/.exec(g)[1], 10) || 0; });
+      var wsum = ws.reduce(function (a, b) { return a + b; }, 0);
+      var even = ws.length < 2 || ws.every(function (w) { return Math.abs(w - ws[0]) <= ws[0] * 0.02 + 1; });
+      if (wsum > 0 && !even && ws.every(function (w) { return w > 0; })) {
+        h += '<colgroup>' + ws.map(function (w) { return '<col style="width:' + (Math.round(w / wsum * 1000) / 10) + '%">'; }).join('') + '</colgroup>';
+      }
+    }
+    h += '<tbody>';
+    model.forEach(function (row) {
+      h += '<tr>';
+      var tag = row.head ? 'th' : 'td';
+      row.forEach(function (cell) {
+        if (cell.vm === 'continue') return;
+        h += '<' + tag + (cell.cs > 1 ? ' colspan="' + cell.cs + '"' : '') + (cell.rs > 1 ? ' rowspan="' + cell.rs + '"' : '')
+          + (cell.fill ? ' style="background-color:#' + cell.fill + '"' : '')
+          + '>' + (cell.body || '') + '</' + tag + '>';
+      });
+      h += '</tr>';
+    });
     return h + '</tbody></table>';
   }
 
@@ -67433,6 +68770,7 @@ function _rtSaid(r) {
   if (left.length) toast('Left as it is in the document: ' + left.slice(0, 4).join('; ') + (left.length > 4 ? ' and ' + (left.length - 4) + ' more' : ''), 'info', 12000);
 }
 async function downloadEditedReport(assessmentId, quiet) {
+  if (typeof _workReady === 'function' && _workAnyLight([assessmentId]) && !(await _workReady([assessmentId]))) return;
   var a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; });
   if (!a || !a.edited_docx_path) { if (!quiet) toast('No uploaded report on file', 'error'); return false; }
 
@@ -67964,6 +69302,7 @@ function _mRetestWithdrawSet(id) {
 }
 window._mRetestWithdrawSet = _mRetestWithdrawSet;
 function _mRetestMark(id) {
+  if (typeof _workFirst === 'function' && _workFirst(_workAidsOf([id]), function () { _mRetestMark(id); })) return;
   var on = !(S._mRetestPending && S._mRetestPending.id === id);
   var fi = (S.data.findings || []).find(function (f) { return f.id === id; });
   var ed = document.getElementById('mRt');
@@ -68133,6 +69472,7 @@ async function _bulkMarkFindingsUnread() {
 }
 window._bulkMarkFindingsUnread = _bulkMarkFindingsUnread;
 async function _bulkRetestFindings() {
+  if (typeof _workReady === 'function' && _workAnyLight(_workAidsOf(_findingSelIds())) && !(await _workReady(_workAidsOf(_findingSelIds())))) return;
   var ids = _findingSelIds();
   if (!ids.length) return;
   var _isCl = !!(S.profile && S.profile.role === 'client');
@@ -68319,6 +69659,7 @@ function _libSaid(n) {
 }
 window._libSaid = _libSaid;
 async function _bulkAddFindingsToKB() {
+  if (typeof _workReady === 'function' && _workAnyLight(_workAidsOf(_findingSelIds())) && !(await _workReady(_workAidsOf(_findingSelIds())))) return;
   var ids = _findingSelIds();
   if (!ids.length) return;
   if (!supabaseClient) { toast('Not connected', 'error'); return; }
@@ -68423,6 +69764,7 @@ async function _bulkSetFindingVisibility(visible) {
 }
 window._bulkSetFindingVisibility = _bulkSetFindingVisibility;
 async function _bulkSetFindingDraft(draft, idsIn, opts) {
+  if (typeof _workReady === 'function' && _workAnyLight(_workAidsOf(idsIn || _findingSelIds())) && !(await _workReady(_workAidsOf(idsIn || _findingSelIds())))) return;
 
   var _given = Array.isArray(idsIn);
   var ids = _given ? idsIn.slice() : _findingSelIds();
@@ -68489,20 +69831,23 @@ async function _bulkDeleteFindings() {
   if (!canDeleteFinding()) { toast('Only an administrator, a senior or a standard tester can delete findings.', 'error'); return; }
   confirmDialog('Delete Findings', '<p>Delete ' + ids.length + ' finding' + (ids.length === 1 ? '' : 's') + '?</p><p style="color:var(--red-text)">This cannot be undone.</p>', async function() {
     _showLoading();
-    var ok = 0, fail = 0;
+    var ok = 0, fail = 0, gone = [];
+
+    try { await _workEnsureFindings(ids, { retry: true }); } catch (e) {}
     for (var i = 0; i < ids.length; i++) {
       var id = ids[i];
       var f = (S.data.findings || []).find(function(x) { return x.id === id; });
       try {
 
-        var sp = f ? _pathsNotSharedElsewhere(_collectFindingStoragePaths(f), { skipFindingIds: ids }) : [];
+        var sp = (f && !(typeof _workRowLight === 'function' && _workRowLight(f))) ? _collectFindingStoragePaths(f) : [];
 
         var res = await _deleteFindingRow(id);
         if (res.error || !res.data || !res.data.length) { fail++; continue; }
         ok++;
-        if (sp && sp.length) { try { await supabaseClient.storage.from('assessment-files').remove(sp); } catch(e) {} }
+        if (sp && sp.length) gone = gone.concat(sp);
       } catch(e) { fail++; }
     }
+    if (gone.length) await _removeUnshared(gone, { skipFindingIds: ids });
     _hideLoading();
     toast(ok + ' deleted' + (fail ? ', ' + fail + ' failed' : ''), fail ? 'error' : 'success');
     _clearFindingSel();
@@ -68623,6 +69968,7 @@ function _retestLanded(id, msg, o) {
 window._retestBusy = _retestBusy;
 window._retestNewPictures = _retestNewPictures;
 async function completeRetest(id, fixed, retestHtml, how) {
+  if (typeof _workReady === 'function' && _workAnyLight(_workAidsOf([id])) && !(await _workReady(_workAidsOf([id])))) return;
   var hw = how || {};
 
   var out = _retestOutcomeKey(fixed) || 'not_fixed';
@@ -69103,6 +70449,7 @@ function _pageSaveKey(repeat) {
 }
 window._pageLeaving = _pageLeaving;
 function toggleRetestEdit(id) {
+  if (typeof _workFirst === 'function' && _workFirst(_workAidsOf([id]), function () { toggleRetestEdit(id); })) return;
   var panel = document.getElementById('retestEditPanel');
   var display = document.getElementById('retestResultsDisplay');
   if (!panel) return;
@@ -69131,6 +70478,7 @@ function toggleRetestEdit(id) {
   }
 }
 async function saveRetestResultsDirect(id, html) {
+  if (typeof _workReady === 'function' && _workAnyLight(_workAidsOf([id])) && !(await _workReady(_workAidsOf([id])))) return;
   var _fromEd = html === undefined, _rtAid = '';
   if (_fromEd) {
     var el = document.getElementById('retestResultsEditor');
@@ -69169,6 +70517,7 @@ async function saveRetestResultsDirect(id, html) {
   if (_done) _retestLanded(id, 'Retest results saved', _done);
 }
 async function saveRetestResults(id) {
+  if (typeof _workReady === 'function' && _workAnyLight(_workAidsOf([id])) && !(await _workReady(_workAidsOf([id])))) return;
   var el = document.getElementById('retestResultsEditor');
   if (!el) return;
   var html = el.innerHTML.trim();
@@ -69195,6 +70544,7 @@ async function saveRetestResults(id) {
   if (_done) _retestLanded(id, 'Retest results saved');
 }
 async function completeRetestWithResults(id, fixed) {
+  if (typeof _workReady === 'function' && _workAnyLight(_workAidsOf([id])) && !(await _workReady(_workAidsOf([id])))) return;
   var f = (S.data.findings || []).find(function(x) { return x.id === id; });
   var editorEl = document.getElementById('retestResultsEditor');
 
@@ -69363,31 +70713,9 @@ async function deleteKB(id) {
           if (m) m.forEach(function(s) { var p = s.replace(/^(?:src="storage:|data-sp=")/, '').replace(/"$/, ''); if (p) _kPaths.push(p); });
         });
 
-        if (_kPaths.length) {
-          var _kStillUsed = {};
-          try {
-            (S.data.findings || []).forEach(function (f) {
-              _collectFindingStoragePaths(f).forEach(function (p) { _kStillUsed[p] = 1; });
-            });
-            (S.data.library || []).forEach(function (k2) {
-              if (!k2 || k2.id === id) return;
-              [k2.description, k2.remediation, _evAsHtml(k2.evidence)].forEach(function (h2) {
-                if (!h2 || typeof h2 !== 'string') return;
-                var m2 = h2.match(/(?:src="storage:|data-sp=")([^"]+)"/g);
-                if (m2) m2.forEach(function (x) {
-                  _kStillUsed[x.replace(/^(?:src="storage:|data-sp=")/, '').replace(/"$/, '')] = 1;
-                });
-              });
-            });
-          } catch (e) {
-
-            _kPaths = [];
-          }
-          var _kSafe = _kPaths.filter(function (p) { return !_kStillUsed[p]; });
-          if (_kSafe.length) { try { await supabaseClient.storage.from('assessment-files').remove(_kSafe); } catch(e) {} }
-        }
       }
       var result = await api('kb_entries', 'delete', null, { id: id }); if (!result) return;
+      if (_lib && _kPaths && _kPaths.length) await _removeUnshared(_kPaths, { skipLibraryId: id });
       toast('Deleted', 'success');
       await refreshAndStay();
     } catch (e) {
@@ -69498,6 +70826,7 @@ function _libEntryFromFinding(f) {
 }
 window._libEntryFromFinding = _libEntryFromFinding;
 async function addToKB(findingId) {
+  if (typeof _workReady === 'function' && _workAnyLight(_workAidsOf([findingId])) && !(await _workReady(_workAidsOf([findingId])))) return;
 
   var f = (S.data.findings || []).find(function(x) { return x.id === findingId; });
   if (!f) return;
@@ -69761,15 +71090,15 @@ async function deleteClient(clientId) {
           if (_cFiles.length) { await supabaseClient.storage.from('assessment-files').remove(_cFiles.map(function(f) { return f.storage_path; })); }
         } catch(e) { console.warn('Client storage cleanup:', e.message); }
 
+        try { await _workEnsure(assessmentIds, { retry: true }); } catch (e) {}
         try {
           var _cEvPaths = [];
-          (S.data.findings || []).filter(function(f) { return assessmentIds.indexOf(f.assessment_id) >= 0; }).forEach(function(f) {
+          (S.data.findings || []).filter(function(f) { return assessmentIds.indexOf(f.assessment_id) >= 0 && !(typeof _workRowLight === 'function' && _workRowLight(f)); }).forEach(function(f) {
             _cEvPaths = _cEvPaths.concat(_collectFindingStoragePaths(f));
           });
           assessments.forEach(function(a) { _cEvPaths = _cEvPaths.concat(_collectAssessmentStoragePaths(a)); });
 
-          _cEvPaths = _pathsNotSharedElsewhere(_cEvPaths, { skipClientId: clientId });
-          if (_cEvPaths.length) { await supabaseClient.storage.from('assessment-files').remove(_cEvPaths); }
+          await _removeUnshared(_cEvPaths, { skipClientId: clientId });
         } catch(e) { console.warn('Client evidence storage cleanup:', e.message); }
         r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('assessment_files').delete().in('assessment_id', part); }, true); if (r.error) console.warn('files:', r.error.message);
         r = await _inParts(assessmentIds, function (part) { return supabaseClient.from('timeline_events').delete().in('assessment_id', part); }, true); if (r.error) console.warn('timeline:', r.error.message);
@@ -69862,9 +71191,10 @@ async function deleteAssessment(assessmentId) {
         }
       } catch(e) { console.warn('Storage cleanup:', e.message); }
 
+      try { await _workEnsure([assessmentId], { retry: true }); } catch (e) {}
       try {
         var _evPaths2 = [];
-        (S.data.findings || []).filter(function(f) { return f.assessment_id === assessmentId; }).forEach(function(f) {
+        (S.data.findings || []).filter(function(f) { return f.assessment_id === assessmentId && !(typeof _workRowLight === 'function' && _workRowLight(f)); }).forEach(function(f) {
           _evPaths2 = _evPaths2.concat(_collectFindingStoragePaths(f));
         });
         if (_evPaths2.length) { await supabaseClient.storage.from('assessment-files').remove(_evPaths2); }
@@ -69874,9 +71204,7 @@ async function deleteAssessment(assessmentId) {
         var _a3 = (S.data.assessments || []).find(function(a) { return a.id === assessmentId; });
         if (_a3) {
 
-          var _aPaths2 = _pathsNotSharedElsewhere(
-            _collectAssessmentStoragePaths(_a3), { skipAssessmentId: assessmentId });
-          if (_aPaths2.length) { await supabaseClient.storage.from('assessment-files').remove(_aPaths2); }
+          await _removeUnshared(_collectAssessmentStoragePaths(_a3), { skipAssessmentId: assessmentId });
         }
       } catch(e) { console.warn('Assessment storage cleanup:', e.message); }
       r = await supabaseClient.from('assessment_files').delete().eq('assessment_id', assessmentId);
@@ -70024,6 +71352,30 @@ async function _updateAssessmentDate(assessmentId, field, value) {
     _scheduleNudge();
   } catch(e) { toast('Failed to update date', 'error'); }
 }
+function _tlInternal(text) { return /sent back for revision|qa changes requested|fixing qa|from delivery|taken back/i.test(String(text || '')); }
+var _tlMarking = false;
+async function _tlMarkInternal() {
+  if (_tlMarking || !S.profile || S.profile.role === 'client' || typeof supabaseClient === 'undefined' || !supabaseClient) return;
+  var ids = [];
+  (S.data.assessments || []).forEach(function (a) {
+    (a._timeline || []).forEach(function (t) {
+
+      if (t && t.id && Object.prototype.hasOwnProperty.call(t, 'internal') && t.internal !== true && _tlInternal(t.title || t.event)) ids.push(t.id);
+    });
+  });
+  if (!ids.length) return;
+  _tlMarking = true;
+  try {
+    for (var i = 0; i < ids.length; i += 100) {
+      var part = ids.slice(i, i + 100);
+      var r = await supabaseClient.from('timeline_events').update({ internal: true }).in('id', part).select('id');
+      if (r && r.error) break;
+      var done = {};
+      ((r && r.data) || []).forEach(function (x) { done[x.id] = 1; });
+      (S.data.assessments || []).forEach(function (a) { (a._timeline || []).forEach(function (t) { if (t && done[t.id]) t.internal = true; }); });
+    }
+  } catch (e) {} finally { _tlMarking = false; }
+}
 async function addTimelineEvent(assessmentId, eventText, customTimestamp, subjectId) {
 
   if (S.profile && S.profile.role === 'client') return;
@@ -70038,7 +71390,9 @@ async function addTimelineEvent(assessmentId, eventText, customTimestamp, subjec
     if (customTimestamp) data.created_at = customTimestamp;
 
     if (subjectId) data.details = JSON.stringify({ subject_id: subjectId });
-    var result = (subjectId && typeof _writeDroppingMissing === 'function')
+
+    if (_tlInternal(eventText)) data.internal = true;
+    var result = ((subjectId || data.internal) && typeof _writeDroppingMissing === 'function')
       ? (await _writeDroppingMissing(data, function (d) { return supabaseClient.from('timeline_events').insert(d); })).result
       : await supabaseClient.from('timeline_events').insert(data);
 
@@ -76632,6 +77986,7 @@ function _esReportSections(a) {
   return out;
 }
 async function generateExecSummary(assessmentId) {
+  if (typeof _workReady === 'function' && _workAnyLight([assessmentId]) && !(await _workReady([assessmentId]))) return;
 
   var _esSolo = _aiEnabled() ? _genSolo(document.getElementById('genBtn'), [document.getElementById('execSummaryEditor')], 'Writing') : null;
   try {
@@ -78187,6 +79542,8 @@ function _sanitizeNode(node, doc) {
 
     if (attrName === 'style') { val = _sanitizeStyle(val); if (!val) continue; }
     if (attrName === 'color' && /^\s*#?(e4e4e7|09090b)\s*$/i.test(val)) continue;
+
+    if (attrName === 'class' && /\btb-sel\b/.test(val)) { val = String(val).split(/\s+/).filter(function (t) { return t && t !== 'tb-sel'; }).join(' '); if (!val) continue; }
     el.setAttribute(attrName, val);
   }
   if (tag === 'a') { el.setAttribute('target', '_blank'); el.setAttribute('rel', 'noopener noreferrer'); }
@@ -78421,13 +79778,19 @@ function parseHtmlForPdf(html) {
 
     if (node.nodeName === 'TABLE') {
       flushRuns();
-      var tableData = [];
-      node.querySelectorAll('tr').forEach(function(row) {
-        var rowData = [];
-        row.querySelectorAll('td, th').forEach(function(cell) { rowData.push(cell.textContent.trim()); });
-        if (rowData.length) tableData.push(rowData);
+
+      var tRows = [];
+      Array.prototype.forEach.call(node.rows || node.querySelectorAll('tr'), function (row) {
+        var cells = [];
+        Array.prototype.forEach.call(row.cells || row.querySelectorAll('td, th'), function (cell) {
+          cells.push({ text: _pdfCellText(cell), header: cell.nodeName === 'TH',
+            colspan: Math.max(1, parseInt(cell.getAttribute('colspan'), 10) || 1),
+            rowspan: Math.max(1, parseInt(cell.getAttribute('rowspan'), 10) || 1) });
+        });
+        if (cells.length) tRows.push(cells);
       });
-      if (tableData.length) blocks.push({ type: 'table', data: tableData });
+      var tableData = tRows.map(function (r) { return r.map(function (c) { return c.text.replace(/\s+/g, ' ').trim(); }); });
+      if (tableData.length) blocks.push({ type: 'table', data: tableData, rows: tRows, widths: _pdfColShares(node) });
       return;
     }
 
@@ -78511,6 +79874,103 @@ function _pdfCodeLines(doc, lines, mg, cw, startY, accentRgb, textRgb, nextPage)
     i += chunk.length;
   }
   return y;
+}
+function _pdfCellText(cell) {
+  var out = '';
+  var nl = function () { if (out && out.charAt(out.length - 1) !== '\n') out += '\n'; };
+  (function walk(n) {
+    for (var i = 0; i < n.childNodes.length; i++) {
+      var k = n.childNodes[i];
+      if (k.nodeType === 3) { out += k.textContent; continue; }
+      if (k.nodeType !== 1) continue;
+      var t = k.nodeName;
+      if (t === 'BR') { out += '\n'; continue; }
+      if (t === 'TABLE') { nl(); out += k.textContent.replace(/\s+/g, ' ').trim(); nl(); continue; }
+      var block = /^(P|DIV|LI|PRE|H[1-6]|BLOCKQUOTE|UL|OL|TR)$/.test(t);
+      if (block) nl();
+      walk(k);
+      if (block) nl();
+    }
+  })(cell);
+  return out.split('\n').map(function (l) { return l.replace(/[ \t\u00a0]+/g, ' ').trim(); }).join('\n').replace(/^\n+|\n+$/g, '').replace(/\n{3,}/g, '\n\n');
+}
+function _pdfColShares(table) {
+  var out = [];
+  for (var i = 0; i < table.children.length; i++) {
+    if (table.children[i].nodeName !== 'COLGROUP') continue;
+    Array.prototype.forEach.call(table.children[i].querySelectorAll('col'), function (cl) {
+      var m = /([\d.]+)%/.exec((cl.getAttribute('style') || '') + ' ' + (cl.getAttribute('width') || ''));
+      out.push(m ? parseFloat(m[1]) : 0);
+    });
+  }
+  return out.length && out.every(function (w) { return w > 0; }) ? out : null;
+}
+function _pdfTableLayout(doc, block, cw, fs) {
+  var rowsIn = block.rows || (block.data || []).map(function (r, ri) {
+    return r.map(function (t) { return { text: String(t == null ? '' : t), colspan: 1, rowspan: 1, header: ri === 0 }; });
+  });
+  var R = rowsIn.length, place = [], cells = [], cols = 0;
+  rowsIn.forEach(function (row, r) {
+    place[r] = place[r] || [];
+    var c = 0;
+    row.forEach(function (cell) {
+      while (place[r][c]) c++;
+      var cs = Math.max(1, cell.colspan || 1), rs = Math.max(1, Math.min(cell.rowspan || 1, R - r));
+      var it = { text: String(cell.text == null ? '' : cell.text), header: !!cell.header, r: r, c: c, cs: cs, rs: rs };
+      cells.push(it);
+      for (var i = 0; i < rs; i++) { place[r + i] = place[r + i] || []; for (var j = 0; j < cs; j++) place[r + i][c + j] = it; }
+      c += cs;
+    });
+  });
+  place.forEach(function (row) { if (row.length > cols) cols = row.length; });
+  if (!cols || !cells.length) return null;
+  var sh = Array.isArray(block.widths) && block.widths.length === cols && block.widths.every(function (w) { return w > 0; }) ? block.widths : null;
+  var tot = sh ? sh.reduce(function (a, b) { return a + b; }, 0) : cols;
+  var colW = [], colX = [], x = 0;
+  for (var c = 0; c < cols; c++) { colX[c] = x; colW[c] = cw * (sh ? sh[c] : 1) / tot; x += colW[c]; }
+  var pad = 1.6, lh = fs * 0.3528 * 1.25;
+  cells.forEach(function (it) {
+    var w = 0;
+    for (var k = it.c; k < it.c + it.cs; k++) w += colW[k];
+    it.x = colX[it.c]; it.w = w;
+    doc.setFont('helvetica', it.header ? 'bold' : 'normal');
+    doc.setFontSize(fs);
+    var lines = [];
+    it.text.split('\n').forEach(function (para) {
+      var t = para.replace(/\s+/g, ' ').trim();
+      if (!t) { if (lines.length) lines.push(''); return; }
+      lines = lines.concat(doc.splitTextToSize(t, Math.max(4, w - pad * 2)));
+    });
+    while (lines.length && lines[lines.length - 1] === '') lines.pop();
+    it.lines = lines;
+    it.need = Math.max(1, lines.length) * lh + pad * 2;
+  });
+  var rowH = [];
+  for (var r = 0; r < R; r++) rowH[r] = 0;
+  cells.forEach(function (it) { if (it.rs === 1) rowH[it.r] = Math.max(rowH[it.r], it.need); });
+  for (var r2 = 0; r2 < R; r2++) if (!rowH[r2]) rowH[r2] = lh + pad * 2;
+  cells.forEach(function (it) {
+    if (it.rs < 2) return;
+    var have = 0;
+    for (var k = it.r; k < it.r + it.rs; k++) have += rowH[k];
+    if (have < it.need) rowH[it.r + it.rs - 1] += it.need - have;
+  });
+  var headEnd = -1;
+  for (var r3 = 0; r3 < R; r3++) {
+    var own = cells.filter(function (it) { return it.r === r3; });
+    if (own.length && own.every(function (it) { return it.header; })) headEnd = r3; else break;
+  }
+  if (headEnd >= R - 1) headEnd = -1;
+
+  if (cells.some(function (it) { return it.r <= headEnd && it.r + it.rs - 1 > headEnd; })) headEnd = -1;
+  var bands = [], start = 0, reach = 0;
+  for (var r4 = 0; r4 < R; r4++) {
+    cells.forEach(function (it) { if (it.r === r4) reach = Math.max(reach, it.r + it.rs - 1); });
+    if (r4 === headEnd && reach <= headEnd) { bands.push([start, r4]); start = r4 + 1; reach = r4 + 1; continue; }
+    if (r4 > headEnd && reach <= r4) { bands.push([start, r4]); start = r4 + 1; reach = r4 + 1; }
+  }
+  if (start < R) bands.push([start, R - 1]);
+  return { cells: cells, cols: cols, colW: colW, rowH: rowH, headEnd: headEnd, bands: bands, lh: lh, pad: pad };
 }
 function renderPdfBlocks(doc, blocks, mg, cw, pw, checkPageFn, yRef, colors) {
   colors = colors || {};
@@ -78878,26 +80338,44 @@ function renderPdfBlocks(doc, blocks, mg, cw, pw, checkPageFn, yRef, colors) {
       y += 1;
       yRef.y = y;
 
-    } else if (block.type === 'table' && block.data) {
-      yRef.y = y; cp(block.data.length * 8 + 10); y = yRef.y;
-      var colW = cw / (block.data[0] ? block.data[0].length : 1);
-      block.data.forEach(function(row, ri) {
-        var cellY = y;
-        row.forEach(function(cell, ci) {
-          doc.setFillColor(ri === 0 ? 240 : 255, ri === 0 ? 240 : 255, ri === 0 ? 240 : 255);
-          doc.rect(mg + ci * colW, cellY, colW, 7, 'F');
-          doc.setDrawColor(200, 200, 200);
-          doc.rect(mg + ci * colW, cellY, colW, 7, 'S');
-          doc.setFont('helvetica', ri === 0 ? 'bold' : 'normal');
-          doc.setFontSize(8);
-          doc.setTextColor(darkGray[0], darkGray[1], darkGray[2]);
-          var cellText = cell.length > 25 ? cell.substring(0, 23) + '..' : cell;
-          doc.text(cellText, mg + ci * colW + 2, cellY + 5);
+    } else if (block.type === 'table' && (block.rows || block.data)) {
+
+      var TL = _pdfTableLayout(doc, block, cw, 8);
+      if (TL) {
+        var tDraw = function (r1, r2, topY) {
+          var yAt = [], yy = topY;
+          for (var r = r1; r <= r2; r++) { yAt[r] = yy; yy += TL.rowH[r]; }
+          TL.cells.forEach(function (it) {
+            if (it.r < r1 || it.r > r2) return;
+            var h = 0;
+            for (var k = it.r; k < it.r + it.rs; k++) h += TL.rowH[k];
+            var cx = mg + it.x, cy = yAt[it.r];
+            if (it.header) { doc.setFillColor(240, 240, 240); doc.rect(cx, cy, it.w, h, 'F'); }
+            doc.setDrawColor(200, 200, 200);
+            doc.rect(cx, cy, it.w, h, 'S');
+            doc.setFont('helvetica', it.header ? 'bold' : 'normal');
+            doc.setFontSize(8);
+            doc.setTextColor(darkGray[0], darkGray[1], darkGray[2]);
+            it.lines.forEach(function (ln, li) { if (ln) doc.text(ln, cx + TL.pad, cy + TL.pad + TL.lh * (li + 0.78)); });
+          });
+          return yy;
+        };
+        var tBands = TL.bands;
+        TL.bands.forEach(function (b, bi) {
+          var bh = 0;
+          for (var r = b[0]; r <= b[1]; r++) bh += TL.rowH[r];
+
+          var need = bh;
+          if (TL.headEnd >= 0 && b[1] <= TL.headEnd && tBands[bi + 1] && tBands[bi + 1][0] > TL.headEnd) {
+            for (var r2 = tBands[bi + 1][0]; r2 <= tBands[bi + 1][1]; r2++) need += TL.rowH[r2];
+          }
+          yRef.y = y; var broke = cp(need); y = yRef.y;
+          if (broke && TL.headEnd >= 0 && b[0] > TL.headEnd) y = tDraw(0, TL.headEnd, y);
+          y = tDraw(b[0], b[1], y);
         });
-        y += 7;
-      });
-      y += 2;
-      yRef.y = y;
+        y += 2;
+        yRef.y = y;
+      }
     }
   });
 }
@@ -79109,6 +80587,7 @@ function addPDFLogo(doc, settings, bannerColor, logoColor, x, y, size) {
   }
 }
 async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
+  if (typeof _workEnsureOrSay === 'function' && _workAnyLight([assessmentId])) await _workEnsureOrSay([assessmentId]);
 
   var _pdfType = _docType === 'vuln_report' ? 'vuln_report' : (_docType === 'findings' ? 'findings' : 'report');
   var _fxDoc = _pdfType === 'findings';
@@ -81332,6 +82811,7 @@ function _restoreWhen(v) {
 }
 async function exportAllData() {
   if (!S.profile || S.profile.role !== 'admin') { toast('Admin access required', 'error'); return; }
+  if (typeof _workReady === 'function' && _workAnyLight(_workLightIds()) && !(await _workReady(_workLightIds()))) return;
   var _expBtn = document.getElementById('btn_export_data');
   var _expOrig = _expBtn ? _expBtn.innerHTML : '';
   if (_expBtn) { _expBtn.disabled = true; _expBtn.textContent = 'Exporting...'; }
@@ -81346,7 +82826,11 @@ async function exportAllData() {
       product: (typeof REPORTER !== 'undefined' && REPORTER) ? 'pental-report' : 'pental', app_version: (typeof REPORTER !== 'undefined' && REPORTER && REPORTER.version) || (typeof PENTAL_BUILD === 'string' ? PENTAL_BUILD.split(' ')[0] : '') },
     settings: _expSettings,
     clients: S.data.clients || [],
-    assessments: S.data.assessments || [],
+
+    assessments: (S.data.assessments || []).map(function (a) {
+      var r = _AQA.on ? _aqaRow(a.id) : null;
+      return r ? Object.assign({}, a, { qa_notes: r.qa_notes, qa_comments: r.qa_comments, qa_ai_review: r.qa_ai_review }) : a;
+    }),
     findings: S.data.findings || [],
     proposals: S.data.proposals || [],
     invoices: S.data.invoices || [],
@@ -81747,6 +83231,7 @@ async function importAllData(evt, opts) {
 }
 async function downloadAllPDFs(type) {
   if (!S.profile || S.profile.role !== 'admin') { toast('Admin access required', 'error'); return; }
+  if (typeof _workReady === 'function' && _workAnyLight(_workLightIds()) && !(await _workReady(_workLightIds()))) return;
   var progEl = document.getElementById('pdf_download_progress');
   var statusEl = document.getElementById('pdf_download_status');
   if (progEl) progEl.style.display = '';
@@ -82087,8 +83572,25 @@ function _wpsTable(node, cellRuns) {
 
   var total = 9360;
   var each = Math.floor(total / cols);
+
+  var colW = [];
+  for (var cgi = 0; cgi < node.children.length; cgi++) {
+    if ((node.children[cgi].tagName || '').toLowerCase() !== 'colgroup') continue;
+    Array.prototype.forEach.call(node.children[cgi].querySelectorAll('col'), function (cl) {
+      var m = /([\d.]+)%/.exec((cl.getAttribute('style') || '') + ' ' + (cl.getAttribute('width') || ''));
+      colW.push(m ? parseFloat(m[1]) : 0);
+    });
+  }
+  var shares = colW.length === cols && colW.every(function (w) { return w > 0; }) ? colW : null;
+  var sumShare = shares ? shares.reduce(function (a, b) { return a + b; }, 0) : 0;
+  var widthOf = function (c0, span) {
+    if (!shares) return each * span;
+    var w = 0;
+    for (var k = c0; k < c0 + span && k < cols; k++) w += Math.round(total * shares[k] / sumShare);
+    return w;
+  };
   var grid = '';
-  for (var g = 0; g < cols; g++) grid += '<w:gridCol w:w="' + each + '"/>';
+  for (var g = 0; g < cols; g++) grid += '<w:gridCol w:w="' + widthOf(g, 1) + '"/>';
 
   var bd = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(function (side) {
     return '<w:' + side + ' w:val="single" w:sz="4" w:space="0" w:color="auto"/>';
@@ -82105,10 +83607,13 @@ function _wpsTable(node, cellRuns) {
     var col = 0;
     r.cells.forEach(function (c) {
       while (occupied[ri + ':' + col]) {
-        xml += '<w:tc><w:tcPr><w:tcW w:w="' + each + '" w:type="dxa"/><w:vMerge/></w:tcPr><w:p/></w:tc>';
-        col++;
+
+        var oc = occupied[ri + ':' + col];
+        var ospan = typeof oc === 'number' ? oc : 1;
+        xml += '<w:tc><w:tcPr><w:tcW w:w="' + widthOf(col, ospan) + '" w:type="dxa"/>' + (ospan > 1 ? '<w:gridSpan w:val="' + ospan + '"/>' : '') + '<w:vMerge/></w:tcPr><w:p/></w:tc>';
+        col += ospan;
       }
-      var tcPr = '<w:tcPr><w:tcW w:w="' + (each * c.colspan) + '" w:type="dxa"/>'
+      var tcPr = '<w:tcPr><w:tcW w:w="' + widthOf(col, c.colspan) + '" w:type="dxa"/>'
         + (c.colspan > 1 ? '<w:gridSpan w:val="' + c.colspan + '"/>' : '')
         + (c.rowspan > 1 ? '<w:vMerge w:val="restart"/>' : '')
         + (c.header ? '<w:shd w:val="clear" w:color="auto" w:fill="EFEFEF"/>' : '')
@@ -82118,13 +83623,22 @@ function _wpsTable(node, cellRuns) {
       if (!body) body = '<w:p/>';
       xml += '<w:tc>' + tcPr + body + '</w:tc>';
       for (var rr = 1; rr < c.rowspan; rr++) {
-        for (var cc = 0; cc < c.colspan; cc++) occupied[(ri + rr) + ':' + (col + cc)] = true;
+
+        occupied[(ri + rr) + ':' + col] = c.colspan;
+        for (var cc = 1; cc < c.colspan; cc++) occupied[(ri + rr) + ':' + (col + cc)] = true;
       }
       col += c.colspan;
     });
 
     while (col < cols) {
-      xml += '<w:tc><w:tcPr><w:tcW w:w="' + each + '" w:type="dxa"/></w:tcPr><w:p/></w:tc>';
+      var tail = occupied[ri + ':' + col];
+      if (tail) {
+        var tspan = typeof tail === 'number' ? tail : 1;
+        xml += '<w:tc><w:tcPr><w:tcW w:w="' + widthOf(col, tspan) + '" w:type="dxa"/>' + (tspan > 1 ? '<w:gridSpan w:val="' + tspan + '"/>' : '') + '<w:vMerge/></w:tcPr><w:p/></w:tc>';
+        col += tspan;
+        continue;
+      }
+      xml += '<w:tc><w:tcPr><w:tcW w:w="' + widthOf(col, 1) + '" w:type="dxa"/></w:tcPr><w:p/></w:tc>';
       col++;
     }
     xml += '</w:tr>';
@@ -85804,6 +87318,8 @@ async function _pdxLayout(bytes, opts) {
   return L;
 }
 var _LOX_CDN = 'https://cdn.zetaoffice.net/zetaoffice_latest/';
+var _LOX_HOST = 'https://engine.pental.io';
+function _loxOrigin() { return String(_LOX_HOST).replace(/\/+$/, ''); }
 var _loxBooting = null, _loxPort = null, _loxSeq = 0, _loxWaiting = {};
 var _loxFonts = null, _loxFontsWaiting = [];
 function _loxFontsReady(ms) {
@@ -85844,22 +87360,40 @@ function _loxBoot(onProgress) {
   }
   if (typeof onProgress === 'function') onProgress('engine', 0, 0);
   _loxBooting = new Promise(function (resolve, reject) {
+    var eo = _loxOrigin();
     var fr = document.createElement('iframe');
     fr.id = 'pentalPdfEngine';
     fr.setAttribute('title', 'PDF engine');
+
+    fr.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+    fr.setAttribute('allow', 'cross-origin-isolated');
     fr.style.cssText = 'position:fixed;left:-9999px;top:0;width:8px;height:8px;border:0';
 
-    fr.src = '/assets/pdf-engine.html?v=' + encodeURIComponent(PENTAL_BUILD.split(' ')[0]) + '&base=' + encodeURIComponent(base);
-    var done = false;
+    fr.src = eo + '/assets/pdf-engine.html?v=' + encodeURIComponent(PENTAL_BUILD.split(' ')[0]) + '&base=' + encodeURIComponent(base)
+      + '&parent=' + encodeURIComponent(location.origin);
+    var done = false, heard = false;
     var giveUp = setTimeout(function () {
       if (!done) { done = true; try { fr.remove(); } catch (e) {} reject(new Error('the engine did not start in time (it is a large download on the first run)')); }
     }, 300000);
+
+    fr.addEventListener('load', function () {
+      setTimeout(function () {
+        if (!heard && !done) {
+          done = true; clearTimeout(giveUp);
+          try { fr.remove(); } catch (e) {}
+          reject(new Error('the engine\u2019s address (' + eo.replace(/^https?:\/\//, '') + ') could not be reached from this browser'));
+        }
+      }, 15000);
+    });
     window.addEventListener('message', function onMsg(ev) {
-      if (ev.origin !== location.origin || !ev.data || !ev.data.pentalEngine) return;
+
+      if (ev.origin !== eo || ev.source !== fr.contentWindow || !ev.data || !ev.data.pentalEngine) return;
       var d = ev.data;
+      heard = true;
+      if (d.pentalEngine === 'loaded') return;
       if (d.pentalEngine === 'ready' && !done) {
         done = true; clearTimeout(giveUp);
-        _loxPort = { frame: fr, post: function (msg, transfer) { fr.contentWindow.postMessage(msg, location.origin, transfer); } };
+        _loxPort = { frame: fr, post: function (msg, transfer) { fr.contentWindow.postMessage(msg, eo, transfer); } };
         resolve(_loxPort);
         return;
       }
@@ -93794,6 +95328,7 @@ function _docPersonTitle(u) {
   return named[u.role] || ({ admin: 'Director', senior: 'Senior Penetration Tester', standard: 'Penetration Tester', sales: 'Account Manager' }[u.role] || '');
 }
 async function buildReportData(assessmentId, docType, _opts) {
+  if (typeof _workEnsureOrSay === 'function' && _workAnyLight([assessmentId])) await _workEnsureOrSay([assessmentId]);
 
   var _dxType = docType === 'vuln_report' ? 'vuln_report' : 'report';
   var a = (S.data.assessments || []).find(function(x) { return x.id === assessmentId; })
@@ -94532,6 +96067,7 @@ var _filenameDefaults = {
 
   finding_pdf:   '{finding_code} - {client} - {finding}',
   finding_docx:  '{finding_code} - {client} - {finding}',
+  finding_xlsx:  '{finding_code} - {client} - {finding}',
   findings_pdf:  '{job_code} - {client} - {assessment} Findings{phase_dash}{phase}',
   findings_docx: '{job_code} - {client} - {assessment} Findings{phase_dash}{phase}'
 };
@@ -94805,6 +96341,7 @@ async function _canonicaliseLegacyFinalPdfs() {
   try {
     var flagKey = 'pental_canon_pdfs_v1_' + (TENANT_ID || 'default');
     if (sessionStorage.getItem(flagKey) === 'done') return;
+    if (localStorage.getItem(flagKey) === 'done') return;
   } catch(_e) {}
   var asms = (S.data.assessments || []);
   if (!asms.length) {
@@ -94855,6 +96392,7 @@ async function _canonicaliseLegacyFinalPdfs() {
   }
   if (moved > 0) console.info('[canon] canonicalised', moved, 'legacy PDF(s) across', scanned, 'assessments (', errors, 'errors )');
   try { sessionStorage.setItem('pental_canon_pdfs_v1_' + (TENANT_ID || 'default'), 'done'); } catch(_e) {}
+  if (!errors) { try { localStorage.setItem('pental_canon_pdfs_v1_' + (TENANT_ID || 'default'), 'done'); } catch(_e) {} }
 }
 async function hasFinalPdf(type, id) {
   try {
@@ -95032,6 +96570,7 @@ function _retestWithdrawn(row) {
   return p;
 }
 function notForRetest(id, after) {
+  if (typeof _workFirst === 'function' && _workFirst(_workAidsOf([id]), function () { notForRetest(id, after); })) return;
   var f = (S.data.findings || []).find(function (x) { return x.id === id; });
   if (!f) { if (after) after(false); return; }
   var drafted = _retestDraftOf(f).draft !== null;
@@ -95707,7 +97246,9 @@ async function _fsiRead(aid, phase, inputEl) {
     var label = r.format === 'SARIF' ? (r.tool || 'SARIF') : (r.format || 'CSV');
 
     var rs = multi ? _scanApplyFieldMap(r.rows, _scanStoredMap(r.format)) : r.rows;
-    rs.forEach(function (row) { row._fmt = fmt; row._tool = label; row._file = x.file.name; rows.push(row); });
+
+    var own = /^(JSON|JSON lines|CSV)$/.test(String(r.format || ''));
+    rs.forEach(function (row) { row._fmt = fmt; row._tool = label; row._file = x.file.name; if (own) row._own = true; rows.push(row); });
     (r.warnings || []).forEach(function (w) { warnings.push(multi ? x.file.name + ': ' + w : w); });
   });
   var one = reads[0].read;
@@ -96676,6 +98217,9 @@ var _BH_UAC = 'https://learn.microsoft.com/en-us/troubleshoot/windows-server/act
 var _BH_GMSA = 'https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/group-managed-service-accounts/group-managed-service-accounts/group-managed-service-accounts-overview';
 var _BH_KCD = 'https://learn.microsoft.com/en-us/windows-server/security/kerberos/kerberos-constrained-delegation-overview';
 var _BH_PU = 'https://learn.microsoft.com/en-us/windows-server/security/credentials-protection-and-management/protected-users-security-group';
+var _BH_MS_APPX = 'https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/';
+var _BH_MS_POL = 'https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/';
+var _BH_PC = 'https://pingcastle.com/PingCastleFiles/ad_hc_rules_list.html';
 var _BH_CHECKS = {
   paths: { t: 'Attack Paths to Tier Zero', s: 'high', c: 'Broken Access Control', w: 'CWE-269', a: 'T1078.002, T1098',
     d: '<p>Tier Zero is what controls Active Directory: the domain itself, its domain controllers, the built-in administrative groups such as Domain Admins and Enterprise Admins with their members, and the objects that govern them. Control of any of them is control of the domain.</p><p>The BloodHound data shows chains of relationships, such as group memberships, permissions on directory objects, local administrator rights and signed-in sessions, through which principals outside Tier Zero can take control of a Tier Zero object. Each step is one that whoever holds the starting point can act on with freely available tools, so an attacker who compromises any account at the start of a path can follow it to control of the domain.</p>',
@@ -96796,7 +98340,84 @@ var _BH_CHECKS = {
   svcpriv: { t: 'Service Accounts With Domain Administrative Rights', s: 'high', c: 'Broken Access Control', w: 'CWE-250', a: 'T1558.003, T1078.002',
     d: '<p>Tier Zero user accounts have service principal names, so they are service accounts and are Kerberoastable: any domain user can request a ticket for them and attack the password offline. A cracked password gives control of the domain.</p>',
     r: '<ul><li>Remove service accounts from privileged groups, and grant them only the rights their service needs.</li><li>Replace them with group managed service accounts where possible, and give any that remain a long random password.</li></ul>',
-    u: ['https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-service-accounts', _BH_GMSA] }
+    u: ['https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-service-accounts', _BH_GMSA] },
+
+  admins: { t: 'Excessive Membership of Privileged Groups', s: 'medium', c: 'Broken Access Control', w: 'CWE-266', a: 'T1078.002',
+    d: '<p>Accounts other than the built-in Administrator are members of Domain Admins, Enterprise Admins or the domain\'s Administrators group, directly or through nested groups. Each of these groups controls the domain, so the compromise of any one of its members is the compromise of the domain.</p><p>Microsoft advises that none of these groups contain user accounts day to day, with the possible exception of the built-in Administrator once it is secured, and that membership be needed only to build the domain or to recover it. PingCastle\'s health check treats more than 50 such accounts, or more than 10 percent of the user accounts of a domain with more than 100 active users, as above its baseline.</p>',
+    r: '<ul><li>Review each member against a documented need, and remove every account that does not need domain administrator rights day to day.</li><li>Give administrators separate accounts for administration, and add them to these groups only for the build or recovery work that needs it.</li><li>Secure the built-in Administrator account as Microsoft describes, and use it only for build and disaster recovery.</li></ul>',
+    u: [_BH_MS_APPX + 'appendix-f--securing-domain-admins-groups-in-active-directory', _BH_MS_APPX + 'appendix-e--securing-enterprise-admins-groups-in-active-directory', _BH_MS_APPX + 'appendix-g--securing-administrators-groups-in-active-directory', _BH_PC] },
+  schemaadmins: { t: 'Schema Admins Group Not Empty', s: 'medium', c: 'Broken Access Control', w: 'CWE-266', a: 'T1078.002',
+    d: '<p>The Schema Admins group has members. Its members can change the Active Directory schema, which the whole forest shares, and a change made to the schema cannot be undone, so a mistaken or malicious one can mean rebuilding the domain. The group\'s only default member is the forest root domain\'s built-in Administrator account.</p>',
+    r: '<ul><li>Remove every member, the built-in Administrator included, and add an administrator to the group only while a schema change needs it, removing them afterwards.</li></ul>',
+    u: [_BH_MS_APPX + 'appendix-b--privileged-accounts-and-groups-in-active-directory', _BH_PC] },
+  operators: { t: 'Operator Groups Not Empty', s: 'low', c: 'Broken Access Control', w: 'CWE-269', a: 'T1078.002',
+    d: '<p>The Account Operators, Server Operators, Print Operators or Backup Operators groups have members. These built-in groups have rights over the domain\'s accounts or its domain controllers: Account Operators administer user and group accounts, Server Operators administer domain controllers, Backup Operators can back up and restore files whatever their permissions, and Print Operators can load and unload device drivers on domain controllers. Each is an indirect route to control of the domain.</p>',
+    r: '<ul><li>Empty these groups, and delegate instead the specific rights people need on the organisational units or systems they manage.</li><li>Put the domain\'s administrators in the groups meant for administering it, and only for as long as they need them.</li></ul>',
+    u: [_BH_MS_APPX + 'appendix-b--privileged-accounts-and-groups-in-active-directory', _BH_PC] },
+  adminused: { t: 'Built-in Administrator Account in Use', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-269', a: 'T1078.002',
+    d: '<p>The domain\'s built-in Administrator account signed in within the 35 days before the latest date in the data. Microsoft advises that this account be used only to build the domain and, possibly, to recover it from a disaster. Its password is often the same as the Directory Services Restore Mode password.</p>',
+    r: '<ul><li>Use separate, named administrative accounts for administration, and keep the built-in Administrator for build and disaster recovery.</li><li>Secure it as Microsoft describes (Account is sensitive and cannot be delegated, Smart card is required for interactive logon), and find what has been signing in with it from the sign-in events on each domain controller.</li></ul>',
+    u: [_BH_MS_APPX + 'appendix-d--securing-built-in-administrator-accounts-in-active-directory', _BH_PC] },
+  admincount: { t: 'Accounts Marked as Administrators That No Longer Are', s: 'low', c: 'Security Misconfiguration', w: 'CWE-269', a: 'T1078.002',
+    d: '<p>User accounts have adminCount set although no group Active Directory protects (Domain Admins, Enterprise Admins, Administrators, the operator groups and the rest) holds them. The mark means the account was given administrator rights at some point, often temporarily and outside the usual process.</p>',
+    r: '<ul><li>Review each account and what it did while it had administrator rights, then clear adminCount on it.</li></ul>',
+    u: [_BH_MS_APPX + 'appendix-c--protected-accounts-and-groups-in-active-directory', _BH_PC] },
+  admininactive: { t: 'Inactive Privileged Accounts', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-286', a: 'T1078.002',
+    d: '<p>Enabled Tier Zero user accounts had not signed in for at least 180 days before the latest date in the data, or had never signed in although created more than 180 days before it. An administrator account nobody uses keeps its rights all the same, and activity on it is unlikely to be noticed.</p>',
+    r: '<ul><li>Remove the administrator rights of accounts that do not use them, and disable the accounts that are no longer needed.</li></ul>',
+    u: [_BH_PC, _BH_MS_LEAST] },
+  adminpwdold: { t: 'Privileged Account Passwords Not Changed for Three Years', s: 'medium', c: 'Identification and Authentication Failures', w: 'CWE-262', a: 'T1078.002',
+    d: '<p>Enabled Tier Zero user accounts have a password last set more than three years before the latest date in the data. PingCastle\'s health check expects administrators to change their passwords at least every three years, and points to the guidance of the French national cybersecurity agency (ANSSI) on it.</p>',
+    r: '<ul><li>Change the passwords of these accounts, and on a schedule from then on.</li></ul>',
+    u: [_BH_PC] },
+  admindeleg: { t: 'Privileged Accounts That Can Be Delegated', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-269', a: 'T1550.003',
+    d: '<p>Enabled Tier Zero user accounts are neither marked Account is sensitive and cannot be delegated nor members of Protected Users. Without either, a service trusted for delegation can be given the account\'s identity and impersonate it.</p>',
+    r: '<ul><li>Set Account is sensitive and cannot be delegated on every administrative account, or add the accounts to Protected Users where the domain functional level is Windows Server 2012 R2 or later.</li></ul>',
+    u: [_BH_MS_APPX + 'appendix-d--securing-built-in-administrator-accounts-in-active-directory', _BH_PU, _BH_PC] },
+  adminnoexpire: { t: 'Domain Admins With Passwords That Never Expire', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-262', a: 'T1003.004, T1558.003',
+    d: '<p>Two or more enabled members of Domain Admins have passwords set never to expire. Accounts whose passwords never expire are mostly service accounts, whose passwords are kept in the LSA secrets of each system their services run on, where they can be extracted, and do not change, so they can also be attacked with Kerberoasting.</p>',
+    r: '<ul><li>Remove service accounts from Domain Admins and give them only the rights their services need, with passwords longer than 20 characters, or replace them with group managed service accounts.</li></ul>',
+    u: [_BH_PC, _BH_GMSA] },
+  pwdpolicy: { t: 'Weak Domain Password Policy', s: 'medium', c: 'Identification and Authentication Failures', w: 'CWE-521', a: 'T1110.001, T1110.003',
+    d: '<p>The domain\'s own password policy, which applies to every account that no fine-grained password policy covers, falls short of Microsoft\'s guidance in the settings listed: a minimum length below 8 characters, complexity not required, passwords stored using reversible encryption, or no lockout however many wrong passwords are tried. Short passwords can be guessed or sprayed more easily, and with reversible encryption on, the domain keeps passwords that can be read in clear text.</p>',
+    r: '<ul><li>Set a minimum length of at least 8 characters, require complexity, turn off reversible encryption, and lock accounts after repeated wrong passwords (Windows security baselines suggest 10).</li><li>Use fine-grained password policies to set longer minimums for administrative accounts.</li></ul>',
+    u: [_BH_MS_POL + 'minimum-password-length', _BH_MS_POL + 'password-must-meet-complexity-requirements', _BH_MS_POL + 'store-passwords-using-reversible-encryption', _BH_MS_POL + 'account-lockout-threshold'] },
+  reversible: { t: 'Accounts Allowed to Store Passwords Using Reversible Encryption', s: 'medium', c: 'Cryptographic Failures', w: 'CWE-257', a: 'T1003.006',
+    d: '<p>Accounts are set to store their passwords using reversible encryption. The domain then keeps the password itself, rather than only a hash of it, and anyone able to replicate from a domain controller (DCSync) can read it in clear text.</p>',
+    r: '<ul><li>Clear Store password using reversible encryption on each account, and keep the domain\'s policy for it off.</li></ul>',
+    u: [_BH_PC, _BH_UAC, _BH_MS_POL + 'store-passwords-using-reversible-encryption'] },
+  des: { t: 'Accounts Using DES Kerberos Encryption', s: 'medium', c: 'Cryptographic Failures', w: 'CWE-327', a: 'T1558',
+    d: '<p>Accounts are set to use only DES keys for Kerberos, or list DES among the encryption types they support. DES is a weak algorithm, and Kerberos tickets encrypted with it can be cracked; Windows 7, Windows Server 2008 R2 and later versions do not support it by default.</p>',
+    r: '<ul><li>Clear Use only Kerberos DES encryption types for this account, and remove DES from the encryption types the accounts support.</li></ul>',
+    u: [_BH_MS_POL + 'network-security-configure-encryption-types-allowed-for-kerberos', _BH_PC, _BH_UAC] },
+  cpwdold: { t: 'Computer Account Passwords Not Changed for 90 Days', s: 'low', c: 'Security Misconfiguration', w: 'CWE-262', a: 'T1078.002',
+    d: '<p>Enabled computer accounts, domain controllers aside, have a password last set more than 90 days before the latest date in the data. Windows changes a computer\'s account password every 30 days by default, so these are computers that have stopped doing so, or that are no longer on the network. Some security agencies treat a password that is not changed as a sign of compromise, and a computer account no computer uses may be one an attacker made.</p>',
+    r: '<ul><li>Find out why each has stopped changing its password: disable and remove the accounts of computers that are gone, and check the machine account password settings of those still in use.</li></ul>',
+    u: [_BH_MS_POL + 'domain-member-maximum-machine-account-password-age', _BH_PC] },
+  dcpwdold: { t: 'Domain Controller Account Passwords Not Changed for 45 Days', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-262', a: 'T1558.002',
+    d: '<p>Domain controllers\' own computer accounts have a password last set more than 45 days before the latest date in the data. A domain controller changes its account password every 30 days by default, as any computer does. Its password hash, once obtained (with DCSync, for example), can be used to forge Kerberos service tickets to it for as long as the password stays unchanged.</p>',
+    r: '<ul><li>Find out why each domain controller has stopped changing its password, from its machine account password settings, and make sure it changes it again.</li></ul>',
+    u: [_BH_MS_POL + 'domain-member-maximum-machine-account-password-age', _BH_PC] },
+  fewdcs: { t: 'Fewer Than Two Domain Controllers', s: 'info', c: 'Security Misconfiguration', w: '', a: '',
+    d: '<p>The data shows fewer than two enabled domain controllers for the domain. A single domain controller\'s failure can leave the whole domain unavailable; for a minimum of redundancy a domain needs at least two.</p>',
+    r: '<ul><li>Add a second domain controller.</li></ul>',
+    u: [_BH_PC] },
+  dsanon: { t: 'Anonymous LDAP Access to Directory Data', s: 'medium', c: 'Broken Access Control', w: 'CWE-306', a: 'T1087.002',
+    d: '<p>The forest\'s dSHeuristics attribute has 2 as its seventh character, which lets anonymous clients carry out any LDAP operation the directory\'s permissions allow, as Windows 2000 domain controllers did. Anyone who can reach a domain controller can then read whatever those permissions give anonymous users, without an account.</p>',
+    r: '<ul><li>Set the seventh character of dSHeuristics back to 0, after checking that nothing relies on anonymous access.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/troubleshoot/windows-server/active-directory/anonymous-ldap-operations-active-directory-disabled', _BH_PC] },
+  pre2000auth: { t: 'Pre-Windows 2000 Compatible Access Includes Authenticated Users', s: 'low', c: 'Broken Access Control', w: 'CWE-732', a: 'T1087.002',
+    d: '<p>The Pre-Windows 2000 Compatible Access group includes Authenticated Users. The group grants access to some legacy RPC calls, and Authenticated Users is its default member; PingCastle reports it as a hardening measure, as with it in the group the exploitation of vulnerabilities in legacy protocols such as the Print Spooler service is made worse, and removing it can affect older systems.</p>',
+    r: '<ul><li>Remove Authenticated Users from the group, after testing what relies on it.</li></ul>',
+    u: [_BH_PC] },
+  smartcard: { t: 'Smart Card Accounts With Passwords Not Rotated', s: 'medium', c: 'Identification and Authentication Failures', w: 'CWE-262', a: 'T1550.002',
+    d: '<p>Enabled accounts that must sign in with a smart card have a password last set more than 90 days before the latest date in the data. When an account requires a smart card its password is no longer changed by default, so its hash stays the same, and an unchanged hash kept for a long time is at more risk of being cracked. From the Windows Server 2016 domain functional level, domain controllers can roll these secrets themselves.</p>',
+    r: '<ul><li>Turn on Enable rolling of expiring NTLM secrets during sign on for users who are required to use Windows Hello for Business or smart card for interactive logon, on a domain at the Windows Server 2016 functional level or later.</li><li>Until then, change these accounts\' passwords on a schedule, or clear and set Smart card is required for interactive logon again, which changes the hash.</li></ul>',
+    u: ['https://learn.microsoft.com/en-us/windows-server/identity/whats-new-active-directory-domain-services', _BH_PC] },
+  primarygroup: { t: 'Accounts With an Unusual Primary Group', s: 'medium', c: 'Security Misconfiguration', w: 'CWE-269', a: 'T1098',
+    d: '<p>Accounts have a primary group other than the default for their kind (Domain Users or Domain Guests for a user, Domain Computers or Domain Guests for a computer, Domain Controllers or Read-only Domain Controllers for a domain controller). Membership through the primary group is not listed among the group\'s members, so it can hide an account\'s membership of a group from anyone who looks there.</p>',
+    r: '<ul><li>Unless there is a reason for it, set each account\'s primary group back to its default, after making it a member of the group it needs, if it needs one.</li></ul>',
+    u: [_BH_PC] }
 };
 var _BH_KIND = { User: 'User', Computer: 'Computer', Group: 'Group', Domain: 'Domain', GPO: 'Group Policy object', OU: 'Organisational unit', Container: 'Container', CertTemplate: 'Certificate template', EnterpriseCA: 'Certification authority', RootCA: 'Root certification authority', AIACA: 'Certification authority', NTAuthStore: 'NTAuth store', IssuancePolicy: 'Issuance policy' };
 var _BH_EDGE = {
@@ -96835,6 +98456,14 @@ function _bhE(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function
 var _BH_ROWS_MAX = 250;
 function _bhTable(head, rows, src) {
   var shown = rows.slice(0, _BH_ROWS_MAX);
+
+  var blank = function (c) { return c == null || String(c).trim() === ''; };
+  var keep = head.map(function (h, i) { return i === 0 || !shown.length || shown.some(function (r) { return !blank(r[i]); }); });
+  if (keep.indexOf(false) >= 0) {
+    var pick = function (r) { return r.filter(function (c, i) { return keep[i]; }); };
+    head = pick(head);
+    shown = shown.map(pick);
+  }
   var html = '<table><thead><tr>' + head.map(function (h) { return '<th>' + _bhE(h) + '</th>'; }).join('') + '</tr></thead><tbody>'
     + shown.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + _bhE(c) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>';
   var text = [head.join(' | ')].concat(shown.map(function (r) { return r.join(' | '); })).join('\n');
@@ -96870,27 +98499,39 @@ function _bhRows(A, label) {
     out.push(_scanRow(r, { Check: c.t, Object: asset, Tool: label }, {}));
   };
 
-  var perDomain = function (key, items, domOf, intro, head, cells, sev) {
+  var perDomain = function (key, items, domOf, intro, head, cells, sev, more) {
     byDom(items, domOf).forEach(function (g) {
       var t = _bhTable(head, g.list.map(cells));
-      var lead = '<p><strong>' + _bhE(dn(g.d)) + '</strong>: ' + _bhE(intro(g.list.length)) + '</p>';
-      row(key, dn(g.d), typeof sev === 'function' ? sev(g.list) : sev, lead + t.html, dn(g.d) + ': ' + intro(g.list.length) + '\n\n' + t.text);
+      var said = intro(g.list.length) + (more ? (function (x) { return x ? ' ' + x : ''; })(more(g.list)) : '');
+      var lead = '<p><strong>' + _bhE(dn(g.d)) + '</strong>: ' + _bhE(said) + '</p>';
+      row(key, dn(g.d), typeof sev === 'function' ? sev(g.list) : sev, lead + t.html, dn(g.d) + ': ' + said + '\n\n' + t.text);
     });
   };
 
-  var perComputer = function (key, items, idOf, intro, head, cells, sev) {
+  var perComputer = function (key, items, idOf, intro, head, cells, sev, more) {
     byDom(items, function (x) { return domOfId(idOf(x)); }).forEach(function (g) {
       var t = _bhTable(head, g.list.map(cells));
-      var lead = '<p><strong>' + _bhE(dn(g.d)) + '</strong>: ' + _bhE(intro(g.list.length)) + '</p>';
+      var said = intro(g.list.length) + (more ? (function (x) { return x ? ' ' + x : ''; })(more(g.list)) : '');
+      var lead = '<p><strong>' + _bhE(dn(g.d)) + '</strong>: ' + _bhE(said) + '</p>';
       var seen = {};
       g.list.forEach(function (x, i) {
         var id = idOf(x);
         if (seen[id]) return;
         seen[id] = 1;
-        row(key, nm(id), sev, i === 0 ? lead + t.html : '', i === 0 ? dn(g.d) + ': ' + intro(g.list.length) + '\n\n' + t.text : '');
+        row(key, nm(id), sev, i === 0 ? lead + t.html : '', i === 0 ? dn(g.d) + ': ' + said + '\n\n' + t.text : '');
       });
     });
   };
+
+  var onOff = function (id) { var k = N(id).kind; return (k === 'User' || k === 'Computer') ? _bhYes(en(id)) : ''; };
+  var offMore = function (idOf) {
+    return function (l) {
+      var seen = {}, off = 0;
+      l.forEach(function (x) { var id = idOf(x); if (seen[id]) return; seen[id] = 1; if (onOff(id) === 'No') off++; });
+      return off ? _bhPlural(off, 'of them is', 'of them are') + ' switched off.' : '';
+    };
+  };
+  var offName = function (id) { return nm(id) + (onOff(id) === 'No' ? ' (switched off)' : ''); };
   var users = A.users.filter(en), computers = A.computers.filter(en);
   var isGmsa = function (id) { var p = N(id).p; return p.gmsa === true || p.msa === true; };
   var spns = function (id) { var s = N(id).p.serviceprincipalnames || []; return s.length ? s.slice(0, 3).join(', ') + (s.length > 3 ? ' and ' + (s.length - 3) + ' more' : '') : ''; };
@@ -96941,7 +98582,7 @@ function _bhRows(A, label) {
     });
   });
   perDomain('dcsync', dcs, function (x) { return x.d; }, function (n) { return _bhPlural(n, 'principal outside Tier Zero can', 'principals outside Tier Zero can') + ' replicate password hashes from the domain controllers.'; },
-    ['Principal', 'Type', 'Rights'], function (x) { return [nm(x.p), kd(x.p), x.how.join('; ')]; });
+    ['Principal', 'Type', 'Enabled', 'Rights'], function (x) { return [nm(x.p), kd(x.p), onOff(x.p), x.how.join('; ')]; }, undefined, offMore(function (x) { return x.p; }));
 
   var roast = users.filter(function (id) { var p = N(id).p; return p.hasspn === true && _bhRid(id) !== 502 && !isGmsa(id); });
   roast.sort(function (a, b) { return (T0[b] ? 1 : 0) - (T0[a] ? 1 : 0) || _bhTs(N(a).p.pwdlastset) - _bhTs(N(b).p.pwdlastset); });
@@ -96971,7 +98612,7 @@ function _bhRows(A, label) {
     (G.inn[c] || []).forEach(function (e) { if (e.kind === 'AllowedToAct' && !T0[e.from]) cons.push({ id: e.from, d: N(c).dsid, type: 'Resource-based', pt: false, to: nm(c), t0: true }); });
   });
   perDomain('constrained', cons, function (x) { return x.d; }, function (n) { return _bhPlural(n, 'delegation setting gives', 'delegation settings give') + ' a path to privileged access.'; },
-    ['Account', 'Delegation', 'Protocol transition', 'Can act towards', 'Tier Zero target'], function (x) { return [nm(x.id), x.type, _bhYes(x.pt), x.to, _bhYes(x.t0)]; });
+    ['Account', 'Enabled', 'Delegation', 'Protocol transition', 'Can act towards', 'Tier Zero target'], function (x) { return [nm(x.id), onOff(x.id), x.type, _bhYes(x.pt), x.to, _bhYes(x.t0)]; }, undefined, offMore(function (x) { return x.id; }));
 
   var CTRL_SHOW = { GenericAll: 'Full control (GenericAll)', GenericWrite: 'GenericWrite', WriteDacl: 'Change permissions (WriteDacl)', WriteOwner: 'Take ownership (WriteOwner)', Owns: 'Owner', AllExtendedRights: 'All extended rights', ForceChangePassword: 'Reset password', AddMember: 'Add members', AddSelf: 'Add itself', AddKeyCredentialLink: 'Add key credential', WriteSPN: 'Write service principal name', ReadLAPSPassword: 'Read LAPS password', ReadGMSAPassword: 'Read managed password', AddAllowedToAct: 'Configure delegation to it', WriteAccountRestrictions: 'Configure delegation to it', WritePKINameFlag: 'Change subject setting', WritePKIEnrollmentFlag: 'Change enrolment setting' };
   var acl = [], gpo = [], seenAcl = {};
@@ -96988,13 +98629,13 @@ function _bhRows(A, label) {
   });
   acl.sort(function (x, y) { return (_bhBroad(y.p) - _bhBroad(x.p)) || (T0[y.t] ? 1 : 0) - (T0[x.t] ? 1 : 0) || (nm(x.p) < nm(y.p) ? -1 : 1); });
   perDomain('acls', acl, function (a) { return N(a.t).dsid || N(a.p).dsid; }, function (n) { return _bhPlural(n, 'permission gives', 'permissions give') + ' control of a privileged object, or give a broad group control of an object.'; },
-    ['Principal', 'Right', 'Object', 'Object type', 'Tier Zero object', 'Inherited'], function (a) { return [nm(a.p), CTRL_SHOW[a.r] || a.r, nm(a.t), kd(a.t), _bhYes(T0[a.t]), _bhYes(a.inh)]; });
+    ['Principal', 'Enabled', 'Right', 'Object', 'Object type', 'Tier Zero object', 'Inherited'], function (a) { return [nm(a.p), onOff(a.p), CTRL_SHOW[a.r] || a.r, nm(a.t), kd(a.t), _bhYes(T0[a.t]), _bhYes(a.inh)]; }, undefined, offMore(function (a) { return a.p; }));
   perDomain('gpowrite', gpo, function (a) { return N(a.t).dsid; }, function (n) { return _bhPlural(n, 'permission lets', 'permissions let') + ' a principal outside Tier Zero change a Group Policy object.'; },
-    ['Policy', 'Principal', 'Right', 'Applies to', 'Applies to Tier Zero'], function (a) {
+    ['Policy', 'Principal', 'Enabled', 'Right', 'Applies to', 'Applies to Tier Zero'], function (a) {
       var to = A.gpoTo[a.t] || [], c = 0, u = 0, t0 = false;
       to.forEach(function (x) { if (N(x.id).kind === 'Computer') c++; else u++; if (T0[x.id]) t0 = true; });
-      return [nm(a.t), nm(a.p), CTRL_SHOW[a.r] || a.r, _bhPlural(c, 'computer', 'computers') + ', ' + _bhPlural(u, 'user', 'users'), _bhYes(t0)];
-    });
+      return [nm(a.t), nm(a.p), onOff(a.p), CTRL_SHOW[a.r] || a.r, _bhPlural(c, 'computer', 'computers') + ', ' + _bhPlural(u, 'user', 'users'), _bhYes(t0)];
+    }, undefined, offMore(function (a) { return a.p; }));
 
   var bad = [];
   A.computers.forEach(function (c) {
@@ -97005,7 +98646,7 @@ function _bhRows(A, label) {
     });
   });
   perComputer('broadadmin', bad, function (x) { return x.c; }, function (n) { return _bhPlural(n, 'grant of local administrator rights to a broad group.', 'grants of local administrator rights to broad groups.'); },
-    ['Computer', 'Group', 'Granted through'], function (x) { return [nm(x.c), nm(x.g), x.via]; }, 'high');
+    ['Computer', 'Computer enabled', 'Group', 'Granted through'], function (x) { return [nm(x.c), onOff(x.c), nm(x.g), x.via]; }, 'high', offMore(function (x) { return x.c; }));
   var sess = [];
   A.computers.forEach(function (c) {
     if (T0[c]) return;
@@ -97067,8 +98708,8 @@ function _bhRows(A, label) {
     sh.push({ id: id, to: to, same: to.some(function (s) { return _bhDomSid(s) && _bhDomSid(s) === N(id).dsid; }), t0: to.some(function (s) { return T0[s]; }) });
   });
   perDomain('sidhistory', sh, function (x) { return N(x.id).dsid; }, function (n) { return _bhPlural(n, 'account carries', 'accounts carry') + ' SID history.'; },
-    ['Account', 'SID history', 'Same domain', 'Privileged entry'], function (x) { return [nm(x.id), x.to.map(nm).join(', '), _bhYes(x.same), _bhYes(x.t0)]; },
-    function (l) { return l.some(function (x) { return x.same || x.t0; }) ? 'high' : 'medium'; });
+    ['Account', 'Enabled', 'SID history', 'Same domain', 'Privileged entry'], function (x) { return [nm(x.id), onOff(x.id), x.to.map(nm).join(', '), _bhYes(x.same), _bhYes(x.t0)]; },
+    function (l) { return l.some(function (x) { return x.same || x.t0; }) ? 'high' : 'medium'; }, offMore(function (x) { return x.id; }));
 
   var trusts = [], levels = [], maq = [], pre = [];
   A.domains.forEach(function (d) {
@@ -97096,18 +98737,176 @@ function _bhRows(A, label) {
     function () { return 'the Pre-Windows 2000 Compatible Access group includes Everyone or Anonymous Logon.'; },
     ['Group', 'Member'], function (x) { return [nm(x.g), nm(x.m)]; });
 
-  var who = function (l) { return l.map(nm).join(', '); };
+  var who = function (l) { return l.map(offName).join(', '); };
   perDomain('esc1', A.esc.e1, function (x) { return N(x.ca).dsid; }, function (n) { return _bhPlural(n, 'published template lets', 'published templates let') + ' principals outside Tier Zero name any account in a certificate.'; },
     ['Template', 'Certification authority', 'Trusted for domain authentication', 'Can enrol'], function (x) { return [nm(x.t), nm(x.ca), _bhYes(x.trusted), who(x.who)]; });
   var e23 = A.esc.e2.map(function (x) { return { x: x, use: x.any ? 'Any Purpose' : 'No usage restriction' }; }).concat(A.esc.e3.map(function (x) { return { x: x, use: 'Certificate Request Agent' }; }));
   perDomain('esc23', e23, function (y) { return N(y.x.ca).dsid; }, function (n) { return _bhPlural(n, 'published template gives', 'published templates give') + ' principals outside Tier Zero certificates for any purpose or for enrolling on behalf of others.'; },
     ['Template', 'Certification authority', 'Usage', 'Can enrol'], function (y) { return [nm(y.x.t), nm(y.x.ca), y.use, who(y.x.who)]; });
   perDomain('esc4', A.esc.e4, function (x) { return N(x.t).dsid; }, function (n) { return _bhPlural(n, 'permission lets', 'permissions let') + ' a principal outside Tier Zero change a certificate template.'; },
-    ['Template', 'Principal', 'Right', 'Published by'], function (x) { return [nm(x.t), nm(x.p), CTRL_SHOW[x.r] || x.r, (A.published[x.t] || []).map(nm).join(', ') || 'Not published']; });
+    ['Template', 'Principal', 'Enabled', 'Right', 'Published by'], function (x) { return [nm(x.t), nm(x.p), onOff(x.p), CTRL_SHOW[x.r] || x.r, (A.published[x.t] || []).map(nm).join(', ') || 'Not published']; }, undefined, offMore(function (x) { return x.p; }));
   perDomain('esc6', A.esc.e6, function (x) { return N(x.ca).dsid; }, function (n) { return _bhPlural(n, 'certification authority accepts', 'certification authorities accept') + ' a subject alternative name in any request.'; },
     ['Certification authority', 'Host', 'Trusted for domain authentication'], function (x) { return [nm(x.ca), N(x.ca).p.dnshostname || '', _bhYes(x.trusted)]; });
   perDomain('esc7', A.esc.e7, function (x) { return N(x.ca).dsid; }, function (n) { return _bhPlural(n, 'right on a certification authority is', 'rights on certification authorities are') + ' held outside Tier Zero.'; },
-    ['Certification authority', 'Principal', 'Right'], function (x) { return [nm(x.ca), nm(x.p), x.r === 'ManageCA' ? 'Manage CA' : 'Issue and Manage Certificates']; });
+    ['Certification authority', 'Principal', 'Enabled', 'Right'], function (x) { return [nm(x.ca), nm(x.p), onOff(x.p), x.r === 'ManageCA' ? 'Manage CA' : 'Issue and Manage Certificates']; }, undefined, offMore(function (x) { return x.p; }));
+
+  var dnOf = function (id) { return N(id).dsid; };
+  var users_in = function (d) { return users.filter(function (u) { return dnOf(u) === d; }).length; };
+  var acct = function (id) { var k = N(id).kind; return k === 'User' || k === 'Computer'; };
+  var through = function (m, g) { var direct = (G.memOf[m] || []).indexOf(g) >= 0; return direct ? nm(g) : nm(g) + ' (through a nested group)'; };
+  var ridIn = function (g, rids) { return rids.indexOf(_bhRid(g)) >= 0; };
+  var builtin500 = function (id) { return _bhRid(id) === 500; };
+
+  var adm = {};
+  A.groups.forEach(function (g) {
+    if (!(ridIn(g, [512, 519]) || _bhWk(g) === 'S-1-5-32-544')) return;
+    var d = dnOf(g);
+    if (!d) return;
+    _bhMembers(G, g).forEach(function (m) {
+      if (!acct(m) || !en(m) || builtin500(m)) return;
+      var k = d + '|' + m;
+      if (!adm[k]) adm[k] = { d: d, id: m, via: [] };
+      adm[k].via.push(through(m, g));
+    });
+  });
+  var admList = Object.keys(adm).map(function (k) { return adm[k]; });
+  var admBy = {};
+  admList.forEach(function (x) { admBy[x.d] = (admBy[x.d] || 0) + 1; });
+  var beyond = function (d) { var u = users_in(d), a = admBy[d] || 0; return u > 100 && (a > 50 || a > u / 10); };
+  perDomain('admins', admList, function (x) { return x.d; }, function (n) { return _bhPlural(n, 'account other than the built-in Administrator holds', 'accounts other than the built-in Administrator hold') + ' domain administrator rights (Domain Admins, Enterprise Admins or Administrators).'; },
+    ['Account', 'Type', 'Through', 'Last signed in', 'Password last set'], function (x) { return [nm(x.id), kd(x.id), x.via.join('; '), _bhDate(_bhLastOn(N(x.id).p)), _bhDate(_bhTs(N(x.id).p.pwdlastset))]; },
+    function (l) { return l.length && beyond(l[0].d) ? 'high' : 'medium'; },
+    function (l) {
+      var d = l[0].d, u = users_in(d);
+      return 'The domain has ' + _bhPlural(u, 'enabled user account', 'enabled user accounts') + '; ' + (u > 100
+        ? (beyond(d) ? 'that is beyond PingCastle\'s baseline of 50, or 10 percent of the users.' : 'that is within PingCastle\'s baseline of 50, or 10 percent of the users, and still more than Microsoft advises.')
+        : 'PingCastle\'s baseline judges only domains of more than 100 active users, and Microsoft advises none.');
+    });
+
+  var schema = [], ops = [];
+  A.groups.forEach(function (g) {
+    var isS = _bhRid(g) === 518, w = _bhWk(g), isO = w === 'S-1-5-32-548' || w === 'S-1-5-32-549' || w === 'S-1-5-32-550' || w === 'S-1-5-32-551';
+    if (!isS && !isO) return;
+    _bhMembers(G, g).forEach(function (m) {
+      if (!acct(m) || !en(m)) return;
+      (isS ? schema : ops).push({ g: g, m: m, d: dnOf(g) || dnOf(m) });
+    });
+  });
+  perDomain('schemaadmins', schema, function (x) { return x.d; }, function (n) { return _bhPlural(n, 'enabled account is a member', 'enabled accounts are members') + ' of Schema Admins.'; },
+    ['Account', 'Type', 'Through', 'Last signed in'], function (x) { return [nm(x.m), kd(x.m), through(x.m, x.g), _bhDate(_bhLastOn(N(x.m).p))]; });
+  perDomain('operators', ops, function (x) { return x.d; }, function (n) { return _bhPlural(n, 'membership', 'memberships') + ' of the operator groups by enabled accounts.'; },
+    ['Group', 'Account', 'Type', 'Through', 'Last signed in'], function (x) { return [nm(x.g), nm(x.m), kd(x.m), through(x.m, x.g), _bhDate(_bhLastOn(N(x.m).p))]; });
+
+  var a500 = users.filter(function (id) { var t = _bhLastOn(N(id).p); return builtin500(id) && t > 0 && t > asof - 35 * DAY; });
+  perDomain('adminused', a500, domOfId, function () { return 'the built-in Administrator account signed in within the 35 days before ' + _bhDate(asof) + ', the latest date in the data.'; },
+    ['Account', 'Last signed in', 'Days before the latest date in the data', 'Sensitive and cannot be delegated'], function (id) { return [nm(id), _bhDate(_bhLastOn(N(id).p)), String(Math.floor((asof - _bhLastOn(N(id).p)) / DAY)), _bhYes(N(id).p.sensitive === true)]; });
+
+  var PROT_RID = [512, 516, 518, 519, 521, 526, 527], PROT_WK = ['S-1-5-32-544', 'S-1-5-32-548', 'S-1-5-32-549', 'S-1-5-32-550', 'S-1-5-32-551', 'S-1-5-32-552'];
+  var protectedNow = function (id) {
+    if (_bhRid(id) === 500 || _bhRid(id) === 502) return true;
+    return _bhGroups(G, id).some(function (g) { return ridIn(g, PROT_RID) || PROT_WK.indexOf(_bhWk(g)) >= 0; });
+  };
+  var leftover = A.users.filter(function (id) { return N(id).p.admincount === true && !protectedNow(id); });
+  perDomain('admincount', leftover, domOfId, function (n) { return _bhPlural(n, 'account is', 'accounts are') + ' marked adminCount without being a member of any group Active Directory protects.'; },
+    ['Account', 'Enabled', 'Last signed in', 'Password last set'], function (id) { return [nm(id), _bhYes(en(id)), _bhDate(_bhLastOn(N(id).p)), _bhDate(_bhTs(N(id).p.pwdlastset))]; },
+    undefined, offMore(function (id) { return id; }));
+
+  var t0u = users.filter(function (id) { return T0[id] && _bhRid(id) !== 502; });
+  var inact = t0u.filter(function (id) {
+    if (builtin500(id)) return false;
+    var p = N(id).p, last = _bhLastOn(p), made = _bhTs(p.whencreated);
+    return last ? last < asof - 180 * DAY : made > 0 && made < asof - 180 * DAY;
+  });
+  perDomain('admininactive', inact, domOfId, function (n) { return _bhPlural(n, 'enabled Tier Zero account had', 'enabled Tier Zero accounts had') + ' not signed in for 180 days or more before ' + _bhDate(asof) + ', the latest date in the data.'; },
+    ['Account', 'Tier Zero through', 'Last signed in', 'Created'], function (id) { return [nm(id), groupsT0(id).join(', ') || 'The account itself', _bhDate(_bhLastOn(N(id).p)), _bhDate(_bhTs(N(id).p.whencreated))]; });
+  var oldpw = t0u.filter(function (id) { var t = _bhTs(N(id).p.pwdlastset); return !isGmsa(id) && t > 0 && t < asof - 1095 * DAY; });
+  perDomain('adminpwdold', oldpw, domOfId, function (n) { return _bhPlural(n, 'enabled Tier Zero account has', 'enabled Tier Zero accounts have') + ' a password last set more than three years before ' + _bhDate(asof) + ', the latest date in the data.'; },
+    ['Account', 'Password last set', 'Password never expires', 'Tier Zero through'], function (id) { return [nm(id), _bhDate(_bhTs(N(id).p.pwdlastset)), _bhYes(N(id).p.pwdneverexpires === true), groupsT0(id).join(', ') || 'The account itself']; });
+  var deleg = t0u.filter(function (id) { return N(id).p.sensitive !== true && !_bhGroups(G, id).some(function (g) { return _bhRid(g) === 525; }); });
+  perDomain('admindeleg', deleg, domOfId, function (n) { return _bhPlural(n, 'enabled Tier Zero account is', 'enabled Tier Zero accounts are') + ' neither marked sensitive and cannot be delegated nor in Protected Users.'; },
+    ['Account', 'Type', 'Tier Zero through', 'Last signed in'], function (id) { return [nm(id), kd(id), groupsT0(id).join(', ') || 'The account itself', _bhDate(_bhLastOn(N(id).p))]; });
+  var noexp = [];
+  A.groups.forEach(function (g) {
+    if (_bhRid(g) !== 512) return;
+    _bhMembers(G, g).forEach(function (m) { if (N(m).kind === 'User' && en(m) && !isGmsa(m) && N(m).p.pwdneverexpires === true) noexp.push({ g: g, m: m, d: dnOf(g) }); });
+  });
+
+  var noexpN = {};
+  noexp.forEach(function (x) { noexpN[x.d] = (noexpN[x.d] || 0) + 1; });
+  perDomain('adminnoexpire', noexp.filter(function (x) { return noexpN[x.d] >= 2; }), function (x) { return x.d; }, function (n) { return _bhPlural(n, 'enabled member of Domain Admins has', 'enabled members of Domain Admins have') + ' a password that never expires.'; },
+    ['Account', 'Through', 'Password last set', 'Service principal names'], function (x) { return [nm(x.m), through(x.m, x.g), _bhDate(_bhTs(N(x.m).p.pwdlastset)), spns(x.m)]; });
+
+  var pol = [], dsan = [], scd = {};
+  A.domains.forEach(function (d) {
+    var p = N(d).p, out1 = [], has = function (k) { return typeof p[k] === 'number' && isFinite(p[k]); };
+    if (has('minpwdlength') && p.minpwdlength < 8) out1.push(['Minimum password length', String(p.minpwdlength) + ' characters', 'At least 8']);
+    if (has('pwdproperties') && !(p.pwdproperties & 1)) out1.push(['Password must meet complexity requirements', 'Not required', 'Required']);
+    if (has('pwdproperties') && (p.pwdproperties & 16)) out1.push(['Store passwords using reversible encryption', 'On', 'Off']);
+    if (has('lockoutthreshold') && p.lockoutthreshold === 0) out1.push(['Account lockout threshold', 'None: accounts are never locked out', '10 wrong passwords (Windows security baselines)']);
+    if (out1.length) pol.push({ d: d, rows: out1, rev: !!(has('pwdproperties') && (p.pwdproperties & 16)) });
+    var dh = typeof p.dsheuristics === 'string' ? p.dsheuristics : '';
+    if (dh.length >= 7 && dh.charAt(6) === '2') dsan.push({ d: d, v: dh });
+    if (typeof p.expirepasswordsonsmartcardonlyaccounts === 'boolean') scd[d] = p.expirepasswordsonsmartcardonlyaccounts;
+  });
+  pol.forEach(function (x) {
+    var t = _bhTable(['Setting', 'The domain\'s policy', 'Guidance'], x.rows);
+    var said = 'the domain\'s own password policy falls short in ' + _bhPlural(x.rows.length, 'setting', 'settings') + '. Fine-grained password policies, which apply over it to the accounts they are given to, are not in the data.';
+    row('pwdpolicy', dn(x.d), x.rev ? 'high' : 'medium', '<p><strong>' + _bhE(dn(x.d)) + '</strong>: ' + _bhE(said) + '</p>' + t.html, dn(x.d) + ': ' + said + '\n\n' + t.text);
+  });
+  perDomain('dsanon', dsan, function (x) { return x.d; }, function () { return 'the seventh character of the forest\'s dSHeuristics is 2, which lets anonymous clients carry out any operation the directory\'s permissions allow.'; },
+    ['Domain', 'dSHeuristics'], function (x) { return [dn(x.d), x.v]; });
+  var p2a = [];
+  A.groups.forEach(function (gid) {
+    if (_bhWk(gid) !== 'S-1-5-32-554') return;
+    (G.mem[gid] || []).forEach(function (m) { if (_bhWk(m) === 'S-1-5-11') p2a.push({ g: gid, m: m }); });
+  });
+  perDomain('pre2000auth', p2a, function (x) { return N(x.g).dsid; }, function () { return 'the Pre-Windows 2000 Compatible Access group includes Authenticated Users.'; },
+    ['Group', 'Member'], function (x) { return [nm(x.g), nm(x.m)]; });
+
+  var both = users.concat(computers);
+  var rev = A.users.concat(A.computers).filter(function (id) { return N(id).p.encryptedtextpwdallowed === true; });
+  perDomain('reversible', rev, domOfId, function (n) { return _bhPlural(n, 'account is allowed to store its password', 'accounts are allowed to store their passwords') + ' using reversible encryption.'; },
+    ['Account', 'Type', 'Enabled', 'Tier Zero'], function (id) { return [nm(id), kd(id), _bhYes(en(id)), _bhYes(T0[id])]; },
+    undefined, offMore(function (id) { return id; }));
+  var desTypes = function (id) { var s = N(id).p.supportedencryptiontypes; return Array.isArray(s) ? s.map(String) : []; };
+  var des = A.users.concat(A.computers).filter(function (id) { var p = N(id).p; return p.usedeskeyonly === true || desTypes(id).some(function (t) { return /^DES-/.test(t); }); });
+  perDomain('des', des, domOfId, function (n) { return _bhPlural(n, 'account uses DES for Kerberos, or lists it among its encryption types.', 'accounts use DES for Kerberos, or list it among their encryption types.'); },
+    ['Account', 'Type', 'Enabled', 'Use only DES keys', 'Encryption types'], function (id) { return [nm(id), kd(id), _bhYes(en(id)), _bhYes(N(id).p.usedeskeyonly === true), desTypes(id).join(', ')]; },
+    undefined, offMore(function (id) { return id; }));
+  var sc = users.filter(function (id) { var p = N(id).p, t = _bhTs(p.pwdlastset); return p.smartcardrequired === true && t > 0 && t < asof - 90 * DAY; });
+  perDomain('smartcard', sc, domOfId, function (n) { return _bhPlural(n, 'enabled account that must sign in with a smart card has', 'enabled accounts that must sign in with a smart card have') + ' a password last set more than 90 days before ' + _bhDate(asof) + ', the latest date in the data.'; },
+    ['Account', 'Password last set', 'Last signed in', 'Tier Zero'], function (id) { return [nm(id), _bhDate(_bhTs(N(id).p.pwdlastset)), _bhDate(_bhLastOn(N(id).p)), _bhYes(T0[id])]; },
+    undefined, function (l) { var d = domOfId(l[0]); return d in scd ? 'The domain\'s automatic rotation of these accounts\' secrets is ' + (scd[d] ? 'on, and has not changed these.' : 'off.') : ''; });
+  var pgOf = function (id) { var o = N(id).o; return o && o.PrimaryGroupSID ? _bhU(o.PrimaryGroupSID) : ''; };
+  var pg = A.users.concat(A.computers).filter(function (id) {
+    var g = pgOf(id), r = _bhRid(g), k = N(id).kind;
+    if (!g || !r) return false;
+    if (k === 'User') return [513, 514].indexOf(r) < 0 && !(isGmsa(id) && r === 515);
+    return [514, 515, 516, 521].indexOf(r) < 0;
+  });
+  perDomain('primarygroup', pg, domOfId, function (n) { return _bhPlural(n, 'account has a primary group other than the default for its kind.', 'accounts have a primary group other than the default for their kind.'); },
+    ['Account', 'Type', 'Enabled', 'Primary group', 'Tier Zero group'], function (id) { return [nm(id), kd(id), _bhYes(en(id)), nm(pgOf(id)), _bhYes(T0[pgOf(id)])]; },
+    function (l) { return l.some(function (id) { return T0[pgOf(id)]; }) ? 'high' : 'medium'; },
+    offMore(function (id) { return id; }));
+
+  var cpw = computers.filter(function (id) { var t = _bhTs(N(id).p.pwdlastset); return !A.isDC(id) && t > 0 && t < asof - 90 * DAY; });
+  perComputer('cpwdold', cpw, function (id) { return id; }, function (n) { return _bhPlural(n, 'enabled computer has', 'enabled computers have') + ' an account password last set more than 90 days before ' + _bhDate(asof) + ', the latest date in the data.'; },
+    ['Computer', 'Operating system', 'Password last set', 'Last signed in'], function (id) { return [nm(id), N(id).p.operatingsystem || '', _bhDate(_bhTs(N(id).p.pwdlastset)), _bhDate(_bhLastOn(N(id).p))]; }, 'low');
+  var dcs = computers.filter(function (id) { return A.isDC(id); });
+  var dcpw = dcs.filter(function (id) { var t = _bhTs(N(id).p.pwdlastset); return t > 0 && t < asof - 45 * DAY; });
+  perComputer('dcpwdold', dcpw, function (id) { return id; }, function (n) { return _bhPlural(n, 'domain controller has', 'domain controllers have') + ' an account password last set more than 45 days before ' + _bhDate(asof) + ', the latest date in the data.'; },
+    ['Domain controller', 'Operating system', 'Password last set', 'Last signed in'], function (id) { return [nm(id), N(id).p.operatingsystem || '', _bhDate(_bhTs(N(id).p.pwdlastset)), _bhDate(_bhLastOn(N(id).p))]; }, 'medium');
+
+  var few = [];
+  A.domains.forEach(function (d) {
+    if (!A.computers.some(function (id) { return dnOf(id) === d; })) return;
+    var n = dcs.filter(function (id) { return dnOf(id) === d; });
+    if (n.length < 2) few.push({ d: d, dcs: n });
+  });
+  few.forEach(function (x) {
+    var said = x.dcs.length ? 'the data shows one enabled domain controller, ' + nm(x.dcs[0]) + ', for the domain.' : 'the data shows no enabled domain controller for the domain.';
+    row('fewdcs', dn(x.d), null, '<p><strong>' + _bhE(dn(x.d)) + '</strong>: ' + _bhE(said) + '</p>', dn(x.d) + ': ' + said);
+  });
 
   return out;
 }

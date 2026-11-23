@@ -80,6 +80,31 @@ say() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"; }
 words() { printf '%s' "$*" | tr -c 'A-Za-z0-9 .,:()/_-' ' ' | tr ' ' '+'; }
 failed() { say "$1"; tell "event=failed&version=$VERSION&from=$FROM&message=$(words "$1")"; exit 1; }
 
+# 0.1.50: ONLY EVER FORWARD. The version comes from Pental Report's own
+# container, which names one only when it is newer than the one running; a
+# container that had been tampered with could name an older one, and send this
+# computer back to a release without the fixes made since. So a version that
+# is not newer than the one in .env is not installed, and update.log says so
+# once. With no version in .env to compare with, it goes on as before. Putting
+# the one before back when a release does not start (4. above) is this
+# script's own doing, not asked for, and is not held to this.
+newer() {
+  a=$1; b=$2
+  while [ -n "$a$b" ]; do
+    x=${a%%.*}; y=${b%%.*}
+    case "$a" in *.*) a=${a#*.} ;; *) a="" ;; esac
+    case "$b" in *.*) b=${b#*.} ;; *) b="" ;; esac
+    [ "${x:-0}" -gt "${y:-0}" ] && return 0
+    [ "${x:-0}" -lt "${y:-0}" ] && return 1
+  done
+  return 1
+}
+if [ -n "$FROM" ] && ! newer "$VERSION" "$FROM"; then
+  WHY="Not updating to $VERSION: it is not newer than $FROM, which is running."
+  [ "$(tail -n 1 "$LOG" 2>/dev/null | cut -d' ' -f3-)" = "$WHY" ] || say "$WHY"
+  exit 0
+fi
+
 say "Updating from ${FROM:-an unknown version} to $VERSION"
 tell "event=started&version=$VERSION&from=$FROM"
 

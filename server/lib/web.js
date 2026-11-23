@@ -4,8 +4,10 @@
 // nothing crosses origins and no address is configured twice. Anything that
 // is not a file under /assets is the app's page (it routes itself). The
 // headers are the Pental portal's own: a content policy that lets scripts
-// come from here alone (and the in-browser Word-to-PDF engine from its CDN),
-// no framing, no sniffing.
+// come from here alone, no framing, no sniffing. 2069: the in-browser
+// Word-to-PDF engine is a frame of engine.pental.io, an address of its own, so
+// its code (from its CDN) cannot reach this app's session; this server no
+// longer serves its page.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -16,13 +18,11 @@ const TYPES = {
   '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf', '.wasm': 'application/wasm',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.txt': 'text/plain; charset=utf-8', '.map': 'application/json',
 };
-const ZETA = 'https://cdn.zetaoffice.net https://business-cdn.zetaoffice.net';
-const APP_CSP = `default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' ${ZETA}; worker-src 'self' blob: ${ZETA}; `
+const ENGINE = 'https://engine.pental.io';   // 2069: the Word-to-PDF engine's own address
+const APP_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self' blob:; "
   + "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; "
   + "img-src 'self' data: blob: https:; connect-src 'self' wss: ws: https: http://localhost:* http://127.0.0.1:*; "
-  + "frame-src 'self' blob:; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'";
-const ENGINE_CSP = `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' data: blob: ${ZETA}; worker-src 'self' blob:; `
-  + `connect-src 'self' ${ZETA}; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'self'; object-src 'none'; base-uri 'none'`;
+  + `frame-src 'self' blob: ${ENGINE}; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'`;
 
 function secure(req) {
   return String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https' || !!(req.socket && req.socket.encrypted);
@@ -46,16 +46,11 @@ export class Web {
       'Cross-Origin-Resource-Policy': 'same-site',
     };
     const base = path.basename(file);
-    if (base === 'pdf-engine.html') {
-      h['Content-Security-Policy'] = ENGINE_CSP;
-      h['Cache-Control'] = 'no-store';
-    } else {
-      h['Content-Security-Policy'] = APP_CSP;
-      h['X-Frame-Options'] = 'SAMEORIGIN';
-      if (/^(lox-thread|lox-wrap|zetaHelper|zeta)\.js$/.test(base) || base === 'index.html') h['Cache-Control'] = 'no-cache, must-revalidate';
-      else if (file.includes(path.sep + 'assets' + path.sep)) h['Cache-Control'] = 'public, max-age=31536000, immutable';
-      else h['Cache-Control'] = 'no-cache';
-    }
+    h['Content-Security-Policy'] = APP_CSP;
+    h['X-Frame-Options'] = 'SAMEORIGIN';
+    if (base === 'index.html') h['Cache-Control'] = 'no-cache, must-revalidate';
+    else if (file.includes(path.sep + 'assets' + path.sep)) h['Cache-Control'] = 'public, max-age=31536000, immutable';
+    else h['Cache-Control'] = 'no-cache';
     if (secure(req)) h['Strict-Transport-Security'] = 'max-age=63072000; includeSubDomains';
     return h;
   }

@@ -372,7 +372,7 @@ docker compose exec report node server/bin/reset-mfa.js you@yourfirm.com
 
 Everything lives in the PostgreSQL that runs beside Pental Report: assessments, findings, your library, settings, templates and uploaded files (or your own S3-compatible bucket). None of it is sent to Pental.
 
-Two things are fetched from outside when you use them: the AI provider you choose, and the Word-to-PDF engine (from `cdn.zetaoffice.net`) when you make a PDF from a Word template. The conversion runs in your browser, and your document is not uploaded anywhere.
+Two things are fetched from outside when you use them: the AI provider you choose, and the Word-to-PDF engine when you make a PDF from a Word template, its page from `engine.pental.io` and the engine itself from `cdn.zetaoffice.net`. The conversion runs in your browser, on the engine's own address so its code cannot reach your session, and your document is not uploaded anywhere.
 
 To know of a new release, the server asks GitHub for Pental Report's latest one twice a day. The request carries nothing but the version it runs, and `UPDATE_CHECK=off` in `.env` stops it. An update is downloaded from GitHub too.
 

@@ -1543,6 +1543,9 @@ CREATE POLICY settings_admin_delete ON public.settings FOR DELETE TO authenticat
 -- every profile row in the tenant, so a client at one organisation could read
 -- another organisation's users and the firm's entire staff list with emails.
 --
+-- 2068: the rows past your own now ask for a fresh second factor; your own
+-- row never does, for the reason below (the policy is made again in 2068).
+--
 -- NO `mfa_is_fresh()` HERE, DELIBERATELY. The sign-in flow reads profiles BY
 -- EMAIL to work out which MFA methods to offer, which happens BEFORE MFA is
 -- fresh by definition. Adding the freshness test to this policy locks
@@ -4341,7 +4344,11 @@ DECLARE
     -- sign-in flow reads them through rpc_get_sso_config, which is signed.
     'sso_google_client_id','sso_ms_client_id','sso_ms_tenant',
     'theme_dark','theme_light','currency_code','currency_symbol',
-    'day_rate','vat_rate','assessment_types','session_timeout_minutes',
+    -- 2068: not 'day_rate'. What the firm charges a day is not branding, and
+    -- nothing reads it before sign-in (the login page and the theme script
+    -- ask rpc_get_login_branding; the setup's checks read only id), so the
+    -- publishable key in every portal page handed it to anybody who asked.
+    'vat_rate','assessment_types','session_timeout_minutes',
     'session_timeout_action','email_enabled','feedback_mode',
     'proposals_enabled','invoices_enabled','feedback_enabled',
     'meet_calendar_enabled','meetings_enabled','contacts_enabled',
@@ -4600,8 +4607,9 @@ BEGIN
       FROM public.proposals p WHERE p.id = ANY(p_ids)
        AND (p.created_by = public.current_profile_id() OR p.sent_by = public.current_profile_id() OR public.can_access_client(p.client_id));
   ELSIF v_role = 'client' THEN
+    -- 2068: not a draft, as proposals_read.
     RETURN QUERY SELECT p.id, p.authorised_by, p.authorised_title, p.authorised_email, p.authorised_signature, p.authorised_at
-      FROM public.proposals p WHERE p.id = ANY(p_ids) AND p.client_id = v_cid;
+      FROM public.proposals p WHERE p.id = ANY(p_ids) AND p.client_id = v_cid AND p.status IS DISTINCT FROM 'draft';
   END IF;
 END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp;
@@ -4630,8 +4638,18 @@ BEGIN
   SELECT email INTO v_email FROM auth.users WHERE id = v_uid;
   IF v_email IS NULL THEN RETURN false; END IF;
   PERFORM set_config('pental.bypass_protect', 'true', true);
-  UPDATE public.profiles SET auth_user_id = v_uid, updated_at = now()
-    WHERE lower(email) = lower(v_email) AND (auth_user_id IS NULL OR auth_user_id != v_uid);
+  -- 2068: A PROFILE ALREADY LINKED TO A LIVE ACCOUNT WITH ITS OWN ADDRESS STAYS
+  -- LINKED TO IT. This took any profile with the caller's address, linked or
+  -- not, so a second account given the same address (Supabase lets an SSO
+  -- account share an address with a password one) would have been handed the
+  -- first one's profile and its role. It links a profile not yet linked, and
+  -- mends one whose account is gone or has another address, as it was for.
+  UPDATE public.profiles p SET auth_user_id = v_uid, updated_at = now()
+    WHERE lower(p.email) = lower(v_email)
+      AND (p.auth_user_id IS NULL
+           OR (p.auth_user_id != v_uid
+               AND NOT EXISTS (SELECT 1 FROM auth.users u
+                                WHERE u.id = p.auth_user_id AND lower(u.email) = lower(p.email))));
   RETURN FOUND;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp;
@@ -48659,6 +48677,8 @@ CREATE OR REPLACE FUNCTION public._e2e_columns(p_table text) RETURNS text[]
                                   'summary_sections', 'section_drafts', 'qa_ai_review']
     WHEN 'assessment_comments' THEN ARRAY['content']
     WHEN 'qa_comments' THEN ARRAY['comment', 'highlight']
+    -- 2069: an engagement's review, kept apart from it (assessment_qa).
+    WHEN 'assessment_qa' THEN ARRAY['qa_notes', 'qa_comments', 'qa_ai_review']
     WHEN 'timeline_events' THEN ARRAY['title', 'details', 'event']
     WHEN 'tickets' THEN ARRAY['subject', 'message', 'responses']
     WHEN 'assets' THEN ARRAY['name', 'label', 'notes', 'details', 'owner_name', 'owner_email', 'owner_team', 'tags']   -- 2021: and its owners and tags
@@ -48860,6 +48880,479 @@ CREATE POLICY e2e_grants_own ON public.e2e_grants FOR SELECT TO authenticated
 DROP POLICY IF EXISTS e2e_principals_seen ON public.e2e_principals;
 CREATE POLICY e2e_principals_seen ON public.e2e_principals FOR SELECT TO authenticated
   USING (profile_id = public.current_profile_id() OR public.is_delivery_staff());
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 2068: THE AUDIT OF 22 NOVEMBER 2026. [stated] Arian: "ok now i want to have
+-- a full QA, Efficiency (like speed of things) and security audit of the
+-- portal ... I want to make sure everything is working perfectly and as best
+-- as it could, (even if they have lots of users of their portal)". Each rule
+-- below was tried as each kind of person on a real PostgreSQL with this file
+-- (verification/test_audit_2068.mjs), and gives what the portal shows.
+-- Placed before 1958's block so it, too, is asked once per query.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- 1. A PASSWORD ALONE OPENS ONLY THE PERSON'S OWN ROW. A session signed in with
+-- a password whose second factor had not been given (or had gone stale) could
+-- read the firm's settings whole (its bank account, rates, mail server, AI
+-- address and prompts), and a member of staff every person the firm has and
+-- every client contact, and an administrator the audit logs and everybody's
+-- sessions. The second factor is what keeps a stolen password from being
+-- enough, so these ask for it as every other table does. Before it is given
+-- the portal reads none of them: the sign-in reads the person's own row and
+-- asks its RPCs (rpc_get_login_branding, rpc_get_mfa_policy,
+-- rpc_mfa_methods_for_user), and a load begun before the code is read again
+-- after it (2065).
+DROP POLICY IF EXISTS profiles_auth_read ON public.profiles;
+CREATE POLICY profiles_auth_read ON public.profiles FOR SELECT TO authenticated
+  USING (
+    auth_user_id = auth.uid()
+    OR (public.mfa_is_fresh() AND (
+      public.is_staff()
+      OR (client_id IS NOT NULL AND public.can_see_client(client_id))
+      OR EXISTS (
+        SELECT 1 FROM public.assessments a
+         WHERE (a.lead_id = public.profiles.id OR a.qa_assignee = public.profiles.id)
+           AND public.can_access_assessment(a.id))
+      OR (contractor_team_id IS NOT NULL AND contractor_team_id = public.current_contractor_team_id()))));
+
+DROP POLICY IF EXISTS settings_auth_read ON public.settings;
+CREATE POLICY settings_auth_read ON public.settings FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh());
+
+DROP POLICY IF EXISTS user_sessions_select_admin ON public.user_sessions;
+CREATE POLICY user_sessions_select_admin ON public.user_sessions
+  FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND public.can_manage() AND EXISTS (
+    SELECT 1 FROM public.profiles caller
+     WHERE caller.auth_user_id = auth.uid() AND caller.active = true));
+
+-- The RPC audit log had two rules for the same readers, either one enough.
+DROP POLICY IF EXISTS _pental_rpc_audit_log_admin_read ON public._pental_rpc_audit_log;
+DROP POLICY IF EXISTS rpc_audit_admin_read ON public._pental_rpc_audit_log;
+CREATE POLICY rpc_audit_admin_read ON public._pental_rpc_audit_log
+  FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND public.current_user_role() IN ('admin', 'senior'));
+DROP POLICY IF EXISTS ops_audit_admin_read ON public._pental_ops_audit;
+CREATE POLICY ops_audit_admin_read ON public._pental_ops_audit
+  FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND public.current_user_role() IN ('admin', 'senior'));
+DROP POLICY IF EXISTS signed_changes_admin_read ON public._pental_signed_changes_audit;
+CREATE POLICY signed_changes_admin_read ON public._pental_signed_changes_audit
+  FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND public.current_user_role() IN ('admin', 'senior'));
+
+-- 2. A CLIENT IS NOT SHOWN A DRAFT, THROUGH THE API EITHER. The portal shows a
+-- client's people their proposals and invoices once they are sent, never a
+-- draft (renderProposalsPage, renderInvoices, the engagement's cards: an
+-- invoice with no status is a draft there too); the database handed them the
+-- drafts all the same, internal notes and prices being worked on with them.
+DROP POLICY IF EXISTS proposals_read ON public.proposals;
+CREATE POLICY proposals_read ON public.proposals FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND (public.current_user_role() IN ('admin', 'senior', 'sales')
+    OR (public.current_user_role() = 'contractor' AND (created_by = public.current_profile_id() OR sent_by = public.current_profile_id() OR public.can_access_client(client_id)))
+    OR (public.current_user_role() = 'client' AND client_id = public.current_user_client_id() AND status IS DISTINCT FROM 'draft')));
+DROP POLICY IF EXISTS invoices_read ON public.invoices;
+CREATE POLICY invoices_read ON public.invoices FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND (public.current_user_role() IN ('admin','senior','sales')
+    OR (public.current_user_role() = 'client' AND client_id = public.current_user_client_id() AND COALESCE(status, 'draft') <> 'draft')));
+
+-- 3. FEEDBACK IS FROM THE PERSON WHO SENDS IT. The portal writes the sender's
+-- own profile and nothing else of who sent it (saveFeedback); the table took
+-- whatever it was given, so a client could file a five-star testimonial,
+-- marked for publishing, under somebody else's name or dressed as a Google
+-- review. A row written through the API is the writer's; the database's own
+-- import of Google reviews (_feedback_import_google, run inside its
+-- functions, as their owner) writes as before.
+CREATE OR REPLACE FUNCTION public._feedback_author() RETURNS trigger
+  LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $fbauthor$
+BEGIN
+  IF current_user NOT IN ('authenticated', 'anon') THEN RETURN NEW; END IF;
+  NEW.submitted_by := public.current_profile_id();
+  NEW.submitted_by_name := NULL;
+  NEW.google_review_id := NULL;
+  NEW.google_review_data := NULL;
+  RETURN NEW;
+END $fbauthor$;
+REVOKE ALL ON FUNCTION public._feedback_author() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS tr_feedback_author ON public.feedback;
+CREATE TRIGGER tr_feedback_author BEFORE INSERT ON public.feedback
+  FOR EACH ROW EXECUTE FUNCTION public._feedback_author();
+
+-- 4. A MEETING'S RULE ASKS ONCE, NOT ONCE A ROW. meetings_read and
+-- attendees_read called _contractor_meeting(id) for every row anybody who is
+-- not staff read, a query of its own each time: at 2,000 meetings a
+-- contractor's read took over a second and a client's (who is shown none)
+-- nearly half of one. The same rule as a set, worked out once per query.
+CREATE OR REPLACE FUNCTION public._contractor_meeting_ids() RETURNS SETOF uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $$
+  SELECT m.id FROM public.meetings m
+   WHERE (SELECT public.current_user_role()) = 'contractor'
+     AND (m.created_by = (SELECT public.current_profile_id())
+          OR m.assigned_to = (SELECT public.current_profile_id())
+          OR EXISTS (SELECT 1 FROM public.meeting_attendees ma
+                      WHERE ma.meeting_id = m.id AND ma.user_id = (SELECT public.current_profile_id())))
+$$;
+REVOKE ALL ON FUNCTION public._contractor_meeting_ids() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public._contractor_meeting_ids() TO authenticated, service_role;
+DROP POLICY IF EXISTS meetings_read ON public.meetings;
+CREATE POLICY meetings_read ON public.meetings FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND (public.current_user_role() NOT IN ('client', 'none', 'contractor')
+    OR id IN (SELECT public._contractor_meeting_ids())));
+DROP POLICY IF EXISTS attendees_read ON public.meeting_attendees;
+CREATE POLICY attendees_read ON public.meeting_attendees FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND (public.current_user_role() NOT IN ('client', 'none', 'contractor')
+    OR meeting_id IN (SELECT public._contractor_meeting_ids())));
+-- And the two look-ups that rule makes, by meeting and by person.
+CREATE INDEX IF NOT EXISTS meeting_attendees_meeting_idx ON public.meeting_attendees (meeting_id);
+CREATE INDEX IF NOT EXISTS meeting_attendees_user_idx ON public.meeting_attendees (user_id);
+-- 2068: END
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 2069: WHAT A CLIENT'S PEOPLE ARE HANDED, THROUGH THE API AS ON THE SCREEN.
+-- [stated] Arian, 23 November 2026, of the audit's decisions: "also do 1, 2,
+-- 3, 5". The second, as he chose it: a client's people are given the settings
+-- their portal reads and no others; the review of a report (its QA notes, the
+-- changes its reviewer suggested with their answers, and what the AI reviewer
+-- said) is kept where only the firm's people who do the work and the
+-- engagement's contractors read it; and the timeline's entries of the review's
+-- back-and-forth are marked internal and kept from the client. Each was tried
+-- as each kind of person on a real PostgreSQL with this file
+-- (verification/test_client_reads_2069.mjs). Placed before 1958's block so
+-- its rules, too, are asked once per query.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- 1. THE SETTINGS A CLIENT'S PORTAL READS, AND NO OTHERS. A client's people
+-- could read every setting a signed-in person may: the firm's AI prompts, its
+-- mail server and its account, its automation and its scanners. Their portal
+-- reads its branding, its modules, the bank details an invoice is paid to and
+-- the like. They read the row through `settings_client` now, which has only
+-- those columns (the portal's `_settingsCols_base`, `public_ip` and the four
+-- reads beside it, which check_client_reads_2069 holds to this list), and the
+-- firm's `settings` row answers the firm's people and its contractors alone.
+-- A person whose account answers 'none' (switched off, or a contractor while
+-- contractors are off) is given neither.
+CREATE OR REPLACE FUNCTION public._settings_client_columns() RETURNS text[]
+LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $$
+  SELECT ARRAY[
+    'id', 'company_name', 'company_email', 'company_phone', 'company_address', 'company_number',
+    'company_ending', 'company_website', 'accent_color', 'theme_mode', 'refcode_bold',
+    'severity_colors', 'severity_style', 'notification_color', 'toast_success_color', 'logo_url',
+    'logo_url_light', 'pdf_logo_variant', 'email_logo_variant', 'password_login_enabled',
+    'font_display', 'font_body', 'font_mono', 'pdf_font_body', 'pdf_font_heading', 'email_font',
+    'portal_title', 'login_title', 'login_subtitle', 'login_support_email', 'login_button_text',
+    'login_custom_text', 'login_show_logo', 'login_show_company_name', 'login_show_title',
+    'sso_google_enabled', 'sso_google_client_id', 'sso_ms_client_id', 'sso_ms_tenant',
+    'sso_microsoft_enabled', 'proposals_enabled', 'invoices_enabled', 'feedback_enabled',
+    'meet_calendar_enabled', 'testing_calendar_enabled', 'meetings_enabled', 'contacts_enabled',
+    'contractors_enabled', 'contractors_library', 'dashboard_enabled', 'qa_enabled',
+    'assessments_enabled', 'library_enabled', 'dashboard_layouts', 'posture_enabled',
+    'assets_enabled', 'posture_config', 'theme_dark', 'theme_light', 'currency_code',
+    'currency_symbol', 'day_rate', 'vat_rate', 'vat_number', 'sig_name', 'sig_title', 'sig_email',
+    'sig_phone', 'sig_teams', 'sig_slack', 'sig_html', 'assessment_types',
+    'session_timeout_minutes', 'session_timeout_action', 'session_signout_minutes',
+    'session_refresh_buffer_minutes', 'show_tester_teams', 'show_tester_slack', 'feedback_mode',
+    'google_review_url', 'loa_visibility', 'email_enabled', 'email_signature_enabled',
+    'notify_test_started', 'notify_test_ended', 'notify_critical_finding', 'notify_proposal_sent',
+    'notify_invoice_sent', 'notify_invoice_paid', 'notify_tester_assigned',
+    'notify_credentials_submitted', 'notify_comment_reply', 'notify_report_delivered',
+    'notify_new_sign_in', 'notify_new_device_sign_in', 'notify_mfa_changed', 'notify_role_changed',
+    'notify_user_created', 'notify_session_revoked', 'bank_account_name', 'bank_name',
+    'bank_sort_code', 'bank_account_number', 'bank_iban', 'bank_bic', 'stripe_enabled',
+    'stripe_publishable_key', 'stripe_success_url', 'favicon_url', 'created_at', 'updated_at',
+    'pdf_templates', 'loa_signatory_name', 'loa_signatory_title', 'loa_signature_data',
+    'filename_templates', 'mfa_methods_allowed', 'mfa_methods_required', 'notify_reply_to_email',
+    'final_pdf_names', 'self_scan_enabled', 'self_scan_who', 'self_scan_target_policy',
+    'self_scan_require_auth', 'self_scan_auth_when', 'self_scan_auth_text', 'self_scan_frequencies',
+    'self_scan_lands', 'self_scan_billing', 'self_scan_price_pence', 'self_scan_price_daily_pence',
+    'self_scan_price_weekly_pence', 'self_scan_price_monthly_pence', 'self_scan_price_annual_pence',
+    'self_scan_self_hosted_only', 'self_scan_internal_enabled', 'self_scan_max_targets',
+    'self_scan_default_cap', 'self_scan_default_cooldown_hours', 'self_scan_window_start',
+    'self_scan_window_end', 'self_scan_notify', 'self_scan_report',
+    -- beside the portal's list: the testing addresses (1977), the report's
+    -- fields, sections and templates (read alone, 1999), the checklist switch,
+    -- and the version the portal's copy reads changes by (1705).
+    'public_ip', 'finding_fields', 'summary_fields', 'summary_sections', 'report_templates',
+    'enable_checklists_runbooks', 'row_version'
+  ]::text[]
+$$;
+REVOKE EXECUTE ON FUNCTION public._settings_client_columns() FROM PUBLIC, anon, authenticated;
+
+DO $settings_client$
+DECLARE v_cols text;
+BEGIN
+  SELECT string_agg(quote_ident(c.column_name::text), ', ' ORDER BY c.ordinal_position) INTO v_cols
+    FROM information_schema.columns c
+   WHERE c.table_schema = 'public' AND c.table_name = 'settings'
+     AND c.column_name::text = ANY (public._settings_client_columns())
+     AND c.column_name::text <> ALL (public._settings_secret_columns());
+  EXECUTE 'DROP VIEW IF EXISTS public.settings_client';
+  -- Read as the view's owner, so the settings row's own rule does not refuse
+  -- it; the view asks who is reading instead (and security_barrier keeps a
+  -- reader's own conditions from being tried on a row before that is asked).
+  EXECUTE 'CREATE VIEW public.settings_client WITH (security_barrier = true) AS SELECT ' || v_cols
+       || ' FROM public.settings WHERE public.mfa_is_fresh() AND public.current_user_role() = ''client''';
+END $settings_client$;
+-- Read only: a view of one table is one a write could go through, as its
+-- owner, so nobody is given more than reading it (the file's default grants
+-- give every new relation to every signed-in person).
+REVOKE ALL ON public.settings_client FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.settings_client TO authenticated, service_role;
+
+DROP POLICY IF EXISTS settings_auth_read ON public.settings;
+CREATE POLICY settings_auth_read ON public.settings FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh()
+    AND public.current_user_role() IN ('admin', 'senior', 'standard', 'sales', 'marketing', 'contractor'));
+
+-- 2. THE REVIEW OF A REPORT IS THE FIRM'S. An engagement's QA notes, the
+-- changes its reviewer suggested (with the tester's answers and the replies)
+-- and what the AI reviewer said were columns of the engagement, and its
+-- client's people read the engagement whole through the API, during the review
+-- as after it, though their portal never shows them any of it. They are kept
+-- in `assessment_qa` now, one row for each engagement, read and written by the
+-- firm's people who do the work and by a contractor on an engagement of
+-- theirs, as the engagement is; a client's people, Sales and Marketing (1970)
+-- are given none of it. The three columns stay on the engagement, empty: a
+-- page from before this that writes them there is asked to reload, and what
+-- the database itself writes there (a restore, a sealing of older words) is
+-- moved across as it is written.
+CREATE TABLE IF NOT EXISTS public.assessment_qa (
+  id uuid PRIMARY KEY REFERENCES public.assessments(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+  qa_notes text,
+  qa_comments jsonb NOT NULL DEFAULT '[]'::jsonb,
+  qa_ai_review jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+-- Two people on one review (1924): its version and who last wrote it.
+ALTER TABLE public.assessment_qa ADD COLUMN IF NOT EXISTS row_version bigint;
+ALTER TABLE public.assessment_qa ADD COLUMN IF NOT EXISTS row_by uuid;
+DROP TRIGGER IF EXISTS zz_row_version ON public.assessment_qa;
+CREATE TRIGGER zz_row_version BEFORE INSERT OR UPDATE ON public.assessment_qa
+  FOR EACH ROW EXECUTE FUNCTION public._tg_row_version();
+DROP TRIGGER IF EXISTS zz_row_by ON public.assessment_qa;
+CREATE TRIGGER zz_row_by BEFORE INSERT OR UPDATE ON public.assessment_qa
+  FOR EACH ROW EXECUTE FUNCTION public._tg_row_by();
+DROP TRIGGER IF EXISTS tg_aqa_touch ON public.assessment_qa;
+CREATE TRIGGER tg_aqa_touch BEFORE UPDATE ON public.assessment_qa
+  FOR EACH ROW EXECUTE FUNCTION public._tg_touch_updated_at_crb();
+
+ALTER TABLE public.assessment_qa ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS aqa_read ON public.assessment_qa;
+CREATE POLICY aqa_read ON public.assessment_qa FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND public.current_user_role() IN ('admin', 'senior', 'standard', 'contractor')
+    AND public.can_access_assessment(id));
+DROP POLICY IF EXISTS aqa_insert ON public.assessment_qa;
+CREATE POLICY aqa_insert ON public.assessment_qa FOR INSERT TO authenticated
+  WITH CHECK (public.mfa_is_fresh() AND public.current_user_role() IN ('admin', 'senior', 'standard', 'contractor')
+    AND public.can_access_assessment(id));
+DROP POLICY IF EXISTS aqa_update ON public.assessment_qa;
+CREATE POLICY aqa_update ON public.assessment_qa FOR UPDATE TO authenticated
+  USING (public.mfa_is_fresh() AND public.current_user_role() IN ('admin', 'senior', 'standard', 'contractor')
+    AND public.can_access_assessment(id))
+  WITH CHECK (public.mfa_is_fresh() AND public.current_user_role() IN ('admin', 'senior', 'standard', 'contractor')
+    AND public.can_access_assessment(id));
+-- No rule to delete one: a review goes with its engagement.
+REVOKE ALL ON public.assessment_qa FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.assessment_qa TO authenticated;
+GRANT ALL ON public.assessment_qa TO service_role;
+
+-- What the AI reviewer said is the firm's reviewer's, as it was on the
+-- engagement (1956, _contractor_guard_assessment): with QA on, a contractor
+-- does not write it.
+CREATE OR REPLACE FUNCTION public._aqa_contractor_guard() RETURNS trigger
+  LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $aqacg$
+DECLARE v_qa_on boolean;
+BEGIN
+  IF current_user NOT IN ('authenticated', 'anon') THEN RETURN NEW; END IF;
+  IF public.current_user_role() IS DISTINCT FROM 'contractor' THEN RETURN NEW; END IF;
+  SELECT s.qa_enabled INTO v_qa_on FROM public.settings s ORDER BY s.created_at ASC NULLS LAST, s.id LIMIT 1;
+  IF NOT COALESCE(v_qa_on, true) THEN RETURN NEW; END IF;
+  IF TG_OP = 'INSERT' THEN
+    NEW.qa_ai_review := '{}'::jsonb;
+  ELSIF NEW.qa_ai_review IS DISTINCT FROM OLD.qa_ai_review THEN
+    RAISE EXCEPTION 'What the AI reviewer said is the firm''s reviewer''s' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END $aqacg$;
+REVOKE ALL ON FUNCTION public._aqa_contractor_guard() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS tr_aqa_contractor_guard ON public.assessment_qa;
+CREATE TRIGGER tr_aqa_contractor_guard BEFORE INSERT OR UPDATE ON public.assessment_qa
+  FOR EACH ROW EXECUTE FUNCTION public._aqa_contractor_guard();
+
+-- Whether a review's column holds anything: empty words, an empty list or
+-- object, or nothing, hold nothing.
+CREATE OR REPLACE FUNCTION public._aqa_has(v jsonb) RETURNS boolean
+  LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $aqahas$
+  SELECT NOT (v IS NULL OR v = 'null'::jsonb OR v = '[]'::jsonb OR v = '{}'::jsonb
+              OR (jsonb_typeof(v) = 'string' AND btrim(v #>> '{}') = ''));
+$aqahas$;
+
+-- Each engagement's review, from what its own columns held (each column only
+-- where the review's own is still empty, so running this file again changes
+-- nothing), and those columns emptied. Under the e2e seal's flag (2018), as
+-- the words are the same words: nobody's open copy of an engagement is out of
+-- date for it.
+DROP TRIGGER IF EXISTS zz_qa_move ON public.assessments;
+DROP TRIGGER IF EXISTS zz_qa_made ON public.assessments;
+DO $aqa_fill$
+BEGIN
+  PERFORM set_config('pental.e2e_seal', 'on', true);
+  INSERT INTO public.assessment_qa AS q (id, qa_notes, qa_comments, qa_ai_review)
+  SELECT a.id, NULLIF(btrim(COALESCE(a.qa_notes, '')), ''),
+         CASE WHEN public._aqa_has(a.qa_comments) THEN a.qa_comments ELSE '[]'::jsonb END,
+         CASE WHEN public._aqa_has(a.qa_ai_review) THEN a.qa_ai_review ELSE '{}'::jsonb END
+    FROM public.assessments a
+  ON CONFLICT (id) DO UPDATE SET
+    qa_notes = CASE WHEN public._aqa_has(to_jsonb(q.qa_notes)) THEN q.qa_notes ELSE EXCLUDED.qa_notes END,
+    qa_comments = CASE WHEN public._aqa_has(q.qa_comments) THEN q.qa_comments ELSE EXCLUDED.qa_comments END,
+    qa_ai_review = CASE WHEN public._aqa_has(q.qa_ai_review) THEN q.qa_ai_review ELSE EXCLUDED.qa_ai_review END
+  WHERE public._aqa_has(to_jsonb(EXCLUDED.qa_notes)) OR public._aqa_has(EXCLUDED.qa_comments) OR public._aqa_has(EXCLUDED.qa_ai_review);
+  UPDATE public.assessments a
+     SET qa_notes = NULL, qa_comments = '[]'::jsonb, qa_ai_review = '{}'::jsonb,
+         e2e_refs = CASE WHEN a.e2e_refs IS NULL THEN NULL ELSE a.e2e_refs - 'qa_notes' - 'qa_comments' - 'qa_ai_review' END
+   WHERE public._aqa_has(to_jsonb(a.qa_notes)) OR public._aqa_has(a.qa_comments) OR public._aqa_has(a.qa_ai_review)
+      OR (a.e2e_refs IS NOT NULL AND (a.e2e_refs ? 'qa_notes' OR a.e2e_refs ? 'qa_comments' OR a.e2e_refs ? 'qa_ai_review'));
+  PERFORM set_config('pental.e2e_seal', 'off', true);
+END $aqa_fill$;
+
+-- WHAT IS WRITTEN TO THE ENGAGEMENT'S OWN COLUMNS GOES ACROSS. Before the
+-- engagement's other triggers are done with it (after 2018's check that its
+-- words are sealed, `zz_e2e_guard`, which sorts first): a new engagement's
+-- review is made with whatever it was given (a restore, an older page's
+-- copy), and only where it has none yet, as a restore leaves a row that is
+-- already there as it is; what the database writes to an engagement it has
+-- (sealing older words, 2018) goes across over the review's own; and a page
+-- of the firm's that writes them there is from before this, and is asked to
+-- reload rather than write a review over the one kept now.
+CREATE OR REPLACE FUNCTION public._assessment_qa_move() RETURNS trigger
+  LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $aqamove$
+DECLARE v_set jsonb := '{}'::jsonb;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF public._aqa_has(to_jsonb(NEW.qa_notes)) THEN v_set := v_set || jsonb_build_object('qa_notes', NEW.qa_notes); END IF;
+    IF public._aqa_has(NEW.qa_comments) THEN v_set := v_set || jsonb_build_object('qa_comments', NEW.qa_comments); END IF;
+    IF public._aqa_has(NEW.qa_ai_review) THEN v_set := v_set || jsonb_build_object('qa_ai_review', NEW.qa_ai_review); END IF;
+    -- Kept for the row's making, once the engagement is there (zz_qa_made).
+    IF v_set <> '{}'::jsonb THEN
+      PERFORM set_config('pental.aqa_' || replace(NEW.id::text, '-', ''), v_set::text, true);
+    END IF;
+  ELSE
+    IF current_user IN ('authenticated', 'anon') THEN
+      IF NEW.qa_notes IS DISTINCT FROM OLD.qa_notes OR NEW.qa_comments IS DISTINCT FROM OLD.qa_comments
+         OR NEW.qa_ai_review IS DISTINCT FROM OLD.qa_ai_review THEN
+        RAISE EXCEPTION 'This page is from before the review was kept apart from the engagement: reload it, and make the change again.'
+          USING ERRCODE = '55A69';
+      END IF;
+      RETURN NEW;
+    END IF;
+    IF public._aqa_has(to_jsonb(NEW.qa_notes)) OR public._aqa_has(NEW.qa_comments) OR public._aqa_has(NEW.qa_ai_review) THEN
+      INSERT INTO public.assessment_qa AS q (id, qa_notes, qa_comments, qa_ai_review)
+      VALUES (NEW.id, NULLIF(btrim(COALESCE(NEW.qa_notes, '')), ''),
+              CASE WHEN public._aqa_has(NEW.qa_comments) THEN NEW.qa_comments ELSE '[]'::jsonb END,
+              CASE WHEN public._aqa_has(NEW.qa_ai_review) THEN NEW.qa_ai_review ELSE '{}'::jsonb END)
+      ON CONFLICT (id) DO UPDATE SET
+        qa_notes = CASE WHEN public._aqa_has(to_jsonb(NEW.qa_notes)) THEN EXCLUDED.qa_notes ELSE q.qa_notes END,
+        qa_comments = CASE WHEN public._aqa_has(NEW.qa_comments) THEN EXCLUDED.qa_comments ELSE q.qa_comments END,
+        qa_ai_review = CASE WHEN public._aqa_has(NEW.qa_ai_review) THEN EXCLUDED.qa_ai_review ELSE q.qa_ai_review END;
+    END IF;
+  END IF;
+  NEW.qa_notes := NULL;
+  NEW.qa_comments := '[]'::jsonb;
+  NEW.qa_ai_review := '{}'::jsonb;
+  IF NEW.e2e_refs IS NOT NULL THEN NEW.e2e_refs := NEW.e2e_refs - 'qa_notes' - 'qa_comments' - 'qa_ai_review'; END IF;
+  RETURN NEW;
+END $aqamove$;
+REVOKE ALL ON FUNCTION public._assessment_qa_move() FROM PUBLIC, anon, authenticated;
+CREATE TRIGGER zz_qa_move BEFORE INSERT OR UPDATE ON public.assessments
+  FOR EACH ROW EXECUTE FUNCTION public._assessment_qa_move();
+
+-- Every engagement has its review's row from the moment it is made (with what
+-- it was given, kept above), whoever made it: the row is the database's to
+-- make, so this one is its owner's, as a contractor may make an engagement
+-- that the rule on the review's rows could not yet see when the row was asked
+-- for. An engagement a restore found already there is not made, and nor is its
+-- review touched.
+CREATE OR REPLACE FUNCTION public._assessment_qa_made() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $aqamade$
+DECLARE v_key text := 'pental.aqa_' || replace(NEW.id::text, '-', ''); v_set jsonb;
+BEGIN
+  v_set := NULLIF(current_setting(v_key, true), '')::jsonb;
+  IF v_set IS NOT NULL THEN PERFORM set_config(v_key, '', true); END IF;
+  INSERT INTO public.assessment_qa (id, qa_notes, qa_comments, qa_ai_review)
+  VALUES (NEW.id, NULLIF(btrim(COALESCE(v_set ->> 'qa_notes', '')), ''),
+          COALESCE(v_set -> 'qa_comments', '[]'::jsonb), COALESCE(v_set -> 'qa_ai_review', '{}'::jsonb))
+  ON CONFLICT (id) DO NOTHING;
+  RETURN NULL;
+END $aqamade$;
+REVOKE ALL ON FUNCTION public._assessment_qa_made() FROM PUBLIC, anon, authenticated;
+CREATE TRIGGER zz_qa_made AFTER INSERT ON public.assessments
+  FOR EACH ROW EXECUTE FUNCTION public._assessment_qa_made();
+
+-- Live, as the engagement is, to those who may read it (the gateway reads a
+-- changed row again as each of them).
+DO $aqa_rt$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    CREATE PUBLICATION supabase_realtime;
+  END IF;
+  BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.assessment_qa;
+  EXCEPTION WHEN duplicate_object THEN NULL; END;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'the review: could not publish assessment_qa (%)', SQLERRM;
+END $aqa_rt$;
+DO $aqa_gw$
+BEGIN
+  IF to_regprocedure('pental.rt_attach()') IS NOT NULL THEN PERFORM pental.rt_attach(); END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'the review: the gateway attaches its change trigger when it next starts (%)', SQLERRM;
+END $aqa_gw$;
+
+-- 3. THE REVIEW'S BACK-AND-FORTH IN THE TIMELINE IS THE FIRM'S. The portal
+-- leaves out of a client's timeline a report sent back for revision, QA
+-- changes requested, fixing QA, and a report taken back from delivery; the
+-- API handed the client those entries all the same. An entry is marked
+-- `internal` now, and a client's people are not given one that is. Words the
+-- database can read decide it as they are written (the same five phrases as
+-- the portal's `_tlInternal`); sealed words (2018) are marked by the page that
+-- writes them, and an older entry by a page of the firm's that reads it. Once
+-- internal, an entry stays so.
+ALTER TABLE public.timeline_events ADD COLUMN IF NOT EXISTS internal boolean;
+CREATE OR REPLACE FUNCTION public._timeline_internal_words(p_text text) RETURNS boolean
+  LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $tlw$
+  SELECT COALESCE(p_text, '') ~* '(sent back for revision|qa changes requested|fixing qa|from delivery|taken back)';
+$tlw$;
+CREATE OR REPLACE FUNCTION public._timeline_internal() RETURNS trigger
+  LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_catalog, pg_temp AS $tli$
+BEGIN
+  IF TG_OP = 'UPDATE' AND OLD.internal IS TRUE THEN NEW.internal := true; RETURN NEW; END IF;
+  IF public._timeline_internal_words(concat_ws(' ',
+       CASE WHEN COALESCE(NEW.title, '') !~ '^pe2[ejst]1\.' THEN NEW.title END,
+       CASE WHEN COALESCE(NEW.event, '') !~ '^pe2[ejst]1\.' THEN NEW.event END)) THEN
+    NEW.internal := true;
+  END IF;
+  RETURN NEW;
+END $tli$;
+REVOKE ALL ON FUNCTION public._timeline_internal() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS tr_timeline_internal ON public.timeline_events;
+CREATE TRIGGER tr_timeline_internal BEFORE INSERT OR UPDATE ON public.timeline_events
+  FOR EACH ROW EXECUTE FUNCTION public._timeline_internal();
+-- The entries already written whose words can be read: only those that are
+-- internal are written to, so a firm's timeline is not rewritten for this.
+DO $tl_fill$
+BEGIN
+  PERFORM set_config('pental.e2e_seal', 'on', true);
+  UPDATE public.timeline_events t SET internal = true
+   WHERE t.internal IS DISTINCT FROM true
+     AND public._timeline_internal_words(concat_ws(' ',
+           CASE WHEN COALESCE(t.title, '') !~ '^pe2[ejst]1\.' THEN t.title END,
+           CASE WHEN COALESCE(t.event, '') !~ '^pe2[ejst]1\.' THEN t.event END));
+  PERFORM set_config('pental.e2e_seal', 'off', true);
+END $tl_fill$;
+DROP POLICY IF EXISTS timeline_read ON public.timeline_events;
+CREATE POLICY timeline_read ON public.timeline_events FOR SELECT TO authenticated
+  USING (public.mfa_is_fresh() AND public.can_access_assessment(assessment_id)
+    AND (internal IS NOT TRUE OR public.current_user_role() IS DISTINCT FROM 'client'));
+-- 2069: END
 
 -- 2021: AND AFTER THE ENCRYPTION'S TWO. 2018 made e2e_grants_own and
 -- e2e_principals_seen below where this block then stood, so they were the
@@ -49847,7 +50340,7 @@ DO $eeguards$
 DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY['findings', 'assessments', 'assessment_comments', 'qa_comments', 'timeline_events',
-                           'tickets', 'assets', 'scan_results', 'scan_runs', 'co_live'] LOOP
+                           'tickets', 'assets', 'scan_results', 'scan_runs', 'co_live', 'assessment_qa'] LOOP   -- 2069: and the review
     EXECUTE format('DROP TRIGGER IF EXISTS zz_e2e_guard ON public.%I', t);
     EXECUTE format('CREATE TRIGGER zz_e2e_guard BEFORE INSERT OR UPDATE ON public.%I FOR EACH ROW EXECUTE FUNCTION public._e2e_guard()', t);
   END LOOP;
@@ -49918,6 +50411,10 @@ BEGIN
                                JOIN public.scan_runs r ON r.id = x.run_id WHERE x.id = ANY (p_ids) AND public.can_see_client(r.client_id))
     WHEN 'tickets' THEN (SELECT jsonb_object_agg(t.id, t.client_id) FROM public.tickets t WHERE t.id = ANY (p_ids) AND public.can_access_client(t.client_id))
     WHEN 'assets' THEN (SELECT jsonb_object_agg(t.id, t.client_id) FROM public.assets t WHERE t.id = ANY (p_ids) AND public.can_see_client(t.client_id))
+    -- 2069: a review is its engagement's (its id is the engagement's), and its client's people are given none.
+    WHEN 'assessment_qa' THEN (SELECT jsonb_object_agg(a.id, a.client_id) FROM public.assessments a
+                                WHERE a.id = ANY (p_ids) AND public.current_user_role() IN ('admin', 'senior', 'standard', 'contractor')
+                                  AND public.can_access_assessment(a.id))
   END, '{}'::jsonb);
 END $eecotwo$;
 REVOKE ALL ON FUNCTION public.rpc_e2e_clients_of(text, uuid[]) FROM PUBLIC, anon;
@@ -50261,6 +50758,7 @@ CREATE OR REPLACE FUNCTION public._e2e_client_expr(p_table text) RETURNS text
     WHEN 'assessment_comments' THEN '(SELECT a.client_id FROM public.assessments a WHERE a.id = t.assessment_id)'
     WHEN 'qa_comments' THEN 'COALESCE((SELECT a.client_id FROM public.assessments a WHERE a.id = t.assessment_id), (SELECT COALESCE(f.client_id, a2.client_id) FROM public.findings f LEFT JOIN public.assessments a2 ON a2.id = f.assessment_id WHERE f.id = t.finding_id))'
     WHEN 'timeline_events' THEN '(SELECT a.client_id FROM public.assessments a WHERE a.id = t.assessment_id)'
+    WHEN 'assessment_qa' THEN '(SELECT a.client_id FROM public.assessments a WHERE a.id = t.id)'   -- 2069
     WHEN 'tickets' THEN 't.client_id'
     WHEN 'assets' THEN 't.client_id'
     WHEN 'scan_results' THEN '(SELECT r.client_id FROM public.scan_runs r WHERE r.id = t.run_id)'
@@ -50320,7 +50818,7 @@ DECLARE t text; v_cols text[]; v_n bigint; v_out jsonb := '{}'::jsonb;
 BEGIN
   IF NOT public.can_manage() THEN RETURN '{}'::jsonb; END IF;
   FOREACH t IN ARRAY ARRAY['findings', 'assessments', 'assessment_comments', 'qa_comments', 'timeline_events',
-                           'tickets', 'assets', 'scan_results', 'scan_runs'] LOOP
+                           'tickets', 'assets', 'scan_results', 'scan_runs', 'assessment_qa'] LOOP   -- 2069: and the review
     v_cols := public._e2e_columns(t);
     EXECUTE format('SELECT count(*) FROM public.%I t WHERE %s', t,
       (SELECT string_agg(format('NOT public._e2e_sealed_json(to_jsonb(t.%I))', x), ' OR ') FROM unnest(v_cols) x)
@@ -50518,9 +51016,9 @@ UPDATE public.settings SET password_login_enabled = true, sso_google_enabled = f
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: ca88819ab48265f8 @ 2025112001
+-- schema-fingerprint: 7ec03e77cdc023db @ 2025112301
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025112001, now())
+VALUES (1, 2025112301, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 
