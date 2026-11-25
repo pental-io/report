@@ -52,7 +52,7 @@ irm https://pental.io/report/install.ps1 | iex
 
 On Windows 10 version 22H2 or Windows 11 version 23H2 or later, 64-bit, with virtualisation turned on in the computer's firmware (the installer says so, and how, if it is off). Docker Desktop does not run on Windows Server: use a Linux server there.
 
-The installer checks Docker, downloads the latest release, makes your settings with new secrets, and starts Pental Report beside its own PostgreSQL. Then it opens your browser on the first-run page with the setup code already filled in: you name your firm, make the first administrator account, set up your authenticator app, and you are in. Your logo, colours and theme are in Settings, Branding. It finishes like this:
+The installer checks Docker, downloads the latest release, makes your settings with new secrets, and starts Pental Report beside its own PostgreSQL. Then it opens your browser on the first-run page with the setup code already filled in: you name your firm and make the first administrator account, and you are in. Your logo, colours and theme are in Settings, Branding. It finishes like this:
 
 ```text
   ╭────────────────────────────────────────────────────────────
@@ -232,7 +232,7 @@ Every picture here is the app itself, with an invented firm's engagement in it. 
 
 - **Roles.** Administrators, senior testers and testers, each able to see and do what their role allows, checked by the database on every read and write.
 - **People.** Add a colleague, change their address, send setup links, reset a lost authenticator, and see the devices each is signed in on and sign one out. Each person has a profile with a picture, job title and phone, for the reports that name them.
-- **A second factor for everyone**: an authenticator app, or a security key or passkey once it is served over HTTPS. Choose which are allowed or require both, when people prove it again and how long a session lasts, and see active sessions and sign the others out. See [Security](#security).
+- **A second factor, required or not**: an authenticator app, or a security key or passkey once it is served over HTTPS. A new install asks for one only once an administrator turns on Require a second factor (Settings, Security); anyone can add one from their profile, and whoever has one proves it. Choose which are allowed or require both, when people prove it again and how long a session lasts, and see active sessions and sign the others out. See [Security](#security).
 - **Live together.** What a colleague saves appears for everyone at once, and two people saving the same finding are asked before one overwrites the other.
 
 **Your own tools**
@@ -363,7 +363,7 @@ An administrator makes a colleague a new password link from Team, and resets a l
 # A link to choose a new password (it works once, for an hour)
 docker compose exec report node server/bin/password-link.js you@yourfirm.com
 
-# Clear a lost authenticator or security key: a new one is set up at the next sign-in,
+# Clear a lost authenticator or security key: where a second factor is required, a new one is set up at the next sign-in,
 # and any API keys the person holds are revoked
 docker compose exec report node server/bin/reset-mfa.js you@yourfirm.com
 ```
@@ -392,7 +392,7 @@ Pental counts installs and running copies of Pental Report, to know how many use
 
 ## Security
 
-Every person signs in with a password and a second factor: an authenticator app, or a security key or passkey once Pental Report is served over HTTPS. Passwords are hashed with bcrypt. Row-level security in PostgreSQL checks every read and write against the person's role and a recent second factor. The testing work is end-to-end encrypted: findings in full, evidence, screenshots and files, scope, notes, summaries and comments are encrypted in the browser of whoever writes them, and opened only in your team's browsers. Read straight from the database, they are unreadable, and there is nothing to set up.
+Every person signs in with a password, and with a second factor where an administrator requires one (Settings, Security, Require a second factor: off on a new install, on for an install that updated from before 0.1.52) or where they have set one up themselves: an authenticator app, or a security key or passkey once Pental Report is served over HTTPS. Passwords are hashed with bcrypt. Row-level security in PostgreSQL checks every read and write against the person's role and a recent sign-in: their second factor, or, where none is required and they have none, their password. A sign-in an API key makes is always the key's, never a password's. The testing work is end-to-end encrypted: findings in full, evidence, screenshots and files, scope, notes, summaries and comments are encrypted in the browser of whoever writes them, and opened only in your team's browsers. Read straight from the database, they are unreadable, and there is nothing to set up.
 
 Your AI key is kept encrypted in the database, and this server's signing keys are sealed with `VAULT_KEY`. An API key is kept only as a SHA-256 hash, works as its person through the API's own functions alone, and is refused from a web page.
 

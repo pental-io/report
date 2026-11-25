@@ -64,6 +64,9 @@ function _rpNoKeys(profile) {
 async function _loadMfaPolicy() {
   var p = await _loadMfaPolicy__portal();
   if (!_rpKeysOk() && p && p.methods_allowed) p.methods_allowed = Object.assign({}, p.methods_allowed, { webauthn: false });
+  // 0.1.52: and whether the firm requires a second factor at all
+  // (shell/82-second-factor.js); unknown is required.
+  if (p) { var req = await _rpMfaRequiredNow(); p.required = req !== false; }
   return p;
 }
 // Each way the portal reads a person's methods: at sign-in, and whenever the

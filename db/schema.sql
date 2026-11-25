@@ -363,6 +363,9 @@ CREATE TABLE IF NOT EXISTS public.settings (
   scan_client_visible_default boolean NOT NULL DEFAULT false,
   scan_exec_summary_prompt text,
   scan_summary_auto boolean DEFAULT false,   -- 1469
+  -- 2072: a scan's results grouped into report findings with AI. Off until
+  -- a firm turns it on.
+  scan_ai_group boolean NOT NULL DEFAULT false,
   finding_default_draft boolean DEFAULT false,   -- 1481
   scan_finding_prompt text,
   scan_default_provider uuid,
@@ -435,6 +438,7 @@ ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS scan_exec_summary_prompt te
 -- time on a local one, and a firm that has not asked for that should not
 -- discover it on their bill.
 ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS scan_summary_auto boolean DEFAULT false;
+ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS scan_ai_group boolean NOT NULL DEFAULT false;   -- 2072
 
 
 -- And whether a NEW finding starts life as a draft. Off by default: a firm that
@@ -1968,14 +1972,20 @@ CREATE OR REPLACE FUNCTION public._client_section_refers(p_assessment uuid, p_pa
          OR (strpos(COALESCE(a.notes, '') || COALESCE(a.e2e_refs->>'notes', ''), p_path) > 0 AND public._client_sees_section(a.id, 'notes'))
          OR (strpos(COALESCE(a.scope, '') || COALESCE(a.e2e_refs->>'scope', ''), p_path) > 0 AND public._client_sees_section(a.id, 'scope'))
          OR (strpos(COALESCE(a.appendices::text, '') || COALESCE(a.e2e_refs->>'appendices', ''), p_path) > 0 AND public._client_sees_section(a.id, 'appendices'))
+         -- 2075: a phase's own executive or retest summary (es:<phase>,
+         -- rs:<phase>) is shown to the client when that summary is.
          OR EXISTS (SELECT 1 FROM jsonb_each_text(CASE WHEN jsonb_typeof(a.summary_sections) = 'object'
                                                        THEN a.summary_sections ELSE '{}'::jsonb END) sec
                      WHERE strpos(sec.value, p_path) > 0
-                       AND public._client_sees_section(a.id, 'summary_' || sec.key))
+                       AND public._client_sees_section(a.id, CASE WHEN left(sec.key, 3) = 'es:' THEN 'exec_summary'
+                                                                  WHEN left(sec.key, 3) = 'rs:' THEN 'retest_summary'
+                                                                  ELSE 'summary_' || sec.key END))
          OR EXISTS (SELECT 1 FROM jsonb_each_text(CASE WHEN jsonb_typeof(a.e2e_refs->'summary_sections') = 'object'
                                                        THEN a.e2e_refs->'summary_sections' ELSE '{}'::jsonb END) sec
                      WHERE strpos(sec.value, p_path) > 0
-                       AND public._client_sees_section(a.id, 'summary_' || sec.key))))
+                       AND public._client_sees_section(a.id, CASE WHEN left(sec.key, 3) = 'es:' THEN 'exec_summary'
+                                                                  WHEN left(sec.key, 3) = 'rs:' THEN 'retest_summary'
+                                                                  ELSE 'summary_' || sec.key END))))
 $csref$;
 REVOKE ALL ON FUNCTION public._client_section_refers(uuid, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public._client_section_refers(uuid, text) TO service_role;
@@ -22897,6 +22907,9 @@ DECLARE
   -- 1943: the firm's library fills a finding only for somebody who may read
   -- it (a contractor while the firm lets contractors use it).
   v_lib_ok boolean := NOT (public.current_user_role() = 'contractor' AND NOT public._contractor_library_on());
+  -- 2072: grouped with AI (_sgr_start), and how many results wait for it.
+  v_group boolean := false;
+  v_held int := 0;
 BEGIN
   -- 1144: THE IMPORT NEEDS LONGER THAN A QUERY.
   --
@@ -23108,6 +23121,21 @@ BEGIN
   UPDATE public.scan_runs SET assessment_id = v_assess, status = 'importing', updated_at = now()
    WHERE id = p_run_id;
 
+  -- 2072: GROUPED WITH AI. A run with grouping on keeps its results on the run
+  -- and makes no finding of them here: they are grouped (_sgr_start) and landed
+  -- (_sgr_land) by the firm's own collector as the run ends, or by the firm's
+  -- page. Decided by the run's first batch, so a run is grouped whole or not
+  -- at all; what the import decides for every finding (where it goes, who
+  -- sees it, the floor, the scanner) is kept for the landing.
+  v_group := COALESCE(v_run.group_on, public._sgr_on());
+  IF v_run.group_on IS NULL THEN UPDATE public.scan_runs SET group_on = v_group WHERE id = p_run_id; END IF;
+  IF v_group THEN
+    UPDATE public.scan_runs SET group_ctx = COALESCE(group_ctx, '{}'::jsonb) || jsonb_build_object(
+             'assess', v_assess, 'phase', v_phase, 'visible', v_client_visible, 'floor', v_floor, 'min', v_min_sev,
+             'full', COALESCE(p_full_report, true), 'fam', COALESCE(NULLIF(v_run_fam, ''), group_ctx ->> 'fam'))
+     WHERE id = p_run_id;
+  END IF;
+
   -- Walk the results.
   FOR v_r IN SELECT value FROM jsonb_array_elements(COALESCE(p_results, '[]'::jsonb)) LOOP
     v_sev := lower(COALESCE(NULLIF(v_r->>'severity', ''), 'info'));
@@ -23227,6 +23255,12 @@ BEGIN
 
     IF public._scan_sev_rank(v_sev) < v_floor THEN
       v_skipped := v_skipped + 1;
+      CONTINUE;
+    END IF;
+
+    -- 2072: kept on the run, to be grouped.
+    IF v_group THEN
+      v_held := v_held + 1;
       CONTINUE;
     END IF;
 
@@ -23827,6 +23861,20 @@ BEGIN
   -- closed the ZAP ones. A finding closes only on the silence of its own
   -- family of scanner (`scan_source`), and a run whose scanner is not known
   -- closes nothing.
+  -- 2072: a grouped run waits, the last of it in, to be grouped: by the
+  -- scanner each result named, as a finding is closed by its own family.
+  IF v_group THEN
+    UPDATE public.scan_runs SET
+      group_ctx = COALESCE(group_ctx, '{}'::jsonb) || jsonb_build_object('fam', COALESCE(NULLIF(v_close_fam, ''), group_ctx ->> 'fam')),
+      group_state = CASE WHEN p_final THEN 'held' ELSE group_state END,
+      -- A customer's own collector's never asks the firm's model: the firm's
+      -- next page groups it, as its card says.
+      group_why = CASE WHEN p_final THEN COALESCE(group_why, CASE WHEN public._sgr_customer((SELECT sr FROM public.scan_runs sr WHERE sr.id = p_run_id)) THEN 'customer' ELSE 'new' END) ELSE group_why END,
+      group_next_at = CASE WHEN p_final THEN now() ELSE group_next_at END,
+      stage = CASE WHEN p_final THEN 'Waiting to be grouped with your AI' ELSE stage END
+     WHERE id = p_run_id AND (group_state IS NULL OR group_state = 'held');
+  END IF;
+
   IF p_final AND p_full_report AND v_close_fam <> '' THEN
   BEGIN
     SELECT COALESCE(array_agg(DISTINCT sr.fingerprint), '{}'),
@@ -23850,6 +23898,8 @@ BEGIN
             OR (v_assess IS NULL AND client_id = v_run.client_id))
        AND scan_fingerprint IS NOT NULL
        AND scan_source = v_close_fam
+       -- 2072: a grouped finding's rows close one by one (_sgr_land).
+       AND NOT COALESCE(scan_grouped, false)
        AND NOT (p_run_id = ANY (COALESCE(scan_run_ids, '{}')))
        AND NOT (scan_fingerprint = ANY (v_run_fps))
        AND NOT (COALESCE(scan_issue_fingerprint, '') = ANY (v_run_ifps))
@@ -24037,6 +24087,8 @@ BEGIN
   -- finding are no longer the same kind of thing, so there is nothing to
   -- promote it into.
 
+  -- 2072: a grouped run says what it made once it lands (_sgr_land).
+  IF NOT v_group THEN
   BEGIN
     INSERT INTO public.timeline_events (assessment_id, event, title, user_name)
     VALUES (
@@ -24047,12 +24099,13 @@ BEGIN
       'Automated scan'
     );
   EXCEPTION WHEN OTHERS THEN NULL; END;
+  END IF;
 
   RETURN jsonb_build_object(
     'success', true, 'assessment_id', v_assess, 'counts', v_counts,
     'client_name', COALESCE(v_client_name, ''), 'created', v_created,
     'updated', v_updated, 'closed', v_closed, 'carried', v_carried,
-    'min_severity', v_min_sev);
+    'min_severity', v_min_sev, 'grouping', v_group, 'held', v_held);
 END;
 $scanimp$;
 REVOKE ALL ON FUNCTION public._scan_import_core(uuid, jsonb, boolean, boolean) FROM PUBLIC, anon, authenticated;
@@ -24760,6 +24813,1371 @@ REVOKE ALL ON FUNCTION public.rpc_scan_run_delete(uuid, text, jsonb) FROM PUBLIC
 GRANT EXECUTE ON FUNCTION public.rpc_scan_run_delete(uuid, text, jsonb) TO authenticated, service_role;
 
 -- (1841: rpc_scan_run_open_adhoc is retired, with Pental's old scan path; see the RETIRED IN 1841 section.)
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 2072: A SCAN'S RESULTS GROUPED INTO REPORT FINDINGS WITH AI
+-- ════════════════════════════════════════════════════════════════════════════
+--
+-- [stated] Arian, 23 November 2026: "and the ai grouping option should be an
+-- automated option as well to be done while scanning", "no its grouped and
+-- added to the relevant issue as it scans effectively and efficiently with its
+-- assocaited evidence presented nicely in table form (where relevant) or nicely
+-- presented for same issue across multiple areas. for example outdated
+-- software, or SSL/TLS misconfiguration etc", and "ideally if on, the ai does
+-- it automated as well as options the client doesnt". Asked, he chose: a
+-- firm-wide switch in Settings, Scans, off until a firm turns it on; a row a
+-- rescan no longer finds kept and marked fixed with its date, the finding
+-- remediated only when every row is; nothing landing while the model cannot
+-- answer (held, retried every few minutes, the scan saying why, and a tester
+-- able to let it in ungrouped); a customer's own collector's scan held until
+-- someone at the firm has Pental open, whose page groups it; the firm's own
+-- collectors grouping as they finish, a new finding carrying its library
+-- entry's words or the scanner's until Pental's AI writes them; Group with AI
+-- on older scans folding their findings in (hosts, evidence, history), then
+-- removing them; and findings made the old way left for that button, still
+-- closed when a rescan no longer finds them.
+--
+-- THE SHAPE. A run with grouping on (`group_on`, decided by its first batch)
+-- keeps its results on the run (`scan_results`) and makes no finding of them
+-- (_scan_import_core). Whoever groups it (the firm's own collector as the run
+-- ends, or the firm's page) asks for the issues no grouped finding has yet
+-- (_sgr_start: an issue is the scanner's id for it and its title, on any host
+-- or port, `_sgr_key`), asks the firm's model to group them with the client's
+-- grouped findings and the firm's library beside them (the portal's own
+-- question and answer, which the collector's code carries), gives each group
+-- its finding (_sgr_assign: one already made, or a new one in the library
+-- entry's words or the scanner's), and then lands the run (_sgr_land): each
+-- result a row of its finding's table (`scan_finding_rows`: a host, a port,
+-- the issue and the tool's output there), and on the last call the rows a full
+-- rescan of a host by the same scanner no longer reports marked fixed, each
+-- finding's hosts, rating, status and history put right. The page or the
+-- collector then lays out each finding's evidence from its rows (the portal's
+-- own table, _fsiEvidenceOf, with a Status column once a row is fixed) and
+-- writes it (_sgr_evidence). Nothing is read from or matched to a finding's
+-- words here, so a run of a client whose work is sealed (end-to-end
+-- encryption) is imported as before.
+
+ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS scan_ai_group boolean NOT NULL DEFAULT false;
+-- 2075: the firm's house style for a finding made from its scans, as an
+-- admin's page reads it from Settings, Findings (the Evidence field's
+-- instructions, each field AI writes with what its answer must be, and the
+-- CVSS prompt and version), kept for the firm's collectors, which have no
+-- page to read it from (rpc_scan_style_save, _scan_write_up). A row of its
+-- own, not a column of the settings, so that keeping it never moves the
+-- settings' version under somebody saving Settings. Empty until an admin's
+-- page gives it.
+CREATE TABLE IF NOT EXISTS public.scan_ai_style (
+  id integer NOT NULL DEFAULT 1 CHECK (id = 1) PRIMARY KEY,
+  style jsonb NOT NULL,
+  saved_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.scan_ai_style ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.scan_ai_style FROM PUBLIC, anon, authenticated;
+
+ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS scan_grouped boolean NOT NULL DEFAULT false;
+-- Still to be written up in the firm's house style with AI (_sgr_words): the
+-- scanner's words, or a library entry's beside fields it left empty (2075:
+-- set on every new grouped finding; the library's words are never written
+-- over). Cleared once written, and by a person changing its words first.
+ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS scan_words_pending boolean NOT NULL DEFAULT false;
+-- Its rows changed since its evidence was laid out from them.
+ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS scan_evidence_stale boolean NOT NULL DEFAULT false;
+-- The library entry a grouped finding took its words from: its score stands.
+ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS scan_kb_id uuid;
+-- 2075: its score is AI's, worked out from the CVSS metrics AI chose as the
+-- finding's own Generate does (_sgr_words): later scans leave it, as they
+-- leave a library entry's.
+ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS scan_scored boolean NOT NULL DEFAULT false;
+-- 2073: the columns AI laid its table out in (Lay out again, with the
+-- instructions given then), which every later scan lays it out in again:
+-- { cols: [headings], extra: instructions }. Null: the table made from the
+-- scans' own output. 2075: AI writes every grouped finding's evidence in the
+-- firm's style; this keeps a person's Write again (its instructions, and its
+-- table's columns where it has one), or { plain: true }, the table made from
+-- the scans chosen instead, for every later scan.
+ALTER TABLE public.findings ADD COLUMN IF NOT EXISTS scan_lay jsonb;
+CREATE INDEX IF NOT EXISTS idx_findings_scan_grouped ON public.findings (client_id, assessment_id) WHERE scan_grouped;
+
+ALTER TABLE public.scan_runs ADD COLUMN IF NOT EXISTS group_on boolean;
+-- 'held' (waiting to be grouped), 'grouping' (somebody is at it), 'grouped',
+-- 'ungrouped' (let in the old way).
+ALTER TABLE public.scan_runs ADD COLUMN IF NOT EXISTS group_state text;
+ALTER TABLE public.scan_runs ADD COLUMN IF NOT EXISTS group_why text;
+ALTER TABLE public.scan_runs ADD COLUMN IF NOT EXISTS group_tries integer NOT NULL DEFAULT 0;
+ALTER TABLE public.scan_runs ADD COLUMN IF NOT EXISTS group_next_at timestamptz;
+ALTER TABLE public.scan_runs ADD COLUMN IF NOT EXISTS group_lease_until timestamptz;
+ALTER TABLE public.scan_runs ADD COLUMN IF NOT EXISTS group_ctx jsonb;
+ALTER TABLE public.scan_runs ADD COLUMN IF NOT EXISTS group_finish jsonb;
+ALTER TABLE public.scan_runs ADD COLUMN IF NOT EXISTS grouped_at timestamptz;
+CREATE INDEX IF NOT EXISTS scan_runs_group_held_idx ON public.scan_runs (group_next_at) WHERE group_state IN ('held', 'grouping');
+
+-- Which grouped finding an issue of a client's (or of an engagement's) goes
+-- into, for every scan after the one that grouped it.
+CREATE TABLE IF NOT EXISTS public.scan_groups (
+  id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  client_id uuid NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+  assessment_id uuid REFERENCES public.assessments(id) ON DELETE CASCADE,
+  issue_key text NOT NULL,
+  finding_id uuid NOT NULL REFERENCES public.findings(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS scan_groups_issue_key ON public.scan_groups
+  (client_id, COALESCE(assessment_id, '00000000-0000-0000-0000-000000000000'::uuid), issue_key);
+CREATE INDEX IF NOT EXISTS scan_groups_finding_idx ON public.scan_groups (finding_id);
+ALTER TABLE public.scan_groups ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.scan_groups FROM PUBLIC, anon, authenticated;
+
+-- A grouped finding's table: a row for each issue on each host and port.
+CREATE TABLE IF NOT EXISTS public.scan_finding_rows (
+  id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  finding_id uuid NOT NULL REFERENCES public.findings(id) ON DELETE CASCADE,
+  issue_key text NOT NULL,
+  host text NOT NULL DEFAULT '',
+  port text NOT NULL DEFAULT '',
+  service text,
+  title text,
+  tool text,
+  family text,
+  severity text,
+  cvss numeric,
+  cvss_vector text,
+  output text,
+  output_html text,
+  first_seen timestamptz NOT NULL DEFAULT now(),
+  last_seen timestamptz NOT NULL DEFAULT now(),
+  last_run_id uuid REFERENCES public.scan_runs(id) ON DELETE SET NULL,
+  fixed_at timestamptz,
+  fixed_run_id uuid REFERENCES public.scan_runs(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS scan_finding_rows_key ON public.scan_finding_rows (finding_id, lower(host), port, issue_key);
+ALTER TABLE public.scan_finding_rows ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.scan_finding_rows FROM PUBLIC, anon, authenticated;
+
+-- An issue, across hosts and ports: the scanner's own id for it and its title.
+CREATE OR REPLACE FUNCTION public._sgr_key(p_plugin text, p_title text) RETURNS text
+  LANGUAGE sql IMMUTABLE SET search_path = public, extensions, pg_catalog, pg_temp AS $sgrkey$
+  SELECT encode(extensions.digest(lower(btrim(COALESCE(p_plugin, ''))) || '|' || lower(btrim(COALESCE(p_title, ''))), 'sha256'), 'hex');
+$sgrkey$;
+REVOKE ALL ON FUNCTION public._sgr_key(text, text) FROM PUBLIC, anon, authenticated;
+-- A run's results by issue, so finding one issue's results among a big scan's
+-- thousands is a lookup, inside the few seconds a call has (a collector's
+-- three, a page's eight, on Supabase). Never change _sgr_key without
+-- REINDEX INDEX public.scan_results_run_issue_idx.
+CREATE INDEX IF NOT EXISTS scan_results_run_issue_idx ON public.scan_results (run_id, public._sgr_key(plugin_id, title));
+
+-- A result's port as a report writes it (443/tcp), or nothing.
+CREATE OR REPLACE FUNCTION public._sgr_port(p_port integer, p_proto text) RETURNS text
+  LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $sgrport$
+  SELECT CASE WHEN p_port IS NULL OR p_port = 0 THEN ''
+              ELSE p_port::text || COALESCE('/' || NULLIF(NULLIF(lower(btrim(COALESCE(p_proto, ''))), ''), 'unknown'), '') END;
+$sgrport$;
+REVOKE ALL ON FUNCTION public._sgr_port(integer, text) FROM PUBLIC, anon, authenticated;
+
+-- The rating a score gives (CVSS 3.1 and 4.0 alike).
+CREATE OR REPLACE FUNCTION public._sgr_rating(p_cvss numeric) RETURNS text
+  LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $sgrrating$
+  SELECT CASE WHEN p_cvss IS NULL OR p_cvss <= 0 THEN NULL WHEN p_cvss >= 9 THEN 'critical' WHEN p_cvss >= 7 THEN 'high'
+              WHEN p_cvss >= 4 THEN 'medium' ELSE 'low' END;
+$sgrrating$;
+REVOKE ALL ON FUNCTION public._sgr_rating(numeric) FROM PUBLIC, anon, authenticated;
+
+-- Whether a run's results are grouped: the firm's switch as its first batch
+-- came, never for a run of a client whose work is sealed.
+CREATE OR REPLACE FUNCTION public._sgr_on() RETURNS boolean
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgron$
+BEGIN
+  RETURN COALESCE((SELECT st.scan_ai_group FROM public.settings st ORDER BY st.created_at ASC NULLS LAST, st.id ASC LIMIT 1), false)
+     AND NOT public._e2e_active();
+END $sgron$;
+REVOKE ALL ON FUNCTION public._sgr_on() FROM PUBLIC, anon, authenticated;
+
+-- Where a run's findings are: its engagement's, or the client's own.
+CREATE OR REPLACE FUNCTION public._sgr_in_scope(f public.findings, p_client uuid, p_assess uuid) RETURNS boolean
+  LANGUAGE sql STABLE SET search_path = public, pg_catalog, pg_temp AS $sgrscope$
+  SELECT CASE WHEN p_assess IS NOT NULL THEN f.assessment_id = p_assess
+              ELSE f.client_id = p_client AND f.assessment_id IS NULL END;
+$sgrscope$;
+REVOKE ALL ON FUNCTION public._sgr_in_scope(public.findings, uuid, uuid) FROM PUBLIC, anon, authenticated;
+
+-- The results of a run that land: not gone, at or over its floor.
+CREATE OR REPLACE FUNCTION public._sgr_floor(p_run public.scan_runs) RETURNS integer
+  LANGUAGE sql STABLE SET search_path = public, pg_catalog, pg_temp AS $sgrfloor$
+  SELECT COALESCE(NULLIF(p_run.group_ctx ->> 'floor', '')::integer, 0);
+$sgrfloor$;
+REVOKE ALL ON FUNCTION public._sgr_floor(public.scan_runs) FROM PUBLIC, anon, authenticated;
+
+-- WHAT IS TO BE GROUPED: the run's issues no grouped finding of this client's
+-- (or this engagement's) has yet, each as the portal's question names one
+-- (its title and the others it was reported as, its worst rating, the tools,
+-- the category, how many hosts and on which ports); the grouped findings
+-- already made; the firm's library; and the firm's own instructions for
+-- grouping (Settings, Findings).
+CREATE OR REPLACE FUNCTION public._sgr_start(p_run_id uuid) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp SET plan_cache_mode = force_custom_plan AS $sgrstart$
+DECLARE r public.scan_runs; v_assess uuid; v_floor int; v_issues jsonb; v_existing jsonb; v_lib jsonb; v_firm text;
+        v_n int; v_lib_ok boolean := NOT (public.current_user_role() = 'contractor' AND NOT public._contractor_library_on());
+BEGIN
+  SELECT * INTO r FROM public.scan_runs WHERE id = p_run_id;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'error', 'Run not found'); END IF;
+  IF NOT COALESCE(r.group_on, false) THEN RETURN jsonb_build_object('ok', false, 'error', 'This scan is not one to group.'); END IF;
+  v_assess := NULLIF(r.group_ctx ->> 'assess', '')::uuid;
+  v_floor := public._sgr_floor(r);
+  SELECT count(*) INTO v_n FROM public.scan_results x WHERE x.run_id = p_run_id;
+  -- One pass over the run's results, each issue's figures gathered as it
+  -- goes: a big scan's thousands read once, not once for each issue.
+  WITH res AS (
+    SELECT x.title, x.severity, x.category, x.asset, x.port, x.protocol, public._sgr_key(x.plugin_id, x.title) AS k,
+           COALESCE(NULLIF(btrim(x.raw ->> 'scan_source'), ''), NULLIF(btrim(r.provider), ''), 'a tool') AS tool
+      FROM public.scan_results x
+     WHERE x.run_id = p_run_id AND NOT COALESCE((x.raw ->> 'gone')::boolean, false)
+       AND public._scan_sev_rank(x.severity) >= v_floor
+  ), un AS (
+    SELECT * FROM res
+     WHERE NOT EXISTS (SELECT 1 FROM public.scan_groups g
+                        WHERE g.client_id = r.client_id AND COALESCE(g.assessment_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE(v_assess, '00000000-0000-0000-0000-000000000000'::uuid)
+                          AND g.issue_key = res.k)
+  ), byk AS (
+    SELECT k,
+           mode() WITHIN GROUP (ORDER BY title) AS title,
+           (array_agg(DISTINCT title ORDER BY title))[1:4] AS titles,
+           (array_agg(severity ORDER BY public._scan_sev_rank(severity) DESC))[1] AS sev,
+           (array_agg(DISTINCT tool ORDER BY tool))[1:3] AS tools,
+           mode() WITHIN GROUP (ORDER BY category) FILTER (WHERE COALESCE(category, '') <> '') AS cat,
+           count(DISTINCT lower(btrim(COALESCE(asset, '')))) FILTER (WHERE COALESCE(btrim(asset), '') <> '') AS n_hosts,
+           (array_agg(DISTINCT public._sgr_port(port, protocol) ORDER BY public._sgr_port(port, protocol))
+              FILTER (WHERE port IS NOT NULL AND port <> 0))[1:6] AS ports
+      FROM un GROUP BY k
+  )
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('key', k, 'title', title, 'titles', COALESCE(to_jsonb(titles), '[]'::jsonb), 'sev', sev,
+                                               'tools', COALESCE(to_jsonb(tools), '[]'::jsonb), 'cat', COALESCE(cat, ''), 'n_hosts', n_hosts,
+                                               'ports', COALESCE(to_jsonb(ports), '[]'::jsonb))
+                            ORDER BY public._scan_sev_rank(sev) DESC, n_hosts DESC, title), '[]'::jsonb)
+    INTO v_issues FROM byk;
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('id', f.id, 'title', f.title, 'sev', f.severity) ORDER BY f.created_at DESC), '[]'::jsonb)
+    INTO v_existing
+    FROM (SELECT * FROM public.findings f0
+           WHERE f0.scan_grouped AND public._sgr_in_scope(f0, r.client_id, v_assess)
+           ORDER BY f0.created_at DESC LIMIT 200) f;
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('id', k.id, 'title', k.title)), '[]'::jsonb) INTO v_lib
+    FROM (SELECT id, title FROM public.kb_entries WHERE v_lib_ok AND COALESCE(btrim(title), '') <> ''
+           ORDER BY updated_at DESC NULLS LAST LIMIT 3000) k;
+  SELECT NULLIF(btrim(COALESCE(st.finding_fields ->> 'ai_group_text', '')), '') INTO v_firm
+    FROM public.settings st ORDER BY st.created_at ASC NULLS LAST, st.id ASC LIMIT 1;
+  RETURN jsonb_build_object('ok', true, 'run_id', r.id, 'client_id', r.client_id, 'assessment_id', v_assess,
+    'client_name', COALESCE((SELECT c.name FROM public.clients c WHERE c.id = r.client_id), ''),
+    'issues', v_issues, 'existing', v_existing, 'library', v_lib, 'firm', left(COALESCE(v_firm, ''), 3000),
+    'results', v_n, 'name', COALESCE(r.name, ''), 'targets', COALESCE(r.targets, '[]'::jsonb), 'why', r.group_why);
+END $sgrstart$;
+REVOKE ALL ON FUNCTION public._sgr_start(uuid) FROM PUBLIC, anon, authenticated;
+
+-- EACH GROUP ITS FINDING. p_groups: [{ existing: a grouped finding's id, or
+-- title and kb (a library entry's id, or null), issues: [issue keys] }]. An
+-- issue goes into one finding only, the first that names it, and only one of
+-- this run's not yet given one. A new finding takes its library entry's words
+-- (the entry the model named, else one of its title, else, for a group of one
+-- issue, one of the issue's title or the scan titles it lists, as the import
+-- finds one), or the words the scanner gave the group's worst result, kept for
+-- the firm's next page to write with AI (`scan_words_pending`). { ok,
+-- findings: [ids, in the order of p_groups], created }.
+CREATE OR REPLACE FUNCTION public._sgr_assign(p_run_id uuid, p_groups jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp SET plan_cache_mode = force_custom_plan AS $sgrassign$
+DECLARE r public.scan_runs; v_assess uuid; v_floor int; g jsonb; v_keys text[]; v_ok text[]; v_fid uuid; v_kb public.kb_entries; v_top public.scan_results;
+        v_out jsonb := '[]'::jsonb; v_created int := 0; v_title text; v_sev text; v_cvss numeric; v_vec text; v_refs jsonb;
+        v_lib_ok boolean := NOT (public.current_user_role() = 'contractor' AND NOT public._contractor_library_on()); v_kbid uuid;
+        v_fam text; v_phase text; v_cv boolean;
+BEGIN
+  SELECT * INTO r FROM public.scan_runs WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'error', 'Run not found'); END IF;
+  IF NOT COALESCE(r.group_on, false) OR r.group_state NOT IN ('held', 'grouping') THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'This scan is not waiting to be grouped.');
+  END IF;
+  IF jsonb_typeof(p_groups) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'The groups are not a list.'); END IF;
+  v_assess := NULLIF(r.group_ctx ->> 'assess', '')::uuid;
+  v_floor := public._sgr_floor(r);
+  v_fam := NULLIF(r.group_ctx ->> 'fam', '');
+  v_phase := NULLIF(r.group_ctx ->> 'phase', '');
+  v_cv := COALESCE((r.group_ctx ->> 'visible')::boolean, false);
+  FOR g IN SELECT value FROM jsonb_array_elements(p_groups) LOOP
+    v_fid := NULL;
+    v_keys := ARRAY(SELECT DISTINCT x FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(g -> 'issues') = 'array' THEN g -> 'issues' ELSE '[]'::jsonb END) x
+                     WHERE x ~ '^[0-9a-f]{64}$');
+    -- This run's issues not given a finding yet.
+    v_ok := ARRAY(SELECT y.k FROM (SELECT DISTINCT public._sgr_key(x.plugin_id, x.title) AS k FROM public.scan_results x
+                                    WHERE x.run_id = p_run_id AND public._sgr_key(x.plugin_id, x.title) = ANY (v_keys)) y
+                   WHERE NOT EXISTS (SELECT 1 FROM public.scan_groups sg WHERE sg.client_id = r.client_id
+                                      AND COALESCE(sg.assessment_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE(v_assess, '00000000-0000-0000-0000-000000000000'::uuid) AND sg.issue_key = y.k));
+    IF cardinality(v_ok) = 0 THEN v_out := v_out || jsonb_build_array(NULL::uuid); CONTINUE; END IF;
+    IF COALESCE(g ->> 'existing', '') ~ '^[0-9a-f-]{36}$' THEN
+      SELECT f.id INTO v_fid FROM public.findings f
+       WHERE f.id = (g ->> 'existing')::uuid AND f.scan_grouped AND public._sgr_in_scope(f, r.client_id, v_assess);
+    END IF;
+    IF v_fid IS NULL THEN
+      -- The group's worst result, for its rating and, with no entry, its words.
+      SELECT x.* INTO v_top FROM public.scan_results x
+       WHERE x.run_id = p_run_id AND public._sgr_key(x.plugin_id, x.title) = ANY (v_ok)
+         AND NOT COALESCE((x.raw ->> 'gone')::boolean, false)
+       ORDER BY public._scan_sev_rank(x.severity) DESC, COALESCE(x.cvss, 0) DESC, x.title LIMIT 1;
+      v_title := left(NULLIF(btrim(regexp_replace(COALESCE(g ->> 'title', ''), '\s+', ' ', 'g')), ''), 300);
+      v_kb := NULL; v_kbid := NULL;
+      IF v_lib_ok AND COALESCE(g ->> 'kb', '') ~ '^[0-9a-f-]{36}$' THEN
+        SELECT * INTO v_kb FROM public.kb_entries WHERE id = (g ->> 'kb')::uuid;
+      END IF;
+      IF v_lib_ok AND v_kb.id IS NULL AND v_title IS NOT NULL THEN
+        SELECT * INTO v_kb FROM public.kb_entries WHERE public._pental_title_key(title) = public._pental_title_key(v_title)
+         ORDER BY updated_at DESC NULLS LAST LIMIT 1;
+      END IF;
+      IF v_lib_ok AND v_kb.id IS NULL AND cardinality(v_ok) = 1 THEN
+        SELECT * INTO v_kb FROM public.kb_entries
+         WHERE public._pental_title_key(title) = public._pental_title_key(v_top.title)
+            OR (scan_titles IS NOT NULL AND public._pental_title_key(v_top.title) = ANY (SELECT public._pental_title_key(t) FROM unnest(scan_titles) t))
+         ORDER BY (public._pental_title_key(title) = public._pental_title_key(v_top.title)) DESC, updated_at DESC NULLS LAST LIMIT 1;
+      END IF;
+      v_kbid := v_kb.id;
+      SELECT x.severity INTO v_sev FROM public.scan_results x
+       WHERE x.run_id = p_run_id AND public._sgr_key(x.plugin_id, x.title) = ANY (v_ok)
+         AND NOT COALESCE((x.raw ->> 'gone')::boolean, false) AND public._scan_sev_rank(x.severity) >= v_floor
+       ORDER BY public._scan_sev_rank(x.severity) DESC LIMIT 1;
+      v_sev := COALESCE(v_sev, v_top.severity, 'info');
+      IF v_kbid IS NOT NULL AND COALESCE(v_kb.cvss, 0) > 0 THEN
+        v_cvss := v_kb.cvss; v_vec := NULLIF(btrim(COALESCE(v_kb.cvss_vector, '')), '');
+      ELSE
+        SELECT x.cvss, x.cvss_vector INTO v_cvss, v_vec FROM public.scan_results x
+         WHERE x.run_id = p_run_id AND public._sgr_key(x.plugin_id, x.title) = ANY (v_ok) AND COALESCE(x.cvss, 0) > 0
+         ORDER BY x.cvss DESC LIMIT 1;
+      END IF;
+      v_refs := COALESCE((SELECT jsonb_agg(u) FROM (SELECT DISTINCT u FROM public.scan_results x,
+                            jsonb_array_elements_text(CASE WHEN jsonb_typeof(x.refs) = 'array' THEN x.refs ELSE '[]'::jsonb END) u
+                           WHERE x.run_id = p_run_id AND public._sgr_key(x.plugin_id, x.title) = ANY (v_ok) LIMIT 12) uu), '[]'::jsonb);
+      v_fid := gen_random_uuid();
+      INSERT INTO public.findings (
+        id, client_id, assessment_id, title, severity, status, cwe, category, description, impact, remediation, refs,
+        cvss, cvss_vector, client_visible, phase, source, scan_fingerprint, scan_run_id, scan_run_ids, scan_last_seen,
+        evidence, scan_source, scan_grouped, scan_words_pending, scan_kb_id, scan_evidence_stale
+      ) VALUES (
+        v_fid, r.client_id, v_assess,
+        COALESCE(NULLIF(btrim(COALESCE(v_kb.title, '')), ''), v_title, NULLIF(btrim(v_top.title), ''), 'Unnamed finding'),
+        CASE WHEN v_kbid IS NOT NULL AND COALESCE(v_kb.cvss, 0) > 0 THEN COALESCE(public._sgr_rating(v_kb.cvss), v_sev) ELSE v_sev END,
+        'open',
+        COALESCE(NULLIF(btrim(COALESCE(v_kb.cwe, '')), ''), NULLIF(v_top.cwe, '')),
+        COALESCE(NULLIF(btrim(COALESCE(v_kb.category, '')), ''), NULLIF(v_top.category, '')),
+        CASE WHEN v_kbid IS NOT NULL AND COALESCE(btrim(v_kb.description), '') <> '' THEN v_kb.description ELSE v_top.description END,
+        CASE WHEN v_kbid IS NOT NULL AND COALESCE(btrim(v_kb.impact), '') <> '' THEN v_kb.impact ELSE v_top.impact END,
+        CASE WHEN v_kbid IS NOT NULL AND COALESCE(btrim(v_kb.recommendation), '') <> '' THEN v_kb.recommendation ELSE v_top.remediation END,
+        CASE WHEN v_kbid IS NOT NULL AND jsonb_typeof(v_kb.refs) = 'array' AND jsonb_array_length(v_kb.refs) > 0 THEN v_kb.refs ELSE v_refs END,
+        COALESCE(v_cvss, 0), v_vec, v_cv, v_phase, 'scan', 'grp:' || v_fid::text, p_run_id, ARRAY[p_run_id], now(),
+        '[]'::jsonb, v_fam, true, true, v_kbid, true
+      );
+      v_created := v_created + 1;
+    END IF;
+    INSERT INTO public.scan_groups (client_id, assessment_id, issue_key, finding_id)
+      SELECT r.client_id, v_assess, k, v_fid FROM unnest(v_ok) k
+      ON CONFLICT DO NOTHING;
+    v_out := v_out || jsonb_build_array(v_fid);
+  END LOOP;
+  UPDATE public.scan_runs SET group_ctx = COALESCE(group_ctx, '{}'::jsonb)
+           || jsonb_build_object('created', COALESCE((group_ctx ->> 'created')::int, 0) + v_created), updated_at = now()
+   WHERE id = p_run_id;
+  RETURN jsonb_build_object('ok', true, 'findings', v_out, 'created', v_created);
+END $sgrassign$;
+REVOKE ALL ON FUNCTION public._sgr_assign(uuid, jsonb) FROM PUBLIC, anon, authenticated;
+
+-- THE RUN LANDED, p_limit results at a time after p_after (each call inside
+-- the few seconds a call has): each result a row of its finding's table, a
+-- row found again open again; a result the scanner says is gone its row fixed.
+-- The last call (p_final, nothing after it) marks fixed the rows of grouped
+-- findings a full scan of their host by the same scanner no longer reports,
+-- puts each finding touched right (its hosts still affected, its worst open
+-- rating, remediated when every row is fixed and open again when one is found
+-- again, as an automated scan closes and reopens one, 857), counts the run,
+-- and says the findings whose evidence is to be laid out again.
+CREATE OR REPLACE FUNCTION public._sgr_land(p_run_id uuid, p_after uuid, p_limit integer, p_final boolean) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp SET plan_cache_mode = force_custom_plan AS $sgrland$
+DECLARE r public.scan_runs; v_assess uuid; v_floor int; x record; v_fid uuid; v_ins boolean; v_last uuid; v_n int := 0;
+        v_more boolean; v_full boolean; v_fam text; v_assets text[]; v_touched uuid[] := '{}'; v_closed int := 0; v_upd int := 0;
+        v_created int; v_counts jsonb; v_kept jsonb; v_hosts int; f record; v_open int; v_sev text; v_cvss numeric; v_vec text;
+        v_now boolean; v_kbs boolean;
+BEGIN
+  SELECT * INTO r FROM public.scan_runs WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'error', 'Run not found'); END IF;
+  IF NOT COALESCE(r.group_on, false) OR r.group_state NOT IN ('held', 'grouping') THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'This scan is not waiting to be grouped.');
+  END IF;
+  v_assess := NULLIF(r.group_ctx ->> 'assess', '')::uuid;
+  v_floor := public._sgr_floor(r);
+  FOR x IN SELECT s.*, public._sgr_key(s.plugin_id, s.title) AS k,
+                  COALESCE(NULLIF(btrim(s.raw ->> 'scan_source'), ''), NULLIF(btrim(r.provider), '')) AS tool
+             FROM public.scan_results s
+            WHERE s.run_id = p_run_id AND (p_after IS NULL OR s.id > p_after)
+            ORDER BY s.id LIMIT GREATEST(1, LEAST(COALESCE(p_limit, 100), 500)) LOOP
+    v_last := x.id; v_n := v_n + 1;
+    SELECT sg.finding_id INTO v_fid FROM public.scan_groups sg
+     WHERE sg.client_id = r.client_id AND COALESCE(sg.assessment_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE(v_assess, '00000000-0000-0000-0000-000000000000'::uuid) AND sg.issue_key = x.k;
+    IF v_fid IS NULL THEN CONTINUE; END IF;
+    IF COALESCE((x.raw ->> 'gone')::boolean, false) THEN
+      UPDATE public.scan_finding_rows SET fixed_at = now(), fixed_run_id = p_run_id
+       WHERE finding_id = v_fid AND issue_key = x.k AND lower(host) = lower(COALESCE(btrim(x.asset), ''))
+         AND port = public._sgr_port(x.port, x.protocol) AND fixed_at IS NULL;
+      IF FOUND THEN v_touched := array_append(v_touched, v_fid); END IF;
+      CONTINUE;
+    END IF;
+    IF public._scan_sev_rank(x.severity) < v_floor THEN CONTINUE; END IF;
+    INSERT INTO public.scan_finding_rows AS w (finding_id, issue_key, host, port, service, title, tool, family, severity, cvss, cvss_vector,
+                                             output, output_html, last_run_id)
+    VALUES (v_fid, x.k, COALESCE(btrim(x.asset), ''), public._sgr_port(x.port, x.protocol), NULLIF(btrim(COALESCE(x.service, '')), ''),
+            x.title, x.tool, NULLIF(public._pental_scan_family(COALESCE(x.raw ->> 'scan_source', r.provider)), ''),
+            x.severity, x.cvss, x.cvss_vector, left(x.evidence, 20000),
+            CASE WHEN jsonb_typeof(x.raw -> 'evidence_blocks') = 'array' AND x.raw #>> '{evidence_blocks,0,type}' = 'html'
+                 THEN left(x.raw #>> '{evidence_blocks,0,content}', 262144) END,
+            p_run_id)
+    ON CONFLICT (finding_id, lower(host), port, issue_key) DO UPDATE SET
+      service = COALESCE(EXCLUDED.service, w.service), title = EXCLUDED.title, tool = COALESCE(EXCLUDED.tool, w.tool),
+      family = COALESCE(EXCLUDED.family, w.family), severity = EXCLUDED.severity, cvss = EXCLUDED.cvss, cvss_vector = EXCLUDED.cvss_vector,
+      output = EXCLUDED.output, output_html = EXCLUDED.output_html, last_seen = now(), last_run_id = p_run_id,
+      fixed_at = NULL, fixed_run_id = NULL
+    RETURNING (xmax = 0) INTO v_ins;
+    UPDATE public.scan_results SET finding_id = v_fid, state = CASE WHEN v_ins THEN 'new' ELSE 'recurring' END WHERE id = x.id;
+    v_touched := array_append(v_touched, v_fid);
+  END LOOP;
+  IF array_length(v_touched, 1) IS NOT NULL THEN
+    UPDATE public.findings SET scan_evidence_stale = true WHERE id = ANY (v_touched);
+  END IF;
+  v_more := v_last IS NOT NULL AND EXISTS (SELECT 1 FROM public.scan_results s WHERE s.run_id = p_run_id AND s.id > v_last);
+  IF NOT COALESCE(p_final, false) OR v_more THEN
+    UPDATE public.scan_runs SET group_lease_until = GREATEST(COALESCE(group_lease_until, now()), now() + interval '10 minutes')
+     WHERE id = p_run_id;
+    RETURN jsonb_build_object('ok', true, 'done', false, 'after', v_last, 'read', v_n,
+                              'touched', (SELECT COALESCE(jsonb_agg(DISTINCT t), '[]'::jsonb) FROM unnest(v_touched) t));
+  END IF;
+
+  -- The last of it. Rows a full scan of their host by the same scanner no
+  -- longer reports are fixed, as 1689's closing pass closes a finding.
+  v_full := COALESCE((r.group_ctx ->> 'full')::boolean, false);
+  v_fam := NULLIF(r.group_ctx ->> 'fam', '');
+  IF v_full AND v_fam IS NOT NULL THEN
+    v_assets := ARRAY(SELECT DISTINCT lower(btrim(s.asset)) FROM public.scan_results s
+                       WHERE s.run_id = p_run_id AND COALESCE(btrim(s.asset), '') <> '');
+    WITH fx AS (
+      UPDATE public.scan_finding_rows w SET fixed_at = now(), fixed_run_id = p_run_id
+        FROM public.findings gf
+       WHERE gf.id = w.finding_id AND gf.scan_grouped AND public._sgr_in_scope(gf, r.client_id, v_assess)
+         AND w.fixed_at IS NULL AND w.last_run_id IS DISTINCT FROM p_run_id
+         AND COALESCE(w.family, v_fam) = v_fam AND lower(w.host) = ANY (v_assets)
+      RETURNING w.finding_id
+    )
+    SELECT v_touched || COALESCE(array_agg(DISTINCT finding_id), '{}') INTO v_touched FROM fx;
+    UPDATE public.findings SET scan_evidence_stale = true WHERE id = ANY (v_touched);
+  END IF;
+
+  FOR f IN SELECT * FROM public.findings WHERE id IN (SELECT DISTINCT t FROM unnest(v_touched) t) AND scan_grouped LOOP
+    SELECT count(*) FILTER (WHERE fixed_at IS NULL), COALESCE(bool_or(last_run_id = p_run_id), false)
+      INTO v_open, v_now FROM public.scan_finding_rows WHERE finding_id = f.id;
+    v_kbs := f.scan_scored OR (f.scan_kb_id IS NOT NULL AND EXISTS (SELECT 1 FROM public.kb_entries k WHERE k.id = f.scan_kb_id AND COALESCE(k.cvss, 0) > 0));
+    SELECT w.severity INTO v_sev FROM public.scan_finding_rows w
+     WHERE w.finding_id = f.id AND (v_open = 0 OR w.fixed_at IS NULL)
+     ORDER BY public._scan_sev_rank(w.severity) DESC LIMIT 1;
+    SELECT w.cvss, w.cvss_vector INTO v_cvss, v_vec FROM public.scan_finding_rows w
+     WHERE w.finding_id = f.id AND (v_open = 0 OR w.fixed_at IS NULL) AND COALESCE(w.cvss, 0) > 0
+     ORDER BY w.cvss DESC LIMIT 1;
+    UPDATE public.findings SET
+      affected_hosts = (SELECT string_agg(h, E'\n' ORDER BY h) FROM (SELECT DISTINCT w.host AS h FROM public.scan_finding_rows w
+                         WHERE w.finding_id = f.id AND w.host <> '' AND (v_open = 0 OR w.fixed_at IS NULL)) hh),
+      -- The firm's score stands where its library entry gave one (1689), and
+      -- AI's where AI scored it (2075).
+      severity = CASE WHEN v_kbs THEN f.severity ELSE COALESCE(v_sev, f.severity) END,
+      cvss = CASE WHEN v_kbs THEN f.cvss ELSE COALESCE(v_cvss, f.cvss, 0) END,
+      cvss_vector = CASE WHEN v_kbs THEN f.cvss_vector ELSE COALESCE(v_vec, f.cvss_vector) END,
+      status = CASE WHEN v_open = 0 AND f.status = 'open' THEN 'remediated'
+                    WHEN v_open > 0 AND f.status = 'remediated' AND f.retest_completed_by = 'Automated scan' THEN 'open'
+                    ELSE f.status END,
+      retest_status = CASE WHEN v_open = 0 AND f.status = 'open' THEN 'passed'
+                           WHEN v_open > 0 AND f.status = 'remediated' AND f.retest_completed_by = 'Automated scan' THEN NULL
+                           ELSE f.retest_status END,
+      retest_completed_at = CASE WHEN v_open = 0 AND f.status = 'open' THEN now()
+                                 WHEN v_open > 0 AND f.status = 'remediated' AND f.retest_completed_by = 'Automated scan' THEN NULL
+                                 ELSE f.retest_completed_at END,
+      retest_completed_by = CASE WHEN v_open = 0 AND f.status = 'open' THEN 'Automated scan'
+                                 WHEN v_open > 0 AND f.status = 'remediated' AND f.retest_completed_by = 'Automated scan' THEN NULL
+                                 ELSE f.retest_completed_by END,
+      scan_run_ids = CASE WHEN p_run_id = ANY (COALESCE(f.scan_run_ids, '{}')) OR NOT v_now THEN f.scan_run_ids
+                          ELSE array_append(COALESCE(f.scan_run_ids, '{}'), p_run_id) END,
+      scan_run_id = CASE WHEN v_now THEN p_run_id ELSE f.scan_run_id END,
+      scan_last_seen = CASE WHEN v_now THEN now() ELSE f.scan_last_seen END,
+      updated_at = now()
+     WHERE id = f.id;
+    IF v_open = 0 AND f.status = 'open' THEN v_closed := v_closed + 1; END IF;
+    IF v_now AND NOT (p_run_id = ANY (COALESCE(f.scan_run_ids, '{}'))) THEN v_upd := v_upd + 1; END IF;
+  END LOOP;
+
+  v_created := COALESCE((r.group_ctx ->> 'created')::int, 0);
+  SELECT jsonb_build_object(
+           'critical', COUNT(*) FILTER (WHERE severity = 'critical'), 'high', COUNT(*) FILTER (WHERE severity = 'high'),
+           'medium', COUNT(*) FILTER (WHERE severity = 'medium'), 'low', COUNT(*) FILTER (WHERE severity = 'low'),
+           'info', COUNT(*) FILTER (WHERE severity = 'info'), 'total', COUNT(*))
+    INTO v_counts FROM public.findings WHERE scan_grouped AND (scan_run_ids @> ARRAY[p_run_id] OR scan_run_id = p_run_id);
+  SELECT jsonb_build_object(
+           'critical', COUNT(*) FILTER (WHERE severity = 'critical'), 'high', COUNT(*) FILTER (WHERE severity = 'high'),
+           'medium', COUNT(*) FILTER (WHERE severity = 'medium'), 'low', COUNT(*) FILTER (WHERE severity = 'low'),
+           'info', COUNT(*) FILTER (WHERE severity = 'info'), 'total', COUNT(*))
+    INTO v_kept FROM public.scan_results WHERE run_id = p_run_id AND finding_id IS NOT NULL;
+  SELECT COUNT(DISTINCT asset) INTO v_hosts FROM public.scan_results WHERE run_id = p_run_id AND COALESCE(asset, '') <> '';
+  v_counts := v_counts || jsonb_build_object('created', v_created, 'updated', v_upd, 'closed', v_closed, 'carried', 0,
+    'below_threshold', (SELECT count(*) FROM public.scan_results s WHERE s.run_id = p_run_id AND public._scan_sev_rank(s.severity) < v_floor),
+    'hosts', v_hosts, 'kept', COALESCE(v_kept, '{}'::jsonb), 'grouped', true);
+  UPDATE public.scan_runs SET counts = v_counts, findings_created = v_created, findings_updated = v_upd, findings_closed = v_closed,
+         hosts_scanned = v_hosts, group_state = 'grouped', group_why = NULL, grouped_at = now(), group_lease_until = NULL,
+         group_next_at = NULL, updated_at = now()
+   WHERE id = p_run_id;
+  IF v_assess IS NOT NULL THEN
+    BEGIN
+      INSERT INTO public.timeline_events (assessment_id, event, title, user_name)
+      VALUES (v_assess, 'Automated scan grouped into ' || v_created || ' new and ' || v_upd || ' earlier findings'
+                || CASE WHEN v_closed > 0 THEN ', and ' || v_closed || ' remediated: every host on them fixed' ELSE '' END,
+              'Vulnerability scan grouped', 'Automated scan');
+    EXCEPTION WHEN OTHERS THEN NULL; END;
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'done', true, 'read', v_n, 'created', v_created, 'updated', v_upd, 'closed', v_closed,
+    'counts', v_counts, 'client_name', COALESCE((SELECT c.name FROM public.clients c WHERE c.id = r.client_id), ''),
+    'min_severity', COALESCE(r.group_ctx ->> 'min', 'low'),
+    'touched', (SELECT COALESCE(jsonb_agg(DISTINCT t), '[]'::jsonb) FROM unnest(v_touched) t),
+    'finish', r.group_finish);
+END $sgrland$;
+REVOKE ALL ON FUNCTION public._sgr_land(uuid, uuid, integer, boolean) FROM PUBLIC, anon, authenticated;
+
+-- A grouped finding's rows, for its evidence to be laid out from: each with
+-- its host, port, service, the tool's title and output there, and when it was
+-- fixed. A few findings at a time.
+-- 2075: and what its words are written from and with: its rating, category,
+-- CWE and hosts, its words and fields as they are, whether it is still to be
+-- written up (`pending`), the library entry it took words from (`kb`), which
+-- of its words and whether its score are that entry's (`kb_has`,
+-- `kb_scored`), and the version read (`rv`, read through the row as a whole:
+-- this file gives a finding its version further down, and a function written
+-- in SQL names only what is there as it is made).
+CREATE OR REPLACE FUNCTION public._sgr_rows(p_ids uuid[]) RETURNS jsonb
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgrrows$
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('id', f.id, 'title', f.title, 'lay', f.scan_lay,
+           'sev', f.severity, 'category', f.category, 'cwe', f.cwe, 'hosts', left(COALESCE(f.affected_hosts, ''), 20000),
+           'description', left(COALESCE(f.description, ''), 60000), 'remediation', left(COALESCE(f.remediation, ''), 60000),
+           'custom', CASE WHEN jsonb_typeof(f.custom_fields) = 'object' THEN f.custom_fields ELSE '{}'::jsonb END,
+           'pending', f.scan_words_pending, 'kb', f.scan_kb_id, 'rv', to_jsonb(f) -> 'row_version', 'aid', f.assessment_id,
+           'kb_has', jsonb_build_object('description', COALESCE(btrim(k.description), '') <> '', 'remediation', COALESCE(btrim(k.recommendation), '') <> ''),
+           'kb_scored', COALESCE(k.cvss, 0) > 0, 'rows',
+           (SELECT COALESCE(jsonb_agg(jsonb_build_object('host', w.host, 'port', w.port, 'service', w.service, 'title', w.title,
+                                                         'issue_key', w.issue_key, 'cvss', w.cvss,
+                                                         'tool', w.tool, 'severity', w.severity, 'output', left(w.output, 6000),
+                                                         'output_html', w.output_html, 'fixed_at', w.fixed_at)
+                                      ORDER BY w.fixed_at NULLS FIRST, w.host, w.port), '[]'::jsonb)
+              FROM (SELECT * FROM public.scan_finding_rows w0 WHERE w0.finding_id = f.id
+                     ORDER BY w0.fixed_at NULLS FIRST, w0.host, w0.port LIMIT 1500) w))), '[]'::jsonb)
+    FROM public.findings f LEFT JOIN public.kb_entries k ON k.id = f.scan_kb_id
+   WHERE f.id = ANY (COALESCE(p_ids, '{}')) AND f.scan_grouped;
+$sgrrows$;
+REVOKE ALL ON FUNCTION public._sgr_rows(uuid[]) FROM PUBLIC, anon, authenticated;
+
+-- Each finding's evidence, laid out from its rows: [{ id, blocks }], the
+-- blocks as the portal keeps evidence (html ones shown through its sanitiser).
+-- 2075: with each finding's version after it (`rv`), which its words are
+-- written against next (_sgr_words). And `apx`: a table too long for the
+-- finding, whole, in an appendix of its engagement that its evidence links to
+-- (the portal's _sgrApx), known by the finding (apx_sgr_<its id>, then _2 and
+-- on), put where the same one was or at the end; those of the finding's no
+-- longer given are let go, and `apx: []` lets go of all of them.
+-- 2079: each written with the finding that links to it (`by`, which a
+-- client's pages read for a finding hidden from them), and one written again
+-- keeps where the firm put it (`place`) and its group's own title (`gt`).
+CREATE OR REPLACE FUNCTION public._sgr_evidence(p_items jsonb, p_client uuid DEFAULT NULL) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgrev$
+DECLARE it jsonb; v_n int := 0; v_blocks jsonb; v_rv bigint; v_rvs jsonb := '{}'::jsonb; v_aid uuid; v_fid uuid; v_pre text; v_apx jsonb;
+BEGIN
+  IF jsonb_typeof(p_items) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'Not a list.'); END IF;
+  FOR it IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    v_blocks := CASE WHEN jsonb_typeof(it -> 'blocks') = 'array' THEN it -> 'blocks' ELSE '[]'::jsonb END;
+    IF length(v_blocks::text) > 600000 OR EXISTS (SELECT 1 FROM jsonb_array_elements(v_blocks) b
+                                                   WHERE jsonb_typeof(b) <> 'object' OR COALESCE(b ->> 'type', '') NOT IN ('html', 'text')) THEN
+      CONTINUE;
+    END IF;
+    -- `stale`: written without AI because the AI did not answer (or, on a
+    -- collector, there was no house style to write it in), so a page writes
+    -- it again. `lay` (a person's page alone, never a collector): what Write
+    -- again was given (its instructions, and its table's columns where it has
+    -- one), or { plain: true } for the table made from the scans, kept for
+    -- every later scan; null for neither.
+    UPDATE public.findings f SET evidence = v_blocks, scan_evidence_stale = COALESCE((it ->> 'stale')::boolean, false),
+           scan_lay = CASE WHEN p_client IS NULL AND it ? 'lay' THEN
+                             CASE WHEN jsonb_typeof(it -> 'lay') <> 'object' THEN NULL
+                                  WHEN COALESCE((it -> 'lay' ->> 'plain')::boolean, false) THEN jsonb_build_object('plain', true)
+                                  WHEN (jsonb_typeof(it -> 'lay' -> 'cols') = 'array' AND jsonb_array_length(it -> 'lay' -> 'cols') > 0)
+                                    OR btrim(COALESCE(it -> 'lay' ->> 'extra', '')) <> '' THEN
+                                    jsonb_build_object('cols', COALESCE((SELECT jsonb_agg(left(cc.c, 40) ORDER BY cc.n) FROM (SELECT x.c, x.n FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(it -> 'lay' -> 'cols') = 'array' THEN it -> 'lay' -> 'cols' ELSE '[]'::jsonb END) WITH ORDINALITY AS x(c, n) ORDER BY x.n LIMIT 6) cc), '[]'::jsonb),
+                                                       'extra', left(COALESCE(it -> 'lay' ->> 'extra', ''), 1400))
+                             END
+                           ELSE f.scan_lay END,
+           updated_at = now()
+     WHERE f.id = NULLIF(it ->> 'id', '')::uuid AND f.scan_grouped AND (p_client IS NULL OR COALESCE(f.client_id, (SELECT a.client_id FROM public.assessments a WHERE a.id = f.assessment_id)) = p_client)
+    RETURNING f.row_version, f.assessment_id, f.id INTO v_rv, v_aid, v_fid;
+    IF FOUND THEN
+      v_n := v_n + 1; v_rvs := v_rvs || jsonb_build_object(it ->> 'id', v_rv);
+      IF v_aid IS NOT NULL AND jsonb_typeof(it -> 'apx') = 'array' AND length((it -> 'apx')::text) <= 2000000 THEN
+        v_pre := 'apx_sgr_' || v_fid::text;
+        SELECT COALESCE(jsonb_agg(jsonb_build_object('id', y ->> 'id', 'title', left(COALESCE(y ->> 'title', 'Evidence'), 300),
+                                                     'items', CASE WHEN jsonb_typeof(y -> 'items') = 'array' THEN y -> 'items' ELSE '[]'::jsonb END,
+                                                     'content', left(COALESCE(y ->> 'content', ''), 200000),
+                                                     'by', jsonb_build_array(v_fid::text)) ORDER BY m), '[]'::jsonb)
+          INTO v_apx
+          FROM jsonb_array_elements(it -> 'apx') WITH ORDINALITY AS g(y, m)
+         WHERE jsonb_typeof(y) = 'object' AND m <= 20
+           AND ((y ->> 'id') = v_pre OR (y ->> 'id') ~ ('^' || v_pre || '_[0-9]{1,2}$'));
+        UPDATE public.assessments a SET appendices = (
+          WITH cur AS (SELECT x, n FROM jsonb_array_elements(CASE WHEN jsonb_typeof(a.appendices) = 'array' THEN a.appendices ELSE '[]'::jsonb END) WITH ORDINALITY AS e(x, n)),
+               neu AS (SELECT y, m FROM jsonb_array_elements(v_apx) WITH ORDINALITY AS g(y, m))
+          SELECT COALESCE(jsonb_agg(q.v ORDER BY q.k), '[]'::jsonb) FROM (
+            SELECT COALESCE((SELECT neu.y || jsonb_strip_nulls(jsonb_build_object('place', cur.x -> 'place', 'gt', cur.x -> 'gt'))
+                               FROM neu WHERE neu.y ->> 'id' = cur.x ->> 'id'), cur.x) AS v, cur.n AS k FROM cur
+             WHERE NOT (left(COALESCE(cur.x ->> 'id', ''), length(v_pre)) = v_pre
+                        AND NOT EXISTS (SELECT 1 FROM neu WHERE neu.y ->> 'id' = cur.x ->> 'id'))
+            UNION ALL
+            SELECT neu.y, 1000000 + neu.m FROM neu WHERE NOT EXISTS (SELECT 1 FROM cur WHERE cur.x ->> 'id' = neu.y ->> 'id')) q),
+          updated_at = now()
+         WHERE a.id = v_aid
+           AND (jsonb_array_length(v_apx) > 0 OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(a.appendices) = 'array' THEN a.appendices ELSE '[]'::jsonb END) z
+                                                          WHERE left(COALESCE(z ->> 'id', ''), length(v_pre)) = v_pre));
+      END IF;
+    END IF;
+  END LOOP;
+  RETURN jsonb_build_object('ok', true, 'written', v_n, 'rv', v_rvs);
+END $sgrev$;
+REVOKE ALL ON FUNCTION public._sgr_evidence(jsonb, uuid) FROM PUBLIC, anon, authenticated;
+
+-- 2075: A GROUPED FINDING'S WORDS AND SCORE, WRITTEN UP WITH AI IN THE
+-- FIRM'S HOUSE STYLE (the portal's _sgrWords, on the firm's page or its own
+-- collector). p_items: [{ id, rv (its version as read), description,
+-- remediation, custom: { a field's id: its value }, cvss_vector }]. Each is
+-- written only while the finding is still to be written up
+-- (`scan_words_pending`) and is still the version read; the description and
+-- the remediation only where they are not a library entry's words (or are
+-- empty); a field of the firm's only where it is empty; and the score only
+-- from a whole vector, worked out here (_cvss_score, the rating from it), never
+-- where the library entry gave one. Then the finding is written up, and a
+-- score AI gave is kept by later scans (`scan_scored`). p_client: a
+-- collector's run's client, whose findings alone it writes. { ok, written }.
+CREATE OR REPLACE FUNCTION public._sgr_words(p_items jsonb, p_client uuid DEFAULT NULL) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgrwords$
+DECLARE it jsonb; f public.findings; k public.kb_entries; v_n int := 0; v_desc text; v_rem text; v_cf jsonb; v_add jsonb := '{}'::jsonb;
+        v_vec text; v_sc numeric; ck text; cv text;
+BEGIN
+  IF jsonb_typeof(p_items) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'Not a list.'); END IF;
+  FOR it IN SELECT value FROM jsonb_array_elements(p_items) LIMIT 50 LOOP
+    IF jsonb_typeof(it) IS DISTINCT FROM 'object' OR COALESCE(it ->> 'id', '') !~ '^[0-9a-f-]{36}$' THEN CONTINUE; END IF;
+    SELECT * INTO f FROM public.findings WHERE id = (it ->> 'id')::uuid AND scan_grouped AND scan_words_pending FOR UPDATE;
+    IF NOT FOUND THEN CONTINUE; END IF;
+    IF p_client IS NOT NULL AND COALESCE(f.client_id, (SELECT a.client_id FROM public.assessments a WHERE a.id = f.assessment_id)) IS DISTINCT FROM p_client THEN CONTINUE; END IF;
+    IF jsonb_typeof(it -> 'rv') = 'number' AND f.row_version IS DISTINCT FROM (it ->> 'rv')::numeric::bigint THEN CONTINUE; END IF;
+    k := NULL;
+    IF f.scan_kb_id IS NOT NULL THEN SELECT * INTO k FROM public.kb_entries WHERE id = f.scan_kb_id; END IF;
+    v_desc := NULL; v_rem := NULL; v_add := '{}'::jsonb; v_vec := NULL; v_sc := NULL;
+    IF jsonb_typeof(it -> 'description') = 'string' AND btrim(it ->> 'description') <> '' AND length(it ->> 'description') <= 200000
+       AND (COALESCE(btrim(k.description), '') = '' OR btrim(regexp_replace(COALESCE(f.description, ''), '<[^>]*>', '', 'g')) = '') THEN
+      v_desc := it ->> 'description';
+    END IF;
+    IF jsonb_typeof(it -> 'remediation') = 'string' AND btrim(it ->> 'remediation') <> '' AND length(it ->> 'remediation') <= 200000
+       AND (COALESCE(btrim(k.recommendation), '') = '' OR btrim(regexp_replace(COALESCE(f.remediation, ''), '<[^>]*>', '', 'g')) = '') THEN
+      v_rem := it ->> 'remediation';
+    END IF;
+    v_cf := CASE WHEN jsonb_typeof(f.custom_fields) = 'object' THEN f.custom_fields ELSE '{}'::jsonb END;
+    IF jsonb_typeof(it -> 'custom') = 'object' THEN
+      FOR ck, cv IN SELECT x.key, x.value FROM jsonb_each_text(it -> 'custom') x LIMIT 60 LOOP
+        IF ck !~ '^[A-Za-z0-9_-]{1,64}$' OR btrim(COALESCE(cv, '')) = '' OR length(cv) > 60000 THEN CONTINUE; END IF;
+        IF btrim(regexp_replace(COALESCE(v_cf ->> ck, ''), '<[^>]*>', '', 'g')) <> '' THEN CONTINUE; END IF;
+        v_add := v_add || jsonb_build_object(ck, cv);
+      END LOOP;
+    END IF;
+    IF jsonb_typeof(it -> 'cvss_vector') = 'string' AND NOT COALESCE(k.cvss, 0) > 0 THEN
+      v_vec := public._cvss_vector_norm(left(it ->> 'cvss_vector', 300));
+      v_sc := public._cvss_score(v_vec);
+      IF v_sc IS NULL THEN v_vec := NULL; END IF;
+    END IF;
+    UPDATE public.findings SET
+      description = COALESCE(v_desc, description),
+      remediation = COALESCE(v_rem, remediation),
+      custom_fields = v_cf || v_add,
+      cvss = CASE WHEN v_vec IS NOT NULL THEN v_sc ELSE cvss END,
+      cvss_vector = CASE WHEN v_vec IS NOT NULL THEN v_vec ELSE cvss_vector END,
+      severity = CASE WHEN v_vec IS NOT NULL THEN public._cvss_band(v_sc) ELSE severity END,
+      scan_scored = scan_scored OR v_vec IS NOT NULL,
+      scan_words_pending = false, updated_at = now()
+     WHERE id = f.id;
+    v_n := v_n + 1;
+  END LOOP;
+  RETURN jsonb_build_object('ok', true, 'written', v_n);
+END $sgrwords$;
+REVOKE ALL ON FUNCTION public._sgr_words(jsonb, uuid) FROM PUBLIC, anon, authenticated;
+
+-- 2075: a person changing a grouped finding's words or score while it waits
+-- to be written up has taken it over: it is no longer AI's to write. Only a
+-- person's own change through the API, never the database's own (a scan
+-- landing, its evidence written, which run as this database).
+CREATE OR REPLACE FUNCTION public._sgr_words_touched() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = public, pg_catalog, pg_temp AS $sgrwt$
+BEGIN
+  IF current_user IN ('anon', 'authenticated') AND OLD.scan_words_pending AND NEW.scan_words_pending
+     AND (NEW.description IS DISTINCT FROM OLD.description OR NEW.remediation IS DISTINCT FROM OLD.remediation
+          OR NEW.custom_fields IS DISTINCT FROM OLD.custom_fields OR NEW.cvss IS DISTINCT FROM OLD.cvss
+          OR NEW.cvss_vector IS DISTINCT FROM OLD.cvss_vector OR NEW.severity IS DISTINCT FROM OLD.severity) THEN
+    NEW.scan_words_pending := false;
+  END IF;
+  RETURN NEW;
+END $sgrwt$;
+REVOKE ALL ON FUNCTION public._sgr_words_touched() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS sgr_words_touched ON public.findings;
+CREATE TRIGGER sgr_words_touched BEFORE UPDATE ON public.findings
+  FOR EACH ROW WHEN (OLD.scan_words_pending) EXECUTE FUNCTION public._sgr_words_touched();
+
+-- Held: the model could not be reached (or there is none), said, and tried
+-- again in five minutes; the run's holder let go of it.
+CREATE OR REPLACE FUNCTION public._sgr_hold(p_run_id uuid, p_why text) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgrhold$
+BEGIN
+  UPDATE public.scan_runs SET group_state = 'held', group_why = left(COALESCE(NULLIF(btrim(p_why), ''), 'The model did not answer.'), 300),
+         group_tries = COALESCE(group_tries, 0) + 1, group_next_at = now() + interval '5 minutes', group_lease_until = NULL,
+         stage = 'Waiting to be grouped with your AI', updated_at = now()
+   WHERE id = p_run_id AND group_state IN ('held', 'grouping');
+  RETURN jsonb_build_object('ok', FOUND);
+END $sgrhold$;
+REVOKE ALL ON FUNCTION public._sgr_hold(uuid, text) FROM PUBLIC, anon, authenticated;
+
+-- Taken to be grouped by one page or collector at a time, ten minutes at most.
+CREATE OR REPLACE FUNCTION public._sgr_claim(p_run_id uuid) RETURNS boolean
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgrclaim$
+BEGIN
+  UPDATE public.scan_runs SET group_state = 'grouping', group_lease_until = now() + interval '10 minutes',
+         stage = 'Being grouped with your AI', updated_at = now()
+   WHERE id = p_run_id AND COALESCE(group_on, false)
+     AND (group_state = 'held' OR (group_state = 'grouping' AND (group_lease_until IS NULL OR group_lease_until < now())));
+  RETURN FOUND;
+END $sgrclaim$;
+REVOKE ALL ON FUNCTION public._sgr_claim(uuid) FROM PUBLIC, anon, authenticated;
+
+-- The run closed once it is grouped, as its collector or upload closed it
+-- (`group_finish`, kept when it came while the run was waiting), or as
+-- completed where nothing closed it yet.
+CREATE OR REPLACE FUNCTION public._sgr_close(p_run_id uuid) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgrclose$
+DECLARE r public.scan_runs;
+BEGIN
+  SELECT * INTO r FROM public.scan_runs WHERE id = p_run_id;
+  IF NOT FOUND OR r.group_state NOT IN ('grouped', 'ungrouped') OR r.status NOT IN ('starting', 'running', 'importing') THEN
+    RETURN jsonb_build_object('ok', true, 'closed', false);
+  END IF;
+  IF r.group_finish IS NULL THEN
+    -- Whoever holds it closes it as it ends (the collector with its summary,
+    -- the page that imported it). Held by nobody, or by a collector or page
+    -- that stopped answering, it is closed now, in the database's own words.
+    IF r.claimed_by IS NOT NULL AND r.lease_until IS NOT NULL AND r.lease_until > now() THEN
+      RETURN jsonb_build_object('ok', true, 'closed', false);
+    END IF;
+    IF r.trigger_source = 'import' THEN
+      UPDATE public.scan_runs SET claimed_by = NULL, lease_until = NULL WHERE id = p_run_id;
+      RETURN public._scan_finish_core(p_run_id, 'completed', public._scan_short_summary(r.counts, r.hosts_scanned), NULL, NULL)
+             || jsonb_build_object('ok', true, 'closed', true);
+    END IF;
+    RETURN public._scan_close(p_run_id, 'completed', NULL, NULL, NULL, NULL) || jsonb_build_object('closed', true);
+  END IF;
+  UPDATE public.scan_runs SET group_finish = NULL WHERE id = p_run_id;
+  -- An upload is finished as its page finishes one (rpc_scan_upload_finish):
+  -- no bill and no notice.
+  IF COALESCE((r.group_finish ->> 'upload')::boolean, false) THEN
+    UPDATE public.scan_runs SET claimed_by = NULL, lease_until = NULL WHERE id = p_run_id;
+    RETURN public._scan_finish_core(p_run_id, 'completed', public._scan_short_summary(r.counts, r.hosts_scanned), NULL, NULL)
+           || jsonb_build_object('ok', true, 'closed', true);
+  END IF;
+  RETURN public._scan_close(p_run_id, COALESCE(r.group_finish ->> 'status', 'completed'), r.group_finish ->> 'exec', r.group_finish ->> 'html',
+                            r.group_finish ->> 'error', CASE WHEN jsonb_typeof(r.group_finish -> 'notice') = 'object' THEN r.group_finish -> 'notice' END)
+         || jsonb_build_object('closed', true);
+END $sgrclose$;
+REVOKE ALL ON FUNCTION public._sgr_close(uuid) FROM PUBLIC, anon, authenticated;
+
+-- LET IN UNGROUPED (a tester's choice on a held scan): its results imported
+-- as findings were before grouping, p_limit at a time, the last closing.
+CREATE OR REPLACE FUNCTION public._sgr_ungrouped(p_run_id uuid, p_after uuid, p_limit integer) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $sgrung$
+DECLARE r public.scan_runs; v_batch jsonb; v_last uuid; v_more boolean; v_out jsonb;
+BEGIN
+  SELECT * INTO r FROM public.scan_runs WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'error', 'Run not found'); END IF;
+  IF r.group_state NOT IN ('held', 'grouping', 'ungrouped') THEN RETURN jsonb_build_object('ok', false, 'error', 'This scan is not waiting to be grouped.'); END IF;
+  UPDATE public.scan_runs SET group_on = false, group_state = 'ungrouped', group_why = NULL, group_lease_until = NULL, group_next_at = NULL,
+         stage = 'Being imported ungrouped', updated_at = now() WHERE id = p_run_id;
+  SELECT COALESCE(jsonb_agg(s.raw ORDER BY s.id), '[]'::jsonb), (array_agg(s.id ORDER BY s.id DESC))[1] INTO v_batch, v_last
+    FROM (SELECT id, raw FROM public.scan_results WHERE run_id = p_run_id AND (p_after IS NULL OR id > p_after) AND raw IS NOT NULL
+           ORDER BY id LIMIT GREATEST(1, LEAST(COALESCE(p_limit, 100), 250))) s;
+  v_more := v_last IS NOT NULL AND EXISTS (SELECT 1 FROM public.scan_results s WHERE s.run_id = p_run_id AND s.id > v_last);
+  v_out := public._scan_import_core(p_run_id, v_batch, NOT v_more, COALESCE((r.group_ctx ->> 'full')::boolean, false));
+  IF v_out ? 'error' THEN RETURN jsonb_build_object('ok', false, 'error', v_out ->> 'error'); END IF;
+  RETURN jsonb_build_object('ok', true, 'done', NOT v_more, 'after', v_last) || v_out;
+END $sgrung$;
+REVOKE ALL ON FUNCTION public._sgr_ungrouped(uuid, uuid, integer) FROM PUBLIC, anon, authenticated;
+
+-- Whether the machine holding a run is a customer's own collector, which
+-- never asks the firm's model (rpc_collector_ai).
+CREATE OR REPLACE FUNCTION public._sgr_customer(r public.scan_runs) RETURNS boolean
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgrcust$
+BEGIN
+  RETURN EXISTS (SELECT 1 FROM public.scan_providers sp
+                  WHERE sp.client_id IS NOT NULL
+                    AND (r.claimed_by = 'collector:' || sp.id::text OR (r.provider_id = sp.id AND sp.connection = 'collector')));
+END $sgrcust$;
+REVOKE ALL ON FUNCTION public._sgr_customer(public.scan_runs) FROM PUBLIC, anon, authenticated;
+
+-- ── The firm's own collector grouping a run it holds ───────────────────────
+CREATE OR REPLACE FUNCTION public.rpc_collector_group_start(p_token text, p_run_id uuid) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $cgstart$
+DECLARE r public.scan_runs;
+BEGIN
+  r := public._collector_run(p_token, p_run_id);
+  IF r.id IS NULL THEN RETURN public._collector_stop(p_run_id); END IF;
+  IF public._sgr_customer(r) THEN RETURN jsonb_build_object('ok', false, 'code', 'customer'); END IF;
+  IF NOT public._sgr_claim(p_run_id) THEN RETURN jsonb_build_object('ok', false, 'busy', true); END IF;
+  RETURN public._sgr_start(p_run_id);
+END $cgstart$;
+REVOKE ALL ON FUNCTION public.rpc_collector_group_start(text, uuid) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.rpc_collector_group_start(text, uuid) TO anon, service_role;
+
+CREATE OR REPLACE FUNCTION public.rpc_collector_group_assign(p_token text, p_run_id uuid, p_groups jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $cgassign$
+DECLARE r public.scan_runs;
+BEGIN
+  r := public._collector_run(p_token, p_run_id);
+  IF r.id IS NULL THEN RETURN public._collector_stop(p_run_id); END IF;
+  IF public._sgr_customer(r) THEN RETURN jsonb_build_object('ok', false, 'code', 'customer'); END IF;
+  RETURN public._sgr_assign(p_run_id, p_groups);
+END $cgassign$;
+REVOKE ALL ON FUNCTION public.rpc_collector_group_assign(text, uuid, jsonb) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.rpc_collector_group_assign(text, uuid, jsonb) TO anon, service_role;
+
+CREATE OR REPLACE FUNCTION public.rpc_collector_group_land(p_token text, p_run_id uuid, p_after uuid, p_limit integer, p_final boolean) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $cgland$
+DECLARE r public.scan_runs;
+BEGIN
+  r := public._collector_run(p_token, p_run_id);
+  IF r.id IS NULL THEN RETURN public._collector_stop(p_run_id); END IF;
+  IF public._sgr_customer(r) THEN RETURN jsonb_build_object('ok', false, 'code', 'customer'); END IF;
+  -- Its hold on the run kept while it lands, however long a big scan takes.
+  UPDATE public.scan_runs SET lease_until = GREATEST(COALESCE(lease_until, now()), now() + interval '15 minutes') WHERE id = p_run_id;
+  RETURN public._sgr_land(p_run_id, p_after, p_limit, p_final);
+END $cgland$;
+REVOKE ALL ON FUNCTION public.rpc_collector_group_land(text, uuid, uuid, integer, boolean) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.rpc_collector_group_land(text, uuid, uuid, integer, boolean) TO anon, service_role;
+
+CREATE OR REPLACE FUNCTION public.rpc_collector_group_rows(p_token text, p_run_id uuid, p_ids uuid[]) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $cgrows$
+DECLARE r public.scan_runs; v_assess uuid;
+BEGIN
+  r := public._collector_run(p_token, p_run_id);
+  IF r.id IS NULL THEN RETURN public._collector_stop(p_run_id); END IF;
+  IF public._sgr_customer(r) THEN RETURN jsonb_build_object('ok', false, 'code', 'customer'); END IF;
+  v_assess := NULLIF(r.group_ctx ->> 'assess', '')::uuid;
+  RETURN jsonb_build_object('ok', true, 'findings', public._sgr_rows(ARRAY(
+    SELECT f.id FROM public.findings f WHERE f.id = ANY (COALESCE(p_ids, '{}')) AND f.scan_grouped
+       AND public._sgr_in_scope(f, r.client_id, v_assess) LIMIT 10)));
+END $cgrows$;
+REVOKE ALL ON FUNCTION public.rpc_collector_group_rows(text, uuid, uuid[]) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.rpc_collector_group_rows(text, uuid, uuid[]) TO anon, service_role;
+
+CREATE OR REPLACE FUNCTION public.rpc_collector_group_evidence(p_token text, p_run_id uuid, p_items jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $cgev$
+DECLARE r public.scan_runs;
+BEGIN
+  r := public._collector_run(p_token, p_run_id);
+  IF r.id IS NULL THEN RETURN public._collector_stop(p_run_id); END IF;
+  IF public._sgr_customer(r) THEN RETURN jsonb_build_object('ok', false, 'code', 'customer'); END IF;
+  RETURN public._sgr_evidence(p_items, r.client_id);
+END $cgev$;
+REVOKE ALL ON FUNCTION public.rpc_collector_group_evidence(text, uuid, jsonb) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.rpc_collector_group_evidence(text, uuid, jsonb) TO anon, service_role;
+
+-- 2075: its findings' words and score, written up in the firm's house style.
+CREATE OR REPLACE FUNCTION public.rpc_collector_group_words(p_token text, p_run_id uuid, p_items jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $cgwords$
+DECLARE r public.scan_runs;
+BEGIN
+  r := public._collector_run(p_token, p_run_id);
+  IF r.id IS NULL THEN RETURN public._collector_stop(p_run_id); END IF;
+  IF public._sgr_customer(r) THEN RETURN jsonb_build_object('ok', false, 'code', 'customer'); END IF;
+  RETURN public._sgr_words(p_items, r.client_id);
+END $cgwords$;
+REVOKE ALL ON FUNCTION public.rpc_collector_group_words(text, uuid, jsonb) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.rpc_collector_group_words(text, uuid, jsonb) TO anon, service_role;
+
+CREATE OR REPLACE FUNCTION public.rpc_collector_group_hold(p_token text, p_run_id uuid, p_why text) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $cghold$
+DECLARE r public.scan_runs;
+BEGIN
+  r := public._collector_run(p_token, p_run_id);
+  IF r.id IS NULL THEN RETURN public._collector_stop(p_run_id); END IF;
+  -- A customer's own collector's run waits for the firm's page, as it says.
+  IF public._sgr_customer(r) THEN RETURN jsonb_build_object('ok', false, 'code', 'customer'); END IF;
+  RETURN public._sgr_hold(p_run_id, p_why);
+END $cghold$;
+REVOKE ALL ON FUNCTION public.rpc_collector_group_hold(text, uuid, text) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.rpc_collector_group_hold(text, uuid, text) TO anon, service_role;
+
+-- ── The firm's page grouping a run (a customer's collector's, one held, an
+-- upload, older scans folded in) ───────────────────────────────────────────
+-- For the firm's own team (not a contractor, not a client), with the
+-- client's work, signed in afresh.
+CREATE OR REPLACE FUNCTION public._sgr_may(p_client uuid) RETURNS boolean
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgrmay$
+BEGIN
+  RETURN auth.uid() IS NOT NULL AND public.mfa_is_fresh() AND public.is_delivery_staff()
+     AND p_client IS NOT NULL AND public.can_access_client(p_client);
+END $sgrmay$;
+REVOKE ALL ON FUNCTION public._sgr_may(uuid) FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public._sgr_run_for_page(p_run_id uuid) RETURNS public.scan_runs
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgrrun$
+DECLARE r public.scan_runs;
+BEGIN
+  SELECT * INTO r FROM public.scan_runs WHERE id = p_run_id;
+  IF NOT FOUND OR NOT public._sgr_may(r.client_id) THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
+  RETURN r;
+END $sgrrun$;
+REVOKE ALL ON FUNCTION public._sgr_run_for_page(uuid) FROM PUBLIC, anon, authenticated;
+
+-- The runs waiting for this page: a customer's collector's at once (and,
+-- once the model did not answer it, when it is due again), one held
+-- because the model did not answer once it is due again, one whose grouping
+-- stopped half way once its ten minutes are up. One the firm's own collector
+-- or server is to group as it ends ([stated] Arian: "On the collector
+-- itself") only once ten minutes pass without it being grouped. Ten at most,
+-- oldest first.
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_held() RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgrheld$
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() OR NOT public.is_delivery_staff() THEN RETURN '[]'::jsonb; END IF;
+  RETURN COALESCE((SELECT jsonb_agg(jsonb_build_object('run_id', x.id, 'client_id', x.client_id, 'why', x.group_why, 'tries', x.group_tries,
+                                                       'next_at', x.group_next_at, 'customer', x.cust, 'upload', x.trigger_source = 'import')
+                                    ORDER BY x.created_at)
+                     FROM (SELECT r.*, public._sgr_customer(r) AS cust FROM public.scan_runs r
+                            WHERE r.group_state IN ('held', 'grouping') AND COALESCE(r.group_on, false)
+                              AND public.can_access_client(r.client_id)
+                              AND (r.group_state = 'held' OR r.group_lease_until IS NULL OR r.group_lease_until < now())
+                              AND ((public._sgr_customer(r) AND (COALESCE(r.group_tries, 0) = 0 OR COALESCE(r.group_next_at, r.updated_at) <= now()))
+                                   OR (COALESCE(r.group_next_at, r.updated_at) <= now()
+                                       AND (COALESCE(r.group_tries, 0) > 0 OR COALESCE(r.group_next_at, r.updated_at) <= now() - interval '10 minutes')))
+                            ORDER BY r.created_at LIMIT 10) x), '[]'::jsonb);
+END $sgrheld$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_held() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_held() TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_start(p_run_id uuid) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $sgpstart$
+DECLARE r public.scan_runs := public._sgr_run_for_page(p_run_id);
+BEGIN
+  IF NOT public._sgr_claim(p_run_id) THEN RETURN jsonb_build_object('ok', false, 'busy', true); END IF;
+  RETURN public._sgr_start(p_run_id);
+END $sgpstart$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_start(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_start(uuid) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_assign(p_run_id uuid, p_groups jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $sgpassign$
+DECLARE r public.scan_runs := public._sgr_run_for_page(p_run_id);
+BEGIN
+  RETURN public._sgr_assign(p_run_id, p_groups);
+END $sgpassign$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_assign(uuid, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_assign(uuid, jsonb) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_land(p_run_id uuid, p_after uuid, p_limit integer, p_final boolean) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $sgpland$
+DECLARE r public.scan_runs := public._sgr_run_for_page(p_run_id);
+BEGIN
+  RETURN public._sgr_land(p_run_id, p_after, p_limit, p_final);
+END $sgpland$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_land(uuid, uuid, integer, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_land(uuid, uuid, integer, boolean) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_hold(p_run_id uuid, p_why text) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $sgphold$
+DECLARE r public.scan_runs := public._sgr_run_for_page(p_run_id);
+BEGIN
+  RETURN public._sgr_hold(p_run_id, p_why);
+END $sgphold$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_hold(uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_hold(uuid, text) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_ungrouped(p_run_id uuid, p_after uuid, p_limit integer) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $sgpung$
+DECLARE r public.scan_runs := public._sgr_run_for_page(p_run_id); v_out jsonb;
+BEGIN
+  v_out := public._sgr_ungrouped(p_run_id, p_after, p_limit);
+  IF COALESCE((v_out ->> 'done')::boolean, false) THEN v_out := v_out || jsonb_build_object('close', public._sgr_close(p_run_id)); END IF;
+  RETURN v_out;
+END $sgpung$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_ungrouped(uuid, uuid, integer) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_ungrouped(uuid, uuid, integer) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_close(p_run_id uuid) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $sgpclose$
+DECLARE r public.scan_runs := public._sgr_run_for_page(p_run_id);
+BEGIN
+  RETURN public._sgr_close(p_run_id);
+END $sgpclose$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_close(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_close(uuid) TO authenticated;
+
+-- A grouped finding's rows, and its evidence laid out from them, by the
+-- finding: after a run lands, and for a finding whose rows changed since
+-- (`scan_evidence_stale`).
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_rows(p_ids uuid[]) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgprows$
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() OR NOT public.is_delivery_staff() THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
+  RETURN public._sgr_rows(ARRAY(
+    SELECT f.id FROM public.findings f WHERE f.id = ANY (COALESCE(p_ids, '{}')) AND f.scan_grouped
+       AND public.can_access_client(COALESCE(f.client_id, (SELECT a.client_id FROM public.assessments a WHERE a.id = f.assessment_id))) LIMIT 10));
+END $sgprows$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_rows(uuid[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_rows(uuid[]) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_evidence(p_items jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgpev$
+DECLARE it jsonb; v_ok jsonb := '[]'::jsonb; v_client uuid;
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() OR NOT public.is_delivery_staff() THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
+  IF jsonb_typeof(p_items) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'Not a list.'); END IF;
+  FOR it IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    SELECT COALESCE(f.client_id, (SELECT a.client_id FROM public.assessments a WHERE a.id = f.assessment_id)) INTO v_client
+      FROM public.findings f WHERE f.id = NULLIF(it ->> 'id', '')::uuid AND f.scan_grouped;
+    IF v_client IS NOT NULL AND public.can_access_client(v_client) THEN v_ok := v_ok || jsonb_build_array(it); END IF;
+  END LOOP;
+  RETURN public._sgr_evidence(v_ok, NULL);
+END $sgpev$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_evidence(jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_evidence(jsonb) TO authenticated;
+
+-- 2075: a grouped finding's words and score, written up on the firm's page.
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_words(p_items jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgpwords$
+DECLARE it jsonb; v_ok jsonb := '[]'::jsonb; v_client uuid;
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() OR NOT public.is_delivery_staff() THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
+  IF jsonb_typeof(p_items) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'Not a list.'); END IF;
+  FOR it IN SELECT value FROM jsonb_array_elements(p_items) LIMIT 50 LOOP
+    IF COALESCE(it ->> 'id', '') !~ '^[0-9a-f-]{36}$' THEN CONTINUE; END IF;
+    SELECT COALESCE(f.client_id, (SELECT a.client_id FROM public.assessments a WHERE a.id = f.assessment_id)) INTO v_client
+      FROM public.findings f WHERE f.id = (it ->> 'id')::uuid AND f.scan_grouped;
+    IF v_client IS NOT NULL AND public.can_access_client(v_client) THEN v_ok := v_ok || jsonb_build_array(it); END IF;
+  END LOOP;
+  RETURN public._sgr_words(v_ok, NULL);
+END $sgpwords$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_words(jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_words(jsonb) TO authenticated;
+
+-- 2075: THE FIRM'S HOUSE STYLE, KEPT FOR ITS COLLECTORS: given by an admin's
+-- page, signed in afresh, whenever what Settings, Findings says differs from
+-- the copy kept (its `h`). { v: 1, h, evidence: the Evidence field's
+-- instructions, fields: [{ key, label, prompt, contract, type, id, def }],
+-- cvss: { ver, prompt, contract } or null }, held to that shape and size.
+CREATE OR REPLACE FUNCTION public.rpc_scan_style_save(p_style jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgpstyle$
+DECLARE fd jsonb;
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.mfa_is_fresh() OR public.current_user_role() IS DISTINCT FROM 'admin' THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'Only an administrator''s page keeps the house style.');
+  END IF;
+  IF jsonb_typeof(p_style) IS DISTINCT FROM 'object' OR length(p_style::text) > 300000 OR COALESCE(p_style ->> 'v', '') <> '1'
+     OR jsonb_typeof(p_style -> 'evidence') IS DISTINCT FROM 'string' OR jsonb_typeof(p_style -> 'fields') IS DISTINCT FROM 'array'
+     OR jsonb_array_length(p_style -> 'fields') > 80 OR COALESCE(length(p_style ->> 'h'), 0) NOT BETWEEN 1 AND 40
+     OR (p_style ? 'cvss' AND jsonb_typeof(p_style -> 'cvss') NOT IN ('null', 'object')) THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'That is not a house style.');
+  END IF;
+  FOR fd IN SELECT value FROM jsonb_array_elements(p_style -> 'fields') LOOP
+    IF jsonb_typeof(fd) IS DISTINCT FROM 'object' OR jsonb_typeof(fd -> 'key') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(fd -> 'prompt') IS DISTINCT FROM 'string' THEN
+      RETURN jsonb_build_object('ok', false, 'error', 'That is not a house style.');
+    END IF;
+  END LOOP;
+  IF jsonb_typeof(p_style -> 'cvss') = 'object' AND (COALESCE(p_style #>> '{cvss,ver}', '') NOT IN ('3.1', '4.0')
+     OR jsonb_typeof(p_style #> '{cvss,prompt}') IS DISTINCT FROM 'string') THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'That is not a house style.');
+  END IF;
+  IF (SELECT s.style ->> 'h' FROM public.scan_ai_style s WHERE s.id = 1) IS NOT DISTINCT FROM p_style ->> 'h' THEN
+    RETURN jsonb_build_object('ok', true, 'saved', false);
+  END IF;
+  INSERT INTO public.scan_ai_style (id, style, saved_at) VALUES (1, p_style, now())
+  ON CONFLICT (id) DO UPDATE SET style = EXCLUDED.style, saved_at = now();
+  RETURN jsonb_build_object('ok', true, 'saved', true);
+END $sgpstyle$;
+REVOKE ALL ON FUNCTION public.rpc_scan_style_save(jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_style_save(jsonb) TO authenticated;
+
+-- ── Group with AI on older scans: their findings folded in ─────────────────
+-- [stated] Arian, asked what Group with AI does to a client's scan findings
+-- made before grouping: "Folded into the groups" (their hosts, evidence and
+-- scan history moved into the grouped finding, then they are removed). Their
+-- latest results are read in as a run of their own (an upload, as it is the
+-- firm's page that brings them), grouped as any run is, and then each older
+-- finding's history (its scan results, its runs, its comments and tickets)
+-- is moved to the finding its issue went into and it is removed. A row of an
+-- older finding a scan had closed is kept as fixed, from when it was closed.
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_fold(p_client uuid, p_assessment uuid DEFAULT NULL) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $sgpfold$
+DECLARE v_run uuid; v_n int; v_who uuid := auth.uid();
+BEGIN
+  IF NOT public._sgr_may(p_client) THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
+  IF public._e2e_active() THEN RETURN jsonb_build_object('ok', false, 'error', 'Grouping is not available while your work is encrypted end to end.'); END IF;
+  IF p_assessment IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.assessments a WHERE a.id = p_assessment AND a.client_id = p_client) THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'That engagement is not this client''s.');
+  END IF;
+  SELECT count(*) INTO v_n FROM public.findings f
+   WHERE f.scan_fingerprint IS NOT NULL AND NOT f.scan_grouped AND public._sgr_in_scope(f, p_client, p_assessment);
+  IF v_n = 0 THEN RETURN jsonb_build_object('ok', true, 'none', true); END IF;
+  -- An earlier fold of the same that never finished (its page closed half
+  -- way) is let go: nothing of the older findings was removed by it, and
+  -- this one folds them all.
+  UPDATE public.scan_runs SET status = 'cancelled', group_state = NULL, group_on = false, claimed_by = NULL, lease_until = NULL,
+         stage = NULL, finished_at = now(), updated_at = now()
+   WHERE client_id = p_client AND assessment_id IS NOT DISTINCT FROM p_assessment AND status = 'importing'
+     AND COALESCE((group_ctx ->> 'fold')::boolean, false);
+  INSERT INTO public.scan_runs (client_id, assessment_id, status, trigger_source, triggered_by, name, started_at, imported_at,
+                                group_on, group_state, group_why, group_next_at, group_ctx, claimed_by, stage)
+  VALUES (p_client, p_assessment, 'importing', 'import', v_who, 'Earlier scan findings, grouped', now(), now(),
+          true, 'held', 'fold', now(),
+          jsonb_build_object('assess', p_assessment, 'floor', 0, 'full', false, 'fold', true, 'visible', false, 'min', 'info'),
+          NULL, 'Being grouped with your AI')
+  RETURNING id INTO v_run;
+  -- Each older finding's latest result on each host, or the finding itself
+  -- on each of its hosts where no result of it is kept.
+  INSERT INTO public.scan_results (run_id, finding_id, fingerprint, external_id, plugin_id, title, severity, cvss, cvss_vector, cve, cwe, category,
+                                   description, impact, remediation, evidence, refs, asset, port, protocol, service, state, first_seen, last_seen, raw)
+  SELECT DISTINCT ON (s.fingerprint) v_run, NULL, s.fingerprint, s.external_id, s.plugin_id, s.title, s.severity, s.cvss, s.cvss_vector, s.cve, s.cwe,
+         s.category, s.description, s.impact, s.remediation, s.evidence, s.refs, s.asset, s.port, s.protocol, s.service, 'recurring',
+         s.first_seen, s.last_seen,
+         COALESCE(s.raw, '{}'::jsonb) || jsonb_build_object('fold_from', f.id::text, 'gone', false,
+                                                            'fold_fixed', CASE WHEN f.status = 'remediated' THEN COALESCE(f.retest_completed_at, f.updated_at) END)
+    FROM public.findings f JOIN public.scan_results s ON s.finding_id = f.id
+   WHERE f.scan_fingerprint IS NOT NULL AND NOT f.scan_grouped AND public._sgr_in_scope(f, p_client, p_assessment)
+   ORDER BY s.fingerprint, s.created_at DESC
+  ON CONFLICT (run_id, fingerprint) DO NOTHING;
+  INSERT INTO public.scan_results (run_id, fingerprint, plugin_id, title, severity, cvss, cvss_vector, cwe, category, description, impact, remediation,
+                                   refs, asset, port, protocol, service, state, first_seen, last_seen, raw)
+  SELECT v_run, 'fold:' || f.id::text || ':' || md5(h), f.scan_plugin_id, f.title, f.severity, f.cvss, f.cvss_vector, f.cwe, f.category,
+         f.description, f.impact, f.remediation, COALESCE(f.refs, '[]'::jsonb), h,
+         CASE WHEN COALESCE(f.scan_port, '') ~ '^[0-9]{1,5}$' THEN f.scan_port::int END, f.scan_protocol, f.scan_service, 'recurring', f.created_at, f.updated_at,
+         jsonb_build_object('fold_from', f.id::text, 'scan_source', f.scan_source, 'title', f.title, 'plugin_id', f.scan_plugin_id,
+                            'fold_fixed', CASE WHEN f.status = 'remediated' THEN COALESCE(f.retest_completed_at, f.updated_at) END)
+    FROM public.findings f, LATERAL (SELECT DISTINCT btrim(x) AS h FROM regexp_split_to_table(COALESCE(f.affected_hosts, ''), E'[\n,]+') x
+                                      WHERE btrim(x) <> '') hh
+   WHERE f.scan_fingerprint IS NOT NULL AND NOT f.scan_grouped AND public._sgr_in_scope(f, p_client, p_assessment)
+     AND NOT EXISTS (SELECT 1 FROM public.scan_results s WHERE s.finding_id = f.id)
+  ON CONFLICT (run_id, fingerprint) DO NOTHING;
+  RETURN jsonb_build_object('ok', true, 'run_id', v_run, 'findings', v_n);
+END $sgpfold$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_fold(uuid, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_fold(uuid, uuid) TO authenticated;
+
+-- The fold finished, once its run has landed: each older finding's history
+-- moved to the finding its issue went into, its rows of a closed finding
+-- kept as fixed, and it removed. { ok, folded, kept } (kept: an older finding
+-- none of whose issues went anywhere, left as it was).
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_fold_finish(p_run_id uuid) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp AS $sgpfoldf$
+DECLARE r public.scan_runs := public._sgr_run_for_page(p_run_id); o record; v_to uuid; v_n int := 0; v_kept int := 0; v_assess uuid;
+BEGIN
+  IF NOT COALESCE((r.group_ctx ->> 'fold')::boolean, false) OR r.group_state <> 'grouped' THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'That is not a grouping of older findings that has landed.');
+  END IF;
+  v_assess := NULLIF(r.group_ctx ->> 'assess', '')::uuid;
+  FOR o IN SELECT DISTINCT (s.raw ->> 'fold_from')::uuid AS fid FROM public.scan_results s
+            WHERE s.run_id = p_run_id AND COALESCE(s.raw ->> 'fold_from', '') <> '' LOOP
+    SELECT s.finding_id INTO v_to FROM public.scan_results s
+     WHERE s.run_id = p_run_id AND s.raw ->> 'fold_from' = o.fid::text AND s.finding_id IS NOT NULL LIMIT 1;
+    IF v_to IS NULL THEN v_kept := v_kept + 1; CONTINUE; END IF;
+    -- A row of a finding a scan had closed is fixed from when it was closed.
+    UPDATE public.scan_finding_rows w SET fixed_at = (s.raw ->> 'fold_fixed')::timestamptz
+      FROM public.scan_results s
+     WHERE s.run_id = p_run_id AND s.raw ->> 'fold_from' = o.fid::text AND COALESCE(s.raw ->> 'fold_fixed', '') <> ''
+       AND w.finding_id = s.finding_id AND w.issue_key = public._sgr_key(s.plugin_id, s.title)
+       AND lower(w.host) = lower(COALESCE(btrim(s.asset), '')) AND w.port = public._sgr_port(s.port, s.protocol);
+    UPDATE public.scan_results SET finding_id = v_to WHERE finding_id = o.fid;
+    UPDATE public.qa_comments SET finding_id = v_to WHERE finding_id = o.fid;
+    UPDATE public.finding_tickets t SET finding_id = v_to WHERE t.finding_id = o.fid
+       AND NOT EXISTS (SELECT 1 FROM public.finding_tickets t2 WHERE t2.finding_id = v_to AND t2.tracker_id = t.tracker_id);
+    UPDATE public.findings f SET scan_run_ids = ARRAY(SELECT DISTINCT x FROM unnest(COALESCE(f.scan_run_ids, '{}') || COALESCE(old.scan_run_ids, '{}')) x),
+           scan_evidence_stale = true
+      FROM public.findings old WHERE f.id = v_to AND old.id = o.fid;
+    DELETE FROM public.findings WHERE id = o.fid AND scan_fingerprint IS NOT NULL AND NOT scan_grouped;
+    v_n := v_n + 1;
+  END LOOP;
+  -- What the fold's own run touched, laid out again with the fixed rows.
+  UPDATE public.findings f SET
+    status = CASE WHEN NOT EXISTS (SELECT 1 FROM public.scan_finding_rows w WHERE w.finding_id = f.id AND w.fixed_at IS NULL) AND f.status = 'open'
+                  THEN 'remediated' ELSE f.status END,
+    retest_status = CASE WHEN NOT EXISTS (SELECT 1 FROM public.scan_finding_rows w WHERE w.finding_id = f.id AND w.fixed_at IS NULL) AND f.status = 'open'
+                         THEN 'passed' ELSE f.retest_status END,
+    retest_completed_at = CASE WHEN NOT EXISTS (SELECT 1 FROM public.scan_finding_rows w WHERE w.finding_id = f.id AND w.fixed_at IS NULL) AND f.status = 'open'
+                               THEN now() ELSE f.retest_completed_at END,
+    retest_completed_by = CASE WHEN NOT EXISTS (SELECT 1 FROM public.scan_finding_rows w WHERE w.finding_id = f.id AND w.fixed_at IS NULL) AND f.status = 'open'
+                               THEN 'Automated scan' ELSE f.retest_completed_by END,
+    affected_hosts = COALESCE((SELECT string_agg(h, E'\n' ORDER BY h) FROM (SELECT DISTINCT w.host AS h FROM public.scan_finding_rows w
+                       WHERE w.finding_id = f.id AND w.host <> '' AND w.fixed_at IS NULL) hh), f.affected_hosts),
+    scan_evidence_stale = true
+   WHERE f.scan_grouped AND public._sgr_in_scope(f, r.client_id, v_assess)
+     AND EXISTS (SELECT 1 FROM public.scan_results s WHERE s.run_id = p_run_id AND s.finding_id = f.id);
+  UPDATE public.scan_runs SET status = 'completed', finished_at = now(), claimed_by = NULL, lease_until = NULL, stage = NULL,
+         exec_summary = v_n || CASE WHEN v_n = 1 THEN ' earlier scan finding' ELSE ' earlier scan findings' END || ' folded into grouped findings.',
+         updated_at = now()
+   WHERE id = p_run_id;
+  RETURN jsonb_build_object('ok', true, 'folded', v_n, 'kept', v_kept,
+    'touched', (SELECT COALESCE(jsonb_agg(DISTINCT s.finding_id), '[]'::jsonb) FROM public.scan_results s WHERE s.run_id = p_run_id AND s.finding_id IS NOT NULL));
+END $sgpfoldf$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_fold_finish(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_fold_finish(uuid) TO authenticated;
+
+-- A grouped finding put right from its rows: its hosts still affected, its
+-- worst open rating (the firm's score standing where its library entry gave
+-- one), remediated when every row is fixed and open again when one is found
+-- again, as a scan's landing does (_sgr_land), and its evidence laid out
+-- again.
+CREATE OR REPLACE FUNCTION public._sgr_refresh(p_fid uuid) RETURNS void
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog, pg_temp AS $sgrrefresh$
+DECLARE v_f public.findings; v_n int; v_open int; v_kbs boolean; v_sev text; v_cvss numeric; v_vec text;
+BEGIN
+  SELECT * INTO v_f FROM public.findings WHERE id = p_fid AND scan_grouped;
+  IF NOT FOUND THEN RETURN; END IF;
+  SELECT count(*), count(*) FILTER (WHERE fixed_at IS NULL) INTO v_n, v_open FROM public.scan_finding_rows WHERE finding_id = p_fid;
+  IF v_n = 0 THEN RETURN; END IF;
+  v_kbs := v_f.scan_scored OR (v_f.scan_kb_id IS NOT NULL AND EXISTS (SELECT 1 FROM public.kb_entries k WHERE k.id = v_f.scan_kb_id AND COALESCE(k.cvss, 0) > 0));
+  SELECT w.severity INTO v_sev FROM public.scan_finding_rows w
+   WHERE w.finding_id = p_fid AND (v_open = 0 OR w.fixed_at IS NULL) ORDER BY public._scan_sev_rank(w.severity) DESC LIMIT 1;
+  SELECT w.cvss, w.cvss_vector INTO v_cvss, v_vec FROM public.scan_finding_rows w
+   WHERE w.finding_id = p_fid AND (v_open = 0 OR w.fixed_at IS NULL) AND COALESCE(w.cvss, 0) > 0 ORDER BY w.cvss DESC LIMIT 1;
+  UPDATE public.findings SET
+    affected_hosts = (SELECT string_agg(h, E'\n' ORDER BY h) FROM (SELECT DISTINCT w.host AS h FROM public.scan_finding_rows w
+                       WHERE w.finding_id = p_fid AND w.host <> '' AND (v_open = 0 OR w.fixed_at IS NULL)) hh),
+    severity = CASE WHEN v_kbs THEN v_f.severity ELSE COALESCE(v_sev, v_f.severity) END,
+    cvss = CASE WHEN v_kbs THEN v_f.cvss ELSE COALESCE(v_cvss, v_f.cvss, 0) END,
+    cvss_vector = CASE WHEN v_kbs THEN v_f.cvss_vector ELSE COALESCE(v_vec, v_f.cvss_vector) END,
+    status = CASE WHEN v_open = 0 AND v_f.status = 'open' THEN 'remediated'
+                  WHEN v_open > 0 AND v_f.status = 'remediated' AND v_f.retest_completed_by = 'Automated scan' THEN 'open' ELSE v_f.status END,
+    retest_status = CASE WHEN v_open = 0 AND v_f.status = 'open' THEN 'passed'
+                         WHEN v_open > 0 AND v_f.status = 'remediated' AND v_f.retest_completed_by = 'Automated scan' THEN NULL ELSE v_f.retest_status END,
+    retest_completed_at = CASE WHEN v_open = 0 AND v_f.status = 'open' THEN now()
+                               WHEN v_open > 0 AND v_f.status = 'remediated' AND v_f.retest_completed_by = 'Automated scan' THEN NULL ELSE v_f.retest_completed_at END,
+    retest_completed_by = CASE WHEN v_open = 0 AND v_f.status = 'open' THEN 'Automated scan'
+                               WHEN v_open > 0 AND v_f.status = 'remediated' AND v_f.retest_completed_by = 'Automated scan' THEN NULL ELSE v_f.retest_completed_by END,
+    scan_evidence_stale = true, updated_at = now()
+   WHERE id = p_fid;
+END $sgrrefresh$;
+REVOKE ALL ON FUNCTION public._sgr_refresh(uuid) FROM PUBLIC, anon, authenticated;
+
+-- GROUP AGAIN, on a grouped finding (a tester's choice, with what to change):
+-- its issues the model put elsewhere moved, each into the client's grouped
+-- finding it named or a new one, with their rows, their scan history and the
+-- map later scans follow. p_groups: [{ existing: a grouped finding's id, or
+-- title and kb, issues: [issue keys of this finding's] }]; what no group names
+-- stays. At least one issue stays: the finding, and anything written on it,
+-- is never emptied. { ok, moved, created, touched }.
+CREATE OR REPLACE FUNCTION public.rpc_scan_group_regroup(p_finding_id uuid, p_groups jsonb) RETURNS jsonb
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_catalog, pg_temp SET plan_cache_mode = force_custom_plan AS $sgpregroup$
+DECLARE v_f0 public.findings; v_client uuid; g jsonb; v_keys text[]; v_all text[]; v_mine text[]; v_to uuid; v_kb public.kb_entries; v_kbid uuid;
+        v_top public.scan_finding_rows; v_src public.scan_results; v_title text; v_touched uuid[]; v_created int := 0; v_moved int := 0;
+        v_lib_ok boolean := NOT (public.current_user_role() = 'contractor' AND NOT public._contractor_library_on());
+BEGIN
+  SELECT * INTO v_f0 FROM public.findings WHERE id = p_finding_id FOR UPDATE;
+  IF NOT FOUND OR NOT COALESCE(v_f0.scan_grouped, false) THEN RETURN jsonb_build_object('ok', false, 'error', 'That is not a finding grouped from scans.'); END IF;
+  v_client := COALESCE(v_f0.client_id, (SELECT a.client_id FROM public.assessments a WHERE a.id = v_f0.assessment_id));
+  IF NOT public._sgr_may(v_client) THEN RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501'; END IF;
+  IF public._e2e_active() THEN RETURN jsonb_build_object('ok', false, 'error', 'Grouping is not available while your work is encrypted end to end.'); END IF;
+  IF jsonb_typeof(p_groups) IS DISTINCT FROM 'array' THEN RETURN jsonb_build_object('ok', false, 'error', 'The groups are not a list.'); END IF;
+  v_mine := ARRAY(SELECT sg.issue_key FROM public.scan_groups sg WHERE sg.finding_id = p_finding_id);
+  v_all := ARRAY(SELECT DISTINCT x FROM jsonb_array_elements(p_groups) gg,
+                   jsonb_array_elements_text(CASE WHEN jsonb_typeof(gg -> 'issues') = 'array' THEN gg -> 'issues' ELSE '[]'::jsonb END) x
+                  WHERE x = ANY (v_mine));
+  IF cardinality(v_mine) > 0 AND cardinality(v_all) >= cardinality(v_mine) THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'At least one of its issues stays in this finding.');
+  END IF;
+  v_touched := ARRAY[p_finding_id];
+  FOR g IN SELECT value FROM jsonb_array_elements(p_groups) LOOP
+    v_keys := ARRAY(SELECT DISTINCT x FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(g -> 'issues') = 'array' THEN g -> 'issues' ELSE '[]'::jsonb END) x
+                     WHERE x = ANY (v_mine)
+                       AND EXISTS (SELECT 1 FROM public.scan_groups sg WHERE sg.finding_id = p_finding_id AND sg.issue_key = x));
+    IF cardinality(v_keys) = 0 THEN CONTINUE; END IF;
+    v_to := NULL;
+    IF COALESCE(g ->> 'existing', '') ~ '^[0-9a-f-]{36}$' AND (g ->> 'existing')::uuid <> p_finding_id THEN
+      SELECT f.id INTO v_to FROM public.findings f
+       WHERE f.id = (g ->> 'existing')::uuid AND f.scan_grouped AND public._sgr_in_scope(f, v_client, v_f0.assessment_id);
+    END IF;
+    IF v_to IS NULL THEN
+      SELECT w.* INTO v_top FROM public.scan_finding_rows w WHERE w.finding_id = p_finding_id AND w.issue_key = ANY (v_keys)
+       ORDER BY (w.fixed_at IS NULL) DESC, public._scan_sev_rank(w.severity) DESC, COALESCE(w.cvss, 0) DESC, w.title LIMIT 1;
+      SELECT x.* INTO v_src FROM public.scan_results x
+       WHERE x.finding_id = p_finding_id AND public._sgr_key(x.plugin_id, x.title) = ANY (v_keys)
+       ORDER BY public._scan_sev_rank(x.severity) DESC, x.created_at DESC LIMIT 1;
+      v_title := left(NULLIF(btrim(regexp_replace(COALESCE(g ->> 'title', ''), '\s+', ' ', 'g')), ''), 300);
+      v_kb := NULL; v_kbid := NULL;
+      IF v_lib_ok AND COALESCE(g ->> 'kb', '') ~ '^[0-9a-f-]{36}$' THEN
+        SELECT * INTO v_kb FROM public.kb_entries WHERE id = (g ->> 'kb')::uuid;
+      END IF;
+      IF v_lib_ok AND v_kb.id IS NULL AND v_title IS NOT NULL THEN
+        SELECT * INTO v_kb FROM public.kb_entries WHERE public._pental_title_key(title) = public._pental_title_key(v_title)
+         ORDER BY updated_at DESC NULLS LAST LIMIT 1;
+      END IF;
+      v_kbid := v_kb.id;
+      v_to := gen_random_uuid();
+      INSERT INTO public.findings (
+        id, client_id, assessment_id, title, severity, status, cwe, category, description, impact, remediation, refs,
+        cvss, cvss_vector, client_visible, phase, source, scan_fingerprint, scan_run_id, scan_run_ids, scan_last_seen,
+        evidence, scan_source, scan_grouped, scan_words_pending, scan_kb_id, scan_evidence_stale
+      ) VALUES (
+        v_to, v_f0.client_id, v_f0.assessment_id,
+        COALESCE(NULLIF(btrim(COALESCE(v_kb.title, '')), ''), v_title, NULLIF(btrim(v_top.title), ''), 'Unnamed finding'),
+        CASE WHEN v_kbid IS NOT NULL AND COALESCE(v_kb.cvss, 0) > 0 THEN COALESCE(public._sgr_rating(v_kb.cvss), COALESCE(v_top.severity, 'info'))
+             ELSE COALESCE(v_top.severity, 'info') END,
+        'open',
+        COALESCE(NULLIF(btrim(COALESCE(v_kb.cwe, '')), ''), NULLIF(v_src.cwe, '')),
+        COALESCE(NULLIF(btrim(COALESCE(v_kb.category, '')), ''), NULLIF(v_src.category, '')),
+        CASE WHEN v_kbid IS NOT NULL AND COALESCE(btrim(v_kb.description), '') <> '' THEN v_kb.description ELSE v_src.description END,
+        CASE WHEN v_kbid IS NOT NULL AND COALESCE(btrim(v_kb.impact), '') <> '' THEN v_kb.impact ELSE v_src.impact END,
+        CASE WHEN v_kbid IS NOT NULL AND COALESCE(btrim(v_kb.recommendation), '') <> '' THEN v_kb.recommendation ELSE v_src.remediation END,
+        CASE WHEN v_kbid IS NOT NULL AND jsonb_typeof(v_kb.refs) = 'array' AND jsonb_array_length(v_kb.refs) > 0 THEN v_kb.refs
+             WHEN jsonb_typeof(v_src.refs) = 'array' THEN v_src.refs ELSE '[]'::jsonb END,
+        CASE WHEN v_kbid IS NOT NULL AND COALESCE(v_kb.cvss, 0) > 0 THEN v_kb.cvss ELSE COALESCE(v_top.cvss, 0) END,
+        CASE WHEN v_kbid IS NOT NULL AND COALESCE(v_kb.cvss, 0) > 0 THEN NULLIF(btrim(COALESCE(v_kb.cvss_vector, '')), '') ELSE v_top.cvss_vector END,
+        v_f0.client_visible, v_f0.phase, 'scan', 'grp:' || v_to::text, v_f0.scan_run_id, v_f0.scan_run_ids, v_f0.scan_last_seen,
+        '[]'::jsonb, v_f0.scan_source, true, true, v_kbid, true
+      );
+      v_created := v_created + 1;
+    END IF;
+    -- The map later scans follow, the rows (an older row of the same issue in
+    -- the finding it goes into let go first), and the scan history.
+    UPDATE public.scan_groups SET finding_id = v_to WHERE finding_id = p_finding_id AND issue_key = ANY (v_keys);
+    DELETE FROM public.scan_finding_rows t WHERE t.finding_id = v_to AND t.issue_key = ANY (v_keys);
+    UPDATE public.scan_finding_rows SET finding_id = v_to WHERE finding_id = p_finding_id AND issue_key = ANY (v_keys);
+    UPDATE public.scan_results x SET finding_id = v_to WHERE x.finding_id = p_finding_id AND public._sgr_key(x.plugin_id, x.title) = ANY (v_keys);
+    UPDATE public.findings f SET scan_run_ids = ARRAY(SELECT DISTINCT y FROM unnest(COALESCE(f.scan_run_ids, '{}') || COALESCE(v_f0.scan_run_ids, '{}')) y)
+     WHERE f.id = v_to;
+    v_touched := array_append(v_touched, v_to);
+    v_mine := ARRAY(SELECT k FROM unnest(v_mine) k WHERE NOT (k = ANY (v_keys)));
+    v_moved := v_moved + cardinality(v_keys);
+  END LOOP;
+  IF v_moved > 0 THEN
+    PERFORM public._sgr_refresh(t) FROM (SELECT DISTINCT t FROM unnest(v_touched) t) tt;
+    IF v_f0.assessment_id IS NOT NULL THEN
+      BEGIN
+        INSERT INTO public.timeline_events (assessment_id, event, title, user_name)
+        VALUES (v_f0.assessment_id, '"' || left(v_f0.title, 120) || '" grouped again: ' || v_moved || CASE WHEN v_moved = 1 THEN ' issue' ELSE ' issues' END
+                  || ' moved, ' || v_created || CASE WHEN v_created = 1 THEN ' new finding' ELSE ' new findings' END,
+                'Scan finding grouped again', COALESCE((SELECT p.name FROM public.profiles p WHERE p.id = public.current_profile_id()), 'Your team'));
+      EXCEPTION WHEN OTHERS THEN NULL; END;
+    END IF;
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'moved', v_moved, 'created', v_created,
+    'touched', (SELECT COALESCE(jsonb_agg(DISTINCT t), '[]'::jsonb) FROM unnest(v_touched) t));
+END $sgpregroup$;
+REVOKE ALL ON FUNCTION public.rpc_scan_group_regroup(uuid, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.rpc_scan_group_regroup(uuid, jsonb) TO authenticated;
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -30065,6 +31483,8 @@ BEGIN
             WHERE claimed_by IS NOT NULL AND lease_until < now() AND status IN ('starting', 'running', 'importing')
               -- 2018: one waiting for the firm's next browser is not lost.
               AND NOT EXISTS (SELECT 1 FROM public._e2e_scan_queue q WHERE q.run_id = scan_runs.id)
+              -- 2072: nor one waiting to be grouped with AI, all its results in.
+              AND COALESCE(group_state, '') NOT IN ('held', 'grouping')
             ORDER BY lease_until LIMIT 50 FOR UPDATE SKIP LOCKED LOOP
     n := n + 1;
     IF r.imported_at IS NOT NULL THEN
@@ -30095,6 +31515,7 @@ BEGIN
   FOR r IN SELECT s.id, s.trigger_source FROM public.scan_runs s
             WHERE s.claimed_by IS NULL AND s.status IN ('starting', 'running', 'importing') AND s.updated_at < now() - interval '24 hours'
               AND NOT EXISTS (SELECT 1 FROM public._e2e_scan_queue q WHERE q.run_id = s.id)
+              AND COALESCE(s.group_state, '') NOT IN ('held', 'grouping')
               AND (s.updated_at < now() - interval '7 days'
                    OR NOT EXISTS (SELECT 1 FROM public._scan_pushes x WHERE x.run_id = s.id AND x.state = 'waiting'))
             ORDER BY s.updated_at LIMIT 50 FOR UPDATE OF s SKIP LOCKED LOOP
@@ -30129,6 +31550,12 @@ BEGIN
     'scan_ai_write', COALESCE(v_s.scan_ai_write, true),
     'scan_finding_prompt', v_s.scan_finding_prompt,
     'scan_exec_summary_prompt', v_s.scan_exec_summary_prompt,
+    -- 2072: whether a run's results are grouped into report findings with
+    -- AI, and the firm's own instructions for it (Settings, Findings).
+    'ai_group', COALESCE(v_s.scan_ai_group, false) AND NOT public._e2e_active(),
+    'ai_group_text', left(COALESCE(to_jsonb(v_s) #>> '{finding_fields,ai_group_text}', ''), 3000),
+    -- 2075: the firm's house style for what its collectors write up.
+    'scan_ai_style', (SELECT st.style FROM public.scan_ai_style st WHERE st.id = 1),
     'ai', jsonb_build_object(
       'provider', lower(COALESCE(NULLIF(btrim(v_s.ai_provider), ''), '')),
       'model', NULLIF(btrim(COALESCE(v_s.ai_custom_model, '')), ''),
@@ -30301,6 +31728,30 @@ BEGIN
       v_jobs := v_jobs || jsonb_build_array(jsonb_build_object('kind', 'push', 'push_id', v_t.id, 'run_id', v_t.run_id,
         'provider', v_sp.provider, 'provider_id', v_sp.id, 'filename', v_t.filename, 'body', v_t.body,
         'map', COALESCE(v_sp.config -> 'map', 'null'::jsonb), 'lease_seconds', extract(epoch FROM v_lease)::integer));
+      v_free := v_free - 1;
+    END LOOP;
+  END IF;
+
+  -- 2072: A RUN WAITING TO BE GROUPED WITH AI, DUE AGAIN, of a scanner this
+  -- collector reaches or of a scanner's output it read: grouped here with the
+  -- firm's model, while nobody has Pental open. Never on a customer's
+  -- collector, and only where the firm's database can ask its model.
+  IF v_free > 0 AND public._ai_sender() IS NOT NULL
+     AND (w.w_kind = 'worker' OR (v_p.client_id IS NULL AND v_p.token_from_pental_at IS NULL)) THEN
+    FOR v_t IN
+      SELECT r.id, r.name, r.targets FROM public.scan_runs r
+       WHERE r.group_state = 'held' AND COALESCE(r.group_on, false) AND r.group_next_at <= now()
+         AND r.status = 'importing' AND r.claimed_by IS NULL AND r.trigger_source <> 'import'
+         AND NOT public._sgr_customer(r)
+         AND (CASE WHEN w.w_kind = 'collector'
+                   THEN r.provider_id = w.w_provider OR EXISTS (SELECT 1 FROM public._scan_pushes x WHERE x.run_id = r.id)
+                   ELSE r.provider_id IN (SELECT sp.id FROM public.scan_providers sp WHERE sp.connection = 'direct' AND sp.client_id IS NULL)
+                        OR EXISTS (SELECT 1 FROM public._scan_pushes x WHERE x.run_id = r.id) END)
+       ORDER BY r.group_next_at LIMIT v_free FOR UPDATE OF r SKIP LOCKED
+    LOOP
+      UPDATE public.scan_runs SET claimed_by = w.w_holder, lease_until = now() + v_lease, updated_at = now() WHERE id = v_t.id;
+      v_jobs := v_jobs || jsonb_build_array(jsonb_build_object('kind', 'group', 'run_id', v_t.id, 'name', v_t.name,
+        'targets', COALESCE(v_t.targets, '[]'::jsonb), 'lease_seconds', extract(epoch FROM v_lease)::integer));
       v_free := v_free - 1;
     END LOOP;
   END IF;
@@ -30547,6 +31998,23 @@ BEGIN
   IF p_status = 'completed' AND r.imported_at IS NULL THEN
     RETURN jsonb_build_object('ok', false, 'error', 'Send the last of the results first.');
   END IF;
+  -- 2072: a run waiting to be grouped with AI is closed once it is
+  -- (_sgr_close), as this says; the collector lets go of it now. One that
+  -- failed is closed as failed, its results never grouped.
+  IF r.group_state IN ('held', 'grouping') THEN
+    v_customer := public._sgr_customer(r);
+    IF p_status = 'completed' THEN
+      UPDATE public.scan_runs SET
+        group_finish = jsonb_build_object('status', 'completed',
+                                          'exec', CASE WHEN v_customer THEN NULL ELSE p_exec_summary END,
+                                          'html', CASE WHEN v_customer THEN NULL ELSE p_summary_html END,
+                                          'notice', CASE WHEN jsonb_typeof(p_notice) = 'object' AND NOT v_customer THEN p_notice END),
+        claimed_by = NULL, lease_until = NULL, updated_at = now()
+       WHERE id = p_run_id;
+      RETURN jsonb_build_object('ok', true, 'deferred', true, 'held', true);
+    END IF;
+    UPDATE public.scan_runs SET group_state = NULL, group_on = false WHERE id = p_run_id;
+  END IF;
   -- The notice and the summary in the collector's words only from the firm's
   -- own collector or server: a collector on a customer's network is the
   -- customer's machine, and an email in the firm's name, or the summary the
@@ -30651,7 +32119,9 @@ BEGIN
   END IF;
   -- Counted on the run, as the requests themselves are purged after half an
   -- hour and a run is held far longer.
-  UPDATE public.scan_runs SET ai_asked = ai_asked + 1 WHERE id = p_run_id AND ai_asked < 6;
+  -- 2072: a run grouped with AI asks once for every 160 issues, and again
+  -- each time it is tried: forty more.
+  UPDATE public.scan_runs SET ai_asked = ai_asked + 1 WHERE id = p_run_id AND ai_asked < CASE WHEN COALESCE(group_on, false) THEN 46 ELSE 6 END;
   IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'run_limit'); END IF;
   RETURN public._ai_submit_core('chat', p_body, NULL, NULL, p_run_id);
 END $cai$;
@@ -31129,6 +32599,17 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'That import is not yours');
   END IF;
   IF p_status = 'completed' AND r.imported_at IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'Send the last of the results first.'); END IF;
+  -- 2072: an upload waiting to be grouped with AI is finished once it is
+  -- (_sgr_close); the page lets go of it now.
+  IF r.group_state IN ('held', 'grouping') THEN
+    IF p_status = 'completed' THEN
+      UPDATE public.scan_runs SET group_finish = jsonb_build_object('status', 'completed', 'upload', true),
+             claimed_by = NULL, lease_until = NULL, updated_at = now()
+       WHERE id = p_run_id;
+      RETURN jsonb_build_object('ok', true, 'deferred', true, 'held', true);
+    END IF;
+    UPDATE public.scan_runs SET group_state = NULL, group_on = false WHERE id = p_run_id;
+  END IF;
   v_fin := public._scan_finish_core(p_run_id, p_status, CASE WHEN p_status = 'completed' THEN public._scan_short_summary(r.counts, r.hosts_scanned) END,
                                     NULL, CASE WHEN p_status = 'failed' THEN left(COALESCE(NULLIF(p_error, ''), 'The import failed'), 400) END);
   UPDATE public.scan_runs SET claimed_by = NULL, lease_until = NULL WHERE id = p_run_id;
@@ -51016,9 +52497,9 @@ UPDATE public.settings SET password_login_enabled = true, sso_google_enabled = f
 -- re-run of this file skips work keyed on it).
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._pental_schema_version FROM PUBLIC, anon, authenticated;
 
--- schema-fingerprint: 7ec03e77cdc023db @ 2025112301
+-- schema-fingerprint: 9f1f2bf8ca8eb6bf @ 2025112402
 INSERT INTO public._pental_schema_version (id, version, applied_at)
-VALUES (1, 2025112301, now())
+VALUES (1, 2025112402, now())
 ON CONFLICT (id) DO UPDATE
   SET version = EXCLUDED.version, applied_at = now();
 

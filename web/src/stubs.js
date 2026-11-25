@@ -110,6 +110,7 @@ var _qaResumeKind = null;
 function _qaReviewCopyAction() { return null; }
 function _qaSelClear() { return; }
 function _qaStickSync() { return; }
+function _qaStoredHtml() { return; }
 function _qaTargetOf() { return {}; }
 function _qaTypedOpen() { return; }
 function _qaWhere() { return; }

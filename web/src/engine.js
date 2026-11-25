@@ -292,7 +292,7 @@ function _evidenceDisplayHtml(rawEvidence, figFn) {
       _eb += '<div style="margin-bottom:1rem">' + _evFigFn(renderHtmlContent(String(ev.content))) + '</div>';
     }
   });
-  return _eb;
+  return _eb.indexOf('#pental-appendix-') >= 0 && typeof _apxLinksNow === 'function' ? _apxLinksNow(_eb) : _eb;
 }
 function _rewriteStorageSrc(html) {
 
@@ -584,6 +584,8 @@ async function prefetchEvidenceImages(findings, assessment) {
   if (assessment) {
     _html(assessment.retest_summary);
     _html(assessment.exec_summary);
+
+    try { var _ssv = _smParseVals(assessment); Object.keys(_ssv).forEach(function (k) { if (/^(es|rs):/.test(k) && typeof _ssv[k] === 'string') _html(_ssv[k]); }); } catch (e) {}
     var ap = []; try { ap = assessment.appendices ? (typeof assessment.appendices === 'string' ? JSON.parse(assessment.appendices) : assessment.appendices) : []; } catch(e) {}
     ap.forEach(function(a) { _jsonb(a.items); });
   }
@@ -5540,6 +5542,8 @@ function _richHtmlToCell(html) {
   var out = { runs: [], images: [] };
   if (!html || typeof html !== 'string') return out;
 
+  if (html.indexOf(_APX_HREF) >= 0 && typeof _apxRelabelHtml === 'function') { try { html = _apxRelabelHtml(html, _apxIndex('doc')); } catch (e) {} }
+
   var container;
   try {
     container = new DOMParser().parseFromString('<div>' + html + '</div>', 'text/html').body.firstChild;
@@ -5925,8 +5929,10 @@ function _ffImportStatus(v) {
   return map[t] || null;
 }
 function _ffImportSame(a, b) {
+  var ax = _apxNumAnyRe();
   var n = function (x) {
-    return String(x == null ? '' : x).replace(/\r/g, '').replace(/\{\{\s*fig\s*\}\}|\bFigure \d+\b/gi, '{{fig}}')
+    return String(x == null ? '' : x).replace(/\r/g, '').replace(/\{\{\s*fig\s*\}\}/gi, '{{fig}}').replace(_figAnyRe('gi'), '{{fig}}')
+      .replace(ax, '$1 #')
       .split('\n').map(function (l) { return l.replace(/[ \t ]+/g, ' ').trim(); }).filter(Boolean).join('\n');
   };
 
@@ -6871,6 +6877,43 @@ function _sanitiseSheetName(name) {
   var clean = String(name || '').replace(/[:\\\/\?\*\[\]]/g, '').trim();
   return clean.slice(0, 31) || 'Sheet';
 }
+function _figNames() {
+  var c = (typeof _ffCfg === 'function' ? _ffCfg() : null) || {};
+  return { word: _nameWord(c.fig_word, _FIG_WORD), num: c.fig_num === 'I' || c.fig_num === 'A' ? c.fig_num : '1' };
+}
+function _figName(n, nm) { nm = nm || _figNames(); return nm.word + ' ' + _numStyled(n, nm.num); }
+function _numPat(style) { return style === 'I' ? '[IVXLCDM]+' : (style === 'A' ? '[A-Z]{1,3}' : '\\d+'); }
+function _numBack(t, style) {
+  t = String(t || '').trim();
+  if (style === 'I') {
+    var v = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 }, n = 0;
+    for (var i = 0; i < t.length; i++) { var a = v[t.charAt(i)] || 0, b = v[t.charAt(i + 1)] || 0; n += a < b ? -a : a; }
+    return n || null;
+  }
+  if (style === 'A') { var k = 0; for (var j = 0; j < t.length; j++) k = k * 26 + (t.charCodeAt(j) - 64); return k || null; }
+  var d = parseInt(t, 10);
+  return isNaN(d) ? null : d;
+}
+function _figLabelSrc(nm) {
+  nm = nm || _figNames();
+  return String(nm.word).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '[ \\u00a0]+') + '[ \\u00a0]+' + _numPat(nm.num);
+}
+function _apxNumAnyRe() {
+  var w = [];
+  try { w.push(_apxNames().word); } catch (e) {}
+  if (w.indexOf(_APX_WORD) < 0) w.push(_APX_WORD);
+  var words = w.map(function (x) { return String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }).join('|');
+  return new RegExp('\\b(' + words + ') (?:[A-Z]{1,3}|\\d{1,4}|[IVXLCDM]{1,8})(?:[.\\-]\\d{1,3})?(?=[:\\s\\-.,;)]|$)', 'g');
+}
+function _figAnyRe(flags) { return new RegExp('(?:\\b|^)(?:' + _figLabelSrc() + '|Figure[ \\u00a0]+\\d+)(?![\\w])', flags || 'g'); }
+function _figLead(cap) {
+  var nm = _figNames(), t = String(cap == null ? '' : cap);
+  var m = new RegExp('^(?:' + String(nm.word).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '[ \\u00a0]+') + ')[ \\u00a0]+(' + _numPat(nm.num) + ')(?![\\w.])\\s*[-\\u2013:]?\\s*([\\s\\S]*)$').exec(t);
+  if (m) return { n: _numBack(m[1], nm.num), rest: m[2] };
+  m = /^Figure\s+(\d+)(?![\w.])\s*[-\u2013:]?\s*([\s\S]*)$/i.exec(t);
+  return m ? { n: parseInt(m[1], 10), rest: m[2] } : null;
+}
+window._figName = _figName;
 function _makeFigCounter() {
   var n = 0;
 
@@ -6878,7 +6921,7 @@ function _makeFigCounter() {
     if (!text) return text;
     return String(text).replace(/\{\{\s*fig\s*\}\}/gi, function() {
       n++;
-      return 'Figure ' + n;
+      return _figName(n);
     });
   };
   fn.current = function() { return n; };
@@ -6892,7 +6935,7 @@ function _figCount(html) {
 function _figShown(f) {
   if (!f) return false;
   if (S.profile && S.profile.role === 'client') return true;
-  return f.client_visible === true;
+  return true;
 }
 function _figOffMark(tip, said) {
   return '<span class="fig-off" title="' + esc(tip || 'Not numbered yet: this finding is hidden from the client. It takes its number when they can see it, so it never moves the numbers they already have.') + '" aria-label="' + esc(said || 'Figure, not numbered: hidden from the client') + '">'
@@ -6907,7 +6950,7 @@ function _figSeq(from) {
   }
   var n = from || 0;
   return function (html) {
-    return _figDash(html).replace(/\{\{fig\}\}/g, function () { n++; return 'Figure ' + n; });
+    return _figDash(html).replace(/\{\{fig\}\}/g, function () { n++; return _figName(n); });
   };
 }
 function _figNumber(html, from) { return _figSeq(from)(html); }
@@ -7086,10 +7129,10 @@ async function _buildFindingsSheet(workbook, sheetName, findings, assessment, ac
             var cap = (img.caption || '').toString().trim();
             var figNum = null;
             var captionText = cap;
-            var m = cap.match(/^Figure\s+(\d+)\s*[-–:]?\s*(.*)$/i);
-            if (m) {
-              figNum = parseInt(m[1], 10);
-              captionText = (m[2] || '').trim();
+            var m = _figLead(cap);
+            if (m && m.n != null) {
+              figNum = m.n;
+              captionText = (m.rest || '').trim();
             }
             figureCatalog.push({
               figNum: figNum,
@@ -7306,7 +7349,7 @@ async function _buildEvidenceSheet(workbook, figureCatalog) {
     var linkFont = { color: { argb: 'FF0563C1' }, underline: true, name: 'Calibri', size: 11 };
 
     if (entry.figNum != null) {
-      row.getCell('fig').value = { text: 'Figure ' + entry.figNum, hyperlink: target };
+      row.getCell('fig').value = { text: _figName(entry.figNum), hyperlink: target };
       row.getCell('fig').font = linkFont;
     } else {
       row.getCell('fig').value = '';
@@ -8842,13 +8885,7 @@ function _renderFindingRow(f, a, isClient, opts) {
 
   if (!isClient && !(opts && opts.affected)) {
 
-    var _mkDraft = false;
-    try { _mkDraft = _findingMissingOnRecord(f).length > 0; } catch (e) { _mkDraft = false; }
-
-    r += '<td><label class="tpl-toggle" style="margin:0"'
-      + (_mkDraft ? ' title="A required field is empty, so this is a draft until it is filled in."' : '')
-      + '><input type="checkbox"' + (f.is_draft ? ' checked' : '') + (_mkDraft ? ' checked disabled' : '')
-      + ' onchange="toggleFindingDraft(\'' + f.id + '\',this.checked)"><span class="tpl-toggle-track"></span></label></td>';
+    r += '<td><div class="fd-draft-cell">' + _draftSwitchHtml(f, { label: false, chip: 'short' }) + '</div></td>';
 
     var _fToggle = f.client_visible ? ' checked' : '';
     r += '<td><label class="tpl-toggle" style="margin:0"><input type="checkbox"' + _fToggle
@@ -10136,7 +10173,7 @@ function _mfaVerifiedNow(method) {
   try { _updateActivity(); } catch (e) {}
   try { _stopMfaScreenWatch(); } catch (e) {}
 }
-function _mfaNewSession() {
+function _mfaNewSession__portal() {
   try { localStorage.removeItem('pental_mfa_verified'); } catch (e) {}
   try { localStorage.removeItem('pental_mfa_alive'); } catch (e) {}
   _mfaKeepAliveAt = 0;
@@ -11504,6 +11541,14 @@ function _coPathLabel(table, field, path, c) {
   }
   if (table === 'assessments' && field === 'summary_sections') {
     try { var sm = _smCustomById(first); if (sm && sm.label) return sm.label; } catch (e) {}
+
+    if (/^(es|rs):/.test(String(first))) {
+      try {
+        var _pk = String(first).slice(0, 2), _pa = _coRowOf(table, c && c.id) || S.currentAssessment;
+        var _px = _pa ? _phSumPhases(_pa, _pk).filter(function (x) { return x.key === first || x.alt === first; })[0] : null;
+        return _phSumLabel(_pk) + (_px ? ': ' + _px.name : ', a phase\u2019s own');
+      } catch (e) { return 'A phase\u2019s own summary'; }
+    }
   }
   var item = _coAt(c.theirs, [first]) || _coAt(c.mine, [first]);
   var name = item && (item.title || item.name || item.label || item.type || item.field);
@@ -20804,6 +20849,9 @@ async function loadAllData() {
 
     setTimeout(function () { try { _impactMoveSoon(); } catch (e) {} }, 3000);
 
+    setTimeout(function () { try { _sgrHeldSoon(); } catch (e) {} }, 6000);
+    if (!window._sgrTick) window._sgrTick = setInterval(function () { try { _sgrHeldSoon(); } catch (e) {} }, 60000);
+
     if (S._bootReady) return;
 
     var _logoSrc = null;
@@ -21456,7 +21504,7 @@ async function _loadAllDataInner() {
   + ',self_scan_default_cooldown_hours,self_scan_window_start,self_scan_window_end'
   + ',self_scan_notify,self_scan_report';
 
-  var _settingsCols_staff = _settingsCols_base + ',notes_prompt,caveats_prompt,contractor_rate,public_ip,exec_summary_prompt,finding_desc_prompt,finding_rem_prompt,retest_summary_prompt,email_templates,meeting_auto_invite,contact_integration,meeting_integration,ai_provider,ai_custom_model,ai_custom_url,ai_custom_format,ai_custom_max_tokens,ai_ollama_num_ctx,ai_requests_per_minute,ai_parallel_requests,smtp_host,smtp_port,smtp_user,smtp_oauth_provider,smtp_oauth_user,smtp_from_name,smtp_from_email,auto_start_enabled,auto_start_time,auto_complete_enabled,auto_complete_time,automation_timezone,automation_workdays_only,auto_credentials_enabled,auto_credentials_time,auto_credentials_days,mail_outbox_enabled,mail_outbox_started_at,invoice_automation,invoice_auto_send_days,invoice_send_via,standard_field_prompts,teams_tenant_id,teams_client_id,teams_user_email,zoom_account_id,zoom_client_id,slack_channel_id,proposal_multi_year_enabled,proposal_subscription_enabled,proposal_custom_titles,plan_max_users,plan_max_clients,scanning_enabled,scan_min_severity,scan_ai_write,scan_client_visible_default,scan_exec_summary_prompt,scan_finding_prompt,scan_default_provider,scan_billing_mode,scan_billing_amount,scan_phase_default,scan_import_maps,cvss_version,date_format,self_scan_enabled,self_scan_default_provider_id,self_scan_type_providers,self_scan_lands,self_scan_billing,self_scan_price_pence,self_scan_stripe_price_id,self_scan_active_providers,self_scan_who,self_scan_target_policy,self_scan_require_auth,self_scan_auth_when,self_scan_auth_text,self_scan_frequencies,self_scan_price_daily_pence,self_scan_price_weekly_pence,self_scan_price_monthly_pence,self_scan_price_annual_pence,self_scan_stripe_sub_price_daily,self_scan_stripe_sub_price_weekly,self_scan_stripe_sub_price_monthly,self_scan_stripe_sub_price_annual,self_scan_self_hosted_only,self_scan_internal_enabled,self_scan_appliances,self_scan_max_targets,self_scan_default_cap,self_scan_default_cooldown_hours,self_scan_default_hour,self_scan_window_start,self_scan_window_end,self_scan_notify,self_scan_report,account_owner_id,scan_fields,vuln_report_fields,final_pdf_names,scan_summary_auto,finding_default_draft,google_place_id,qa_checklist,qa_checklist_on,qa_ai_enabled,qa_ai_prompt,qa_submit_word,qa_submit_ticks';
+  var _settingsCols_staff = _settingsCols_base + ',notes_prompt,caveats_prompt,contractor_rate,public_ip,exec_summary_prompt,finding_desc_prompt,finding_rem_prompt,retest_summary_prompt,email_templates,meeting_auto_invite,contact_integration,meeting_integration,ai_provider,ai_custom_model,ai_custom_url,ai_custom_format,ai_custom_max_tokens,ai_ollama_num_ctx,ai_requests_per_minute,ai_parallel_requests,smtp_host,smtp_port,smtp_user,smtp_oauth_provider,smtp_oauth_user,smtp_from_name,smtp_from_email,auto_start_enabled,auto_start_time,auto_complete_enabled,auto_complete_time,automation_timezone,automation_workdays_only,auto_credentials_enabled,auto_credentials_time,auto_credentials_days,mail_outbox_enabled,mail_outbox_started_at,invoice_automation,invoice_auto_send_days,invoice_send_via,standard_field_prompts,teams_tenant_id,teams_client_id,teams_user_email,zoom_account_id,zoom_client_id,slack_channel_id,proposal_multi_year_enabled,proposal_subscription_enabled,proposal_custom_titles,plan_max_users,plan_max_clients,scanning_enabled,scan_min_severity,scan_ai_write,scan_ai_group,scan_client_visible_default,scan_exec_summary_prompt,scan_finding_prompt,scan_default_provider,scan_billing_mode,scan_billing_amount,scan_phase_default,scan_import_maps,cvss_version,date_format,self_scan_enabled,self_scan_default_provider_id,self_scan_type_providers,self_scan_lands,self_scan_billing,self_scan_price_pence,self_scan_stripe_price_id,self_scan_active_providers,self_scan_who,self_scan_target_policy,self_scan_require_auth,self_scan_auth_when,self_scan_auth_text,self_scan_frequencies,self_scan_price_daily_pence,self_scan_price_weekly_pence,self_scan_price_monthly_pence,self_scan_price_annual_pence,self_scan_stripe_sub_price_daily,self_scan_stripe_sub_price_weekly,self_scan_stripe_sub_price_monthly,self_scan_stripe_sub_price_annual,self_scan_self_hosted_only,self_scan_internal_enabled,self_scan_appliances,self_scan_max_targets,self_scan_default_cap,self_scan_default_cooldown_hours,self_scan_default_hour,self_scan_window_start,self_scan_window_end,self_scan_notify,self_scan_report,account_owner_id,scan_fields,vuln_report_fields,final_pdf_names,scan_summary_auto,finding_default_draft,google_place_id,qa_checklist,qa_checklist_on,qa_ai_enabled,qa_ai_prompt,qa_submit_word,qa_submit_ticks';
 
   var _settingsCols = isClient ? _settingsCols_base + ',public_ip' : (isCon ? _settingsCols_base + ',ai_parallel_requests,qa_checklist,qa_checklist_on,qa_submit_word,qa_submit_ticks' : _settingsCols_staff);
 
@@ -21980,6 +22028,15 @@ async function _loadAllDataInner() {
     }
   } else {
     S.data.findings = [];
+
+    if (!_commercialOnly) {
+      try {
+        var _sf0 = await Promise.resolve(_syncQ('2:scan_findings', 'findings', function (q) {
+          return q.not('scan_run_id', 'is', null).is('assessment_id', null);
+        }, null, Infinity)).catch(function () { return null; });
+        S.data.findings = _d(_sf0).slice();
+      } catch (e) { S.data.findings = []; }
+    }
     S.data.files = [];
     S.data.assessment_comments = [];
     S.data.qa_comments = [];
@@ -23036,7 +23093,7 @@ async function submitPasswordLogin(e) {
     fail('Network error. Please check your connection and try again.');
   }
 }
-async function _afterCredentialLogin() {
+async function _afterCredentialLogin__portal() {
   if (!S.profile) { window._codeLoginInProgress = false; _fadeToApp(); return true; }
   var _mfaPolicy = await _loadMfaPolicy();
 
@@ -24983,6 +25040,7 @@ function _doRender() {
   var _pkAsked = false;
   try { if (typeof _pkBeforeSwap === 'function') { _pkBeforeSwap(); _pkAsked = _pkPageAsked(); } } catch (e) {}
   try { if (typeof _rtKeepBefore === 'function') _rtKeepBefore(); } catch (e) {}
+  try { if (typeof _fdKeepBefore === 'function') _fdKeepBefore(); } catch (e) {}
   var _editSnap = (typeof _qaEditorSnapshot === 'function') ? _qaEditorSnapshot() : null;
   if (_editSnap) {
 
@@ -25157,6 +25215,10 @@ function _doRender() {
   try { if (typeof _lfPaint === 'function') _lfPaint(); } catch (e) {}
   try { if (typeof _pkAfterSwap === 'function') _pkAfterSwap(_pkAsked); } catch (e) {}
   try { if (typeof _rtKeepAfter === 'function') _rtKeepAfter(); } catch (e) {}
+  try { if (typeof _fdGenAfterDraw === 'function') _fdGenAfterDraw(); } catch (e) {}
+  try { if (typeof _tblCardsAfterDraw === 'function') _tblCardsAfterDraw(); } catch (e) {}
+  try { if (typeof _apxAfterDraw === 'function') _apxAfterDraw(); } catch (e) {}
+  try { if (typeof _edPageAfterDraw === 'function') _edPageAfterDraw(); } catch (e) {}
   try { if (S.page === 'settings' || S.wizard) _setDrawnTake(); } catch (e) {}
 
   try { _aixAfterDraw(); } catch (e) {}
@@ -25495,7 +25557,7 @@ function _hasTotpEnrolled(prof) {
   var pr = prof || S.profile || S._mfaProfile;
   return !!(pr && pr.mfa_methods && pr.mfa_methods.enrolled && pr.mfa_methods.enrolled.totp);
 }
-function _mfaEnrolmentIncomplete(prof, policy) {
+function _mfaEnrolmentIncomplete__portal(prof, policy) {
   var pr = prof || S.profile || S._mfaProfile;
   if (!pr) return false;
   var m = pr.mfa_methods;
@@ -25555,7 +25617,7 @@ function _mfaSetupExitHtml() {
     '<button onclick="logout()" class="login-btn-secondary" style="margin-top:0.5rem">Sign out</button>';
 }
 window._mfaSetupExitHtml = _mfaSetupExitHtml;
-function renderMfaSetup() {
+function renderMfaSetup__portal() {
 
   var policy = (S._mfaPolicy && S._mfaPolicy.methods_allowed) ? S._mfaPolicy : { methods_allowed: { totp: true, webauthn: true }, methods_required: 'any' };
   var allowed = policy.methods_allowed || { totp: true, webauthn: true };
@@ -28355,6 +28417,9 @@ async function refreshAndStay(o) {
   }
 }
 async function openM(t, id, extra) {
+  if (t === 'finding' && typeof _fdAiBusy === 'function' && _fdAiBusy()) return;
+
+  if (t === 'finding' && S._fdEdit && S._fdEdit.kind === 'facts' && typeof _fdEditLeave === 'function') _fdEditLeave();
   if (t === 'finding' && id && typeof _workFirst === 'function' && _workFirst(_workAidsOf([id]), function () { openM(t, id, extra); })) return;
 
   if ((t === 'finding' || t === 'kb') && id) {
@@ -31428,7 +31493,7 @@ document.addEventListener('click', function(e) {
 });
 var _MK_STORE = 'pental_modal_keep';
 var _MK_KEEP_TYPES = ['finding', 'kb', 'meeting', 'client', 'appendix',
-  'retestsummary', 'customsummary', 'exec', 'execsummary', 'editnotes', 'editcaveats',
+  'retestsummary', 'customsummary', 'exec', 'execsummary', 'editnotes', 'editcaveats', 'phasesum',
   'editscope', 'editphasescope', 'addartifact'];
 var _mkDraft = null;
 var _mkPaint = null;
@@ -34619,9 +34684,10 @@ function renderAssessmentDetail() {
   }
 
   var _retestVis = isSectionVisible(a, 'retest_summary');
+  var _rsMode = _phSumMode(a, 'rs');
   if (isClient && !_retestVis) {
 
-  } else if (a.retest_summary || (canEdit() && (!Array.isArray(a.phases) || !a.phases.length || a.phases.some(_phaseRetestOn)))) {
+  } else if (a.retest_summary || (_rsMode === 'inside' && _phSumAny(a, 'rs')) || (canEdit() && (!Array.isArray(a.phases) || !a.phases.length || a.phases.some(_phaseRetestOn)))) {
     h += '<!--SEC:retest_summary--><div class="card mb-4"><div class="card-header"><span class="card-title">' + _smIconHtml('retest_summary') + ' ' + esc(_smLabel('retest_summary') !== 'Retest Summary' ? _smLabel('retest_summary') : (_rptTpl.heading_retest_summary || 'Retest Summary')) + '</span>' + _secDraftBadge(a, 'retest_summary');
     if (canEdit()) {
       h += '<div class="flex gap-2" style="align-items:center">';
@@ -34633,15 +34699,23 @@ function renderAssessmentDetail() {
     h += '</div>';
     h += '<div class="card-body">';
 
-    if (a.retest_summary) {
-      h += '<div class="exec-summary rich-content">' + _figNumber(a.retest_summary.indexOf('<') >= 0 ? renderHtmlContent(a.retest_summary) : formatExecSummary(a.retest_summary), _figP.area.retest_summary) + '</div>';
+    var _rsOwn = a.retest_summary ? '<div class="exec-summary rich-content">' + _figNumber(a.retest_summary.indexOf('<') >= 0 ? renderHtmlContent(a.retest_summary) : formatExecSummary(a.retest_summary), _figP.area.retest_summary) + '</div>' : '';
+    var _rsAny = _rsMode === 'inside' && _phSumAny(a, 'rs');
+    if (_rsAny) {
+      if (!_rsOwn && canEdit() && !isClient) _rsOwn = '<p class="text-muted phs-empty">Nothing written for the engagement as a whole yet.</p>';
+      var _rsParts = _phSumPartsHtml(a, 'rs', isClient);
+      h += _rtIn(a, function () { return _phSumCfg().rs_whole; }) === 'last' ? _rsParts + _rsOwn : _rsOwn + _rsParts;
+    } else if (_rsOwn) {
+      h += _rsOwn;
     } else {
       h += '<p class="text-muted">No retest summary yet.' + (canEdit() ? ' Click "Generate / Edit" to create one.' : '') + '</p>';
     }
+    if (_rsMode === 'above' && canEdit() && !isClient) h += '<p class="hint phs-where">Each phase\u2019s own ' + esc(_phSumLabel('rs').toLowerCase()) + ' is with its findings.</p>';
     h += '</div></div>';
   }
 
   var _execVis = isSectionVisible(a, 'exec_summary');
+  var _esMode = _phSumMode(a, 'es');
   if (isClient && !_execVis) {
     h += '<!--SEC:executive_summary--><div class="card mb-4"><div class="card-header"><span class="card-title">' + _smIconHtml('executive_summary') + ' ' + esc(_smLabel('executive_summary') !== 'Executive Summary' ? _smLabel('executive_summary') : (_rptTpl.heading_exec_summary || 'Executive Summary')) + '</span></div>';
     h += '<div class="card-body"><p class="text-muted">' + esc(_rptTpl.text_no_exec_summary || 'No executive summary available.') + '</p></div></div>';
@@ -34656,11 +34730,19 @@ function renderAssessmentDetail() {
     }
     h += '</div>';
     h += '<div class="card-body">';
-    if (a.exec_summary) {
-      h += '<div class="exec-summary rich-content">' + _figNumber(_execFigs(a.exec_summary && a.exec_summary.indexOf('<') >= 0 ? renderHtmlContent(a.exec_summary) : formatExecSummary(a.exec_summary)), _figP.area.exec_summary) + '</div>';
+
+    var _esOwn = a.exec_summary ? '<div class="exec-summary rich-content">' + _figNumber(_execFigs(a.exec_summary && a.exec_summary.indexOf('<') >= 0 ? renderHtmlContent(a.exec_summary) : formatExecSummary(a.exec_summary)), _figP.area.exec_summary) + '</div>' : '';
+    var _esAny = _esMode === 'inside' && _phSumAny(a, 'es');
+    if (_esAny) {
+      if (!_esOwn && canEdit() && !isClient) _esOwn = '<p class="text-muted phs-empty">Nothing written for the engagement as a whole yet.</p>';
+      var _esParts = _phSumPartsHtml(a, 'es', isClient);
+      h += _rtIn(a, function () { return _phSumCfg().es_whole; }) === 'last' ? _esParts + _esOwn : _esOwn + _esParts;
+    } else if (_esOwn) {
+      h += _esOwn;
     } else {
       h += '<p class="text-muted">No executive summary yet.' + (canEdit() ? ' Click "Generate / Edit" to create one.' : '') + '</p>';
     }
+    if (_esMode === 'above' && canEdit() && !isClient) h += '<p class="hint phs-where">Each phase\u2019s own ' + esc(_phSumLabel('es').toLowerCase()) + ' is with its findings.</p>';
     h += '</div></div>';
   }
 
@@ -34778,6 +34860,10 @@ function renderAssessmentDetail() {
       if (!isClient) _phHead += '<th>Draft</th>';
       if (!isClient) _phHead += '<th>Client Visible</th>';
       _phHead += _findingActionsTh();
+
+      var _phParts = _phSumWith(a);
+      _phParts.forEach(function (_pk) {
+        if (_pk !== 'findings') { h += _phSumWithHtml(a, _pk, phIdx, isClient); return; }
       h += '<div class="mob-table">' + _findingTableOpen(_phHead)
         + '<thead><tr>' + _phHead + '</tr></thead><tbody>';
       if (!phFindings.length) h += '<tr><td colspan="' + _thCount(_phHead) + '" class="empty">No ' + esc(phType).toLowerCase() + ' findings yet</td></tr>';
@@ -34788,6 +34874,7 @@ function renderAssessmentDetail() {
       if (!phFindings.length) h += '<div class="empty">No findings yet</div>';
       else phFindings.forEach(function(f) { h += _renderFindingMobCard(f, a); });
       h += '</div>';
+      });
 
       h += _renderPhaseChecklistsPanel(a, ph, phIdx, isClient);
       h += '</div>';
@@ -34892,18 +34979,8 @@ function renderAssessmentDetail() {
     h += '</div>';
     h += '<div class="card-body">';
     if (appendices.length) {
-      h += '<div class="appendices-list">';
-      appendices.forEach(function(ap, i) {
-        h += '<div class="appendix-item"><div class="appendix-header"><strong>' + esc(ap.title || 'Appendix ' + (i+1)) + '</strong>';
-        if (canEdit()) {
-          h += '<div class="flex gap-2"><button class="btn btn-ghost btn-sm" onclick="openM(\'appendix\',\'' + a.id + '\',\'' + i + '\')">' + IC.edit + '</button>';
-          h += '<button class="btn btn-ghost btn-sm" onclick="deleteAppendix(\'' + a.id + '\',' + i + ')">' + IC.trash + '</button></div>';
-        }
-        h += '</div>';
-        var apContent = ap.content || (ap.items ? ap.items.map(function(x) { return x.content || ''; }).join('\n') : '');
-        h += '<pre class="evidence-code" style="white-space:pre-wrap;max-height:200px;overflow:auto">' + esc(apContent.substring(0, 1000)) + (apContent.length > 1000 ? '...' : '') + '</pre></div>';
-      });
-      h += '</div>';
+
+      h += _apxSectionHtml(a);
     } else {
 
       var _apxFilesOn = (typeof _smEnabled !== 'function') || _smEnabled('files');
@@ -35300,12 +35377,53 @@ function formatExecSummary(text) {
 
   return html;
 }
+function _draftLive(f) {
+  return (f && f.id && (S.data.findings || []).find(function (x) { return x && x.id === f.id; })) || f;
+}
+function _draftMissing(f) {
+  try { return _findingMissingOnRecord(f) || []; } catch (e) { return []; }
+}
+function _draftSwitchHtml(f, o) {
+  o = o || {};
+  var live = _draftLive(f);
+  if (!live || !live.id) return '';
+  var miss = _draftMissing(live), names = miss.map(function (m) { return m.label; });
+  var on = !!(live.is_draft || miss.length);
+  var stop = o.stop ? 'event.stopPropagation();' : '';
+  var tip = miss.length ? _mMissingWords(names) + '. It is a draft until they are filled in: turning this off opens the first.'
+    : on ? 'A draft: it stays out of the report until this is turned off.' : 'Final. Turn this on to make it a draft again.';
+  var h = '<label class="tpl-toggle fd-draft' + (o.cls ? ' ' + o.cls : '') + (miss.length ? ' fd-draft-miss' : '') + '" style="margin:0" title="' + esc(tip) + '"'
+    + (o.stop ? ' onclick="event.stopPropagation()"' : '') + '>'
+    + '<input type="checkbox" data-fd-draft' + (on ? ' checked' : '') + ' aria-label="Draft" onchange="' + stop + '_draftSwitched(\'' + esc(live.id) + '\',this)">'
+    + '<span class="tpl-toggle-track"></span>' + (o.label === false ? '' : '<span class="fd-switch-label">Draft</span>') + '</label>';
+  if (miss.length) {
+    h += '<button type="button" class="fd-fill-chip" onclick="' + stop + '_draftFillFirst(\'' + esc(live.id) + '\')" title="' + esc(_mMissingWords(names) + '. Click to fill in the first.') + '">'
+      + miss.length + (o.chip === 'short' ? '' : ' to fill') + '</button>';
+  }
+  return h;
+}
+window._draftSwitchHtml = _draftSwitchHtml;
+function _draftSwitched(id, el) {
+  var f = _draftLive({ id: id });
+  if (el && !el.checked && _draftMissing(f).length) { el.checked = true; _draftFillFirst(id); return; }
+  toggleFindingDraft(id, !!(el && el.checked));
+}
+window._draftSwitched = _draftSwitched;
+function _draftFillFirst(id) {
+  var f = _draftLive({ id: id });
+  var miss = _draftMissing(f);
+  if (!f || !miss.length) return;
+  toast(_mMissingWords(miss.map(function (m) { return m.label; })) + '. It is final once they are.', 'info', 6000);
+  if (S.page === 'finding-detail' && S.currentFinding && S.currentFinding.id === id && typeof _fdEditOpen === 'function' && _fdEditOpen(id, _fdKeyOfMissing(miss[0].key))) return;
+  if (!canEdit()) return;
+  openM('finding', id, f.assessment_id);
+  setTimeout(function () {
+    try { var m = _findingMissingOnForm(); if (m && m[0]) _ffFocusMissing(m[0]); } catch (e) {}
+  }, 350);
+}
+window._draftFillFirst = _draftFillFirst;
 function _fdSwitches(f) {
-  var mk = false;
-  try { mk = _findingMissingOnRecord(f).length > 0; } catch (e) { mk = false; }
-  var h = '<label class="tpl-toggle fd-switch" title="' + (mk ? 'A required field is empty, so this is a draft until it is filled in.' : 'Whether this finding is still a draft.') + '">'
-    + '<input type="checkbox" data-fd-draft' + (f.is_draft || mk ? ' checked' : '') + (mk ? ' disabled' : '')
-    + ' onchange="toggleFindingDraft(\'' + f.id + '\',this.checked)"><span class="tpl-toggle-track"></span><span class="fd-switch-label">Draft</span></label>';
+  var h = _draftSwitchHtml(f, { cls: 'fd-switch' });
   return h;
 }
 function renderFindingDetail() {
@@ -35314,6 +35432,8 @@ function renderFindingDetail() {
   var a = S.currentAssessment;
 
   if (!f) return '<div class="empty-page"><p>No finding selected</p><button class="btn btn-secondary" onclick="nav(\'assessments\')">View Assessments</button></div>';
+
+  if (S._fdEdit && S._fdEdit.id !== f.id) _fdEditLeave();
 
   var isClient = S.profile.role === 'client';
 
@@ -35326,9 +35446,9 @@ function renderFindingDetail() {
   h += '<div class="fd-bar" style="padding:0.85rem 1.5rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;row-gap:0.55rem;border-bottom:1px solid var(--border)">';
   if (_fCode) h += '<span class="mono" style="color:var(--accent);font-size:0.8rem;font-weight:700;letter-spacing:0.02em">' + esc(_fCode) + '</span>';
 
-  var _fdPill = function (label, value, style, cls, muted) {
+  var _fdPill = function (label, value, style, cls, muted, key) {
 
-    var s = '<span class="badge' + (cls ? ' ' + cls : '') + '" style="' +
+    var s = '<span class="badge' + (cls ? ' ' + cls : '') + '"' + (key ? ' data-fd-fact="' + esc(key) + '"' : '') + ' style="' +
             (style || (cls ? '' : 'background:var(--bg);color:var(--text)')) + ';gap:0.32rem">';
     s += '<span style="opacity:.6;font-weight:600">' + esc(label) + '</span>';
     s += '<span style="font-weight:700' + (muted ? ';opacity:.45' : '') + '">' + esc(value) + '</span>';
@@ -35337,19 +35457,20 @@ function renderFindingDetail() {
   var _sevStyle = (typeof _sevBadgeStyle === 'function' && _SEV_BADGE_KEYS.indexOf(String(f.severity || '').toLowerCase()) !== -1)
     ? _sevBadgeStyle(String(f.severity).toLowerCase()) : null;
 
+  var _fdEdits = canEdit() && (!isContractor() || f.created_by === S.profile.id || _conOnWork((S.data.assessments || []).find(function (x) { return x.id === f.assessment_id; })));
   h += '<div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;row-gap:0.4rem">';
 
   var _fdDraft = '';
   try { _fdDraft = _findingDraftBadge(f) || ''; } catch (e) { _fdDraft = ''; }
   if (_fdDraft) h += _fdDraft.replace(/^\s+/, '');
   h += _fdPill(_ffLabel('severity'), _sevName(f.severity || 'info'), _sevStyle,
-               _sevStyle ? null : 'badge-' + String(f.severity || 'info'));
+               _sevStyle ? null : 'badge-' + String(f.severity || 'info'), false, 'severity');
   if (_ffEnabled('cvss') && _ffClientSees('cvss') && f.cvss && f.cvss > 0) {
-    h += _fdPill(_ffLabel('cvss'), Number(f.cvss).toFixed(1), _sevStyle);
+    h += _fdPill(_ffLabel('cvss'), Number(f.cvss).toFixed(1), _sevStyle, null, false, 'cvss');
   }
   if (_ffEnabled('status') && _ffClientSees('status')) {
     h += _fdPill(_ffLabel('status'), (_SLABEL_MAP[f.status] || f.status || 'open').replace(/_/g, ' '),
-                 null, 'badge-' + String(f.status || 'open'));
+                 null, 'badge-' + String(f.status || 'open'), false, 'status');
   }
 
   if (f.retest_status === 'requested') h += badge('medium', 'Retest Requested');
@@ -35361,14 +35482,14 @@ function renderFindingDetail() {
   }
 
   var _facts = [];
-  var _pushFact = function (label, value, html) {
+  var _pushFact = function (label, value, html, key) {
     if (!value && isClient) return;
-    _facts.push({ label: label, value: value, html: html || '' });
+    _facts.push({ label: label, value: value, html: html || '', key: key || '' });
   };
 
-  if (_ffEnabled('cwe') && _ffClientSees('cwe')) _pushFact(_ffLabel('cwe'), f.cwe || '');
-  if (_ffEnabled('attack') && _ffClientSees('attack')) _pushFact(_ffLabel('attack'), _attackTidy(f.attack), _attackHtml(f.attack));
-  if (_ffEnabled('category') && _ffClientSees('category')) _pushFact(_ffLabel('category'), f.category || '');
+  if (_ffEnabled('cwe') && _ffClientSees('cwe')) _pushFact(_ffLabel('cwe'), f.cwe || '', '', 'cwe');
+  if (_ffEnabled('attack') && _ffClientSees('attack')) _pushFact(_ffLabel('attack'), _attackTidy(f.attack), _attackHtml(f.attack), 'attack');
+  if (_ffEnabled('category') && _ffClientSees('category')) _pushFact(_ffLabel('category'), f.category || '', '', 'category');
   (function () {
     var cfs = (typeof _ffCustomEnabled === 'function') ? _ffCustomEnabled() : [];
     if (!cfs.length || typeof _cffIsCompact !== 'function') return;
@@ -35382,24 +35503,25 @@ function renderFindingDetail() {
       var v = vals[cf.id];
 
       var t = _cfHasContent(v) ? _fsText(cf, String(v), { report: true }) : '';
-      _pushFact(cf.label, t, t ? _fsShowHtml(cf, String(v)) : '');
+      _pushFact(cf.label, t, t ? _fsShowHtml(cf, String(v)) : '', 'custom_' + cf.id);
     });
   })();
   _facts.forEach(function (ft) {
     if (ft.value && ft.html) {
-      h += '<span class="badge fd-fact" style="background:var(--bg);color:var(--text);gap:0.4rem"><span style="opacity:.6;font-weight:600">' + esc(ft.label) + '</span>' + ft.html + '</span>';
+      h += '<span class="badge fd-fact"' + (ft.key ? ' data-fd-fact="' + esc(ft.key) + '"' : '') + ' style="background:var(--bg);color:var(--text);gap:0.4rem"><span style="opacity:.6;font-weight:600">' + esc(ft.label) + '</span>' + ft.html + '</span>';
       return;
     }
-    h += ft.value ? _fdPill(ft.label, ft.value) : _fdPill(ft.label, 'Not set', null, null, true);
+    h += ft.value ? _fdPill(ft.label, ft.value, null, null, false, ft.key) : _fdPill(ft.label, 'Not set', null, null, true, ft.key);
   });
+
+  if (_fdEdits) h += _fdFactsBtnHtml(f);
   h += '</div>';
 
-  h += '<div style="margin-left:auto;display:flex;align-items:center;gap:0.4rem">';
-
-  var _fdEdits = canEdit() && (!isContractor() || f.created_by === S.profile.id || _conOnWork((S.data.assessments || []).find(function (x) { return x.id === f.assessment_id; })));
+  h += '<div class="fd-acts" style="margin-left:auto;display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;justify-content:flex-end;row-gap:0.4rem">';
 
   if (_fdEdits && !(typeof _isScanFinding === 'function' && _isScanFinding(f))) h += _fdSwitches(f);
-  if (_fdEdits) h += '<button class="btn btn-ghost btn-sm" onclick="openM(\'finding\',\'' + f.id + '\',\'' + f.assessment_id + '\')" style="font-size:0.75rem">' + IC.edit + ' Edit</button>';
+
+  if (_fdEdits) h += '<button class="btn btn-ghost btn-sm" onclick="_fdEditLeave();openM(\'finding\',\'' + f.id + '\',\'' + f.assessment_id + '\')" style="font-size:0.75rem" title="Open this finding in the full editor">' + IC.edit + ' Full Editor</button>';
   if (canEdit() && _libUseOn()) h += '<button class="btn btn-ghost btn-sm" onclick="addToKB(\'' + f.id + '\')" style="font-size:0.75rem">' + IC.library + ' Library</button>';
 
   if (!(typeof _isScanFinding === 'function' && _isScanFinding(f)) && _canExportFindingsDoc()) {
@@ -35416,12 +35538,23 @@ function renderFindingDetail() {
   h += '</div>';
   h += '</div>';
 
+  if (_fdEdits && _fdEditing(f, 'facts')) h += _fdFactsHtml(f);
+
   h += '<div class="fd-title-row" style="padding:1.25rem 1.5rem;display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;row-gap:0.5rem">';
-  h += '<h1 style="font-family:var(--font-display);font-size:1.15rem;font-weight:700;margin:0;letter-spacing:0.02em">' + _findingTitleHtml(f) + '</h1>';
+
+  if (_fdEdits && _fdEditing(f, 'title')) h += _fdTitleEditHtml(f);
+  else {
+    h += '<h1 style="font-family:var(--font-display);font-size:1.15rem;font-weight:700;margin:0;letter-spacing:0.02em">' + _findingTitleHtml(f) + '</h1>';
+    if (_fdEdits) h += '<button type="button" class="btn btn-ghost btn-sm fd-edit-btn fd-title-edit" onclick="_fdEditOpen(\'' + f.id + '\',\'title\')" title="Edit the title here" aria-label="Edit the title">' + IC.edit + '</button>';
+  }
   h += _e2eBadge(_e2eStateRow('assessments', f.assessment_id) || { id: f.assessment_id, client_id: f.client_id });
+
+  if (_fdEdits) h += '\u0001FD_ADD\u0001';
   h += '</div>';
 
   h += '</div>';
+
+  if (_fdEdits) h += '<div id="fdGenHost" class="fd-gen-host"></div>';
 
   var _figA = (S.currentAssessment && S.currentAssessment.id === f.assessment_id) ? S.currentAssessment
     : ((S.data.assessments || []).find(function(x) { return x.id === f.assessment_id; }) || S.currentAssessment);
@@ -35468,9 +35601,18 @@ function renderFindingDetail() {
 
   var _dVals = (typeof _ffParseCustomVals === 'function') ? _ffParseCustomVals(f) : {};
   var _dCustom = _ffCustomEnabled();
-  var _dCard = function(title, body) {
+
+  var _dCard = function(title, body, key, o) {
+    if (key && _fdEdits) { h += _fdCardHtml(f, key, title, body, o || {}); return; }
     h += '<div class="card mb-4"><div class="card-header"><span class="card-title">' + esc(title) + '</span></div>';
     h += '<div class="card-body rich-content">' + body + '</div></div>';
+  };
+
+  var _dOpt = [];
+  var _dAdd = function (title, key, o) {
+    if (!_fdEdits || (key.indexOf('custom_') !== 0 && !_ffEnabled(key))) return;
+    if (!(o && o.required) && !_fdEditing(f, key)) { _dOpt.push({ title: title, key: key }); return; }
+    h += _fdCardHtml(f, key, title, '', Object.assign({ empty: true }, o || {}));
   };
 
   _ffOrder().forEach(function(_k) {
@@ -35480,42 +35622,46 @@ function renderFindingDetail() {
       var cf = _dCustom.find(function(x) { return 'custom_' + x.id === _k; });
       if (!cf) return;
       var v = _dVals[cf.id];
-      if (!_cfHasContent(v)) return;
 
       if ((typeof _cffIsCompact === 'function') && _cffIsCompact(cf)) return;
+      var _cfo = { kind: _cffType(cf) === 'html' ? 'html' : 'field', def: cf, required: _ffCustomRequired(cf) };
+      if (!_cfHasContent(v)) { _dAdd(cf.label, _k, _cfo); return; }
 
-      if (_cffType(cf) !== 'html') { _dCard(cf.label, _fsShowHtml(cf, String(v))); return; }
-      _dCard(cf.label, _portalFigForField(_k)(renderHtmlContent(String(v))));
+      if (_cffType(cf) !== 'html') { _dCard(cf.label, _fsShowHtml(cf, String(v)), _k, _cfo); return; }
+      _dCard(cf.label, _portalFigForField(_k)(renderHtmlContent(String(v))), _k, _cfo);
       return;
     }
 
     if (_k === 'description') {
+      if (!_ffStripToText(f.description || '') && !f.impact && !/<img|<table/i.test(String(f.description || ''))) { _dAdd(_ffLabel('description'), 'description', { kind: 'html', required: _ffRequired('description') }); return; }
       var _db = _portalFigForField('description')(renderHtmlContent(f.description || ''));
       if (f.impact) _db += '<div style="margin-top:1rem"><strong>Impact:</strong><div style="margin-top:0.25rem">' + _portalFigForField('impact')(renderHtmlContent(f.impact)) + '</div></div>';
-      _dCard(_ffLabel('description'), _db);
+      _dCard(_ffLabel('description'), _db, 'description', { kind: 'html' });
       return;
     }
 
     if (_k === 'evidence') {
       var _eb = _evidenceDisplayHtml(f.evidence, _portalFigForField('evidence'));
-      if (_eb) _dCard(_ffLabel('evidence'), _eb);
+
+      var _rg = _sgrRegroupHtml(f);
+      if (!_eb && !_rg) { _dAdd(_ffLabel('evidence'), 'evidence', { kind: 'html', required: _ffRequired('evidence') }); return; }
+      _dCard(_ffLabel('evidence'), (_eb || '') + _rg, 'evidence', { kind: 'html', acts: _fdGenBtnHtml(f) });
       return;
     }
 
     if (_k === 'remediation') {
-      if (!f.remediation) return;
-      _dCard(_ffLabel('remediation'), _portalFigForField('remediation')(renderHtmlContent(f.remediation)));
+      if (!f.remediation) { _dAdd(_ffLabel('remediation'), 'remediation', { kind: 'html', required: _ffRequired('remediation') }); return; }
+      _dCard(_ffLabel('remediation'), _portalFigForField('remediation')(renderHtmlContent(f.remediation)), 'remediation', { kind: 'html' });
       return;
     }
 
     if (_k === 'affected_assets') {
       var affectedHosts = f.affected_hosts || '';
-      if (!affectedHosts) return;
       var hostsList = String(affectedHosts).split(/[\n,]/).map(function(s) { return s.trim(); }).filter(Boolean);
-      if (!hostsList.length) return;
+      if (!hostsList.length) { _dAdd(_ffLabel('affected_assets'), 'affected_assets', { kind: 'lines', required: _ffRequired('affected_assets') }); return; }
       var _hb = '<ul style="margin:0;padding-left:1.5rem">';
       hostsList.forEach(function(host) { _hb += '<li style="margin-bottom:0.25rem">' + esc(host) + '</li>'; });
-      _dCard(_ffLabel('affected_assets'), _hb + '</ul>' + _astFindingOwnersHtml(f));
+      _dCard(_ffLabel('affected_assets'), _hb + '</ul>' + _astFindingOwnersHtml(f), 'affected_assets', { kind: 'lines' });
       return;
     }
 
@@ -35528,7 +35674,7 @@ function renderFindingDetail() {
           catch (e) { refs = f.refs.split(/[\n,]/).map(function(r) { return r.trim(); }).filter(Boolean); }
         }
       }
-      if (!refs.length) return;
+      if (!refs.length) { _dAdd(_ffLabel('references'), 'references', { kind: 'refs', required: _ffRequired('references') }); return; }
       var _rb = '<ul style="margin:0;padding-left:1.5rem">';
       refs.forEach(function(r) {
         var _rs = (r == null ? '' : String(r)).trim();
@@ -35537,11 +35683,13 @@ function renderFindingDetail() {
         _rb += '<li style="margin-bottom:0.3rem;word-break:break-word">' +
                _linkifyText(_rs, 'color:var(--accent);text-decoration:underline;text-underline-offset:2px') + '</li>';
       });
-      _dCard(_ffLabel('references'), _rb + '</ul>');
+      _dCard(_ffLabel('references'), _rb + '</ul>', 'references', { kind: 'refs' });
       return;
     }
 
   });
+
+  h = h.replace('\u0001FD_ADD\u0001', _fdAddOptHtml(f, _dOpt));
 
   if (f.id) {
     var _tk = _findingTicketsHtml(f);
@@ -35550,6 +35698,2431 @@ function renderFindingDetail() {
 
   return h;
 }
+var _FD_INLINE = { title: 'line', description: 'html', evidence: 'html', remediation: 'html', affected_assets: 'lines', references: 'refs' };
+function _fdKeyOfMissing(k) { k = String(k || ''); return k.indexOf('cf_') === 0 ? 'custom_' + k.slice(3) : k; }
+function _fdEditing(f, key) { var e = S._fdEdit; return !!(e && f && e.id === f.id && e.key === key); }
+function _fdEdId(key) {
+
+  if (_fdAiRun && _fdAiRun.id && _fdAiRun.key === key && S._fdEdit === _fdAiRun.ref) return _fdAiRun.id;
+  return 'fdEd_' + String(key).replace(/[^A-Za-z0-9_]/g, '_');
+}
+function _fdCol(key) { return key === 'affected_assets' ? 'affected_hosts' : key === 'references' ? 'refs' : key === 'facts' ? 'severity' : key; }
+function _fdCfDef(key) {
+  var m = /^custom_(.+)$/.exec(String(key || ''));
+  return m ? ((_ffCustomEnabled() || []).find(function (c) { return c && c.id === m[1]; }) || null) : null;
+}
+function _fdKindOf(key) {
+  if (key === 'facts') return 'facts';
+  if (_FD_INLINE[key]) return _FD_INLINE[key];
+  var cf = _fdCfDef(key);
+  if (!cf) return null;
+  return _cffType(cf) === 'html' ? 'html' : 'field';
+}
+function _fdLabelOf(key) {
+  if (key === 'facts') return 'Classification';
+  var cf = _fdCfDef(key); return cf ? String(cf.label || 'Field') : _ffLabel(key);
+}
+function _fdStored(f, key) {
+  var cf = _fdCfDef(key);
+  if (cf) { var v = (_ffParseCustomVals(f) || {})[cf.id]; return v == null ? '' : v; }
+  return f[_fdCol(key)];
+}
+function _fdRefsOf(v) {
+  if (Array.isArray(v)) return v.map(function (x) { return x == null ? '' : String(x).trim(); }).filter(Boolean);
+  if (typeof v === 'string' && v.trim()) {
+    try { var j = JSON.parse(v); if (Array.isArray(j)) return _fdRefsOf(j); } catch (e) {}
+    return v.split(/\n+/).map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+  return [];
+}
+function _fdEditorFill(f, key, kind) {
+  var v = _fdStored(f, key);
+  if (kind === 'html') {
+    if (Array.isArray(v)) return renderHtmlContent(JSON.stringify(v));
+    var t = String(v == null ? '' : v);
+    if (/^\s*\[/.test(t)) { try { if (Array.isArray(JSON.parse(t))) return renderHtmlContent(t); } catch (e) {} }
+    if (t && !/<[a-z][^>]*>/i.test(t)) return esc(t).replace(/\n/g, '<br>');
+    return t ? _apxRelabelHtml(sanitizeHtml(_rewriteStorageSrc(_qaStoredHtml(t)))) : '';
+  }
+  if (kind === 'refs') return _fdRefsOf(v).join('\n');
+  if (kind === 'lines') return String(v == null ? '' : v).split(/[\n,]/).map(function (x) { return x.trim(); }).filter(Boolean).join('\n');
+  return v == null ? '' : String(v);
+}
+function _fdSameAs(a, b, kind) {
+  if (kind === 'refs') return JSON.stringify(_fdRefsOf(a)) === JSON.stringify(_fdRefsOf(b));
+  if (kind === 'html') return _qaSameValue(a == null ? '' : a, b == null ? '' : b);
+  return String(a == null ? '' : a).trim() === String(b == null ? '' : b).trim();
+}
+function _fdAddOptHtml(f, opt) {
+  if (!opt || !opt.length) return '';
+  return '<span class="fd-add-opt">' + opt.map(function (x) {
+    return '<button type="button" class="fd-add-chip" data-fd-add="' + esc(x.key) + '" onclick="_fdEditOpen(\'' + esc(f.id) + '\',\'' + esc(x.key) + '\')" title="Add ' + esc(x.title) + ' to this finding">'
+      + IC.plus + '<span>' + esc(x.title) + '</span></button>';
+  }).join('') + '</span>';
+}
+function _fdCardHtml(f, key, title, body, o) {
+  o = o || {};
+  var kind = o.kind || _fdKindOf(key) || 'html';
+  var ed = _fdEditing(f, key);
+  var q = esc(f.id) + '\',\'' + esc(key);
+  if (o.empty && !ed) {
+    return '<button type="button" class="fd-add" data-fd-add="' + esc(key) + '" onclick="_fdEditOpen(\'' + q + '\')">' + IC.plus + '<span>Add ' + esc(title) + '</span>'
+      + (o.required ? '<span class="fd-add-req">Required</span>' : '') + '</button>';
+  }
+  var h = '<div class="card mb-4 fd-card' + (ed ? ' fd-card-editing' : '') + '" data-fd-key="' + esc(key) + '"><div class="card-header"><span class="card-title">' + esc(title) + '</span>';
+  var _eBtn = '<button type="button" class="btn btn-ghost btn-sm fd-edit-btn" onclick="_fdEditOpen(\'' + q + '\')" title="Edit ' + esc(title) + ' here">' + IC.edit + ' Edit</button>';
+
+  h += ed ? '<span class="fd-card-state">' + IC.edit + ' Editing</span>'
+    : (o.acts ? '<span class="fd-card-acts">' + o.acts + _eBtn + '</span>' : _eBtn);
+  h += '</div>';
+  if (!ed) return h + '<div class="card-body rich-content">' + body + '</div></div>';
+  return h + _fdEditorHtml(f, key, kind, o) + '</div>';
+}
+function _fdEditorHtml(f, key, kind, o) {
+  var e = S._fdEdit, id = _fdEdId(key);
+  var val = e.draft != null ? e.draft : _fdEditorFill(f, key, kind);
+  var h = '<div class="card-body fd-edit-body" onkeydown="_fdEditKey(event)" oninput="_fdEditTyped(event)" onchange="_fdEditTyped(event)">';
+  h += _fdAiRowHtml(f, key);
+  if (kind === 'html') {
+    h += buildEditorToolbar(id, false);
+    h += '<div class="rich-editor fd-rich" id="' + id + '" contenteditable="true" style="min-height:' + (key === 'evidence' ? 260 : 170) + 'px"'
+      + ' data-placeholder="' + esc(key === 'evidence' ? 'Paste or write the evidence: screenshots, requests, output and your notes' : 'Write the ' + _fdLabelOf(key).toLowerCase() + ' here') + '">' + val + '</div>';
+  } else if (kind === 'field' && o.def) {
+    h += _fsControlHtml(o.def, val, id, { rows: 4 });
+  } else {
+    var n = String(val).split('\n').length;
+    h += '<textarea class="form-textarea fd-text" id="' + id + '" rows="' + Math.min(14, Math.max(4, n + 1)) + '" placeholder="'
+      + (kind === 'refs' ? 'One link or reference on each line' : 'One on each line') + '">' + esc(val) + '</textarea>';
+  }
+  h += '<div class="fd-edit-acts"><button type="button" class="btn btn-primary btn-sm" id="fdEdSave" onclick="_fdEditSave()">' + IC.check + ' Save</button>'
+    + '<button type="button" class="btn btn-ghost btn-sm" onclick="_fdEditCancel()">Cancel</button>'
+    + '<span class="fd-edit-hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> saves, <kbd>Esc</kbd> cancels</span></div>';
+  return h + '</div>';
+}
+function _fdTitleEditHtml(f) {
+  var e = S._fdEdit, val = e.draft != null ? e.draft : String(f.title || '');
+  return '<div class="fd-title-editing" onkeydown="_fdEditKey(event)" oninput="_fdEditTyped(event)">'
+    + '<input class="form-input fd-title-input" id="' + _fdEdId('title') + '" value="' + esc(val) + '" aria-label="' + esc(_ffLabel('title')) + '" maxlength="300">'
+    + '<button type="button" class="btn btn-primary btn-sm" id="fdEdSave" onclick="_fdEditSave()">' + IC.check + ' Save</button>'
+    + '<button type="button" class="btn btn-ghost btn-sm" onclick="_fdEditCancel()">Cancel</button>' + _fdAiBtnHtml(f, 'title') + '</div>';
+}
+var _fdAiRun = null;
+var _FD_AI_IDS = { title: 'mTi', description: 'mDe', remediation: 'mRe', evidence: 'evidenceEditor', affected_assets: 'mAs', references: 'mRf' };
+function _fdAiOn() { return !!((S.data && S.data.settings || {}).ai_provider || S._hasAiKey); }
+function _fdAiSpec(key) {
+  var cf = _fdCfDef(key);
+  if (cf) return { id: 'cfld_' + cf.id, btn: 'genCf_' + cf.id, aix: 'cf:' + cf.id, what: cf.label || 'this field', label: 'Generate',
+    run: function () { return generateCustomField(cf.id); } };
+  var sp = {
+    title: { btn: 'genFTitleBtn', aix: 'title', label: 'Generate', run: function () { return generateFindingTitle(); } },
+    description: { btn: 'genDescBtn', aix: 'description', label: 'Generate', run: function () { return generateFindingDesc(); } },
+    remediation: { btn: 'genRemBtn', aix: 'remediation', label: 'Generate', run: function () { return generateFindingRem(); } },
+    evidence: { btn: 'genEvBtn', aix: 'evidence', label: 'Generate evidence', verb: 'Generate evidence', what: 'generating the evidence',
+      title: 'Writes a line above each screenshot, and each request, block of code, output or table, saying what it shows, with the whole finding in mind, and a caption beneath each screenshot. Your own notes are tidied, every value in them kept as you wrote it. With instructions, the evidence is rewritten as they say.',
+      run: function () { return generateEvidenceLayout(); } },
+    affected_assets: { btn: 'genAssetsBtn', aix: 'assets', label: 'Choose from scope and evidence', verb: 'Choose',
+      title: 'Selects the engagement\u2019s targets this finding affects (or, with no scope, lists the assets the evidence shows)',
+      run: function () { return generateAffectedAssets(); } },
+    references: { btn: 'genRefsBtn', aix: 'references', label: 'Generate', run: function () { return generateRefs(); } }
+  }[key];
+  if (!sp) return null;
+  sp.id = _FD_AI_IDS[key];
+  if (!sp.what) sp.what = _ffLabel(key);
+  return sp;
+}
+function _fdAiBtnHtml(f, key) {
+  var sp = _fdAiOn() ? _fdAiSpec(key) : null;
+  if (!sp) return '';
+
+  return _aixWrap('<button type="button" class="btn btn-ghost btn-sm fd-ai-btn" id="' + sp.btn + '" onmousedown="event.preventDefault()" onclick="_fdAiGo(\'' + esc(key) + '\')"'
+    + ' style="color:var(--accent);font-size:0.72rem;padding:0.15rem 0.5rem"'
+    + (sp.title ? ' title="' + esc(sp.title) + '"' : '') + '>' + IC.ai + ' ' + esc(sp.label) + '</button>', sp.aix, sp.btn, sp.what, { scope: 'fd', verb: sp.verb });
+}
+function _fdAiRowHtml(f, key) {
+  var b = _fdAiBtnHtml(f, key);
+  return b ? '<div class="fd-ai-row">' + b + '</div>' : '';
+}
+function _fdAiSrcHtml(f, skip) {
+  var facts = skip === 'facts';
+  var put = function (key, html) { return (key === skip || (facts && _FD_FACTS[key])) ? '' : html; };
+  var val = function (id, v) { return '<input id="' + id + '" value="' + esc(v == null ? '' : String(v)) + '">'; };
+
+  var ph = _fdPhaseVal(f);
+  var h = put('title', val('mTi', f.title))
+    + put('severity', val('mSv', f.severity)) + put('category', val('mCat', f.category)) + put('cwe', val('mCw', f.cwe)) + put('cvss', val('mCv', f.cvss) + val('mCvVec', f.cvss_vector)) + (ph != null ? val('mPhase', ph) : '')
+    + put('description', '<div id="mDe">' + _fdEditorFill(f, 'description', 'html') + '</div>')
+    + put('remediation', '<div id="mRe">' + _fdEditorFill(f, 'remediation', 'html') + '</div>')
+    + put('evidence', '<div id="evidenceEditor">' + _fdEditorFill(f, 'evidence', 'html') + '</div>')
+    + put('affected_assets', '<textarea id="mAs">' + esc(_fdEditorFill(f, 'affected_assets', 'lines')) + '</textarea>')
+    + put('references', '<textarea id="mRf">' + esc(_fdEditorFill(f, 'references', 'refs')) + '</textarea>');
+  (_ffCustomEnabled() || []).forEach(function (cf) {
+    if (!cf || !cf.id || 'custom_' + cf.id === skip) return;
+    if (facts && typeof _cffIsCompact === 'function' && _cffIsCompact(cf)) return;
+    var v = _fdStored(f, 'custom_' + cf.id);
+    h += _cffType(cf) === 'html' ? '<div id="cfld_' + esc(cf.id) + '">' + _fdEditorFill(f, 'custom_' + cf.id, 'html') + '</div>'
+      : _fsControlHtml(cf, v == null ? '' : String(v), 'cfld_' + cf.id);
+  });
+  return h;
+}
+function _fdAiBusy() {
+
+  if (typeof _fdGenBusy === 'function' && _fdGenBusy()) {
+    toast('Generate all is still writing this finding. It saves each part as it goes; wait for it, or press Stop.', 'info');
+    return true;
+  }
+  if (!_fdAiRun) return false;
+
+  var w = String(_fdAiRun.what || _fdLabelOf(_fdAiRun.key));
+  toast('AI is still writing the ' + (w === w.toUpperCase() ? w : w.toLowerCase()) + '. It will be done in a moment.', 'info');
+  return true;
+}
+async function _fdAiGo(key) {
+  var e = S._fdEdit;
+  if (!e || e.key !== key || _fdAiRun) return;
+  var f = (S.data.findings || []).find(function (x) { return x && x.id === e.id; });
+  var sp = f ? _fdAiSpec(key) : null;
+  var ed = sp ? document.getElementById(_fdEdId(key)) : null;
+  if (!ed) return;
+  var src = document.createElement('div');
+  src.id = 'fdAiSrc';
+  src.hidden = true;
+  src.setAttribute('aria-hidden', 'true');
+  src.innerHTML = _fdAiSrcHtml(f, key);
+  document.body.appendChild(src);
+
+  var keep = [window._scopeByPhase, window._scopeFlat];
+  try { var sc = _findingScopeLists(f.assessment_id); window._scopeByPhase = sc.byPhase; window._scopeFlat = sc.flat; } catch (x) {}
+  _fdAiRun = { key: key, id: sp.id, ref: e };
+  ed.id = sp.id;
+  try {
+    try { await resolveStorageImages(src); } catch (x) {}
+    await sp.run();
+  } catch (x) {
+    toast('AI error: ' + ((x && x.message) || x), 'error');
+  } finally {
+    _fdAiRun = null;
+    var now = document.getElementById(sp.id);
+    if (now && now !== src && !src.contains(now)) now.id = _fdEdId(key);
+    if (src.parentNode) src.parentNode.removeChild(src);
+    window._scopeByPhase = keep[0]; window._scopeFlat = keep[1];
+    if (S._fdEdit === e) {
+      var v = _fdEditRead();
+      if (v != null) e.draft = v;
+
+      var el = document.getElementById(_fdEdId(key));
+      if (el && document.activeElement !== el) { try { el.focus({ preventScroll: true }); } catch (x) {} }
+    }
+  }
+}
+window._fdAiGo = _fdAiGo;
+function _fdEditOpen(id, key) {
+  if (_fdAiBusy()) return true;
+  var f = (S.data.findings || []).find(function (x) { return x && x.id === id; });
+  if (!f || !canEdit()) return false;
+
+  var factBox = _fdFactBox(key);
+  if (factBox) key = 'facts';
+  var kind = _fdKindOf(key);
+  if (!kind) {
+
+    var fid = _FF_FORM_IDS[key];
+    _fdEditLeave();
+    openM('finding', id, f.assessment_id);
+    if (fid) setTimeout(function () { var x = document.getElementById(fid); if (x) { try { _ffFocusMissing({ el: x }); } catch (e) {} } }, 350);
+    return true;
+  }
+  if (typeof _workFirst === 'function' && _workFirst(_workAidsOf([id]), function () { _fdEditOpen(id, key); })) return true;
+  var cur = S._fdEdit;
+  if (cur && !(cur.id === id && cur.key === key) && _fdEditChanged()) {
+    toast('Save or cancel the ' + _fdLabelOf(cur.key).toLowerCase() + ' you are editing first', 'info');
+    _fdEditFocus();
+    return true;
+  }
+  if (cur && cur.id === id && cur.key === key) { if (factBox) cur.focus = factBox; _fdEditFocus(); return true; }
+  var cf = _fdCfDef(key);
+  S._fdEdit = { id: id, key: key, kind: kind, col: cf ? 'custom_fields' : _fdCol(key), cf: cf ? cf.id : null,
+    opened: kind === 'facts' ? _fdFactsOf(f) : _coCopy(_fdStored(f, key)), version: f.row_version, draft: null, force: false };
+  if (factBox) S._fdEdit.focus = factBox;
+  try { _coEnterField('findings', id, _fdCol(key)); } catch (e) {}
+  render();
+  setTimeout(function () { _fdEditFocus(true); }, 60);
+  return true;
+}
+window._fdEditOpen = _fdEditOpen;
+function _fdEditFocus(atEnd) {
+  var e = S._fdEdit;
+
+  var el = e ? (e.kind === 'facts' ? (_fdFactsEl(e.focus || 'mSv') || _fdFactsEl('mSta') || _fdFactsEl('mCat')) : document.getElementById(_fdEdId(e.key))) : null;
+  if (!el) return;
+  try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (x) {}
+  try {
+    el.focus();
+    if (atEnd && el.isContentEditable) {
+      var r = document.createRange(); r.selectNodeContents(el); r.collapse(false);
+      var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    } else if (atEnd && typeof el.setSelectionRange === 'function' && typeof el.value === 'string') el.setSelectionRange(el.value.length, el.value.length);
+  } catch (x) {}
+}
+function _fdEditRead() {
+  var e = S._fdEdit;
+  if (e && e.kind === 'facts') return _fdFactsRead();
+  var el = e ? document.getElementById(_fdEdId(e.key)) : null;
+  if (!el) return null;
+  if (e.kind === 'html') return String(el.innerHTML || '');
+  if (e.kind === 'field') return typeof _fsRead === 'function' ? _fsRead(el) : String(el.value || '');
+  return String(el.value == null ? '' : el.value);
+}
+function _fdEditTyped(ev) {
+  var e = S._fdEdit;
+  if (!e) return;
+  var v = _fdEditRead();
+  if (v != null) e.draft = v;
+  if (e.key === 'evidence') { var el = document.getElementById(_fdEdId('evidence')); if (el) { try { _evAiTouched(el); } catch (x) {} } }
+}
+window._fdEditTyped = _fdEditTyped;
+function _fdEditChanged() {
+  var e = S._fdEdit;
+
+  if (e && e.kind === 'facts') { var nowF = _fdFactsRead() || e.draft; return !!nowF && Object.keys(_fdFactsMine(e, nowF)).length > 0; }
+  if (!e || e.draft == null) return false;
+  var f = (S.data.findings || []).find(function (x) { return x && x.id === e.id; });
+  if (!f) return false;
+  var was = _fdEditorFill(f, e.key, e.kind);
+  if (e.kind === 'html') return !_qaSameValue(_qaStoredHtml(e.draft), _qaStoredHtml(was));
+  return String(e.draft).trim() !== String(was).trim();
+}
+function _fdEditLeave() {
+  var e = S._fdEdit;
+  S._fdEdit = null;
+  if (e) { try { _coEnterField('findings', e.id, ''); } catch (x) {} }
+}
+function _fdEditCancel() { if (_fdAiBusy()) return; _fdEditLeave(); render(); }
+window._fdEditCancel = _fdEditCancel;
+function _fdEditKey(ev) {
+  if (!S._fdEdit || !ev) return;
+  if (_fdAiRun && (ev.key === 'Escape' || ev.key === 'Enter')) { ev.preventDefault(); ev.stopPropagation(); return; }
+  if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); _fdEditCancel(); return; }
+
+  var title = S._fdEdit.kind === 'line' || (S._fdEdit.kind === 'facts' && !!ev.target && ev.target.tagName === 'INPUT');
+  if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey || (title && !ev.shiftKey))) { ev.preventDefault(); ev.stopPropagation(); _fdEditSave(); }
+}
+window._fdEditKey = _fdEditKey;
+var _fdEditSaving = false;
+async function _fdEditSave() {
+  var e = S._fdEdit;
+  if (!e || _fdEditSaving || _fdAiBusy()) return;
+  if (e.kind === 'facts') return _fdFactsSave(e);
+  var f = (S.data.findings || []).find(function (x) { return x && x.id === e.id; });
+  if (!f) { toast('That finding is no longer there', 'error'); _fdEditCancel(); return; }
+  var v = _fdEditRead();
+  if (v == null) return;
+  var label = _fdLabelOf(e.key);
+  if (e.kind === 'line') { v = v.replace(/\s+/g, ' ').trim(); if (!v) { toast('A finding needs a ' + label.toLowerCase(), 'error'); _fdEditFocus(); return; } }
+  else if (e.kind === 'lines') v = v.split(/[\n,]/).map(function (x) { return x.trim(); }).filter(Boolean).join('\n');
+  else if (e.kind === 'refs') v = _fdRefsOf(v);
+  else if (e.kind === 'html') { v = v.trim(); if (!_ffStripToText(v) && !/<img|<table|<hr/i.test(v)) v = ''; }
+  else v = String(v).trim();
+  _fdEditSaving = true;
+  var btn = document.getElementById('fdEdSave');
+  if (btn) btn.disabled = true;
+  _showLoading();
+  var done = false;
+  try {
+
+    if (e.kind === 'html' && v) v = String(_qaStoredHtml(await uploadHtmlImages(v, f.assessment_id, f.id, e.cf ? 'custom_' + e.cf : e.col)) || '').trim();
+    var nowOf = function (row) { return e.cf ? (_qaObj(row.custom_fields)[e.cf]) : row[e.col]; };
+    var r = await _coUpdate('findings', f.id, function (row) {
+      var now = nowOf(row);
+      if (_fdSameAs(now, v, e.kind)) return { refuse: 'same', already: true };
+      if (!e.force && !_fdSameAs(now, e.opened, e.kind)) return { refuse: 'moved' };
+      var patch = {};
+      if (e.cf) { var x = _coCopy(_qaObj(row.custom_fields)); x[e.cf] = v; patch.custom_fields = x; }
+      else patch[e.col] = v;
+      return { patch: patch };
+    });
+    if (!r.ok && r.refused === 'same') { done = true; toast('No changes to save', 'info'); }
+    else if (!r.ok && r.refused === 'moved') {
+      var theirs = r.row ? nowOf(r.row) : undefined;
+      var mineV = v;
+      _coShowConflict('findings', f.id, [{ field: e.cf ? 'custom_fields' : e.col, mine: e.cf ? (function () { var x = _coCopy(_qaObj(r.row.custom_fields)); x[e.cf] = mineV; return x; })() : mineV,
+        theirs: _coCopy(e.cf ? r.row.custom_fields : theirs), paths: e.cf ? [[e.cf]] : null }], function (choice) {
+        if (!S._fdEdit || S._fdEdit.id !== f.id || S._fdEdit.key !== e.key) return;
+        if (choice === 'mine') { S._fdEdit.force = true; return _fdEditSave(); }
+        S._fdEdit.opened = _coCopy(theirs); S._fdEdit.draft = null; S._fdEdit.force = false;
+        render();
+      }, { by: (r.row && r.row.row_by) || null });
+    } else if (!r.ok) {
+      _coSaidUpdate('findings', f.id, r, 'The ' + label.toLowerCase());
+    } else {
+      done = true;
+      if (f.assessment_id) { try { await addTimelineEvent(f.assessment_id, label + ' edited on ' + (f.title || 'a finding')); } catch (x) {} }
+      toast(label + ' saved', 'success');
+    }
+  } catch (err) {
+    toast(label + ' could not be saved: ' + ((err && err.message) || err), 'error');
+  } finally {
+    _fdEditSaving = false;
+    _hideLoading();
+    var b2 = document.getElementById('fdEdSave');
+    if (b2) b2.disabled = false;
+  }
+  if (done && S._fdEdit && S._fdEdit.id === e.id && S._fdEdit.key === e.key) { _fdEditLeave(); render(); }
+}
+window._fdEditSave = _fdEditSave;
+function _fdPhaseVal(f) {
+  var a = f ? (S.data.assessments || []).find(function (x) { return x && x.id === f.assessment_id; }) : null;
+  var ph = a ? _getPhases(a) : null;
+  if (!ph || ph.length < 2) return null;
+  var own = String((f && f.phase) || '');
+  return ph.some(function (p) { return (p.type || '') === own; }) ? own : String((ph[0] && ph[0].type) || '');
+}
+var _FD_FACTS = { severity: 'mSv', status: 'mSta', category: 'mCat', cvss: 'mCv', cwe: 'mCw', attack: 'mAtt' };
+function _fdFactsCfs() {
+  var cfs = (typeof _ffCustomEnabled === 'function') ? (_ffCustomEnabled() || []) : [];
+  return cfs.filter(function (cf) { return cf && cf.id && typeof _cffIsCompact === 'function' && _cffIsCompact(cf); });
+}
+function _fdFactBox(key) {
+  key = String(key || '');
+  if (key === 'facts') return 'mSv';
+  if (Object.prototype.hasOwnProperty.call(_FD_FACTS, key)) return (key === 'severity' || _ffEnabled(key)) ? _FD_FACTS[key] : null;
+  var m = /^custom_(.+)$/.exec(key);
+  if (m && _fdFactsCfs().some(function (cf) { return cf.id === m[1]; })) return 'cfld_' + m[1];
+  return null;
+}
+function _fdSevOfScore(n) {
+  n = Number(n) || 0;
+  return n >= 9 ? 'critical' : n >= 7 ? 'high' : n >= 4 ? 'medium' : n >= 0.1 ? 'low' : 'info';
+}
+function _fdFactsOf(row) {
+  row = row || {};
+  var o = { severity: String(row.severity || ''), status: String(row.status || 'open'), category: String(row.category || ''),
+    cvss: Number(row.cvss) || 0, cvss_vector: row.cvss_vector || null, cwe: String(row.cwe || ''), attack: _attackTidy(row.attack) };
+  var cv = _qaObj(row.custom_fields);
+  _fdFactsCfs().forEach(function (cf) { var v = cv[cf.id]; o['cf:' + cf.id] = v == null ? '' : String(v); });
+  return o;
+}
+function _fdFactSame(col, a, b) {
+  if (col === 'cvss') return (Number(a) || 0) === (Number(b) || 0);
+  if (col === 'cvss_vector') return String(a || '') === String(b || '');
+  return String(a == null ? '' : a).trim() === String(b == null ? '' : b).trim();
+}
+function _fdFactsEl(id) {
+  var box = document.querySelector('.fd-facts-edit');
+  if (!box || !id) return null;
+  var all = box.querySelectorAll('[id]');
+  for (var i = 0; i < all.length; i++) if (all[i].id === id) return all[i];
+  return null;
+}
+function _fdFactsRead() {
+  if (!document.querySelector('.fd-facts-edit')) return null;
+  var o = {}, el;
+  if ((el = _fdFactsEl('mSv'))) o.severity = String(el.value || '');
+  if ((el = _fdFactsEl('mSta'))) o.status = String(el.value || '') || 'open';
+  if ((el = _fdFactsEl('mCat'))) o.category = String(el.value || '').trim();
+  if ((el = _fdFactsEl('mCv'))) o.cvss = parseFloat(el.value) || 0;
+  if ((el = _fdFactsEl('mCvVec'))) o.cvss_vector = String(el.value || '') || null;
+  if ((el = _fdFactsEl('mCw'))) o.cwe = String(el.value || '').trim();
+  if ((el = _fdFactsEl('mAtt'))) o.attack = _attackTidy(el.value);
+  _fdFactsCfs().forEach(function (cf) {
+    var c = _fdFactsEl('cfld_' + cf.id);
+    if (c) o['cf:' + cf.id] = String(((typeof _fsRead === 'function') ? _fsRead(c) : c.value) || '').trim();
+  });
+  return o;
+}
+function _fdFactsMine(e, now) {
+  var out = {}, was = (e && e.opened) || {};
+  Object.keys(now || {}).forEach(function (col) { if (!_fdFactSame(col, now[col], was[col])) out[col] = now[col]; });
+  if (Object.prototype.hasOwnProperty.call(out, 'cvss') && out.cvss > 0) {
+    out.severity = _fdSevOfScore(out.cvss);
+    if (_fdFactSame('severity', out.severity, was.severity)) delete out.severity;
+  }
+  if (Object.prototype.hasOwnProperty.call(out, 'severity') && !out.severity) delete out.severity;
+  return out;
+}
+function _fdFactLabel(col) {
+  if (col.indexOf('cf:') === 0) { var cf = _fdFactsCfs().find(function (x) { return 'cf:' + x.id === col; }); return cf ? String(cf.label || 'Field') : 'Field'; }
+  return _ffLabel(col === 'cvss_vector' ? 'cvss' : col);
+}
+function _fdFactLabels(cols) {
+  var l = [];
+  cols.forEach(function (c) { var x = _fdFactLabel(c); if (l.indexOf(x) < 0) l.push(x); });
+  return l;
+}
+function _fdFactsNames() {
+  var l = [_ffLabel('severity')];
+  ['status', 'category', 'cvss', 'cwe', 'attack'].forEach(function (k) { if (_ffEnabled(k)) l.push(_ffLabel(k)); });
+  _fdFactsCfs().forEach(function (cf) { l.push(String(cf.label || 'Field')); });
+  return _genList(l);
+}
+function _fdFactsBtnHtml(f) {
+  if (_fdEditing(f, 'facts')) return '<span class="fd-card-state fd-facts-state">' + IC.edit + ' Editing</span>';
+  var n = _fdFactsNames();
+  return '<button type="button" class="btn btn-ghost btn-sm fd-edit-btn fd-facts-btn" onclick="_fdEditOpen(\'' + esc(f.id) + '\',\'facts\')" title="' + esc('Edit the ' + n + ' here') + '" aria-label="' + esc('Edit the ' + n) + '">' + IC.edit + '</button>';
+}
+function _fdFactsHtml(f) {
+  var e = S._fdEdit, d = e && e.draft, was = (e && e.opened) || {};
+  var now = _fdFactsOf(f), v = Object.assign({}, f), cfv = {};
+  Object.keys(now).forEach(function (col) {
+    var x = (d && Object.prototype.hasOwnProperty.call(d, col) && !_fdFactSame(col, d[col], was[col])) ? d[col] : now[col];
+    if (col.indexOf('cf:') === 0) cfv[col.slice(3)] = x; else v[col] = x;
+  });
+  var ai = _fdAiOn();
+  var o = { scope: 'fd', go: { cvss: "_fdAiFact('cvss')", cwe: "_fdAiFact('cwe')", category: "_fdAiFact('category')" } };
+
+  var h = '<div class="fd-facts-edit finding-modal-body" onkeydown="_fdEditKey(event)" oninput="_fdEditTyped(event)" onchange="_fdEditTyped(event)">';
+  h += _fmClsGridHtml(v, ai, o) + _fmCwGridHtml(v, ai, o);
+  var cfs = _fdFactsCfs();
+  if (cfs.length) {
+
+    h += '<div class="fm-compact fd-facts-cf">';
+    cfs.forEach(function (cf) {
+      var val = cfv[cf.id] != null ? String(cfv[cf.id]) : '';
+      h += '<div class="form-group fm-compact-item"><div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;margin-bottom:0.3rem">'
+        + '<label style="margin:0">' + esc(cf.label) + _ffCustomReqMark(cf) + '</label>';
+      if (ai) h += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="genCf_' + cf.id + '" onclick="_fdAiFact(\'cf:' + cf.id + '\')" style="color:var(--accent);font-size:0.7rem;padding:0.1rem 0.4rem;white-space:nowrap">' + IC.ai + ' Generate</button>',
+        'cf:' + cf.id, 'genCf_' + cf.id, cf.label || 'this field', { scope: 'fd' });
+      h += '</div><div class="fm-compact-ctl">' + _fsControlHtml(cf, val, 'cfld_' + cf.id) + '</div></div>';
+    });
+    h += '</div>';
+  }
+  h += '<div class="fd-edit-acts"><button type="button" class="btn btn-primary btn-sm" id="fdEdSave" onclick="_fdEditSave()">' + IC.check + ' Save</button>'
+    + '<button type="button" class="btn btn-ghost btn-sm" onclick="_fdEditCancel()">Cancel</button>'
+    + '<span class="fd-edit-hint"><kbd>Enter</kbd> saves, <kbd>Esc</kbd> cancels</span></div>';
+  return h + '</div>';
+}
+async function _fdAiFact(which) {
+  var e = S._fdEdit;
+  if (!e || e.kind !== 'facts' || _fdAiRun) return;
+  var f = (S.data.findings || []).find(function (x) { return x && x.id === e.id; });
+  if (!f) return;
+  var m = /^cf:(.+)$/.exec(String(which || ''));
+  var cf = m ? _fdFactsCfs().find(function (c) { return c.id === m[1]; }) : null;
+  var go = cf ? function () { return generateCustomField(cf.id); }
+    : ({ cvss: function () { return calculateCVSS(); }, cwe: function () { return generateCWE(); }, category: function () { return generateCategory(); } })[which];
+  if (!go || (m && !cf)) return;
+  var src = document.createElement('div');
+  src.id = 'fdAiSrc';
+  src.hidden = true;
+  src.setAttribute('aria-hidden', 'true');
+  src.innerHTML = _fdAiSrcHtml(f, 'facts');
+  document.body.appendChild(src);
+  var ids = ['mSv', 'mSta', 'mCat', 'mCv', 'mCvVec', 'cvssPickBtn', 'mCw', 'mAtt'].concat(_fdFactsCfs().map(function (c) { return 'cfld_' + c.id; }));
+  _fdAiRun = { key: 'facts', what: cf ? (cf.label || 'field') : _ffLabel(which), ids: ids, ref: e };
+  try {
+    try { await resolveStorageImages(src); } catch (x) {}
+    await go();
+  } catch (x) {
+    toast('AI error: ' + ((x && x.message) || x), 'error');
+  } finally {
+    _fdAiRun = null;
+    if (src.parentNode) src.parentNode.removeChild(src);
+    if (S._fdEdit === e) { var v = _fdFactsRead(); if (v) e.draft = v; }
+  }
+}
+window._fdAiFact = _fdAiFact;
+async function _fdFactsSave(e) {
+  var f = (S.data.findings || []).find(function (x) { return x && x.id === e.id; });
+  if (!f) { toast('That finding is no longer there', 'error'); _fdEditCancel(); return; }
+
+  try { _cvssLeft({ quiet: false }); } catch (x) {}
+  var now = _fdFactsRead();
+  if (!now) return;
+  e.draft = now;
+  var mine = _fdFactsMine(e, now), cols = Object.keys(mine);
+  if (!cols.length) { toast('No changes to save', 'info'); _fdEditLeave(); render(); return; }
+  var said = _genList(_fdFactLabels(cols));
+  _fdEditSaving = true;
+  var btn = document.getElementById('fdEdSave');
+  if (btn) btn.disabled = true;
+  _showLoading();
+  var done = false;
+  try {
+    var r = await _coUpdate('findings', f.id, function (row) {
+      var at = _fdFactsOf(row), patch = {}, cfx = null, moved = false, left = 0;
+      cols.forEach(function (col) {
+        if (_fdFactSame(col, at[col], mine[col])) return;
+        if (!e.force && !_fdFactSame(col, at[col], e.opened[col])) { moved = true; return; }
+        left++;
+        if (col.indexOf('cf:') === 0) { cfx = cfx || _coCopy(_qaObj(row.custom_fields)); cfx[col.slice(3)] = mine[col]; }
+        else patch[col] = mine[col];
+      });
+      if (moved) return { refuse: 'moved' };
+      if (!left) return { refuse: 'same', already: true };
+      if (cfx) patch.custom_fields = cfx;
+      return { patch: patch };
+    });
+    if (!r.ok && r.refused === 'same') { done = true; toast('No changes to save', 'info'); }
+    else if (!r.ok && r.refused === 'moved') {
+      var at = _fdFactsOf(r.row), conflicts = [], met = [], cfMine = null, cfPaths = [];
+      cols.forEach(function (col) {
+        if (_fdFactSame(col, at[col], mine[col]) || _fdFactSame(col, at[col], e.opened[col])) return;
+        met.push(col);
+        if (col.indexOf('cf:') === 0) { cfMine = cfMine || _coCopy(_qaObj(r.row.custom_fields)); cfMine[col.slice(3)] = mine[col]; cfPaths.push([col.slice(3)]); return; }
+        conflicts.push({ field: col, mine: mine[col], theirs: _coCopy(r.row[col]), paths: null });
+      });
+      if (cfMine) conflicts.push({ field: 'custom_fields', mine: cfMine, theirs: _coCopy(r.row.custom_fields), paths: cfPaths });
+      _coShowConflict('findings', f.id, conflicts, function (choice) {
+        var cur = S._fdEdit;
+        if (!cur || cur.id !== f.id || cur.key !== 'facts') return;
+        if (choice === 'mine') { cur.force = true; return _fdEditSave(); }
+
+        var theirs = _fdFactsOf(r.row);
+        cur.draft = Object.assign({}, cur.draft || now);
+        met.forEach(function (col) { cur.draft[col] = theirs[col]; });
+        cur.opened = theirs; cur.force = false;
+        render();
+      }, { by: (r.row && r.row.row_by) || null });
+    } else if (!r.ok) {
+      _coSaidUpdate('findings', f.id, r, 'The ' + said);
+    } else {
+      done = true;
+      if (f.assessment_id) { try { await addTimelineEvent(f.assessment_id, said + ' edited on ' + (f.title || 'a finding')); } catch (x) {} }
+      toast(said + ' saved', 'success');
+    }
+  } catch (err) {
+    toast('The ' + said + ' could not be saved: ' + ((err && err.message) || err), 'error');
+  } finally {
+    _fdEditSaving = false;
+    _hideLoading();
+    var b2 = document.getElementById('fdEdSave');
+    if (b2) b2.disabled = false;
+  }
+  if (done && S._fdEdit === e) { _fdEditLeave(); render(); }
+}
+function _fdKeepBefore() {
+  var e = S._fdEdit;
+  if (!e || e.kind !== 'facts') return;
+  var v = _fdFactsRead();
+  if (v) e.draft = v;
+}
+var _fdGenRefs = {};
+function _fdPageRef(fid) {
+  if (!fid) return null;
+  return _fdGenRefs[fid] || (_fdGenRefs[fid] = { fdpage: fid });
+}
+function _fdGenBusy() { var r = _genRuns.fdpage; return !!(r && !r.finished && !r.gone); }
+function _fdGenRec(run) { return (S.data.findings || []).find(function (x) { return x && x.id === run.cfg.fid; }) || null; }
+function _fdGenBtnHtml(f) {
+  if (!_fdAiOn() || !_ffEnabled('evidence')) return '';
+  return _aixWrap('<button type="button" class="btn btn-ghost btn-sm fd-gen-btn" id="genAllBtn" onmousedown="event.preventDefault();_fdGenAll()" onclick="if(event.detail===0)_fdGenAll()"'
+    + ' style="color:var(--accent);font-weight:700" title="Fills every empty part of the finding from this evidence, several at once in the order they depend on each other, and explains its screenshots, code and output, saving each part as it is written. Derives a title if blank, reuses the Library entry with this title, and can be stopped or undone, a part at a time or all of it.">'
+    + IC.ai + ' Generate all from evidence</button>', 'all', 'genAllBtn', 'Generate all from evidence', { verb: 'Generate all', scope: 'fdall' });
+}
+function _fdGenFormHtml(f) {
+  var val = function (id, v, more) { return '<input id="' + id + '" value="' + esc(v == null ? '' : String(v)) + '"' + (more || '') + '>'; };
+  var h = val('mTi', f.title) + val('mSv', f.severity, parseFloat(f.cvss) > 0 ? ' disabled' : '');
+  if (_ffEnabled('status')) h += val('mSta', f.status || 'open');
+  if (_ffEnabled('category')) h += val('mCat', f.category);
+  if (_ffEnabled('cvss')) h += val('mCv', f.cvss || 0) + val('mCvVec', f.cvss_vector) + '<button type="button" id="cvssPickBtn"></button>';
+  if (_ffEnabled('cwe')) h += val('mCw', f.cwe);
+  if (_ffEnabled('attack')) h += val('mAtt', _attackTidy(f.attack));
+  var ph = _fdPhaseVal(f);
+  if (ph != null) h += val('mPhase', ph);
+  var rich = function (key, id) { return '<div id="' + id + '" contenteditable="true">' + _fdEditorFill(f, key, 'html') + '</div>'; };
+  if (_ffEnabled('evidence')) h += rich('evidence', 'evidenceEditor');
+  if (_ffEnabled('description')) h += rich('description', 'mDe');
+  if (_ffEnabled('remediation')) h += rich('remediation', 'mRe');
+  if (_ffEnabled('affected_assets')) h += '<textarea id="mAs">' + esc(_fdEditorFill(f, 'affected_assets', 'lines')) + '</textarea>';
+  if (_ffEnabled('references')) h += '<textarea id="mRf">' + esc(_fdEditorFill(f, 'references', 'refs')) + '</textarea>';
+  (_ffCustomEnabled() || []).forEach(function (cf) {
+    if (!cf || !cf.id) return;
+    var v = _fdStored(f, 'custom_' + cf.id);
+    h += _cffType(cf) === 'html' ? rich('custom_' + cf.id, 'cfld_' + cf.id) : _fsControlHtml(cf, v == null ? '' : String(v), 'cfld_' + cf.id);
+  });
+  return h;
+}
+function _fdGenFormMake(f) {
+  var form = document.createElement('div');
+  form.id = 'fdGenForm';
+  form.hidden = true;
+  form.setAttribute('aria-hidden', 'true');
+  form.innerHTML = _fdGenFormHtml(f);
+  document.body.appendChild(form);
+  try { if (typeof _fsAfterDraw === 'function') _fsAfterDraw(form); } catch (e) {}
+  return form;
+}
+function _fdGenFormDrop() {
+  var form = document.getElementById('fdGenForm');
+  if (form && form.parentNode) form.parentNode.removeChild(form);
+}
+var _FD_GEN_COLS = { mTi: 'title', mDe: 'description', mRe: 'remediation', evidenceEditor: 'evidence', mAs: 'affected_hosts', mRf: 'refs',
+  mCv: 'cvss', mCvVec: 'cvss_vector', mSv: 'severity', mCw: 'cwe', mCat: 'category', mAtt: 'attack' };
+function _fdGenColOf(id) {
+  if (Object.prototype.hasOwnProperty.call(_FD_GEN_COLS, id)) return _FD_GEN_COLS[id];
+  var m = /^cfld_(.+)$/.exec(String(id || ''));
+  return m ? 'cf:' + m[1] : null;
+}
+function _fdGenCf(col) {
+  var m = /^cf:(.+)$/.exec(String(col || ''));
+  return m ? ((_ffCustomEnabled() || []).find(function (c) { return c && c.id === m[1]; }) || null) : null;
+}
+function _fdGenKind(col) {
+  if (col === 'description' || col === 'remediation' || col === 'evidence') return 'html';
+  var cf = _fdGenCf(col);
+  if (cf) return _cffType(cf) === 'html' ? 'html' : 'text';
+  return col === 'refs' ? 'refs' : col === 'affected_hosts' ? 'lines' : col === 'cvss' ? 'num' : 'text';
+}
+function _fdGenLines(v) { return String(v == null ? '' : v).split(/[\n,]/).map(function (x) { return x.trim(); }).filter(Boolean).join('\n'); }
+function _fdGenRecVal(row, col) {
+  if (!row) return undefined;
+  if (col.indexOf('cf:') === 0) { var v = _qaObj(row.custom_fields)[col.slice(3)]; return v == null ? '' : v; }
+  return row[col];
+}
+function _fdGenSame(col, a, b) {
+  var k = _fdGenKind(col);
+  if (k === 'html') return _fdSameAs(a == null ? '' : a, b == null ? '' : b, 'html');
+  if (k === 'refs') return _fdSameAs(a, b, 'refs');
+  if (k === 'lines') return _fdGenLines(a) === _fdGenLines(b);
+  if (k === 'num') return (Number(a) || 0) === (Number(b) || 0);
+  if (col === 'cvss_vector') return String(a || '') === String(b || '');
+  if (col === 'attack') return _attackTidy(a) === _attackTidy(b);
+  return String(a == null ? '' : a).trim() === String(b == null ? '' : b).trim();
+}
+async function _fdGenValOf(el, col, f) {
+  var k = _fdGenKind(col), cf = _fdGenCf(col);
+  if (k === 'html') {
+    var v = String(el.innerHTML || '').trim();
+    if (!_ffStripToText(v) && !/<img|<table|<hr/i.test(v)) return '';
+    return String(_qaStoredHtml(await uploadHtmlImages(v, f.assessment_id, f.id, cf ? 'custom_' + cf.id : col)) || '').trim();
+  }
+  var raw = (cf && typeof _fsRead === 'function') ? _fsRead(el) : String(el.value == null ? '' : el.value);
+  if (col === 'title') return String(raw).replace(/\s+/g, ' ').trim();
+  if (k === 'lines') return _fdGenLines(raw);
+  if (k === 'refs') return _fdRefsOf(raw);
+  if (k === 'num') return parseFloat(raw) || 0;
+  if (col === 'cvss_vector') return String(raw || '') || null;
+  if (col === 'attack') return _attackTidy(raw);
+  return String(raw == null ? '' : raw).trim();
+}
+function _fdGenFill(el, col, row) {
+  if (!el || !row) return;
+  var k = _fdGenKind(col);
+  var key = col.indexOf('cf:') === 0 ? 'custom_' + col.slice(3) : col === 'affected_hosts' ? 'affected_assets' : col === 'refs' ? 'references' : col;
+  if (k === 'html') { el.innerHTML = _fdEditorFill(row, key, 'html'); try { resolveStorageImages(el); } catch (e) {} return; }
+  if (k === 'lines' || k === 'refs') { el.value = _fdEditorFill(row, key, k); return; }
+  var v = _fdGenRecVal(row, col), s = col === 'attack' ? _attackTidy(v) : (v == null ? '' : String(v));
+  if (_fdGenCf(col) && typeof _fsSet === 'function' && el.getAttribute && el.getAttribute('data-fs-def') != null) _fsSet(el, s);
+  else el.value = s;
+}
+function _fdGenCurOf(f) {
+  var o = {};
+  Object.keys(_FD_GEN_COLS).forEach(function (id) { var c = _FD_GEN_COLS[id]; o[c] = _fdGenRecVal(f, c); });
+  (_ffCustomEnabled() || []).forEach(function (cf) { if (cf && cf.id) o['cf:' + cf.id] = _fdGenRecVal(f, 'cf:' + cf.id); });
+  return o;
+}
+async function _fdGenCommit(run, s) {
+  var f = _fdGenRec(run);
+  if (!f) throw new Error('the finding is no longer there');
+  var pre = s.pre || {}, ids = [], cols = {};
+  Object.keys(pre).forEach(function (id) {
+    var el = document.getElementById(id), col = _fdGenColOf(id);
+    if (!el || !col || !pre[id] || pre[id].v === null) return;
+    if (_genSnapEl(el).v !== pre[id].v) ids.push(id);
+  });
+  for (var i = 0; i < ids.length; i++) cols[_fdGenColOf(ids[i])] = await _fdGenValOf(document.getElementById(ids[i]), _fdGenColOf(ids[i]), f);
+
+  if (Object.prototype.hasOwnProperty.call(cols, 'cvss') && cols.cvss > 0) cols.severity = _fdSevOfScore(cols.cvss);
+  if (Object.prototype.hasOwnProperty.call(cols, 'severity') && !cols.severity) delete cols.severity;
+  var keys = Object.keys(cols);
+  if (!keys.length || run.gone) return;
+  var wrote = [];
+  var r = await _coUpdate('findings', f.id, function (row) {
+    var patch = {}, cfx = null, moved = false;
+    wrote = [];
+    keys.forEach(function (col) {
+      var at = _fdGenRecVal(row, col);
+      if (_fdGenSame(col, at, cols[col])) return;
+      if (!_fdGenSame(col, at, run.cur[col])) { moved = true; return; }
+      wrote.push(col);
+      if (col.indexOf('cf:') === 0) { cfx = cfx || _coCopy(_qaObj(row.custom_fields)); cfx[col.slice(3)] = cols[col]; }
+      else patch[col] = cols[col];
+    });
+    if (moved) return { refuse: 'moved' };
+    if (!wrote.length) return { refuse: 'same', already: true };
+    if (cfx) patch.custom_fields = cfx;
+    return { patch: patch };
+  });
+  if (r.ok || r.refused === 'same') {
+    s.cols = {};
+    if (r.ok) wrote.forEach(function (col) { s.cols[col] = { was: run.cur[col], now: cols[col] }; });
+    keys.forEach(function (col) { run.cur[col] = cols[col]; });
+    if (r.ok) { (run.flash = run.flash || []).push(s.key); _fdGenDraw(run); }
+    return;
+  }
+  if (r.refused === 'moved') {
+    var row = r.row || _fdGenRec(run) || f;
+    ids.forEach(function (id) { _fdGenFill(document.getElementById(id), _fdGenColOf(id), row); });
+    keys.forEach(function (col) { run.cur[col] = _fdGenRecVal(row, col); });
+    return { kept: 'changed meanwhile by somebody else, kept as they saved it' };
+  }
+  ids.forEach(function (id) { _genPut(document.getElementById(id), pre[id]); });
+  throw new Error(r.deleted ? 'the finding has been deleted' : r.busy ? 'it kept being changed while it was saved'
+    : r.refused === '' ? 'your account cannot change it' : 'it could not be saved');
+}
+function _fdGenSrc(run, s) {
+  if (!s) return null;
+  if (s.state === 'done' && s.cols) return { src: s, cols: Object.keys(s.cols) };
+  if (s.state === 'lib') {
+    var L = run.by.library;
+    if (!L || L.state !== 'done' || !L.cols) return null;
+    var mine = (s.writes || (s.el ? [s.el] : [])).map(_fdGenColOf).filter(Boolean);
+    return { src: L, cols: mine.filter(function (c) { return Object.prototype.hasOwnProperty.call(L.cols, c); }) };
+  }
+  return null;
+}
+function _fdGenLeft(run, s) {
+  var x = _fdGenSrc(run, s);
+  if (!x) return 0;
+  var back = x.src.backCols || {};
+  return x.cols.filter(function (c) { return !back[c]; }).length;
+}
+var _FD_GEN_GROUP = ['cvss', 'cvss_vector', 'severity'];
+async function _fdGenPutBack(run, list) {
+  var f = _fdGenRec(run);
+  if (!f) { toast('That finding is no longer there', 'error'); return null; }
+  var res = null;
+  var r = await _coUpdate('findings', f.id, function (row) {
+    var sim = {}, put = [], kept = 0, patch = {}, cfx = null;
+    var at = function (c) { return Object.prototype.hasOwnProperty.call(sim, c) ? sim[c] : _fdGenRecVal(row, c); };
+    list.forEach(function (x) {
+      var cs = x.src.cols || {}, back = x.src.backCols || {}, seen = {};
+      x.cols.forEach(function (c) {
+        if (seen[c] || back[c] || !cs[c]) return;
+        var g = (_FD_GEN_GROUP.indexOf(c) >= 0 ? _FD_GEN_GROUP : [c]).filter(function (y) { return cs[y] && !back[y]; });
+        g.forEach(function (y) { seen[y] = 1; });
+        if (g.some(function (y) { return !_fdGenSame(y, at(y), cs[y].now); })) { kept++; return; }
+        g.forEach(function (y) { sim[y] = cs[y].was; put.push([x.src, y]); });
+      });
+    });
+    res = { put: put, kept: kept, sim: sim };
+    Object.keys(sim).forEach(function (c) {
+      if (c.indexOf('cf:') === 0) {
+        cfx = cfx || _coCopy(_qaObj(row.custom_fields));
+        if (sim[c] == null || sim[c] === '') delete cfx[c.slice(3)]; else cfx[c.slice(3)] = sim[c];
+      } else patch[c] = sim[c] === undefined ? null : sim[c];
+    });
+    if (cfx) patch.custom_fields = cfx;
+    if (!Object.keys(patch).length) return { refuse: 'same', already: true };
+    return { patch: patch };
+  });
+  if (!r.ok && r.refused !== 'same') { _coSaidUpdate('findings', f.id, r, 'The undo'); return null; }
+  if (!res) return null;
+  res.put.forEach(function (p) { (p[0].backCols || (p[0].backCols = {}))[p[1]] = 1; });
+  Object.keys(res.sim).forEach(function (c) { run.cur[c] = res.sim[c]; });
+  return { put: res.put.length, kept: res.kept };
+}
+async function _fdGenUndoOne(run, s) {
+  var x = _fdGenSrc(run, s);
+  if (!x || run.undoing) return;
+  run.undoing = true;
+  _genPaint(run);
+  var res = null;
+  try { res = await _fdGenPutBack(run, [x]); } finally { run.undoing = false; }
+  if (!res) { _genPaint(run); return; }
+  _genBackSaid(run, s, res);
+  if (res.put) { (run.flash = run.flash || []).push(s.key); _fdGenSaidOn(run, s.label + ' put back'); _fdGenDraw(run); }
+}
+async function _fdGenUndoAll(run) {
+  if (run.undoing) return;
+  var list = [];
+  for (var i = run.wrote.length - 1; i >= 0; i--) { var t = run.wrote[i]; if (t.cols) list.push({ src: t, cols: Object.keys(t.cols) }); }
+  run.undoing = true;
+  _genPaint(run);
+  var res = null;
+  try { res = await _fdGenPutBack(run, list); } finally { run.undoing = false; }
+  if (!res) { _genPaint(run); return; }
+  run.undone = true; run.undoKept = res.kept;
+  _genPaint(run);
+  _genAnnounce(run, 'Undone');
+  toast(res.kept ? 'Undone, except ' + res.kept + ' field' + (res.kept === 1 ? '' : 's') + ' changed since' : 'Undone: every field it wrote is as it was', 'success');
+  if (res.put) { _fdGenSaidOn(run, 'Generate all undone'); _fdGenDraw(run); }
+  return res.kept;
+}
+function _fdGenSaidOn(run, what) {
+  var f = _fdGenRec(run);
+  if (f && f.assessment_id) { try { addTimelineEvent(f.assessment_id, what + ' on ' + (f.title || 'a finding')); } catch (e) {} }
+}
+function _fdGenAlive(run) {
+  if (S.page !== 'finding-detail' || !S.currentFinding || S.currentFinding.id !== run.cfg.fid) return false;
+  if (!run.finished && !_genLive(run.cfg.form)) return false;
+  _fdGenAttach(run);
+  return true;
+}
+function _fdGenAttach(run) {
+  var host = document.getElementById('fdGenHost');
+  if (!host) return;
+  run.cfg.host = host;
+  if (run.panel && run.panel.parentNode !== host) {
+    run.panel.style.animation = 'none';
+    host.insertBefore(run.panel, host.firstChild);
+    _fdGenTop(run.panel);
+  }
+  var b = document.getElementById('genAllBtn');
+  if (b !== run.cfg.button) { run.cfg.button = b; if (b && !run.finished) _genButtons(run, true); }
+}
+function _fdGenTop(p) {
+  if (!p) return;
+  var top = 8;
+  try {
+    if (document.body && document.body.classList.contains('rb-barred')) top += parseFloat(getComputedStyle(document.body).getPropertyValue('--rb-bar')) || 48;
+    var hd = document.querySelector('.main > .header');
+    if (hd && getComputedStyle(hd).position === 'sticky') top += Math.round(hd.getBoundingClientRect().height);
+  } catch (e) {}
+  p.style.top = top + 'px';
+}
+function _fdGenCardOf(key) {
+  var k = String(key || '');
+  k = k === 'assets' ? 'affected_assets' : k.indexOf('cf:') === 0 ? 'custom_' + k.slice(3) : k;
+  if (k === 'library' || /["\\]/.test(k)) return null;
+  if (k === 'title') return document.querySelector('.fd-title-row');
+  return document.querySelector('.fd-card[data-fd-key="' + k + '"]') || document.querySelector('[data-fd-add="' + k + '"]')
+    || document.querySelector('[data-fd-fact="' + k + '"]') || (k === 'cvss' ? document.querySelector('[data-fd-fact="severity"]') : null);
+}
+function _fdGenHold(run, s, on) {
+  var c = _fdGenCardOf(s.key);
+  if (c && c.classList) c.classList[on ? 'add' : 'remove']('gen-busy');
+}
+function _fdGenGoTo(run, key) {
+  var c = _fdGenCardOf(key);
+  if (!c) return;
+  try { c.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { try { c.scrollIntoView(); } catch (e2) {} }
+  _genFlash(c, 'gen-ping');
+}
+function _fdGenDraw(run) {
+  if (run._press && Date.now() - run._press < 1500) { run._owed = function () { _fdGenDraw(run); }; return; }
+  if (S.page === 'finding-detail' && S.currentFinding && S.currentFinding.id === run.cfg.fid) render();
+}
+function _fdGenAfterDraw() {
+  var run = _genRuns.fdpage;
+  if (!run || run.gone) return;
+
+  if (!S.currentFinding || S.page !== 'finding-detail' || S.currentFinding.id !== run.cfg.fid) { if (run.finished && run.panel) _genDismiss(run); return; }
+  _fdGenAttach(run);
+  setTimeout(function () {
+    if (!run.finished) run.steps.forEach(function (s) { if (s.state === 'run') _fdGenHold(run, s, true); });
+    var fl = run.flash || [];
+    run.flash = [];
+    fl.forEach(function (k) { var c = _fdGenCardOf(k); if (c) _genFlash(c, 'gen-new'); });
+  }, 0);
+}
+function _fdGenFree() {
+  var e = S._fdEdit;
+  if (!e) return true;
+  if (_fdEditChanged()) {
+    toast('Save or cancel the ' + _fdLabelOf(e.key).toLowerCase() + ' you are editing first', 'info');
+    _fdEditFocus();
+    return false;
+  }
+  _fdEditLeave();
+  render();
+  return true;
+}
+function _fdGenCanAgain(run) {
+  if (_fdAiRun) { _fdAiBusy(); return false; }
+  return _fdGenFree();
+}
+function _fdGenBegin(run, imgs) {
+  if (run._began) {
+    var f = _fdGenRec(run);
+    _fdGenFormDrop();
+    if (f) { run.cfg.form = _fdGenFormMake(f); try { resolveStorageImages(run.cfg.form); } catch (e) {} }
+  }
+  run._began = true;
+  run.cur = _fdGenCurOf(_fdGenRec(run) || {});
+  run.flash = run.flash || [];
+  S._aiImages = (imgs && imgs.length) ? imgs : null;
+  S._aiImagesRefused = '';
+
+  if (!run._scopeKeep) run._scopeKeep = [window._scopeByPhase, window._scopeFlat];
+  try { var sc = _findingScopeLists(run.cfg.aid); window._scopeByPhase = sc.byPhase; window._scopeFlat = sc.flat; } catch (e) {}
+}
+function _fdGenEnd(run) {
+  _genFindingSaid(run);
+  S._aiImages = null;
+  if (run._scopeKeep) { window._scopeByPhase = run._scopeKeep[0]; window._scopeFlat = run._scopeKeep[1]; run._scopeKeep = null; }
+  _fdGenFormDrop();
+  if (run.gone) {
+    if (run.wrote.length) toast('Generate all stopped when you left the finding. The parts it had written are saved.', 'info', 8000);
+    return;
+  }
+  var said = run.steps.filter(function (s) { return !s.hidden && !s._said && (s.state === 'done' || s.state === 'lib') && (s.state === 'lib' || (s.cols && Object.keys(s.cols).length)); });
+  said.forEach(function (s) { s._said = true; });
+  if (said.length) _fdGenSaidOn(run, _genList(said.map(function (s) { return s.label; })) + ' generated from evidence');
+  _fdGenDraw(run);
+}
+async function _fdGenAll() {
+  var fid = S.currentFinding && S.currentFinding.id;
+  var f = fid ? (S.data.findings || []).find(function (x) { return x && x.id === fid; }) : null;
+  if (!f || S.page !== 'finding-detail' || S.modal || !canEdit()) return;
+  var live = _genRuns.fdpage;
+  if (live && !live.finished && !live.gone && live.cfg.fid === f.id) return live.promise;
+  if (_fdAiBusy()) return;
+  if (typeof _workFirst === 'function' && _workFirst(_workAidsOf([f.id]), function () { _fdGenAll(); })) return;
+  if (!_fdGenFree()) return;
+
+  if (live && live.panel && live.panel.parentNode) live.panel.parentNode.removeChild(live.panel);
+  _fdGenFormDrop();
+  var form = _fdGenFormMake(f);
+  try { await resolveStorageImages(form); } catch (e) {}
+
+  if (!form.isConnected || S.page !== 'finding-detail' || !S.currentFinding || S.currentFinding.id !== f.id || S.modal || _fdAiRun || S._fdEdit || _fdGenBusy()) { _fdGenFormDrop(); return; }
+  var ed = document.getElementById('evidenceEditor');
+  var tEl = document.getElementById('mTi');
+  if (!String((tEl && tEl.value) || '').trim() && !_aiEditorText(ed, '[screenshot]')) { _fdGenFormDrop(); toast('Add some evidence (or a title) first', 'error'); return; }
+
+  var notes = [], imgs = [], n = 0;
+  try { n = ed ? ed.querySelectorAll('img').length : 0; if (n && _aiCanSeeImages()) imgs = _evidenceImagesForAI(); } catch (e) {}
+  if (n && !imgs.length) notes.push('did not read the ' + n + ' screenshot' + (n === 1 ? '' : 's') + ', because the model you have configured does not read images');
+  else if (imgs.length) notes.push('read ' + imgs.length + ' screenshot' + (imgs.length === 1 ? '' : 's') + (n > imgs.length ? ' of ' + n : ''));
+  var run;
+  try {
+    run = _genRun({
+      kind: 'fdpage', page: true, fid: f.id, aid: f.assessment_id, title: 'Generating from the evidence', form: form, formId: 'fdGenForm', aix: 'all',
+      mref: _fdPageRef(f.id), host: document.getElementById('fdGenHost'), button: document.getElementById('genAllBtn'), buttonId: 'genAllBtn',
+      steps: _genFindingSteps(ed, imgs), groups: [['mCv', 'mCvVec', 'cvssPickBtn', 'mSv']], notes: notes,
+      begin: function (r) { _fdGenBegin(r, imgs); },
+      end: function (r) { _fdGenEnd(r); },
+      commit: _fdGenCommit, undoOne: _fdGenUndoOne, undoAll: _fdGenUndoAll, left: _fdGenLeft,
+      goTo: _fdGenGoTo, alive: _fdGenAlive, hold: _fdGenHold, canAgain: _fdGenCanAgain
+    });
+    _fdGenTop(run.panel);
+    await run.promise;
+  } finally {
+    S._aiImages = null;
+    if (!run || run.finished) _fdGenFormDrop();
+  }
+}
+window._fdGenAll = _fdGenAll;
+var _APX_HREF = '#pental-appendix-';
+var _APX_KEEP = 10;
+var _APX_ROWS = 25;
+function _apxListOf(a) {
+  var l = [];
+  try { l = a && a.appendices ? (typeof a.appendices === 'string' ? JSON.parse(a.appendices) : a.appendices) : []; } catch (e) { l = []; }
+  return Array.isArray(l) ? l : [];
+}
+function _apxLetter(i) {
+  var s = '', n = i + 1;
+  while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+function _apxRowsLimit() {
+  var n = (_ffCfg() || {}).apx_rows;
+  return typeof n === 'number' && n >= 0 ? n : _APX_ROWS;
+}
+var _APX_LINES = 50;
+function _apxLinesLimit() {
+  var n = (_ffCfg() || {}).apx_lines;
+  return typeof n === 'number' && n >= 0 ? n : _APX_LINES;
+}
+var _APX_WORD = 'Appendix';
+var _FIG_WORD = 'Figure';
+var _APX_TITLE = 'Evidence for {finding}';
+function _nameWord(v, def) {
+  var s = String(v == null ? '' : v).replace(/[<>{}\[\]|\\]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  return s || def;
+}
+function _apxTitlePattern(v) {
+  var s = String(v == null ? '' : v).replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  return s || _APX_TITLE;
+}
+function _apxTitleFrom(pattern, findingTitle) {
+  var p = String(pattern == null ? '' : pattern).replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Evidence for {finding}';
+  var t = String(findingTitle == null ? '' : findingTitle).replace(/\s+/g, ' ').trim() || 'this finding';
+  var out = p.replace(/\{\s*finding\s*\}/gi, function () { return t; }).replace(/\s+/g, ' ').trim();
+  return (out || t).slice(0, 200);
+}
+function _apxNames() {
+  var c = (typeof _ffCfg === 'function' ? _ffCfg() : null) || {};
+  return {
+    word: _nameWord(c.apx_word, _APX_WORD),
+    num: c.apx_num === '1' || c.apx_num === 'I' ? c.apx_num : 'A',
+    sub: c.apx_sub === '-' ? '-' : '.',
+    link: c.apx_link === 'dash' || c.apx_link === 'ref' ? c.apx_link : 'colon',
+    title: _apxTitlePattern(c.apx_title),
+    keep: (typeof c.apx_keep === 'number' && c.apx_keep >= 1) ? Math.min(1000, Math.floor(c.apx_keep)) : _APX_KEEP,
+    whole: c.apx_whole === true
+  };
+}
+window._apxNames = _apxNames;
+function _romanOf(n) {
+  var r = '', t = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']];
+  n = Math.max(1, Math.min(3999, Math.floor(n) || 1));
+  t.forEach(function (p) { while (n >= p[0]) { r += p[1]; n -= p[0]; } });
+  return r;
+}
+function _numStyled(n, style) {
+  if (style === '1') return String(n);
+  if (style === 'I') return _romanOf(n);
+  return _apxLetter(n - 1);
+}
+function _apxHeadOf(num, title, nm) {
+  nm = nm || _apxNames();
+  return nm.word + ' ' + num + (nm.link === 'dash' ? ' - ' : ': ') + (String(title == null ? '' : title).replace(/\s+/g, ' ').trim() || 'Untitled');
+}
+function _apxLinkOf(num, title, nm) {
+  nm = nm || _apxNames();
+  return nm.link === 'ref' ? nm.word + ' ' + num : _apxHeadOf(num, title, nm);
+}
+function _apxIdsIn(v) {
+  var s = typeof v === 'string' ? v : (v == null ? '' : JSON.stringify(v));
+  if (s.indexOf(_APX_HREF) < 0) return [];
+  var out = [], re = /#pental-appendix-([^"'\\<>\s]+)/g, m;
+  while ((m = re.exec(s))) out.push(m[1]);
+  return out;
+}
+function _apxFieldsFor(f) {
+  var fields;
+  try { fields = _effectiveFindingFieldOrder(getTemplate(f && f.assessment_type)); }
+  catch (e) { fields = ['retest_results', 'description', 'evidence', 'remediation', 'affected_hosts', 'references']; }
+  fields = (fields || []).slice();
+  ['description', 'impact', 'evidence', 'remediation'].forEach(function (k) { if (fields.indexOf(k) < 0) fields.push(k); });
+  return fields;
+}
+function _apxFindingIds(f, fields, ov) {
+  var out = [], cv = null;
+  fields.forEach(function (fld) {
+    var v;
+    if (ov && ov.fid === f.id && ov.field === fld) v = ov.html;
+    else if (fld.indexOf('custom_') === 0) {
+      if (!cv) { try { cv = _ffParseCustomVals(f) || {}; } catch (e) { cv = {}; } }
+      v = cv[fld.slice(7)];
+    } else v = f[fld];
+    _apxIdsIn(v).forEach(function (id) { out.push(id); });
+  });
+  return out;
+}
+function _apxOffHead(title, nm) {
+  nm = nm || _apxNames();
+  return nm.word + (nm.link === 'dash' ? ' - ' : ': ') + (String(title == null ? '' : title).replace(/\s+/g, ' ').trim() || 'Untitled');
+}
+function _apxOffLink(title, nm) {
+  nm = nm || _apxNames();
+  return nm.link === 'ref' ? nm.word : _apxOffHead(title, nm);
+}
+function _apxPlanOf(a, ov, o) {
+  o = o || {};
+  var plan = { entries: [], byId: {}, off: [] };
+  if (!a) return plan;
+  var doc = !!o.doc, client = !!(S.profile && S.profile.role === 'client');
+  var nm = _apxNames(), list = _apxListOf(a), at = {};
+  list.forEach(function (ap, i) { if (ap && ap.id != null && !(String(ap.id) in at)) at[String(ap.id)] = i; });
+  var first = {}, fstart = {}, inBasis = {}, hidden = {}, pos = 0, fields = null, all = [];
+  try { all = _figFindingOrder(a); } catch (e) { all = []; }
+  all.forEach(function (f) {
+    if (!f || !f.id) return;
+    if (!fields) fields = _apxFieldsFor(f);
+    var ids = _apxFindingIds(f, fields, ov);
+    if (!doc && !client && !_figShown(f)) {
+      ids.forEach(function (id) { if ((id in at) && !hidden[id]) hidden[id] = f.id; });
+      return;
+    }
+    inBasis[f.id] = f;
+    fstart[f.id] = pos;
+    ids.forEach(function (id) {
+      if (!(id in at) || first[id]) return;
+      first[id] = { pos: pos++, fid: f.id };
+    });
+  });
+  var isOff = function (ap) {
+    var id = String(ap.id);
+    if (first[id]) return false;
+    if (client) return Array.isArray(ap.by) && ap.by.length > 0;
+    return !doc && !!hidden[id];
+  };
+  var keyOf = function (ap) {
+    var pl = String((ap && ap.place) || '');
+    if (pl === 'own') return '';
+    if (pl.indexOf('f:') === 0 && inBasis[pl.slice(2)]) return pl.slice(2);
+    var fi = first[String(ap.id)];
+    return fi ? fi.fid : '';
+  };
+  var members = {}, offs = [];
+  list.forEach(function (ap, i) {
+    if (!ap || ap.id == null || at[String(ap.id)] !== i) return;
+    if (isOff(ap)) { offs.push(i); return; }
+    var k = keyOf(ap);
+    if (k) (members[k] = members[k] || []).push(i);
+  });
+  var posOf = function (i) { var fi = first[String(list[i].id)]; return fi ? fi.pos : null; };
+  var byPos = function (p, q) {
+    if (p.pos != null && q.pos != null) return p.pos - q.pos || p.at - q.at;
+    if (p.pos != null) return -1;
+    if (q.pos != null) return 1;
+    return p.at - q.at;
+  };
+  var entries = [], done = {};
+  list.forEach(function (ap, i) {
+    if (!ap) return;
+    var own = ap.id != null && at[String(ap.id)] === i;
+    if (own && offs.indexOf(i) >= 0) return;
+    var k = own ? keyOf(ap) : '';
+    if (k && members[k].length >= 2) {
+      if (done[k]) return;
+      done[k] = true;
+      var parts = members[k].map(function (j) { return { i: j, ap: list[j], id: String(list[j].id), pos: posOf(j), at: j }; });
+      parts.sort(byPos);
+      var gp = null;
+      parts.forEach(function (p) { if (p.pos != null && (gp === null || p.pos < gp)) gp = p.pos; });
+      if (gp === null && fstart[k] != null) gp = fstart[k] - 0.5;
+      entries.push({ group: true, fid: k, f: inBasis[k] || null, parts: parts, pos: gp, at: members[k][0] });
+    } else {
+      var fi0 = own ? first[String(ap.id)] : null;
+      entries.push({ group: false, i: i, ap: ap, id: own ? String(ap.id) : null, pos: own ? posOf(i) : null, at: i, fid: fi0 ? fi0.fid : null });
+    }
+  });
+  entries.sort(byPos);
+  entries.forEach(function (e, k) {
+    var num = _numStyled(k + 1, nm.num);
+    e.num = num;
+    if (e.group) {
+      var own = null;
+      e.parts.forEach(function (p) { var g = p.ap && p.ap.gt; if (!own && g && g.fid === e.fid && String(g.title || '').trim()) own = String(g.title).replace(/\s+/g, ' ').trim(); });
+      e.ownTitle = !!own;
+      e.title = own || (e.f && String(e.f.title || '').replace(/\s+/g, ' ').trim()) || 'Untitled finding';
+      e.head = _apxHeadOf(num, e.title, nm);
+      e.parts.forEach(function (p, j) {
+        p.num = num + nm.sub + (j + 1);
+        p.head = _apxHeadOf(p.num, p.ap.title, nm);
+        p.link = _apxLinkOf(p.num, p.ap.title, nm);
+        plan.byId[p.id] = { a: a, i: p.i, ap: p.ap, id: p.id, num: p.num, head: p.head, link: p.link, grp: e, k: k, j: j, fid: e.fid };
+      });
+    } else {
+      e.head = _apxHeadOf(num, e.ap.title, nm);
+      e.link = _apxLinkOf(num, e.ap.title, nm);
+      if (e.id != null) plan.byId[e.id] = { a: a, i: e.i, ap: e.ap, id: e.id, num: num, head: e.head, link: e.link, grp: null, k: k, fid: e.fid };
+    }
+  });
+  plan.entries = entries;
+
+  if (!client) offs.forEach(function (i) {
+    var ap = list[i], id = String(ap.id);
+    var x = { off: true, a: a, i: i, ap: ap, id: id, num: '', head: _apxOffHead(ap.title, nm), link: _apxOffLink(ap.title, nm), grp: null, k: -1, fid: hidden[id] || null };
+    plan.off.push(x);
+    plan.byId[id] = x;
+  });
+  return plan;
+}
+window._apxPlanOf = _apxPlanOf;
+var _apxPlanMemo = null;
+function _apxPlanForget() { _apxPlanMemo = null; }
+function _apxMemo() {
+  if (!_apxPlanMemo) {
+    _apxPlanMemo = { by: new Map(), doc: new Map(), idx: null, idxDoc: null };
+    setTimeout(_apxPlanForget, 0);
+  }
+  return _apxPlanMemo;
+}
+function _apxPlanNow(a, mode) {
+  if (!a) return { entries: [], byId: {}, off: [] };
+  var m = _apxMemo(), map = mode === 'doc' ? m.doc : m.by;
+  var p = map.get(a);
+  if (!p) { p = _apxPlanOf(a, null, mode === 'doc' ? { doc: true } : null); map.set(a, p); }
+  return p;
+}
+window._apxPlanNow = _apxPlanNow;
+function _apxFind(id, mode) {
+  var m = _apxMemo();
+  var w = m.where;
+  if (!w) {
+    w = m.where = {};
+    (S.data && S.data.assessments || []).forEach(function (a) {
+      if (!a || !a.appendices) return;
+      _apxListOf(a).forEach(function (ap) { if (ap && ap.id != null && !(String(ap.id) in w)) w[String(ap.id)] = a; });
+    });
+  }
+  var a = w[String(id)];
+  return a ? (_apxPlanNow(a, mode).byId[String(id)] || null) : null;
+}
+function _apxIndex(mode) {
+  var doc = mode === 'doc', key = doc ? 'idxDoc' : 'idx';
+  if (_apxPlanMemo && _apxPlanMemo[key]) return _apxPlanMemo[key];
+  var out = (typeof Proxy === 'function') ? new Proxy({}, { get: function (t, k) { return typeof k === 'string' ? (_apxFind(k, mode) || undefined) : undefined; } }) : null;
+  if (!out) {
+    out = {};
+    (S.data && S.data.assessments || []).forEach(function (a) {
+      if (!a || !a.appendices) return;
+      var by = _apxPlanNow(a, mode).byId;
+      Object.keys(by).forEach(function (id) { if (!(id in out)) out[id] = by[id]; });
+    });
+  }
+  _apxMemo()[key] = out;
+  return out;
+}
+var _APX_OFF_TIP = 'Not lettered yet: only findings hidden from the client link to it. It takes its letter when they can see one of them, so it never moves the letters they already have.';
+function _apxLinksNow(html, idx) {
+  var t = String(html == null ? '' : html);
+  if (t.indexOf(_APX_HREF) < 0) return t;
+  idx = idx || _apxIndex();
+  var client = !!(S.profile && S.profile.role === 'client');
+  return t.replace(/<a\b[^>]*?href="#pental-appendix-([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, function (m0, id, inner) {
+    var x = idx[id];
+    if (!x || (client && (x.off || (typeof isSectionVisible === 'function' && !isSectionVisible(x.a, 'appendices'))))) return inner.replace(/<[^>]*>/g, '');
+    if (x.off) return '<a class="apx-link apx-link-off" href="' + _APX_HREF + esc(id) + '" title="' + esc(_APX_OFF_TIP) + '">' + esc(x.link) + '</a>';
+    return '<a class="apx-link" href="' + _APX_HREF + esc(id) + '">' + esc(x.link) + '</a>';
+  });
+}
+window._apxLinksNow = _apxLinksNow;
+function _apxRelabelHtml(html, idx) {
+  var t = String(html == null ? '' : html);
+  if (t.indexOf(_APX_HREF) < 0) return t;
+  idx = idx || _apxIndex();
+  return t.replace(/(<a\b[^>]*?href="#pental-appendix-([^"]+)"[^>]*>)([\s\S]*?)(<\/a>)/gi, function (m0, open, id, inner, close) {
+    var x = idx[id];
+    return x ? open + esc(x.link) + close : m0;
+  });
+}
+window._apxRelabelHtml = _apxRelabelHtml;
+function _apxByMap(a) {
+  var out = {}, at = {}, fields = null;
+  _apxListOf(a).forEach(function (ap) { if (ap && ap.id != null) at[String(ap.id)] = true; });
+  var all = [];
+  try { all = _figFindingOrder(a); } catch (e) { all = []; }
+  all.forEach(function (f) {
+    if (!f || !f.id) return;
+    if (!fields) fields = _apxFieldsFor(f);
+    _apxFindingIds(f, fields, null).forEach(function (id) {
+      if (!at[id]) return;
+      var l = out[id] = out[id] || [];
+      if (l.indexOf(f.id) < 0) l.push(f.id);
+    });
+  });
+  return out;
+}
+function _apxByOut(list, want) {
+  var out = [];
+  list.forEach(function (ap) {
+    if (!ap || ap.id == null) return;
+    var w = want[String(ap.id)] || [], h = Array.isArray(ap.by) ? ap.by : [];
+    if (JSON.stringify(w) !== JSON.stringify(h)) out.push(String(ap.id));
+  });
+  return out;
+}
+var _apxByWrote = {};
+function _apxByHeal(a) {
+  if (!a || !a.id || (S.profile && S.profile.role === 'client') || typeof canEdit !== 'function' || !canEdit()) return;
+  var list = _apxListOf(a);
+  if (!list.length) return;
+  var want = _apxByMap(a);
+  if (!_apxByOut(list, want).length) return;
+  var key = JSON.stringify(want);
+  if (_apxByWrote[a.id] === key) return;
+  _apxByWrote[a.id] = key;
+  _coUpdate('assessments', a.id, function (row) {
+    var l = _coIdItems(_apxListOf(row));
+    if (!_apxByOut(l, want).length) return null;
+    l.forEach(function (ap) {
+      if (!ap || ap.id == null) return;
+      var w = want[String(ap.id)] || [];
+      if (w.length) ap.by = w.slice(); else delete ap.by;
+    });
+    return { patch: { appendices: l } };
+  }).then(function () { _apxPlanForget(); }, function () {});
+}
+var _apxByTimer = null;
+function _apxByHealSoon() {
+  return;
+  _apxByTimer = setTimeout(function () {
+    _apxByTimer = null;
+    if (!S || !S.data || (S.profile && S.profile.role === 'client')) return;
+    var ids = [];
+    if (S.currentAssessment && S.currentAssessment.id) ids.push(S.currentAssessment.id);
+    if (S.currentFinding && S.currentFinding.assessment_id && ids.indexOf(S.currentFinding.assessment_id) < 0) ids.push(S.currentFinding.assessment_id);
+    ids.forEach(function (id) {
+      var a = (S.data.assessments || []).find(function (x) { return x && x.id === id; });
+      if (a && a.appendices) { try { _apxByHeal(a); } catch (e) {} }
+    });
+  }, 400);
+}
+function _apxStrip(s) {
+  return String(s == null ? '' : s).replace(/<br\s*\/?>/gi, '; ').replace(/<[^>]*>/g, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+}
+function _apxLinkHtml(id, title) { return '<a class="apx-link" href="' + _APX_HREF + _fsiEsc(id) + '">' + _fsiEsc('Appendix: ' + title) + '</a>'; }
+function _apxSplitHtml(html, max, id, title, o) {
+  max = parseInt(max, 10) || 0;
+  var t = String(html == null ? '' : html);
+  if (!(max > 0) || t.indexOf('<table>') < 0) return null;
+  var apps = [];
+  var want = o && parseInt(o.keep, 10) > 0 ? Math.min(1000, parseInt(o.keep, 10)) : _APX_KEEP;
+  var out = t.replace(/<table>([\s\S]*?)<\/table>/g, function (whole, inner) {
+    var m = /^<thead>([\s\S]*?)<\/thead><tbody>([\s\S]*)<\/tbody>$/.exec(inner);
+    if (!m) return whole;
+    var rows = m[2].match(/<tr>[\s\S]*?<\/tr>/g) || [];
+    if (rows.length <= max) return whole;
+    var keep = (o && o.whole === true) ? 0 : Math.min(want, max), k = apps.length;
+    var aid = id + (k ? '_' + (k + 1) : ''), at = _apxTitleFrom(o && o.pattern, title) + (k ? ' (' + (k + 1) + ')' : '');
+    var text = [m[1]].concat(rows).map(function (r) {
+      return (r.match(/<t[hd]>([\s\S]*?)<\/t[hd]>/g) || []).map(_apxStrip).join(' | ');
+    }).join('\n');
+    apps.push({ id: aid, title: at, items: [{ type: 'html', content: whole, text: text }], content: text.slice(0, 200000) });
+    if (!keep) return '<p>' + _fsiEsc('The table is in ') + _apxLinkHtml(aid, at) + '.</p>';
+    return '<table><thead>' + m[1] + '</thead><tbody>' + rows.slice(0, keep).join('') + '</tbody></table>'
+      + '<p>' + _fsiEsc((keep === 1 ? 'The first of ' : 'The first ' + keep + ' of ') + rows.length + ' rows ' + (keep === 1 ? 'is' : 'are') + ' shown here, and all ' + rows.length + ' are in ') + _apxLinkHtml(aid, at) + '.</p>';
+  });
+  return apps.length ? { html: out, appendices: apps } : null;
+}
+document.addEventListener('click', function (e) {
+  var a = e.target && e.target.closest ? e.target.closest('a[href^="#pental-appendix-"]') : null;
+  if (!a || (a.closest && a.closest('[contenteditable="true"]'))) return;
+  e.preventDefault();
+  _apxOpen(String(a.getAttribute('href') || '').slice(_APX_HREF.length));
+});
+function _apxOpen(id) {
+  var x = _apxIndex()[id];
+  if (!x) { toast('That appendix is no longer in the engagement', 'info'); return; }
+  S.modal = { type: 'apx-view', id: id, extra: x.a.id, from: (S.page === 'finding-detail' && S.currentFinding) ? S.currentFinding.id : null };
+  render();
+}
+window._apxOpen = _apxOpen;
+function _apxCapShown(c) { return String(c == null ? '' : c).replace(/\{\{\s*fig\s*\}\}\s*[-:–]?\s*/gi, '').trim(); }
+function _apxItemsOf(ap) {
+  return (ap && Array.isArray(ap.items) && ap.items.length) ? ap.items : (String((ap && ap.content) || '').trim() ? [{ type: 'code', content: String(ap.content) }] : []);
+}
+function _apxItemsHtml(ap) {
+  return _apxItemsOf(ap).map(function (it) {
+    if (!it) return '';
+    if (it.type === 'html') return '<div class="apx-item">' + sanitizeHtml(String(it.content || '')) + '</div>';
+    if (it.type === 'code') return '<div class="code-block">' + esc(String(it.content || '')) + '</div>';
+    if (it.type === 'image' && it.data) {
+      var cap = _apxCapShown(it.caption);
+      var sp = String(it.storagePath || (String(it.data).indexOf('storage:') === 0 ? String(it.data).slice(8) : ''));
+      var img = sp ? '<img data-sp="' + esc(sp) + '" src="' + _AI_IMG_PLACEHOLDER + 'AQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="' + esc(cap || 'Screenshot') + '">'
+        : (/^data:image\//.test(String(it.data)) ? '<img src="' + esc(it.data) + '" alt="' + esc(cap || 'Screenshot') + '">' : '');
+      return img ? '<figure class="apx-fig">' + img + (cap ? '<figcaption>' + esc(cap) + '</figcaption>' : '') + '</figure>' : '';
+    }
+    return '<p>' + esc(String(it.content || '')).replace(/\n/g, '<br>') + '</p>';
+  }).join('');
+}
+function _apxWhatOf(ap) {
+  var items = _apxItemsOf(ap).filter(Boolean);
+  if (!items.length) return 'Empty';
+  var shots = items.filter(function (it) { return it.type === 'image'; }).length;
+  if (items.length === 1) {
+    var it = items[0];
+    if (it.type === 'code') { var n = String(it.content || '').replace(/\n+$/, '').split('\n').length; return 'Output, ' + n + (n === 1 ? ' line' : ' lines'); }
+    if (it.type === 'image') return 'Screenshot';
+    if (it.type === 'html') {
+      var c = String(it.content || '');
+      var tm = /^\s*(?:<div[^>]*>\s*)?<table\b[\s\S]*<\/table>\s*(?:<\/div>\s*)?$/i.test(c);
+      if (tm) {
+        var rows = (c.match(/<tr\b/gi) || []).length - ((/<thead\b/i.test(c) || /<th\b/i.test(c)) ? 1 : 0);
+        return 'Table, ' + Math.max(0, rows) + (rows === 1 ? ' row' : ' rows');
+      }
+      if (/^\s*<(ul|ol)\b[\s\S]*<\/\1>\s*$/i.test(c)) {
+        var li = (c.match(/<li\b/gi) || []).length;
+        return 'List, ' + li + (li === 1 ? ' item' : ' items');
+      }
+      return 'Text';
+    }
+    return 'Text';
+  }
+  if (shots === items.length) return shots + ' screenshots';
+  return items.length + ' parts' + (shots ? ', ' + shots + (shots === 1 ? ' screenshot' : ' screenshots') : '');
+}
+function _apxLinkedFrom(a, id) {
+  var needle = _APX_HREF + id + '"';
+  return (S.data.findings || []).filter(function (f) {
+    if (!f || f.assessment_id !== a.id) return false;
+    var words = [f.evidence, f.description, f.remediation, f.custom_fields].map(function (v) { return typeof v === 'string' ? v : JSON.stringify(v || ''); }).join(' ');
+    return words.indexOf(needle) >= 0 || words.indexOf(_APX_HREF + id + '\\"') >= 0;
+  });
+}
+function renderApxViewModal() {
+  var m = S.modal, x = _apxIndex()[m.id];
+  if (!x) return '<div class="modal-header"><h3>Appendix</h3><button class="modal-close" onclick="closeM()">' + IC.x + '</button></div><div class="modal-body"><p class="text-muted">That appendix is no longer in the engagement.</p></div>';
+  var from = m.from ? (S.data.findings || []).find(function (f) { return f && f.id === m.from; }) : null;
+  var linked = _apxLinkedFrom(x.a, m.id);
+  var h = '<div class="modal-header"><h3>' + esc(x.head) + '</h3><button class="modal-close" onclick="closeM()" aria-label="Close">' + IC.x + '</button></div>';
+  h += '<div class="modal-body"><div class="apx-meta">' + IC.paperclip + '<span>' + (x.grp ? 'Part of ' + esc(x.grp.head) + ', in the ' : 'In the ') + esc((typeof _smLabel === 'function' && _smLabel('evidence')) || 'Appendices') + ' of ' + esc(x.a.name || 'this engagement') + '</span>';
+  if (x.off) h += '<span class="apx-off-note">' + _APX_EYE_OFF + 'Not shown to the client yet: only findings hidden from them link to it</span>';
+  if (linked.length) h += '<span class="apx-from">Linked from ' + linked.slice(0, 4).map(function (f) { return '<button type="button" class="apx-chip" onclick="closeM();viewFinding(\'' + esc(f.id) + '\',\'' + esc(f.assessment_id) + '\')">' + esc(f.title || 'A finding') + '</button>'; }).join('') + (linked.length > 4 ? '<span class="apx-chip apx-chip-more">and ' + (linked.length - 4) + ' more</span>' : '') + '</span>';
+  h += '</div><div class="rich-content apx-body">' + _apxItemsHtml(x.ap) + '</div></div>';
+  h += '<div class="modal-footer">';
+  if (canEdit() && from && linked.indexOf(from) >= 0) h += '<button type="button" class="btn btn-secondary" onclick="_apxPutBack(\'' + esc(from.id) + '\',\'' + esc(m.id) + '\')" title="Its content goes back into the evidence of ' + esc(from.title || 'this finding') + ' in place of the link">Put back in the finding</button>';
+  if (canEdit()) h += '<button type="button" class="btn btn-ghost" onclick="openM(\'appendix\',\'' + esc(x.a.id) + '\',\'' + x.i + '\')">' + IC.edit + ' Edit appendix</button>';
+  h += '<button type="button" class="btn btn-primary" onclick="closeM()">Close</button></div>';
+  return h;
+}
+window.renderApxViewModal = renderApxViewModal;
+function _apxItemsBack(ap) {
+  return _apxItemsOf(ap).map(function (it) {
+    if (!it) return '';
+    if (it.type === 'html') return sanitizeHtml(String(it.content || ''));
+    if (it.type === 'code') return '<div class="code-block">' + esc(String(it.content || '')) + '</div>';
+    if (it.type === 'image' && it.data) {
+      var sp = String(it.storagePath || (String(it.data).indexOf('storage:') === 0 ? String(it.data).slice(8) : ''));
+      var src = sp ? 'storage:' + sp : (/^data:image\//.test(String(it.data)) ? String(it.data) : '');
+      if (!src) return '';
+      return sanitizeHtml('<div style="text-align:center;margin:1rem 0"><img src="' + esc(src) + '" alt="' + esc(_apxCapShown(it.caption) || 'Screenshot') + '">'
+        + (it.caption ? '<div class="img-caption">' + esc(String(it.caption)) + '</div>' : '') + '</div>');
+    }
+    return '<p>' + esc(String(it.content || '')).replace(/\n/g, '<br>') + '</p>';
+  }).join('');
+}
+function _apxKeptBy(prev, firstHead) {
+  if (!prev || prev.nodeType !== 1) return false;
+  if (prev.classList && prev.classList.contains('apx-kept')) return true;
+  return prev.tagName === 'TABLE' && !!firstHead && (prev.querySelector('thead') || {}).innerHTML === firstHead.trim();
+}
+async function _apxPutBack(fid, id, o) {
+  o = o || {};
+  var f = (S.data.findings || []).find(function (x) { return x && x.id === fid; });
+  var x = _apxIndex()[id];
+  if (!f || !x) return false;
+  var back = _apxItemsBack(x.ap), firstHead = (/<thead>([\s\S]*?)<\/thead>/i.exec(back) || [])[1] || '';
+  if (!o.quiet) _showLoading();
+  try {
+    var r = await _coUpdate('findings', fid, function (row) {
+      var ev = typeof row.evidence === 'string' ? row.evidence : renderHtmlContent(JSON.stringify(row.evidence || []));
+      var box = document.implementation.createHTMLDocument('').createElement('div');
+      box.innerHTML = ev;
+      var link = box.querySelector('a[href="' + _APX_HREF + id + '"]');
+      if (!link) return { refuse: 'gone' };
+      var p = link.closest('p, li, div') || link;
+
+      var marked = /^[A-Za-z0-9_-]+$/.test(id) ? Array.prototype.slice.call(box.querySelectorAll('.apx-kept-' + id)) : [];
+      if (marked.length) marked.forEach(function (k) { if (k.parentNode) k.parentNode.removeChild(k); });
+      else {
+        var prev = p.previousElementSibling;
+        if (_apxKeptBy(prev, firstHead)) prev.parentNode.removeChild(prev);
+      }
+      var holder = document.createElement('div');
+      holder.innerHTML = back;
+      while (holder.firstChild) p.parentNode.insertBefore(holder.firstChild, p);
+      p.parentNode.removeChild(p);
+      return { patch: { evidence: box.innerHTML } };
+    });
+    if (!r.ok) { if (r.refused === 'gone') toast('That finding no longer links to it', 'info'); else _coSaidUpdate('findings', fid, r, 'The evidence'); return false; }
+    _apxPlanForget();
+    var still = _apxLinkedFrom(x.a, id).filter(function (g) { return g.id !== fid; });
+    if (!still.length) await _apxDrop(x.a.id, id);
+    if (!o.quiet) {
+      if (S.modal && S.modal.type === 'apx-view') closeM();
+      toast('Put back in the evidence of ' + (f.title || 'the finding') + (still.length ? '. The appendix stays: ' + still.length + (still.length === 1 ? ' other finding links' : ' other findings link') + ' to it.' : ', and the appendix removed'), 'success');
+      render();
+    }
+    return true;
+  } catch (e) {
+    toast('It could not be put back: ' + ((e && e.message) || e), 'error');
+    return false;
+  } finally { if (!o.quiet) _hideLoading(); }
+}
+window._apxPutBack = _apxPutBack;
+async function _apxDrop(aid, id) {
+  var r = await _coUpdate('assessments', aid, function (row) {
+    var list = _coIdItems(_apxListOf(row)), at = -1;
+    list.forEach(function (y, i) { if (at < 0 && y && String(y.id) === id) at = i; });
+    if (at < 0) return null;
+    list.splice(at, 1);
+    return { patch: { appendices: list } };
+  });
+  _apxPlanForget();
+  return r;
+}
+function _apxEditorWhere(edId) {
+  var f = null, aid = null, title = '';
+  if (edId === 'fdEd_evidence' && S._fdEdit) {
+    f = (S.data.findings || []).find(function (x) { return x && x.id === S._fdEdit.id; }) || null;
+    aid = f ? f.assessment_id : null; title = f ? f.title : '';
+  } else if (S.modal && S.modal.type === 'finding') {
+    f = S.modal.id ? (S.data.findings || []).find(function (x) { return x && x.id === S.modal.id; }) : null;
+    aid = (f && f.assessment_id) || S.modal.extra || (S.currentAssessment ? S.currentAssessment.id : null);
+    title = String(((document.getElementById('mTi') || {}).value) || (f && f.title) || '').trim();
+  }
+  return { f: f, aid: aid, title: title };
+}
+function _apxBlockAt(ed) {
+  var sel = window.getSelection && window.getSelection();
+  var n = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
+  if (n && n.nodeType !== 1) n = n.parentNode;
+  if (!n || !ed.contains(n)) return null;
+
+  if (n === ed) {
+    var at = sel.getRangeAt(0).startOffset, near = [ed.childNodes[at - 1], ed.childNodes[at]];
+    for (var k = 0; k < near.length; k++) {
+      var c = near[k];
+      if (!c || c.nodeType !== 1) continue;
+      if (c.matches && c.matches('table, .code-block, pre, ul, ol, figure')) return c;
+
+      if (c.tagName === 'IMG' || (c.tagName === 'DIV' && c.querySelectorAll('img').length === 1 && !c.querySelector('table, ul, ol, pre, .code-block'))) return c;
+    }
+    return null;
+  }
+  var b = n.closest('table, .code-block, pre, ul, ol, figure');
+  if (b && ed.contains(b) && b !== ed) {
+
+    if (b.tagName === 'UL' || b.tagName === 'OL') { for (var u = b.parentNode; u && u !== ed; u = u.parentNode) if (u.tagName === 'UL' || u.tagName === 'OL') b = u; }
+    return b;
+  }
+  var img = n.tagName === 'IMG' ? n : null;
+  if (img) { var w = img.parentNode; return (w && w !== ed && w.querySelectorAll('img').length === 1) ? w : img; }
+  return null;
+}
+function _apxTopOf(ed, n) {
+  while (n && n.parentNode && n.parentNode !== ed) n = n.parentNode;
+  return n && n.parentNode === ed ? n : null;
+}
+function _apxHasStuff(el) {
+  if (!el) return false;
+  if (el.nodeType === 3) return /\S/.test(el.nodeValue);
+  if (el.nodeType !== 1) return false;
+  return el.tagName === 'IMG' || el.tagName === 'TABLE' || /\S/.test(el.textContent || '') || !!(el.querySelector && el.querySelector('img, table'));
+}
+function _apxShotOf(el) {
+  if (!el || el.nodeType !== 1) return false;
+  if (el.tagName === 'IMG') return true;
+  var imgs = el.querySelectorAll ? el.querySelectorAll('img') : [];
+  if (imgs.length !== 1 || el.querySelector('table, ul, ol, pre, .code-block')) return false;
+  var cap = el.querySelector('.img-caption, figcaption');
+  return String(el.textContent || '').replace(/\s+/g, '') === (cap ? String(cap.textContent || '').replace(/\s+/g, '') : '');
+}
+function _apxKindOf(el) {
+  if (!el || el.nodeType !== 1) return 'text';
+  if (el.tagName === 'TABLE') return 'table';
+  if (el.tagName === 'UL' || el.tagName === 'OL') return 'list';
+  if (el.tagName === 'PRE' || (el.classList && el.classList.contains('code-block'))) return 'code';
+  if (_apxShotOf(el)) return 'shot';
+  return 'text';
+}
+function _apxRowsOf(tb) {
+  var body = tb.querySelector('tbody') || tb;
+  var trs = Array.prototype.filter.call(body.querySelectorAll('tr'), function (tr) { return tr.closest('table') === tb; });
+  if (body === tb && trs.length && trs[0].querySelector('th')) trs = trs.slice(1);
+  return trs;
+}
+function _apxCodeLines(el) { return _codeBlockText(el).replace(/\n+$/, '').split('\n'); }
+function _apxUnitsOf(el, kind) {
+  if (kind === 'table') return _apxRowsOf(el).length;
+  if (kind === 'list') return Array.prototype.filter.call(el.children, function (c) { return c.tagName === 'LI'; }).length;
+  if (kind === 'code') return _apxCodeLines(el).length;
+  if (kind === 'text') return /\S/.test(el.textContent || '') ? _apxSentenceEnds(el.textContent).length + 1 : 1;
+  return 1;
+}
+var _APX_UNIT = { table: ['row', 'rows'], list: ['item', 'items'], code: ['line', 'lines'], text: ['sentence', 'sentences'], mixed: ['item', 'items'] };
+var _APX_ABBR = /(?:^|[\s(])(?:e\.g|i\.e|etc|vs|cf|approx|incl|no|nos|fig|figs|mr|mrs|ms|dr|prof|st|inc|ltd|co|jr|sr|al)\.$/i;
+function _apxSentenceEnds(text) {
+  var t = String(text || ''), ends = [], re = /[.!?]+["'\u201d\u2019)\]]*(?=\s+\S)/g, m;
+  while ((m = re.exec(t))) {
+    var end = m.index + m[0].length;
+    if (m[0] === '.' && _APX_ABBR.test(t.slice(Math.max(0, m.index - 12), m.index + 1))) continue;
+    if (!/^\s+["'\u201c\u2018(\[]?[A-Z0-9]/.test(t.slice(end))) continue;
+    ends.push(end);
+  }
+  return ends;
+}
+function _apxCutAfter(el, at) {
+  var walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT), n, seen = 0;
+  while ((n = walk.nextNode())) {
+    var len = n.nodeValue.length;
+    if (seen + len >= at) {
+      var r = document.createRange();
+      r.setStart(n, at - seen);
+      r.setEnd(el, el.childNodes.length);
+      r.deleteContents();
+      n.nodeValue = n.nodeValue.replace(/\s+$/, '');
+      return true;
+    }
+    seen += len;
+  }
+  return false;
+}
+var _APX_WHAT = { table: 'the table', list: 'the list', code: 'the output', shot: 'the screenshot', text: 'the details', mixed: 'the details' };
+function _apxPick(ed) {
+  var sel = window.getSelection && window.getSelection();
+  var blocks = null;
+  if (sel && sel.rangeCount && !sel.isCollapsed) {
+    var r = sel.getRangeAt(0), ca = r.commonAncestorContainer;
+    if (ca === ed) {
+      blocks = Array.prototype.filter.call(ed.childNodes, function (c) {
+        try { return r.intersectsNode(c) && _apxHasStuff(c); } catch (e) { return false; }
+      });
+    }
+  }
+  if (blocks && blocks.length > 1) return { blocks: blocks, kind: 'mixed', units: blocks.length };
+  var b = blocks && blocks.length === 1 ? blocks[0] : _apxBlockAt(ed);
+  if (b && b.nodeType === 1 && b.closest && b.tagName !== 'TABLE' && b.tagName !== 'UL' && b.tagName !== 'OL' && !(b.classList && b.classList.contains('code-block')) && b.tagName !== 'PRE') {
+
+    var only = b.children.length === 1 ? b.firstElementChild : null;
+    if (only && !/\S/.test((b.textContent || '').replace(only.textContent || '', '')) && _apxKindOf(only) !== 'text' && _apxKindOf(only) !== 'shot') b = only;
+  }
+  if (!b) {
+    var n = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
+    if (n && n.nodeType !== 1) n = n.parentNode;
+    if (n && n !== ed && ed.contains(n)) b = _apxTopOf(ed, n);
+  }
+  if (!b || !_apxHasStuff(b) || b === ed) return null;
+  var kind = _apxKindOf(b);
+  return { blocks: [b], kind: kind, units: _apxUnitsOf(b, kind) };
+}
+function _apxPlaceOpts(a, cur, forFid, isNew) {
+  cur = String(cur || '');
+  var h = '<option value=""' + (!cur ? ' selected' : '') + '>' + esc(isNew ? 'With this finding’s appendices' : 'With the finding that links it first') + '</option>';
+  h += '<option value="own"' + (cur === 'own' ? ' selected' : '') + '>On its own</option>';
+  var seen = {};
+  if (forFid) seen[forFid] = true;
+  var add = function (fid) {
+    if (!fid || seen[fid]) return;
+    seen[fid] = true;
+    var f = (S.data.findings || []).find(function (x) { return x && x.id === fid; });
+    if (!f) return;
+    h += '<option value="f:' + esc(fid) + '"' + (cur === 'f:' + fid ? ' selected' : '') + '>' + esc('With the appendices of ' + (String(f.title || '').trim() || 'a finding')) + '</option>';
+  };
+  _apxPlanNow(a).entries.forEach(function (e) { add(e.fid); });
+  if (cur.indexOf('f:') === 0) add(cur.slice(2));
+  return h;
+}
+var _apxPend = null;
+function _apxKeepRange(pick) { return { min: 1, max: Math.max(1, pick.units - 1) }; }
+function _apxMoveAsk(edId, btn) {
+  var ed = document.getElementById(edId);
+  if (!ed) return;
+  var w = _apxEditorWhere(edId);
+  if (!w.aid) { toast('Appendices belong to an engagement, and this finding is not in one', 'info'); return; }
+  var pick = _apxPick(ed);
+  if (!pick) { toast('Click into what to move first, or choose it', 'info'); return; }
+  var a = (S.data.assessments || []).find(function (x) { return x && x.id === w.aid; });
+  var nm = _apxNames(), unit = _APX_UNIT[pick.kind];
+  var canKeep = !!unit && pick.units >= 2;
+  _apxPend = { edId: edId, pick: pick, aid: w.aid, fid: w.f ? w.f.id : null };
+  var old = document.getElementById('apxPop');
+  if (old) old.parentNode.removeChild(old);
+  var pop = document.createElement('div');
+  pop.id = 'apxPop';
+  pop.className = 'apx-pop';
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', 'Move to an appendix');
+  var what = _APX_WHAT[pick.kind];
+  var h = '<div class="apx-pop-head">' + IC.paperclip + '<strong>Move to an appendix</strong></div>'
+    + '<label class="apx-pop-lbl" for="apxPopTitle">Its title</label>'
+    + '<input class="form-input" id="apxPopTitle" maxlength="200" value="' + esc(_apxTitleFrom(nm.title, w.title)) + '">';
+  if (canKeep) {
+    var rg = _apxKeepRange(pick), n0 = Math.max(rg.min, Math.min(rg.max, nm.keep));
+    var keepFirst = !nm.whole && pick.units > nm.keep;
+    var of = pick.kind === 'mixed' ? 'all ' + pick.units + ' chosen' : 'all ' + pick.units;
+    h += '<div class="apx-pop-lbl apx-pop-lbl2">What stays here</div><div class="apx-pop-opts" role="radiogroup">'
+      + '<label class="apx-pop-opt apx-pop-opt-n"><input type="radio" name="apxKeep" value="keep"' + (keepFirst ? ' checked' : '') + '><span>The first '
+      + '<input type="number" class="form-input apx-pop-n" id="apxPopN" min="' + rg.min + '" max="' + rg.max + '" value="' + n0 + '" aria-label="How many stay" oninput="_apxPopN(this)" onfocus="_apxPopN(this)"> '
+      + '<span id="apxPopUnit">' + esc(unit[n0 === 1 ? 0 : 1]) + '</span>, with a link to ' + esc(of) + '</span></label>'
+      + '<label class="apx-pop-opt"><input type="radio" name="apxKeep" value="whole"' + (keepFirst ? '' : ' checked') + '><span>A link alone, and all of ' + esc(what) + ' moves</span></label></div>';
+  } else {
+    h += '<p class="apx-pop-note">' + esc(pick.kind === 'shot' ? 'A screenshot moves whole, and a link takes its place here.' : 'A link to the appendix takes its place here.') + '</p>';
+  }
+  h += '<label class="apx-pop-lbl apx-pop-lbl2" for="apxPopPlace">Where it goes</label>'
+    + '<select class="form-select apx-pop-sel" id="apxPopPlace">' + _apxPlaceOpts(a, '', _apxPend.fid, true) + '</select>'
+    + '<p class="apx-pop-note apx-pop-note2">A finding’s appendices are one, under its title, once it has two or more.</p>'
+    + '<div class="apx-pop-acts"><button type="button" class="btn btn-ghost btn-sm" onclick="_apxMoveClose()">Cancel</button>'
+    + '<button type="button" class="btn btn-primary btn-sm" onclick="_apxMoveDo()">' + IC.paperclip + ' Move it</button></div>';
+  pop.innerHTML = h;
+  document.body.appendChild(pop);
+  var r = (btn && btn.getBoundingClientRect) ? btn.getBoundingClientRect() : { left: 40, bottom: 80 };
+  var ph = pop.getBoundingClientRect().height || 300;
+  pop.style.left = Math.max(12, Math.min(window.innerWidth - pop.offsetWidth - 12, r.left)) + 'px';
+  pop.style.top = Math.max(12, Math.min(window.innerHeight - ph - 12, r.bottom + 6)) + 'px';
+  pop.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && e.target && e.target.tagName !== 'SELECT') { e.preventDefault(); _apxMoveDo(); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); _apxMoveClose(); }
+  });
+  var inp = pop.querySelector('#apxPopTitle');
+  setTimeout(function () { try { inp.focus(); inp.select(); } catch (e) {} }, 0);
+}
+window._apxMoveAsk = _apxMoveAsk;
+function _apxPopN(inp) {
+  var pd = _apxPend, pick = pd && pd.pick, unit = pick && _APX_UNIT[pick.kind];
+  if (!unit) return;
+  var k = document.querySelector('#apxPop input[name="apxKeep"][value="keep"]');
+  if (k) k.checked = true;
+  var n = parseInt(inp.value, 10), u = document.getElementById('apxPopUnit');
+  if (u) u.textContent = unit[n === 1 ? 0 : 1];
+}
+window._apxPopN = _apxPopN;
+function _apxMoveClose() { var p = document.getElementById('apxPop'); if (p) p.parentNode.removeChild(p); _apxPend = null; }
+window._apxMoveClose = _apxMoveClose;
+function _apxItemsFrom(blocks, ed) {
+  var items = [], html = '', text = [];
+  var flush = function () {
+    if (html) items.push({ type: 'html', content: sanitizeHtml(html), text: text.join('\n') });
+    html = ''; text = [];
+  };
+  var capOf = function (im, b) {
+    var c = null;
+    try { c = typeof _evCapOf === 'function' ? _evCapOf(im, ed) : null; } catch (e) { c = null; }
+    if (!c && b && b.querySelector) c = b.querySelector('.img-caption, figcaption');
+    return c ? String(c.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  };
+  blocks.forEach(function (b) {
+    if (b.nodeType === 3) {
+      if (/\S/.test(b.nodeValue)) { html += '<p>' + esc(b.nodeValue.trim()) + '</p>'; text.push(b.nodeValue.trim()); }
+      return;
+    }
+    if (b.nodeType !== 1) return;
+    var kind = _apxKindOf(b);
+    if (kind === 'code') { flush(); items.push({ type: 'code', content: _codeBlockText(b) }); return; }
+    var imgs = b.tagName === 'IMG' ? [b] : Array.prototype.slice.call(b.querySelectorAll('img'));
+    if (imgs.length && kind !== 'table' && kind !== 'list') {
+      flush();
+      imgs.forEach(function (im) {
+        items.push({ type: 'image', data: im.getAttribute('data-sp') ? 'storage:' + im.getAttribute('data-sp') : im.src, storagePath: im.getAttribute('data-sp') || undefined, caption: capOf(im, b) });
+      });
+      if (kind !== 'shot') {
+        var rest = b.cloneNode(true);
+        Array.prototype.slice.call(rest.querySelectorAll('img, .img-caption, figcaption')).forEach(function (x) { if (x.parentNode) x.parentNode.removeChild(x); });
+        if (/\S/.test(rest.textContent || '')) { html += rest.outerHTML; text.push(String(rest.textContent).replace(/\s+/g, ' ').trim()); flush(); }
+      }
+      return;
+    }
+    html += b.outerHTML;
+    text.push(kind === 'table' || kind === 'list' ? _apxPlainOf(b) : String(b.textContent || '').replace(/\s+/g, ' ').trim());
+  });
+  flush();
+  return items;
+}
+async function _apxMoveDo() {
+  var pd = _apxPend;
+  if (!pd) return;
+  var title = String(((document.getElementById('apxPopTitle') || {}).value) || '').replace(/\s+/g, ' ').trim();
+  if (!title) { toast('Give the appendix a title', 'error'); return; }
+  var kept = document.querySelector('#apxPop input[name="apxKeep"]:checked');
+  var keepIt = !!kept && kept.value === 'keep';
+  var nIn = document.getElementById('apxPopN');
+  var nWant = nIn ? parseInt(nIn.value, 10) : NaN;
+  var place = String(((document.getElementById('apxPopPlace') || {}).value) || '');
+  var ed = document.getElementById(pd.edId), pick = pd.pick;
+  var unit = _APX_UNIT[pick.kind], rg = _apxKeepRange(pick);
+  if (keepIt && unit && !(nWant >= rg.min && nWant <= rg.max)) {
+    toast('Keep between ' + rg.min + ' and ' + rg.max + ' ' + unit[1] + ' here, or move all of it', 'error');
+    return;
+  }
+  _apxMoveClose();
+  if (!ed || !pick.blocks.every(function (b) { return ed.contains(b); })) { toast('The evidence was drawn again meanwhile: click into it and move it again', 'info'); return; }
+  keepIt = keepIt && !!unit && pick.units >= 2;
+  var n = keepIt ? nWant : 0;
+  var items = _apxItemsFrom(pick.blocks, ed);
+  if (!items.length) { toast('Nothing there to move', 'info'); return; }
+  _showLoading();
+  try {
+    items = await uploadEvidenceToStorage(items, pd.aid, 'appendix_' + Date.now());
+    var id = _coNewId('apx');
+    var made = { id: id, title: title, items: items, content: items.map(function (it) { return it.type === 'html' ? (it.text || '') : (it.content || ''); }).join('\n\n') };
+    if (place === 'own' || place.indexOf('f:') === 0) made.place = place;
+    var r = await _coUpdate('assessments', pd.aid, function (row) {
+      var list = _coIdItems(_apxListOf(row));
+      list.push(made);
+      return { patch: { appendices: list } };
+    });
+    if (!r.ok) { _coSaidUpdate('assessments', pd.aid, r, 'The appendix'); return; }
+    _apxPlanForget();
+    if (!ed.isConnected || !pick.blocks.every(function (b) { return ed.contains(b); })) {
+      toast('The appendix was made, but the evidence was drawn again meanwhile, so nothing moved out of it. Delete the appendix from the engagement, or link to it.', 'info', 9000);
+      return;
+    }
+
+    var undo = { edId: pd.edId, aid: pd.aid, id: id, fid: pd.fid, was: pick.blocks.map(function (b) { return b.nodeType === 1 ? b.outerHTML : esc(b.nodeValue || ''); }).join('') };
+    var link = '<a class="apx-link" href="' + _APX_HREF + esc(id) + '">' + esc(title) + '</a>';
+    var p = document.createElement('p');
+    var first = pick.blocks[0], what = _APX_WHAT[pick.kind], mark = 'apx-kept-' + id;
+    var keptEls = [];
+    if (keepIt) {
+      var b = first;
+      if (pick.kind === 'mixed') {
+
+        pick.blocks.forEach(function (x, k) {
+          if (k < n) {
+            if (x.nodeType === 3) { var w = document.createElement('p'); w.textContent = x.nodeValue.trim(); x.parentNode.replaceChild(w, x); x = w; }
+            if (x.nodeType === 1) { x.classList.add('apx-kept', mark); keptEls.push(x); }
+          } else if (x.parentNode) x.parentNode.removeChild(x);
+        });
+        b = keptEls[keptEls.length - 1] || first;
+      } else {
+        if (pick.kind === 'table') _apxRowsOf(b).slice(n).forEach(function (tr) { if (tr.parentNode) tr.parentNode.removeChild(tr); });
+        else if (pick.kind === 'list') Array.prototype.filter.call(b.children, function (c) { return c.tagName === 'LI'; }).slice(n).forEach(function (li) { b.removeChild(li); });
+        else if (pick.kind === 'code') b.textContent = _apxCodeLines(b).slice(0, n).join('\n');
+        else if (pick.kind === 'text') _apxCutAfter(b, _apxSentenceEnds(b.textContent)[n - 1]);
+        b.classList.add('apx-kept', mark);
+        keptEls.push(b);
+      }
+      p.innerHTML = esc((n === 1 ? 'The first of ' : 'The first ' + n + ' of ') + pick.units + ' ' + unit[1] + ' ' + (n === 1 ? 'is' : 'are') + ' shown here, and all ' + pick.units + ' are in ') + link + '.';
+      b.parentNode.insertBefore(p, b.nextSibling);
+      undo.kept = keptEls;
+    } else {
+      p.innerHTML = esc(what.charAt(0).toUpperCase() + what.slice(1) + (pick.kind === 'text' || pick.kind === 'mixed' ? ' are in ' : ' is in ')) + link + '.';
+      first.parentNode.insertBefore(p, first);
+      pick.blocks.forEach(function (b) { if (b.parentNode) b.parentNode.removeChild(b); });
+    }
+    undo.marker = p;
+
+    var a2 = (S.data.assessments || []).find(function (x) { return x && x.id === pd.aid; });
+    var plan = _apxPlanOf(a2, pd.fid ? { fid: pd.fid, field: 'evidence', html: ed.innerHTML } : null);
+    _apxRelabel(ed, plan);
+    try { ed.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+    var x = plan.byId[id];
+    undo.label = x ? x.link : title;
+    undo.after = ed.innerHTML;
+    _apxUndoShow(undo);
+  } catch (e) {
+    toast('It could not be moved: ' + ((e && e.message) || e), 'error');
+  } finally { _hideLoading(); }
+}
+window._apxMoveDo = _apxMoveDo;
+function _apxRelabel(ed, plan) {
+  if (!ed || !plan) return;
+  Array.prototype.forEach.call(ed.querySelectorAll('a[href^="' + _APX_HREF + '"]'), function (l) {
+    var x = plan.byId[String(l.getAttribute('href') || '').slice(_APX_HREF.length)];
+    if (x && l.textContent !== x.link) l.textContent = x.link;
+  });
+}
+var _apxUndoNow = null, _apxUndoTimer = null;
+function _apxUndoShow(u) {
+  _apxUndoHide();
+  _apxUndoNow = u;
+  var bar = document.createElement('div');
+  bar.id = 'apxUndo';
+  bar.className = 'apx-undo';
+  bar.setAttribute('role', 'status');
+  bar.setAttribute('aria-live', 'polite');
+
+  var _msg = u.list
+    ? 'Moved ' + u.list.length + (u.marked ? (u.list.length === 1 ? ' block' : ' blocks') : (u.list.length === 1 ? ' long block' : ' long blocks')) + ' to '
+      + _evApxJoin((u.labels || [u.label]).map(function (l) { return '<strong>' + esc(l) + '</strong>'; }))
+      + (u.marked ? '' : ', as your settings say') + '. Save the finding to keep ' + (u.list.length === 1 ? 'the link' : 'the links') + '.'
+    : 'Moved to <strong>' + esc(u.label) + '</strong>. Save the finding to keep the link.';
+  bar.innerHTML = '<span class="apx-undo-ic">' + IC.paperclip + '</span><span class="apx-undo-msg">' + _msg + '</span>'
+    + '<button type="button" class="apx-undo-btn" onclick="_apxUndoMove()" title="Undo the move (Ctrl+Z in the evidence)">Undo</button>'
+    + '<button type="button" class="apx-undo-x" onclick="_apxUndoHide()" aria-label="Dismiss">' + IC.x + '</button>';
+  document.body.appendChild(bar);
+  _apxUndoTimer = setTimeout(_apxUndoBarGo, 20000);
+}
+function _apxUndoBarGo() {
+  if (_apxUndoTimer) { clearTimeout(_apxUndoTimer); _apxUndoTimer = null; }
+  var b = document.getElementById('apxUndo');
+  if (b && b.parentNode) b.parentNode.removeChild(b);
+}
+function _apxUndoHide() {
+  _apxUndoBarGo();
+  _apxUndoNow = null;
+}
+window._apxUndoHide = _apxUndoHide;
+document.addEventListener('keydown', function (e) {
+  var u = _apxUndoNow;
+  if (!u || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || String(e.key || '').toLowerCase() !== 'z') return;
+  var ed = (u.ed && u.ed.isConnected) ? u.ed : document.getElementById(u.edId);
+  if (!ed || !e.target || !ed.contains(e.target)) return;
+  if (ed.innerHTML !== u.after) { _apxUndoHide(); return; }
+  e.preventDefault();
+  e.stopPropagation();
+  _apxUndoMove();
+}, true);
+async function _apxUndoMove() {
+  var u = _apxUndoNow;
+  _apxUndoHide();
+  if (!u) return;
+  if (u.list) return _apxUndoMany(u);
+  var a = (S.data.assessments || []).find(function (x) { return x && x.id === u.aid; });
+  var ed = document.getElementById(u.edId);
+  var inEd = !!(ed && u.marker && ed.contains(u.marker));
+  var saved = !!(a && u.fid && _apxLinkedFrom(a, u.id).some(function (f) { return f.id === u.fid; }));
+  var keptEls = Array.isArray(u.kept) ? u.kept : (u.kept ? [u.kept] : []);
+  _showLoading();
+  try {
+    if (saved) {
+
+      if (!(await _apxPutBack(u.fid, u.id, { quiet: true }))) return;
+    }
+    if (inEd) {
+      var hold = document.createElement('div');
+      hold.innerHTML = u.was;
+      var at = keptEls.filter(function (k) { return ed.contains(k); })[0] || u.marker;
+      while (hold.firstChild) at.parentNode.insertBefore(hold.firstChild, at);
+      keptEls.forEach(function (k) { if (k.parentNode) k.parentNode.removeChild(k); });
+      if (u.marker.parentNode) u.marker.parentNode.removeChild(u.marker);
+      _apxPlanForget();
+      var a2 = (S.data.assessments || []).find(function (x) { return x && x.id === u.aid; });
+      if (!saved && a2) await _apxDrop(u.aid, u.id);
+      var a3 = (S.data.assessments || []).find(function (x) { return x && x.id === u.aid; });
+      _apxRelabel(ed, _apxPlanOf(a3, u.fid ? { fid: u.fid, field: 'evidence', html: ed.innerHTML } : null));
+      try { ed.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+      toast(saved ? 'Put back where it was, in the finding as saved and here' : 'Put back where it was, and the appendix removed', 'success');
+    } else if (saved) {
+      toast('Put back in the finding as it is saved, and the appendix removed', 'success');
+      render();
+    } else {
+
+      if (a && !_apxLinkedFrom(a, u.id).length) await _apxDrop(u.aid, u.id);
+      toast('The evidence it came from was closed without saving, so it is as it was; the appendix is removed', 'info', 7000);
+      render();
+    }
+  } catch (e) {
+    toast('It could not be undone: ' + ((e && e.message) || e), 'error');
+  } finally { _hideLoading(); }
+}
+window._apxUndoMove = _apxUndoMove;
+var _EV_APX_MOVE_RE = /^\s*\[\[\s*APPENDIX\s*(?::\s*([^\]]*?))?\s*\]\]\s*$/i;
+var _EV_APX_KEEP_RE = /^\s*\[\[\s*KEEP\s*\]\]\s*$/i;
+var _evApxMade = [];
+function _evApxMarks(ed) {
+  var marks = new Map();
+  if (!ed) return marks;
+  Array.prototype.slice.call(ed.querySelectorAll('p, div')).forEach(function (p) {
+    if (p === ed || !ed.contains(p) || p.querySelector('img, table, ul, ol, pre, .code-block, p, div')) return;
+    var txt = String(p.textContent || '').replace(/ /g, ' ');
+    var mv = _EV_APX_MOVE_RE.exec(txt), kp = _EV_APX_KEEP_RE.test(txt);
+    if (!mv && !kp) return;
+    var next = p.nextElementSibling;
+    while (next && !_apxHasStuff(next)) next = next.nextElementSibling;
+    if (next) {
+
+      var only = next.children && next.children.length === 1 ? next.firstElementChild : null;
+      var wraps = !!only && (/^(TABLE|UL|OL|PRE)$/.test(only.tagName) || (only.classList && only.classList.contains('code-block')));
+      if (wraps && !/\S/.test(String(next.textContent || '').replace(only.textContent || '', ''))) next = only;
+      marks.set(next, mv ? { move: true, title: String(mv[1] || '').replace(/\s+/g, ' ').trim().slice(0, 200) } : { keep: true });
+    }
+    if (p.parentNode) p.parentNode.removeChild(p);
+  });
+  return marks;
+}
+function _evApxWhere(ed) {
+  var w = _apxEditorWhere(ed && ed.id);
+  if (w && w.aid) return w;
+  var e = S._fdEdit;
+  if (e && e.key === 'evidence') {
+    var f = (S.data.findings || []).find(function (x) { return x && x.id === e.id; }) || null;
+    if (f && f.assessment_id) return { f: f, aid: f.assessment_id, title: String(f.title || '') };
+  }
+  return w || { f: null, aid: null, title: '' };
+}
+function _evApxLong(ed, marks) {
+  var rows = _apxRowsLimit(), lines = _apxLinesLimit(), out = [], seen = [];
+  var add = function (el, kind, why) {
+    if (seen.indexOf(el) >= 0) return;
+    seen.push(el);
+    out.push({ el: el, kind: kind, units: _apxUnitsOf(el, kind), why: why || null });
+  };
+  marks.forEach(function (m, el) { if (m.move && ed.contains(el)) add(el, _apxKindOf(el), m); });
+  Array.prototype.forEach.call(ed.querySelectorAll('table, ul, ol, pre, .code-block'), function (el) {
+    if (seen.indexOf(el) >= 0) return;
+    for (var u = el.parentNode; u && u !== ed; u = u.parentNode) if (u.matches && u.matches('table, ul, ol, pre, .code-block')) return;
+    if (el.closest && el.closest('.apx-kept')) return;
+    var m = marks.get(el);
+    if (m && m.keep) return;
+    var kind = _apxKindOf(el);
+    if (kind === 'table' && el.querySelector('img')) return;
+    var n = _apxUnitsOf(el, kind);
+    var lim = kind === 'code' ? lines : (kind === 'table' || kind === 'list') ? rows : 0;
+    if (lim > 0 && n > lim) add(el, kind, null);
+  });
+  out.sort(function (a, b) { return (a.el.compareDocumentPosition(b.el) & 4) ? -1 : 1; });
+  return out;
+}
+function _evApxJoin(l) {
+  l = l || [];
+  return l.length < 2 ? (l[0] || 'an appendix') : l.slice(0, -1).join(', ') + ' and ' + l[l.length - 1];
+}
+function _evApxSaid(n, labels, marked) {
+  return n + (marked ? (n === 1 ? ' block' : ' blocks') : (n === 1 ? ' long block' : ' long blocks')) + ' moved to ' + _evApxJoin(labels);
+}
+async function _apxDropMany(aid, ids) {
+  ids = (ids || []).map(String);
+  if (!ids.length) return null;
+  var r = await _coUpdate('assessments', aid, function (row) {
+    var list = _coIdItems(_apxListOf(row));
+    var left = list.filter(function (y) { return !(y && ids.indexOf(String(y.id)) >= 0); });
+    if (left.length === list.length) return null;
+    return { patch: { appendices: left } };
+  });
+  _apxPlanForget();
+  return r;
+}
+async function _evApxAuto(ed, o) {
+  o = o || {};
+  if (!ed || !ed.isConnected) return null;
+  var marks = o.marks || new Map();
+  var list = _evApxLong(ed, marks);
+  if (!list.length) return null;
+  var w = _evApxWhere(ed);
+  if (!w.aid) return { moved: 0, none: true, asked: list.some(function (x) { return x.why && x.why.move; }) };
+  var nm = _apxNames(), a = (S.data.assessments || []).find(function (x) { return x && x.id === w.aid; });
+  var existing = _apxListOf(a).map(function (ap) { return String((ap && ap.title) || ''); });
+  var base = _apxTitleFrom(nm.title, w.title);
+  var made = [], plan = [];
+  var titleFor = function (want) {
+    var used = function (tt) { return existing.indexOf(tt) >= 0 || made.some(function (m) { return m.title === tt; }); };
+    if (!used(want)) return want;
+    for (var i = 2; i < 1000; i++) { var tt = want + ' (' + i + ')'; if (!used(tt)) return tt; }
+    return want;
+  };
+  var wasEditable = ed.getAttribute('contenteditable');
+  ed.setAttribute('contenteditable', 'false');
+  try {
+    for (var k = 0; k < list.length; k++) {
+      var x = list[k];
+      var items = _apxItemsFrom([x.el], ed);
+      if (!items.length) continue;
+      items = await uploadEvidenceToStorage(items, w.aid, 'appendix_' + Date.now() + '_' + k);
+      var m = { id: _coNewId('apx'), title: titleFor((x.why && x.why.title) || base), items: items,
+        content: items.map(function (it) { return it.type === 'html' ? (it.text || '') : (it.content || ''); }).join('\n\n') };
+      made.push(m);
+      plan.push({ x: x, m: m });
+    }
+    if (!made.length) return null;
+    var r = await _coUpdate('assessments', w.aid, function (row) {
+      var l = _coIdItems(_apxListOf(row));
+      made.forEach(function (mm) { l.push(mm); });
+      return { patch: { appendices: l } };
+    });
+    if (!r.ok) { _coSaidUpdate('assessments', w.aid, r, 'The appendices'); return { moved: 0, error: true }; }
+    _apxPlanForget();
+
+    if (!ed.isConnected || !plan.every(function (pp) { return ed.contains(pp.x.el); })) {
+      await _apxDropMany(w.aid, made.map(function (mm) { return mm.id; }));
+      return { moved: 0, gone: true };
+    }
+    var keepN = nm.whole ? 0 : nm.keep;
+    var moves = [];
+    plan.forEach(function (pp) {
+      var x = pp.x, mm = pp.m, unit = _APX_UNIT[x.kind];
+      var n = unit && keepN > 0 && x.units > keepN ? keepN : 0;
+      if (x.kind === 'text' && n && _apxSentenceEnds(x.el.textContent).length < n) n = 0;
+      var was = x.el.outerHTML;
+      var link = '<a class="apx-link" href="' + _APX_HREF + esc(mm.id) + '">' + esc(mm.title) + '</a>';
+      var line = document.createElement('p');
+      var kept = [];
+      if (n) {
+        if (x.kind === 'table') _apxRowsOf(x.el).slice(n).forEach(function (tr) { if (tr.parentNode) tr.parentNode.removeChild(tr); });
+        else if (x.kind === 'list') Array.prototype.filter.call(x.el.children, function (c) { return c.tagName === 'LI'; }).slice(n).forEach(function (li) { x.el.removeChild(li); });
+        else if (x.kind === 'code') x.el.textContent = _apxCodeLines(x.el).slice(0, n).join('\n');
+        else if (x.kind === 'text') _apxCutAfter(x.el, _apxSentenceEnds(x.el.textContent)[n - 1]);
+        x.el.classList.add('apx-kept', 'apx-kept-' + mm.id);
+        kept.push(x.el);
+        line.innerHTML = esc((n === 1 ? 'The first of ' : 'The first ' + n + ' of ') + x.units + ' ' + unit[1] + ' ' + (n === 1 ? 'is' : 'are') + ' shown here, and all ' + x.units + ' are in ') + link + '.';
+        x.el.parentNode.insertBefore(line, x.el.nextSibling);
+      } else {
+        var what = _APX_WHAT[x.kind] || 'the details';
+        line.innerHTML = esc(what.charAt(0).toUpperCase() + what.slice(1) + (x.kind === 'text' || x.kind === 'mixed' ? ' are in ' : ' is in ')) + link + '.';
+        x.el.parentNode.insertBefore(line, x.el);
+        x.el.parentNode.removeChild(x.el);
+      }
+      moves.push({ id: mm.id, was: was, marker: line, kept: kept });
+    });
+    var a2 = (S.data.assessments || []).find(function (y) { return y && y.id === w.aid; });
+    var fid = w.f ? w.f.id : null;
+    var plan2 = _apxPlanOf(a2, fid ? { fid: fid, field: 'evidence', html: ed.innerHTML } : null);
+    _apxRelabel(ed, plan2);
+    try { ed.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+    var labels = moves.map(function (mv) { var y = plan2.byId[mv.id]; return y ? y.link : made.filter(function (q) { return q.id === mv.id; })[0].title; });
+    var marked = plan.some(function (pp) { return !!(pp.x.why && pp.x.why.move); });
+    made.forEach(function (mm) { _evApxMade.push({ aid: w.aid, id: mm.id, ed: ed }); });
+    _apxUndoShow({ list: moves, edId: ed.id, ed: ed, aid: w.aid, fid: fid, label: labels.join(', '), labels: labels, marked: marked, after: ed.innerHTML });
+    return { moved: moves.length, labels: labels, marked: marked, said: _evApxSaid(moves.length, labels, marked) };
+  } catch (e) {
+    toast('The long ones could not be moved to an appendix: ' + ((e && e.message) || e), 'error');
+    return { moved: 0, error: true };
+  } finally {
+    if (wasEditable == null) ed.removeAttribute('contenteditable'); else ed.setAttribute('contenteditable', wasEditable);
+  }
+}
+window._evApxAuto = _evApxAuto;
+async function _apxUndoMany(u) {
+  var a = (S.data.assessments || []).find(function (x) { return x && x.id === u.aid; });
+  var ed = (u.ed && u.ed.isConnected) ? u.ed : document.getElementById(u.edId);
+  var savedIds = (a && u.fid) ? u.list.filter(function (m) { return _apxLinkedFrom(a, m.id).some(function (f) { return f.id === u.fid; }); }).map(function (m) { return m.id; }) : [];
+  _showLoading();
+  try {
+
+    for (var i = 0; i < savedIds.length; i++) { if (!(await _apxPutBack(u.fid, savedIds[i], { quiet: true }))) return; }
+    var inEd = 0;
+    if (ed) u.list.slice().reverse().forEach(function (m) {
+      if (!m.marker || !ed.contains(m.marker)) return;
+      var hold = document.createElement('div');
+      hold.innerHTML = m.was;
+      var keptEls = (m.kept || []).filter(function (kk) { return ed.contains(kk); });
+      var at = keptEls[0] || m.marker;
+      while (hold.firstChild) at.parentNode.insertBefore(hold.firstChild, at);
+      keptEls.forEach(function (kk) { if (kk.parentNode) kk.parentNode.removeChild(kk); });
+      if (m.marker.parentNode) m.marker.parentNode.removeChild(m.marker);
+      inEd++;
+    });
+    _apxPlanForget();
+    var a2 = (S.data.assessments || []).find(function (x) { return x && x.id === u.aid; });
+    var drop = u.list.map(function (m) { return m.id; }).filter(function (id) { return savedIds.indexOf(id) < 0 && !(a2 && _apxLinkedFrom(a2, id).length); });
+    if (drop.length) await _apxDropMany(u.aid, drop);
+    _evApxMade = _evApxMade.filter(function (y) { return !u.list.some(function (m) { return m.id === y.id; }); });
+    if (ed && inEd) {
+      var a3 = (S.data.assessments || []).find(function (x) { return x && x.id === u.aid; });
+      _apxRelabel(ed, _apxPlanOf(a3, u.fid ? { fid: u.fid, field: 'evidence', html: ed.innerHTML } : null));
+      try { ed.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+      toast('Put back where ' + (inEd === 1 ? 'it was' : 'they were') + ', and ' + (u.list.length === 1 ? 'the appendix' : 'the appendices') + ' removed', 'success');
+    } else if (savedIds.length) {
+      toast('Put back in the finding as it is saved, and the appendices removed', 'success');
+      render();
+    } else {
+      toast('The evidence they came from was closed without saving, so it is as it was; the appendices are removed', 'info', 7000);
+      render();
+    }
+  } catch (e) {
+    toast('It could not be undone: ' + ((e && e.message) || e), 'error');
+  } finally { _hideLoading(); }
+}
+function _evApxSweepSoon(ed) { setTimeout(function () { _evApxSweep(ed).catch(function () {}); }, 0); }
+async function _evApxSweep(ed) {
+  var mine = _evApxMade.filter(function (y) { return y.ed === ed; });
+  if (!mine.length) return;
+  var gone = mine.filter(function (y) {
+    if (ed && ed.isConnected && /^[A-Za-z0-9_-]+$/.test(y.id) && ed.querySelector('a[href="' + _APX_HREF + y.id + '"]')) return false;
+    var a = (S.data.assessments || []).find(function (x) { return x && x.id === y.aid; });
+    return !(a && _apxLinkedFrom(a, y.id).length);
+  });
+  if (!gone.length) return;
+  var byA = {};
+  gone.forEach(function (y) { (byA[y.aid] = byA[y.aid] || []).push(y.id); });
+  for (var aid in byA) { if (Object.prototype.hasOwnProperty.call(byA, aid)) await _apxDropMany(aid, byA[aid]); }
+  _evApxMade = _evApxMade.filter(function (y) { return gone.indexOf(y) < 0; });
+  var u = _apxUndoNow;
+  if (u && u.list && u.list.some(function (m) { return gone.some(function (y) { return y.id === m.id; }); })) _apxUndoHide();
+}
+window._evApxSweepSoon = _evApxSweepSoon;
+var _APX_EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>'
+  + '<line x1="1" y1="1" x2="23" y2="23"/></svg>';
+var _apxOpenKeys = {};
+function _apxOpenKey(a, key) { return String((a && a.id) || '') + '|' + key; }
+function _apxIsOpen(a, key) { return !!_apxOpenKeys[_apxOpenKey(a, key)]; }
+function _apxToggleHtml(a, key, label, bodyId) {
+  var open = _apxIsOpen(a, key);
+  return '<button type="button" class="apx-toggle" data-apx-toggle="' + esc(_apxOpenKey(a, key)) + '" aria-controls="' + esc(bodyId) + '" aria-expanded="' + (open ? 'true' : 'false') + '"'
+    + ' aria-label="' + esc((open ? 'Show less of ' : 'Show more of ') + label) + '" data-apx-label="' + esc(label) + '" onclick="_apxToggle(this)">'
+    + '<span class="apx-toggle-txt">' + (open ? 'Show less' : 'Show more') + '</span><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>';
+}
+function _apxToggle(btn) {
+  if (!btn) return;
+  var key = btn.getAttribute('data-apx-toggle') || '';
+  var body = document.getElementById(btn.getAttribute('aria-controls') || '');
+  var box = btn.closest ? btn.closest('.apx-card, .apx-grp') : null;
+  var open = btn.getAttribute('aria-expanded') !== 'true';
+  if (open) _apxOpenKeys[key] = true; else delete _apxOpenKeys[key];
+  if (body) body.hidden = !open;
+  if (box) box.classList.toggle('is-closed', !open);
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  var label = btn.getAttribute('data-apx-label') || '';
+  btn.setAttribute('aria-label', (open ? 'Show less of ' : 'Show more of ') + label);
+  var t = btn.querySelector('.apx-toggle-txt');
+  if (t) t.textContent = open ? 'Show less' : 'Show more';
+  if (open && body) { try { _tblCardsAfterDraw(); } catch (e) {} }
+  if (!open && box) { try { box.scrollIntoView({ block: 'nearest' }); } catch (e) {} }
+}
+window._apxToggle = _apxToggle;
+function _apxCardHtml(a, x, part) {
+  var ap = x.ap, id = ap && ap.id != null ? String(ap.id) : '';
+  var from = id ? _apxLinkedFrom(a, id) : [];
+  var ed = canEdit() && !(S.profile && S.profile.role === 'client');
+
+  var key = 'a:' + (id || ('i' + x.i));
+  var open = part || _apxIsOpen(a, key);
+  var bodyId = 'apxb_' + String(a.id || '').replace(/[^A-Za-z0-9_-]/g, '') + '_' + String(id || ('i' + x.i)).replace(/[^A-Za-z0-9_-]/g, '');
+  var h = '<article class="apx-card' + (part ? ' apx-part' : '') + (x.off ? ' apx-card-off' : '') + (open ? '' : ' is-closed') + '"' + (id ? ' data-apx-id="' + esc(id) + '"' : '') + '>';
+  if (x.off) h += '<header class="apx-card-head"><span class="apx-num apx-num-off" title="' + esc(_APX_OFF_TIP) + '" aria-label="Not lettered: only findings hidden from the client link to it">' + _APX_EYE_OFF + '</span>';
+  else h += '<header class="apx-card-head"><span class="apx-num" title="' + esc(x.head) + '">' + esc(x.num) + '</span>';
+  h += '<div class="apx-card-titles"><h4 class="apx-card-title">' + esc(String((ap && ap.title) || '').trim() || 'Untitled') + '</h4>';
+  h += '<div class="apx-card-sub"><span class="apx-what">' + esc(_apxWhatOf(ap)) + '</span>';
+  if (from.length && !part) h += ' <span class="apx-from">Linked from ' + from.slice(0, 4).map(function (lf) { return '<button type="button" class="apx-chip" onclick="viewFinding(\'' + esc(lf.id) + '\',\'' + esc(lf.assessment_id) + '\')">' + esc(lf.title || 'A finding') + '</button>'; }).join('') + (from.length > 4 ? '<span class="apx-chip apx-chip-more">and ' + (from.length - 4) + ' more</span>' : '') + '</span>';
+  else if (!from.length && id && !(S.profile && S.profile.role === 'client')) h += ' <span class="apx-from apx-from-none">No finding links to it</span>';
+  h += '</div>';
+  if (!part) h += _apxToggleHtml(a, key, x.head || String((ap && ap.title) || ''), bodyId);
+  h += '</div><div class="apx-card-acts">';
+  if (id) h += '<button type="button" class="btn btn-ghost btn-sm apx-act" onclick="_apxOpen(\'' + esc(id) + '\')" title="Open it whole" aria-label="Open ' + esc(x.head) + ' whole">' + IC.eye + '</button>';
+  if (ed && from.length === 1) h += '<button type="button" class="btn btn-ghost btn-sm apx-act" onclick="_apxPutBack(\'' + esc(from[0].id) + '\',\'' + esc(id) + '\')" title="Put it back in the evidence of ' + esc(from[0].title || 'the finding') + ', in place of the link" aria-label="Put back in ' + esc(from[0].title || 'the finding') + '">' + IC.reply + '</button>';
+  if (ed) {
+    h += '<button type="button" class="btn btn-ghost btn-sm apx-act" onclick="openM(\'appendix\',\'' + esc(a.id) + '\',\'' + x.i + '\')" title="Edit" aria-label="Edit ' + esc(x.head) + '">' + IC.edit + '</button>';
+    h += '<button type="button" class="btn btn-ghost btn-sm apx-act" onclick="deleteAppendix(\'' + esc(a.id) + '\',' + x.i + ')" title="Delete" aria-label="Delete ' + esc(x.head) + '">' + IC.trash + '</button>';
+  }
+  h += '</div></header>';
+
+  h += '<div class="apx-prev rich-content" data-apx-prev id="' + esc(bodyId) + '"' + (open ? '' : ' hidden') + '>' + _apxItemsHtml(ap) + '</div>';
+  return h + '</article>';
+}
+function _apxSectionHtml(a) {
+  var plan = _apxPlanNow(a);
+  var ed = canEdit() && !(S.profile && S.profile.role === 'client');
+  var h = '<div class="apx-list">';
+  plan.entries.forEach(function (e) {
+    if (!e.group) { h += _apxCardHtml(a, e, false); return; }
+
+    var gKey = 'g:' + e.fid, gOpen = _apxIsOpen(a, gKey);
+    var gBody = 'apxg_' + String(a.id || '').replace(/[^A-Za-z0-9_-]/g, '') + '_' + String(e.fid || '').replace(/[^A-Za-z0-9_-]/g, '');
+    h += '<section class="apx-grp' + (gOpen ? '' : ' is-closed') + '" data-apx-grp="' + esc(e.fid) + '"><header class="apx-grp-head"><span class="apx-num" title="' + esc(e.head) + '">' + esc(e.num) + '</span>';
+    h += '<div class="apx-card-titles"><h4 class="apx-card-title">' + esc(e.title) + '</h4><div class="apx-card-sub"><span class="apx-what">' + e.parts.length + ' parts</span>';
+    if (e.f) h += ' <span class="apx-from">' + (e.ownTitle ? 'Of the finding ' : 'From the finding ') + '<button type="button" class="apx-chip" onclick="viewFinding(\'' + esc(e.f.id) + '\',\'' + esc(e.f.assessment_id) + '\')">' + esc(e.f.title || 'A finding') + '</button></span>';
+    h += '</div>' + _apxToggleHtml(a, gKey, e.head || e.title, gBody) + '</div>';
+
+    if (ed) h += '<div class="apx-card-acts"><button type="button" class="btn btn-ghost btn-sm apx-act" onclick="_apxGroupTitleAsk(\'' + esc(a.id) + '\',\'' + esc(e.fid) + '\',this)" title="Give it a title of its own" aria-label="Retitle ' + esc(e.head) + '">' + IC.edit + '</button></div>';
+    h += '</header><div class="apx-grp-parts" id="' + esc(gBody) + '"' + (gOpen ? '' : ' hidden') + '>';
+    e.parts.forEach(function (pt) { h += _apxCardHtml(a, pt, true); });
+    h += '</div></section>';
+  });
+
+  if (plan.off.length) {
+    h += '<section class="apx-off-list"><header class="apx-off-head"><span class="apx-off-ic">' + _APX_EYE_OFF + '</span><div><div class="apx-off-title">Not shown to the client yet</div>'
+      + '<div class="apx-off-why">Only findings hidden from the client link to ' + (plan.off.length === 1 ? 'this one' : 'these') + '. ' + (plan.off.length === 1 ? 'It takes its letter' : 'Each takes its letter') + ' when they can see one of those findings, so the letters they already have never move. The report letters ' + (plan.off.length === 1 ? 'it' : 'them') + ' as it prints ' + (plan.off.length === 1 ? 'it' : 'them') + '.</div></div></header>';
+    plan.off.forEach(function (x) { h += _apxCardHtml(a, x, false); });
+    h += '</section>';
+  }
+  return h + '</div>';
+}
+window._apxSectionHtml = _apxSectionHtml;
+function _apxGroupOf(aid, fid) {
+  var a = (S.data.assessments || []).find(function (x) { return x && x.id === aid; });
+  return a ? (_apxPlanNow(a).entries.filter(function (x) { return x.group && x.fid === fid; })[0] || null) : null;
+}
+function _apxGroupTitleAsk(aid, fid, btn) {
+  var e = _apxGroupOf(aid, fid);
+  if (!e) { toast('That group is no longer there', 'info'); return; }
+  _apxMoveClose();
+  var fTitle = (e.f && String(e.f.title || '').replace(/\s+/g, ' ').trim()) || '';
+  var q = function (v) { return '\'' + esc(v) + '\''; };
+  var pop = document.createElement('div');
+  pop.id = 'apxPop';
+  pop.className = 'apx-pop';
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', 'Title of ' + e.head);
+  pop.innerHTML = '<div class="apx-pop-head">' + IC.edit + '<strong>' + esc(_apxNames().word + ' ' + e.num) + '</strong></div>'
+    + '<label class="apx-pop-lbl" for="apxGtTitle">Its title</label>'
+    + '<input class="form-input" id="apxGtTitle" maxlength="200" value="' + esc(e.title) + '">'
+    + '<p class="apx-pop-note">' + esc('Left empty, it is the finding’s title' + (fTitle ? ': ' + fTitle : '') + '.') + '</p>'
+    + '<div class="apx-pop-acts">'
+    + (e.ownTitle ? '<button type="button" class="btn btn-ghost btn-sm" onclick="_apxGroupTitleSet(' + q(aid) + ',' + q(fid) + ',\'\')">Use the finding’s title</button>' : '')
+    + '<button type="button" class="btn btn-ghost btn-sm" onclick="_apxMoveClose()">Cancel</button>'
+    + '<button type="button" class="btn btn-primary btn-sm" onclick="_apxGroupTitleSet(' + q(aid) + ',' + q(fid) + ')">Save</button></div>';
+  document.body.appendChild(pop);
+  var r = (btn && btn.getBoundingClientRect) ? btn.getBoundingClientRect() : { left: 40, bottom: 80, right: 80 };
+  var ph = pop.getBoundingClientRect().height || 200;
+  pop.style.left = Math.max(12, Math.min(window.innerWidth - pop.offsetWidth - 12, (r.right || r.left) - pop.offsetWidth)) + 'px';
+  pop.style.top = Math.max(12, Math.min(window.innerHeight - ph - 12, r.bottom + 6)) + 'px';
+  pop.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); _apxGroupTitleSet(aid, fid); }
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); _apxMoveClose(); }
+  });
+  var inp = pop.querySelector('#apxGtTitle');
+  setTimeout(function () { try { inp.focus(); inp.select(); } catch (x) {} }, 0);
+}
+window._apxGroupTitleAsk = _apxGroupTitleAsk;
+async function _apxGroupTitleSet(aid, fid, given) {
+  var inp = document.getElementById('apxGtTitle');
+  var t = String(given !== undefined ? given : (inp ? inp.value : '')).replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  _apxMoveClose();
+  var e = _apxGroupOf(aid, fid);
+  if (!e) { toast('That group is no longer there', 'info'); return; }
+  var fTitle = (e.f && String(e.f.title || '').replace(/\s+/g, ' ').trim()) || '';
+  var clear = !t || t === fTitle;
+  var ids = e.parts.map(function (p) { return p.id; });
+  _showLoading();
+  try {
+    var r = await _coUpdate('assessments', aid, function (row) {
+      var list = _coIdItems(_apxListOf(row)), changed = false;
+      list.forEach(function (ap) {
+        if (!ap || ids.indexOf(String(ap.id)) < 0) return;
+        if (clear) { if (ap.gt) { delete ap.gt; changed = true; } }
+        else if (!ap.gt || ap.gt.fid !== fid || ap.gt.title !== t) { ap.gt = { fid: fid, title: t }; changed = true; }
+      });
+      return changed ? { patch: { appendices: list } } : null;
+    });
+    if (!r.ok) { _coSaidUpdate('assessments', aid, r, 'The title'); return; }
+    _apxPlanForget();
+    toast(clear ? 'Titled after the finding again' : 'Retitled: ' + t, 'success');
+    render();
+  } catch (x) {
+    toast('The title could not be saved: ' + ((x && x.message) || x), 'error');
+  } finally { _hideLoading(); }
+}
+window._apxGroupTitleSet = _apxGroupTitleSet;
+function _apxAfterDraw() {
+  _apxByHealSoon();
+}
+window._apxAfterDraw = _apxAfterDraw;
+function _tblCardsAfterDraw() {
+  Array.prototype.forEach.call(document.querySelectorAll('.rich-content table:not(.tbl-cards):not([data-tbl-seen])'), function (tb) {
+    if (tb.closest('[contenteditable="true"]')) return;
+    tb.setAttribute('data-tbl-seen', '1');
+    var rows = Array.prototype.slice.call(tb.rows || []);
+    var head = tb.tHead && tb.tHead.rows.length ? tb.tHead.rows[0] : null;
+    if (!head && rows.length && rows[0].cells.length && Array.prototype.every.call(rows[0].cells, function (c) { return c.tagName === 'TH'; })) { head = rows[0]; head.classList.add('tbl-head'); }
+    if (!head) return;
+    var names = [], col = 0;
+    Array.prototype.forEach.call(head.cells, function (c) {
+      var t = String(c.textContent || '').replace(/\s+/g, ' ').trim();
+      for (var k = 0; k < (c.colSpan || 1); k++) names[col++] = t;
+    });
+    if (!names.some(Boolean)) return;
+    rows.forEach(function (tr) {
+      if (tr === head || (tr.parentNode && tr.parentNode.tagName === 'THEAD')) return;
+      var at = 0;
+      Array.prototype.forEach.call(tr.cells, function (c) { if (names[at]) c.setAttribute('data-th', names[at]); at += c.colSpan || 1; });
+    });
+    tb.classList.add('tbl-cards');
+  });
+}
+window._tblCardsAfterDraw = _tblCardsAfterDraw;
+function _ffNamesHtml() {
+  var a = _apxNames(), f = _figNames();
+  var opts = function (list, cur) { return list.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (o[0] === cur ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join(''); };
+  var h = '<div class="ff-names">';
+  h += '<div class="ff-names-head">Appendices and figures</div>';
+  h += '<p class="hint" style="margin:0 0 0.75rem">How appendices and figures are named and numbered, in findings, on an engagement’s page and in both reports, and what a finding keeps of what goes to an appendix.</p>';
+  h += '<div class="ff-nm-grid" oninput="_ffNamesEgNow()" onchange="_ffNamesEgNow()">';
+  h += '<label class="ff-nm-lbl" for="ff_apx_word">An appendix is called</label><div class="ff-nm-row">'
+    + '<input class="form-input ff-nm-word" id="ff_apx_word" maxlength="40" value="' + esc(a.word) + '" placeholder="' + esc(_APX_WORD) + '">'
+    + '<select class="form-select ff-nm-sel" id="ff_apx_num" aria-label="Appendices numbered">' + opts([['A', 'A, B, C'], ['1', '1, 2, 3'], ['I', 'I, II, III']], a.num) + '</select>'
+    + '<select class="form-select ff-nm-sel" id="ff_apx_sub" aria-label="Its parts numbered">' + opts([['.', 'Parts C.1, C.2'], ['-', 'Parts C-1, C-2']], a.sub) + '</select></div>';
+  h += '<label class="ff-nm-lbl" for="ff_apx_link">A link to one reads</label><div class="ff-nm-row">'
+    + '<select class="form-select" id="ff_apx_link">' + opts([['colon', 'Its number and title, after a colon'], ['dash', 'Its number and title, after a dash'], ['ref', 'Its number alone']], a.link) + '</select></div>';
+  h += '<label class="ff-nm-lbl" for="ff_apx_title">To appendix suggests the title</label><div class="ff-nm-row">'
+    + '<input class="form-input" id="ff_apx_title" maxlength="200" value="' + esc(a.title) + '" placeholder="' + esc(_APX_TITLE) + '"></div>';
+  h += '<label class="ff-nm-lbl" for="ff_apx_whole">A long table, list or output</label><div class="ff-nm-row">'
+    + '<select class="form-select ff-nm-sel" id="ff_apx_whole">' + opts([['keep', 'Keeps its first'], ['whole', 'Moves whole']], a.whole ? 'whole' : 'keep') + '</select>'
+    + '<input type="number" class="form-input ff-nm-num" id="ff_apx_keep" min="1" max="1000" step="1" value="' + a.keep + '" aria-label="Rows, items, lines or sentences it keeps"' + (a.whole ? ' disabled' : '') + '>'
+    + '<span class="ff-nm-unit">rows, items, lines or sentences, with a link to the rest</span></div>';
+  h += '<label class="ff-nm-lbl" for="ff_fig_word">A figure is called</label><div class="ff-nm-row">'
+    + '<input class="form-input ff-nm-word" id="ff_fig_word" maxlength="40" value="' + esc(f.word) + '" placeholder="' + esc(_FIG_WORD) + '">'
+    + '<select class="form-select ff-nm-sel" id="ff_fig_num" aria-label="Figures numbered">' + opts([['1', '1, 2, 3'], ['I', 'I, II, III'], ['A', 'A, B, C']], f.num) + '</select></div>';
+  h += '</div>';
+  h += '<div class="ff-nm-eg" id="ff_nm_eg" aria-live="polite">' + _ffNamesEg(a, f) + '</div>';
+
+  h += '<p class="hint" style="margin:0.45rem 0 0">{finding} in the title is the finding’s title. To appendix asks each time how many stay, starting from this number: a table’s rows, a list’s items, an output’s lines, a paragraph’s sentences, or the first of several blocks chosen together; or it moves whole. An import or a scan does as this says. A finding’s appendices are one, under its title, once it has two or more.</p>';
+  return h + '</div>';
+}
+function _ffNamesRead(prev) {
+  prev = prev || {};
+  var v = function (id) { var el = document.getElementById(id); return el ? el.value : null; };
+  var o = {};
+  var w = v('ff_apx_word'); o.apx_word = w == null ? prev.apx_word : _nameWord(w, _APX_WORD);
+  var n = v('ff_apx_num'); o.apx_num = n == null ? prev.apx_num : (n === '1' || n === 'I' ? n : 'A');
+  var sb = v('ff_apx_sub'); o.apx_sub = sb == null ? prev.apx_sub : (sb === '-' ? '-' : '.');
+  var l = v('ff_apx_link'); o.apx_link = l == null ? prev.apx_link : (l === 'dash' || l === 'ref' ? l : 'colon');
+  var t = v('ff_apx_title'); o.apx_title = t == null ? prev.apx_title : _apxTitlePattern(t);
+  var wh = v('ff_apx_whole'); o.apx_whole = wh == null ? prev.apx_whole === true : wh === 'whole';
+  var k = v('ff_apx_keep'); o.apx_keep = (k == null || String(k).trim() === '' || !isFinite(+k)) ? prev.apx_keep : Math.max(1, Math.min(1000, Math.floor(+k)));
+  var fw = v('ff_fig_word'); o.fig_word = fw == null ? prev.fig_word : _nameWord(fw, _FIG_WORD);
+  var fn = v('ff_fig_num'); o.fig_num = fn == null ? prev.fig_num : (fn === 'I' || fn === 'A' ? fn : '1');
+  Object.keys(o).forEach(function (key) { if (o[key] === undefined) delete o[key]; });
+  return o;
+}
+function _ffNamesEg(a, f) {
+  var k1 = _numStyled(3, a.num), k2 = _numStyled(4, a.num), part = k2 + a.sub + '2';
+  var one = a.link === 'ref' ? a.word + ' ' + k1 : _apxHeadOf(k1, 'Unauthenticated Endpoints', a);
+  var two = a.link === 'ref' ? a.word + ' ' + part : _apxHeadOf(part, 'Evidence for Weak TLS Configuration', a);
+  return '<span class="ff-nm-eg-l">In a finding</span><span>The list is in <b>' + esc(one) + '</b>. The table is in <b>' + esc(two) + '</b>, a part of ' + esc(_apxHeadOf(k2, 'Weak TLS Configuration', a)) + '.</span>'
+    + '<span class="ff-nm-eg-l">To appendix</span><span>' + esc(_apxTitleFrom(a.title, 'Weak TLS Configuration')) + (a.whole ? ', moved whole' : ', its first ' + a.keep + ' rows kept here') + '</span>'
+    + '<span class="ff-nm-eg-l">A caption</span><span><b>' + esc(f.word + ' ' + _numStyled(3, f.num)) + '</b> - The sign-in page with no limit on attempts</span>';
+}
+function _ffNamesEgNow() {
+  var box = document.getElementById('ff_nm_eg');
+  if (!box) return;
+  var r = _ffNamesRead({});
+  var a = { word: r.apx_word || _APX_WORD, num: r.apx_num || 'A', sub: r.apx_sub || '.', link: r.apx_link || 'colon', title: r.apx_title || _APX_TITLE, keep: r.apx_keep || _APX_KEEP, whole: r.apx_whole === true };
+  var f = { word: r.fig_word || _FIG_WORD, num: r.fig_num || '1' };
+  var kp = document.getElementById('ff_apx_keep');
+  if (kp) kp.disabled = a.whole;
+  box.innerHTML = _ffNamesEg(a, f);
+}
+window._ffNamesEgNow = _ffNamesEgNow;
 function renderClients() {
   var list = S.data.clients;
   var q = S.searchQuery.toLowerCase();
@@ -36741,6 +39314,350 @@ function _aiEnabled() {
   return !!(s.ai_provider || S._hasAiKey);
 }
 window._aiEnabled = _aiEnabled;
+var _sgrBusy = {};
+var _sgrHeldAt = 0, _sgrHeldGoing = false;
+var _SGR_SINCE = 2025112309;
+var _SGR_STYLE_SINCE = 2025112401;
+var _SGR_LAY_SINCE = 2025112311;
+function _sgrMayGroup() {
+  var role = S.profile && S.profile.role;
+  return (role === 'admin' || role === 'senior' || role === 'standard') && _aiEnabled() && !(typeof E2E !== 'undefined' && E2E && E2E.on)
+    && _dbAtLeast(_SGR_SINCE);
+}
+async function _sgrRpc(fn, args) {
+  var r = await supabaseClient.rpc(fn, args);
+  if (r && r.error) throw new Error(_errMsg(r.error));
+  return r ? r.data : null;
+}
+async function _sgrPageRun(runId, o) {
+  o = o || {};
+  if (_sgrBusy[runId]) return { ok: false, busy: true };
+  _sgrBusy[runId] = true;
+  try {
+    var style = _sgrStyleNow();
+    var out = await _sgrDrive({
+      start: function () { return _sgrRpc('rpc_scan_group_start', { p_run_id: runId }); },
+      ask: function (sys, um, maxTokens, kind) {
+
+        var opts = kind === 'words' ? { maxWaitMs: 5 * 60 * 1000 } : { responseFormat: 'json', maxWaitMs: 5 * 60 * 1000 };
+        if (o.extra && kind === 'group') opts.extra = o.extra;
+        return callAI(um, sys, maxTokens, opts);
+      },
+
+      style: style,
+      words: _dbAtLeast(_SGR_STYLE_SINCE) ? function (items) { return _sgrRpc('rpc_scan_group_words', { p_items: items }); } : null,
+      assign: function (groups) { return _sgrRpc('rpc_scan_group_assign', { p_run_id: runId, p_groups: groups }); },
+      land: function (after, limit, fin) { return _sgrRpc('rpc_scan_group_land', { p_run_id: runId, p_after: after, p_limit: limit, p_final: fin }); },
+      rows: function (ids) { return _sgrRpc('rpc_scan_group_rows', { p_ids: ids }); },
+      evidence: async function (items) {
+        var w = await _sgrRpc('rpc_scan_group_evidence', { p_items: items });
+        if (!w || w.ok !== true) throw new Error('the evidence could not be written');
+        return w;
+      },
+      hold: function (why) { return _sgrRpc('rpc_scan_group_hold', { p_run_id: runId, p_why: why }); },
+      progress: o.progress || null,
+    });
+    if (out.ok && !o.noClose) await _sgrRpc('rpc_scan_group_close', { p_run_id: runId });
+    return out;
+  } catch (e) {
+    var why = String((e && e.message) || e || 'the grouping stopped').slice(0, 280);
+    try { await supabaseClient.rpc('rpc_scan_group_hold', { p_run_id: runId, p_why: why }); } catch (e2) {  }
+    return { ok: false, held: true, why: why };
+  } finally {
+    delete _sgrBusy[runId];
+  }
+}
+function _sgrHeldSoon(force) {
+  if (_sgrHeldGoing || !_sgrMayGroup()) return;
+  if (!force && Date.now() - _sgrHeldAt < 110000) return;
+  _sgrHeldAt = Date.now();
+  _sgrHeldGoing = true;
+  (async function () {
+    var landed = 0;
+    try {
+      var list = [];
+      try { list = (await _sgrRpc('rpc_scan_group_held', {})) || []; } catch (e) { list = []; }
+      for (var i = 0; i < list.length; i++) {
+        var x = list[i];
+        if (!x || !x.run_id || x.why === 'fold') continue;
+        var out = await _sgrPageRun(x.run_id, {});
+        if (out.ok) landed++;
+      }
+
+      await _sgrStyleSave();
+      landed += await _sgrStaleSoon();
+      landed += await _sgrWordsSoon();
+    } catch (e) {
+      console.debug('[scan grouping]', (e && e.message) || e);
+    } finally {
+      _sgrHeldGoing = false;
+      if (landed) { try { await refreshAndStay(); } catch (e) {} }
+    }
+  })();
+}
+window._sgrHeldSoon = _sgrHeldSoon;
+async function _sgrStaleSoon() {
+  if (!_sgrMayGroup()) return 0;
+  var ids = (S.data.findings || []).filter(function (f) { return f && f.scan_grouped && f.scan_evidence_stale; }).map(function (f) { return f.id; }).slice(0, 40);
+  var n = 0;
+  for (var i = 0; i < ids.length; i += 5) {
+    var fs = (await _sgrRpc('rpc_scan_group_rows', { p_ids: ids.slice(i, i + 5) })) || [], items = [];
+    var style = _sgrStyleNow();
+    for (var j = 0; j < fs.length; j++) { var it = await _sgrLaidOut(_sgrPageAsk, fs[j], _fsiAiFirm(), style); delete it.text; items.push(it); }
+    if (!items.length) continue;
+    var w = await _sgrRpc('rpc_scan_group_evidence', { p_items: items });
+    n += (w && w.written) || 0;
+  }
+  return n;
+}
+async function _sgrWordsSoon() {
+  if (!_sgrMayGroup()) return 0;
+  var list = (S.data.findings || []).filter(function (f) { return f && f.scan_grouped && f.scan_words_pending; }).slice(0, 6);
+  var n = 0;
+
+  if (_dbAtLeast(_SGR_STYLE_SINCE)) {
+    var style = _sgrStyleNow();
+    for (var si = 0; si < list.length; si += 5) {
+      var fs = (await _sgrRpc('rpc_scan_group_rows', { p_ids: list.slice(si, si + 5).map(function (f) { return f.id; }) })) || [], items = [];
+      for (var sj = 0; sj < fs.length; sj++) {
+        try {
+          var w = await _sgrWords(_sgrPageWordsAsk, fs[sj], style, _fsiAiFirm(), _sgrEvidence(fs[sj].rows || []).text);
+          if (w && w.wrote) items.push(_sgrWordsItem(w));
+          if (w && w.failed && w.failed.length) console.debug('[scan grouping] not written for "' + fs[sj].title + '":', w.failed.join(', '));
+        } catch (e) {
+          console.debug('[scan grouping] words of "' + fs[sj].title + '" left as they were:', (e && e.message) || e);
+        }
+      }
+      if (items.length) { var ws = await _sgrRpc('rpc_scan_group_words', { p_items: items }); n += (ws && ws.written) || 0; }
+    }
+    return n;
+  }
+  for (var i = 0; i < list.length; i++) {
+    var f0 = list[i];
+    try {
+      var got = ((await _sgrRpc('rpc_scan_group_rows', { p_ids: [f0.id] })) || [])[0];
+      var rows = (got && got.rows) || [];
+      var titles = [], tools = [], hosts = {};
+      rows.forEach(function (w) {
+        var t = String(w.title || '').trim(); if (t && titles.indexOf(t) < 0) titles.push(t);
+        var tl = String(w.tool || '').trim(); if (tl && tools.indexOf(tl) < 0) tools.push(tl);
+        if (w.host) hosts[String(w.host).toLowerCase()] = 1;
+      });
+      var said = _fsTextOfHtml(f0.description || '');
+      var g = { issues: [{ titles: titles, tools: tools, hosts: Object.keys(hosts),
+        rows: titles.map(function (t) { return { title: t, _tool: tools[0] || '', description: said, impact: '' }; }) }] };
+      var f = { title: f0.title, severity: f0.severity, category: f0.category, cwe: f0.cwe, affected_hosts: f0.affected_hosts || '',
+        description: '', remediation: '', custom_fields: {}, _evText: _sgrEvidence(rows).text,
+        _need: { description: _ffEnabled('description'), remediation: _ffEnabled('remediation') } };
+      if (!f._need.description && !f._need.remediation) continue;
+      var failed = await _fsiAiWrite(f, g, { one: (S.data.settings || {}).ai_provider === 'ollama' });
+      var patch = { scan_words_pending: false };
+      if (f._need.description && String(f.description || '').trim()) patch.description = f.description;
+      if (f._need.remediation && String(f.remediation || '').trim()) patch.remediation = f.remediation;
+      if (!patch.description && !patch.remediation) continue;
+      var q = supabaseClient.from('findings').update(patch).eq('id', f0.id).eq('scan_words_pending', true);
+      if (f0.row_version != null) q = q.eq('row_version', f0.row_version);
+      var res = await q.select('id');
+      if (res && !res.error && res.data && res.data.length) n++;
+      if (failed && failed.length) console.debug('[scan grouping] not written for "' + f0.title + '":', failed.join(', '));
+    } catch (e) {
+      console.debug('[scan grouping] words of "' + f0.title + '" left as the scanner wrote them:', (e && e.message) || e);
+    }
+  }
+  return n;
+}
+function _sgrRegroupHtml(f) {
+  if (!f || !f.scan_grouped || isClient() || !canEdit() || !_sgrMayGroup()) return '';
+  var lays = _dbAtLeast(_SGR_LAY_SINCE), styled = _dbAtLeast(_SGR_STYLE_SINCE);
+  var lay = f.scan_lay && typeof f.scan_lay === 'object' ? f.scan_lay : null, plain = !!(lay && lay.plain);
+  var told = !!(lay && String(lay.extra || '').trim());
+  return '<div class="sgr-regroup"><span class="sub-text">Grouped with AI from your scans. Grouped wrongly? Say what to change in the instructions beside Group again. '
+    + (!lays ? '' : plain ? 'Its evidence is the table made from the scans, and every later scan makes it the same way.'
+      : 'Its evidence is written by AI in your Evidence style from the scans\u2019 output' + (told ? ', with the instructions it was written again with' : '') + ', and every later scan writes it the same way.') + '</span>'
+    + '<span class="sgr-regroup-acts">'
+    + _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="sgrRegroup" onclick="_sgrRegroup(\'' + esc(f.id) + '\')">' + IC.ai + ' Group again</button>',
+      'sgr_regroup', 'sgrRegroup', 'grouping this finding again', { verb: 'Group again', scope: 'page', ex: _AIX_EX.ingest })
+    + (!lays ? '' : _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="sgrRelay" onclick="_sgrRelay(\'' + esc(f.id) + '\')">' + IC.ai + ' Write again</button>',
+      'sgr_lay', 'sgrRelay', 'this finding\u2019s evidence', { verb: 'Write again', scope: 'page', ex: _AIX_EX.ingest_table }))
+    + (lays && styled && !plain ? '<button type="button" class="btn btn-ghost btn-sm" id="sgrLayOff" onclick="_sgrRelayOff(\'' + esc(f.id) + '\')">Use the table made from the scans</button>' : '')
+    + (lays && styled && plain ? '<button type="button" class="btn btn-ghost btn-sm" id="sgrLayOn" onclick="_sgrRelay(\'' + esc(f.id) + '\')">Let AI write it</button>' : '')
+    + '</span></div>';
+}
+window._sgrRegroupHtml = _sgrRegroupHtml;
+function _sgrRegroupIssues(rows) {
+  var byKey = {}, order = [];
+  (rows || []).forEach(function (w) {
+    var k = String(w.issue_key || '');
+    if (!k) return;
+    var it = byKey[k];
+    if (!it) { it = byKey[k] = { key: k, title: String(w.title || '').trim(), titles: [], sev: w.severity || 'info', tools: [], cat: '', hosts: {}, ports: [] }; order.push(it); }
+    var t = String(w.title || '').trim();
+    if (t && it.titles.indexOf(t) < 0) it.titles.push(t);
+    if (sevRank(w.severity) < sevRank(it.sev)) it.sev = w.severity;
+    var tl = String(w.tool || '').trim();
+    if (tl && it.tools.indexOf(tl) < 0) it.tools.push(tl);
+    if (w.host) it.hosts[String(w.host).toLowerCase()] = 1;
+    if (w.port && it.ports.indexOf(w.port) < 0) it.ports.push(w.port);
+  });
+  return order.map(function (it) { it.nHosts = Object.keys(it.hosts).length; delete it.hosts; return it; });
+}
+async function _sgrRegroup(fid) {
+  var f = (S.data.findings || []).find(function (x) { return x && x.id === fid; });
+  if (!f || !f.scan_grouped || !_sgrMayGroup()) return;
+  var extra = _aixFor('sgr_regroup', null, null);
+  if (!extra) {
+    toast('Say what to change in the instructions beside Group again', 'info');
+    var t = document.querySelector('.aix-t[data-aix-go="sgrRegroup"]');
+    if (t && t.getAttribute('aria-expanded') !== 'true') _aixOpen(t);
+    return;
+  }
+  _showLoading(10 * 60 * 1000);
+  _loadingNote('Grouping it again with your AI');
+  var msg = '', kind = 'success';
+  try {
+    var got = ((await _sgrRpc('rpc_scan_group_rows', { p_ids: [fid] })) || [])[0];
+    var issues = _sgrRegroupIssues((got && got.rows) || []);
+    if (issues.length < 2) { msg = 'It brings together one issue: there is nothing to group again'; kind = 'info'; return; }
+    var existing = (S.data.findings || []).filter(function (x) {
+      return x && x.scan_grouped && x.id !== fid && (f.assessment_id ? x.assessment_id === f.assessment_id : (x.client_id === f.client_id && !x.assessment_id));
+    }).map(function (x) { return { id: x.id, title: x.title }; }).slice(0, 200);
+    var lib = _fsiAiLibrary(issues);
+    var sys = _sgrSys(_FSI_AI_GROUP_PROMPT, _fsiAiFirm()) + '\n\n' + _SGR_GROUPS_CONTRACT;
+    var q = _sgrQuestion(issues, lib, existing, [{ title: f.title, issues: issues, kb: null }]);
+    var raw = await callAI(q, sys, Math.min(8000, 800 + issues.length * 40), { responseFormat: 'json', maxWaitMs: 5 * 60 * 1000, extra: extra });
+    var groups = _fsiAiGroupsFrom(raw, issues, lib, existing);
+    if (!groups) throw new Error('its answer could not be read as findings');
+    var tk = _scanTitleKey(f.title), stay = -1;
+    groups.forEach(function (g, i) { if (stay < 0 && _scanTitleKey(g.title) === tk) stay = i; });
+    if (stay < 0) groups.forEach(function (g, i) { if (stay < 0 || g.issues.length > groups[stay].issues.length) stay = i; });
+    var out = [];
+    groups.forEach(function (g, i) {
+      if (i === stay) return;
+      var keys = g.issues.map(function (it) { return it.key; });
+      if (g.existing && g.existing.id !== fid) out.push({ existing: g.existing.id, issues: keys });
+      else out.push({ title: String(g.title || '').slice(0, 300), kb: g.kb ? g.kb.id : null, issues: keys });
+    });
+    if (!out.length) { msg = 'Your AI kept it as one finding'; kind = 'info'; return; }
+    var r = await _sgrRpc('rpc_scan_group_regroup', { p_finding_id: fid, p_groups: out });
+    if (!r || r.ok !== true) throw new Error((r && r.error) || 'it could not be grouped again');
+    var ids = r.touched || [];
+    _loadingNote('Writing up the evidence');
+    var style = _sgrStyleNow();
+    for (var k = 0; k < ids.length; k += 5) {
+      var fs = (await _sgrRpc('rpc_scan_group_rows', { p_ids: ids.slice(k, k + 5) })) || [], items = [];
+      for (var x = 0; x < fs.length; x++) { var it = await _sgrLaidOut(_sgrPageAsk, fs[x], _fsiAiFirm(), style); delete it.text; items.push(it); }
+      if (items.length) await _sgrRpc('rpc_scan_group_evidence', { p_items: items });
+    }
+    msg = 'Grouped again: ' + r.moved + (r.moved === 1 ? ' issue' : ' issues') + ' moved'
+      + (r.created ? ', ' + r.created + (r.created === 1 ? ' new finding' : ' new findings') : '');
+  } catch (e) {
+    msg = 'It was not grouped again: ' + ((e && e.message) || e) + '. It is as it was.'; kind = 'error';
+  } finally {
+    _hideLoading();
+    if (msg) toast(msg, kind, kind === 'error' ? 9000 : undefined);
+  }
+  await refreshAndStay();
+}
+window._sgrRegroup = _sgrRegroup;
+function _sgrPageAsk(sys, um, maxTokens) {
+  return callAI(um, sys, maxTokens, { responseFormat: 'json', maxWaitMs: 5 * 60 * 1000 });
+}
+function _sgrPageWordsAsk(sys, um, maxTokens) {
+  return callAI(um, sys, maxTokens, { maxWaitMs: 5 * 60 * 1000 });
+}
+function _sgrStyle() {
+  return _rtPromptsBase(function () {
+    var fields = [];
+    ['description', 'remediation'].forEach(function (k) {
+      if (_ffEnabled(k)) fields.push({ key: k, label: _ffLabel(k), prompt: _stdFieldPrompt(k), contract: _AI_REPLY_CONTRACTS.html, type: 'html' });
+    });
+    _ffCustomEnabled().forEach(function (c) {
+      if (!c || !c.id) return;
+      var ty = _cffType(c);
+      fields.push({ key: 'cf:' + c.id, id: String(c.id), label: String(c.label || 'A field'), prompt: _afResolveFieldPrompt(c), contract: _fsAiFormat(c), type: ty,
+        def: { id: String(c.id), label: String(c.label || ''), type: ty, options: String(c.options || '') } });
+    });
+
+    var ver = (S.data.settings || {}).cvss_version === '4.0' ? '4.0' : '3.1';
+    var cvss = _ffEnabled('cvss') ? { ver: ver, prompt: _stdFieldPrompt('cvss'), contract: _cvssPromptTail(ver) } : null;
+
+    var nm = _apxNames();
+    return { v: 1, evidence: _stdFieldPrompt('evidence'), fields: fields, cvss: cvss, apx: _dbAtLeast(_SGR_STYLE_SINCE) ? _apxRowsLimit() : 0,
+      apx_keep: nm.keep, apx_whole: nm.whole, apx_title: nm.title };
+  });
+}
+function _sgrStyleNow() {
+  try { return _sgrStyle(); } catch (e) { console.debug('[scan grouping] style', (e && e.message) || e); return null; }
+}
+function _sgrHash(s) {
+  var h1 = 0x811c9dc5, h2 = 0x01000193;
+  s = String(s);
+  for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 0x01000193); h2 = Math.imul(h2 ^ c, 0x5bd1e995); }
+  return ((h1 >>> 0).toString(36) + (h2 >>> 0).toString(36));
+}
+var _sgrStyleSent = '';
+async function _sgrStyleSave() {
+  if (!_sgrMayGroup() || !_dbAtLeast(_SGR_STYLE_SINCE) || !(S.profile && S.profile.role === 'admin')) return;
+  var st = _sgrStyleNow();
+  if (!st) return;
+  var h = _sgrHash(JSON.stringify(st));
+  if (h === _sgrStyleSent) return;
+  st.h = h;
+  try {
+    var r = await _sgrRpc('rpc_scan_style_save', { p_style: st });
+    if (r && r.ok === true) _sgrStyleSent = h;
+  } catch (e) { console.debug('[scan grouping] house style not kept for the collectors:', (e && e.message) || e); }
+}
+window._sgrStyleSave = _sgrStyleSave;
+async function _sgrRelay(fid) {
+  var f = (S.data.findings || []).find(function (x) { return x && x.id === fid; });
+  if (!f || !f.scan_grouped || !_sgrMayGroup()) return;
+  var extra = _aixFor('sgr_lay', null, null);
+  _showLoading(10 * 60 * 1000);
+  _loadingNote('Writing the evidence with your AI');
+  var msg = '', kind = 'success';
+  try {
+    var got = ((await _sgrRpc('rpc_scan_group_rows', { p_ids: [fid] })) || [])[0];
+    var rows = (got && got.rows) || [];
+    var style = _sgrStyleNow();
+    var W = await _sgrEvWrite(_sgrPageAsk, { title: f.title, severity: f.severity || '' }, _sgrPlain(rows),
+      { evidence: style ? style.evidence : '', firm: _fsiAiFirm(), extra: extra || '' });
+    if (W && W.html) {
+      var keep = _dbAtLeast(_SGR_STYLE_SINCE) ? { cols: W.cols, extra: extra || '' } : (W.cols.length ? { cols: W.cols, extra: extra || '' } : null);
+      var w = await _sgrRpc('rpc_scan_group_evidence', { p_items: [_sgrApx({ id: fid, blocks: _sgrEvidence(rows, null, W).blocks, lay: keep },
+        { id: fid, aid: f.assessment_id, title: f.title }, style)] });
+      if (!w || w.ok !== true || !w.written) throw new Error('the evidence could not be saved');
+      msg = 'Written again by AI in your Evidence style, each value checked against the scans\u2019 output'
+        + (W.dropped ? ': ' + W.dropped + (W.dropped === 1 ? ' value' : ' values') + ' not found in it ' + (W.dropped === 1 ? 'was' : 'were') + ' left out' : '')
+        + (W.known ? (W.dropped ? ', and ' : ': ') + W.known + (W.known === 1 ? ' fixed or supported version' : ' fixed or supported versions') + ' the output did not give ' + (W.known === 1 ? 'was' : 'were') + ' written from what AI knows' : '')
+        + '. Later scans write it ' + (extra ? 'with the same instructions.' : 'the same way.');
+    } else if (W && W.refused) { msg = 'AI\u2019s evidence left out more than it kept (values not in the scans\u2019 output), so the evidence is as it was.'; kind = 'info'; }
+    else if (W && W.tooMany) { msg = 'The scans gave output on ' + W.tooMany.toLocaleString() + ' hosts and ports, more than AI writes up at once, so the evidence is as it was.'; kind = 'info'; }
+    else { msg = 'AI gave back no evidence it could use, so the evidence is as it was.'; kind = 'info'; }
+  } catch (e) {
+    msg = 'AI could not write it again (' + String((e && e.message) || e) + '), so the evidence is as it was.'; kind = 'error';
+  } finally {
+    _hideLoading();
+    if (msg) toast(msg, kind, kind === 'error' ? 9000 : undefined);
+  }
+  await refreshAndStay();
+}
+window._sgrRelay = _sgrRelay;
+async function _sgrRelayOff(fid) {
+  var f = (S.data.findings || []).find(function (x) { return x && x.id === fid; });
+  if (!f || !f.scan_grouped || !_sgrMayGroup()) return;
+  try {
+    var got = ((await _sgrRpc('rpc_scan_group_rows', { p_ids: [fid] })) || [])[0];
+    var w = await _sgrRpc('rpc_scan_group_evidence', { p_items: [_sgrApx({ id: fid, blocks: _sgrEvidence((got && got.rows) || []).blocks, lay: _dbAtLeast(_SGR_STYLE_SINCE) ? { plain: true } : null },
+      { id: fid, aid: f.assessment_id, title: f.title }, _dbAtLeast(_SGR_STYLE_SINCE) ? _sgrStyleNow() : null)] });
+    if (!w || w.ok !== true || !w.written) throw new Error('the evidence could not be saved');
+    toast('The evidence is the table made from the scans, and later scans make it the same way', 'success');
+  } catch (e) {
+    toast('The evidence is as it was: ' + ((e && e.message) || e), 'error');
+  }
+  await refreshAndStay();
+}
+window._sgrRelayOff = _sgrRelayOff;
 function _vrFieldPick() {
   var want = (S.data.settings || {}).vuln_report_fields;
   if (typeof want === 'string') { try { want = JSON.parse(want); } catch (e) { want = null; } }
@@ -37995,7 +40912,7 @@ async function _apiCall(name, params) {
   if (r.error) return { ok: false, code: 'error', error: _errMsg(r.error) };
   return r.data || { ok: false, code: 'error', error: 'No answer from your database.' };
 }
-function _apiConfirmFactor(said) {
+function _apiConfirmFactor__portal(said) {
   _mfaKeepOwnProfile();
   toast(said || 'Enter your authenticator code to carry on', 'warning');
   _suppressRender = true;
@@ -39590,6 +42507,8 @@ function _aixBag(ref) {
 }
 function _aixRefOf(scope) {
   if (scope === 'page') return null;
+  if (scope === 'fd') return (S && S._fdEdit) || null;
+  if (scope === 'fdall') return _fdPageRef(S && S.currentFinding && S.currentFinding.id);
   if (scope === 'rb') return (S && S.rb) || null;
   return (S && S.modal) || null;
 }
@@ -39601,8 +42520,9 @@ function _aixSet(key, ref, text) {
   if (t.trim()) b[key] = t; else delete b[key];
   _aixPaint();
 }
+function _aixDefRef() { return (S && S.modal) || (_fdAiRun && _fdAiRun.ref) || null; }
 function _aixFor(key, o, ref) {
-  var r = (o && o.run && o.run.mref) || (ref !== undefined ? ref : ((S && S.modal) || null));
+  var r = (o && o.run && o.run.mref) || (ref !== undefined ? ref : _aixDefRef());
   var own = _aixGet(key, r);
   var all = String((o && o.run && o.run.extra) || '').trim();
   if (own) _aixKeepNow(key, own, r, true);
@@ -39785,6 +42705,8 @@ function _aixUndoOf(cur, what) {
     else t.value = cur.before;
 
     if (t.id === 'mAs' && window._updateScopeSelector) { try { _updateScopeSelector(); } catch (e) {} }
+
+    if (!S.modal && S._fdEdit) { try { t.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {} }
     toast(what + ' put back as it was', 'info');
   };
 }
@@ -39820,6 +42742,8 @@ function _aixKind(key, ref) {
   if (/^scan/.test(key)) return 'scan';
 
   if (/^ingest_table/.test(key)) return 'ingest_table';
+
+  if (/^phs:(es|rs)/.test(key)) return key.slice(0, 6);
   return (ref && ref.type === 'kb' ? 'kb:' : '') + key;
 }
 function _aixStoreKey() {
@@ -39900,7 +42824,8 @@ var _AIX_PROSE = /^(html|textarea|text)$/;
 function _aixTipsOf(key) {
   key = String(key || '');
   if (key === 'remediation') return _AIX_TIPS.fix;
-  if (key === 'exec') return _AIX_TIPS.summary;
+  if (key === 'exec' || /^phs:es/.test(key)) return _AIX_TIPS.summary;
+  if (/^phs:rs/.test(key)) return _AIX_TIPS.prose;
   if (key === 'evidence') return _AIX_TIPS.evidence;
   if (key === 'all') return _AIX_TIPS.all;
   if (key === 'description' || key === 'retest' || key === 'notes' || key === 'caveats' || /^scan/.test(key)) return _AIX_TIPS.prose;
@@ -39927,7 +42852,7 @@ var _AIX_EX = {
   caveats: 'e.g. Tested from the internet only, with no credentials',
   scan: 'e.g. One paragraph, for the client\u2019s IT lead',
   ingest: 'e.g. Keep each web server\u2019s TLS weaknesses as one finding, and write for the client\u2019s IT team',
-  ingest_table: 'e.g. One row for each host and port, with the weak cipher suites in one cell',
+  ingest_table: 'e.g. Show the weak cipher suites in a table, with one excerpt of the output as proof',
   rb: 'e.g. The findings start in section 4, and the client\u2019s name is on the cover\u2019s second line',
   _: 'e.g. Two sentences at most'
 };
@@ -39968,12 +42893,16 @@ function _aixOpen(t) {
   var ex = t.getAttribute('data-aix-ex') || _AIX_EX[key] || _AIX_EX._;
   var hint0 = scope === 'rb' ? 'Sent with every part of the build.'
     : scope === 'page' ? 'Sent each time you generate this.'
+
+    : scope === 'fdall' ? 'Sent with every part it fills.'
     : key === 'all' ? 'Sent with every field it fills, and each field\u2019s own with it.'
 
-    : key === 'ingest' ? 'Sent with the grouping, each table AI lays out and every finding it writes.'
+    : key === 'ingest' ? 'Sent with the grouping, each finding\u2019s evidence AI writes and every field it writes.'
 
     : 'Applied to what is there now.';
-  var hint = hint0 + (scope === 'rb' ? ' Kept with this document.' : scope === 'page' ? ' Kept until the page reloads.' : ' Kept until the dialog closes.');
+
+  var hint = hint0 + (scope === 'rb' ? ' Kept with this document.' : scope === 'page' ? ' Kept until the page reloads.'
+    : scope === 'fd' ? ' Kept while this part is open.' : scope === 'fdall' ? ' Kept for this finding until the page reloads.' : ' Kept until the dialog closes.');
   var hintKeep = hint0 + ' Remembered for next time.';
   var p = document.createElement('div');
   p.className = 'aix-pop';
@@ -40248,6 +43177,8 @@ function _genLive(el) { return !!(el && el.isConnected); }
 function _genTarget(el, mref) {
   if (!el) return null;
   if (el.isConnected) return el;
+
+  if (!mref && !S.modal && _fdAiRun && el.id && (el.id === _fdAiRun.id || (_fdAiRun.ids && _fdAiRun.ids.indexOf(el.id) >= 0)) && S._fdEdit === _fdAiRun.ref) return document.getElementById(el.id);
   if (!mref || !S.modal || S.modal !== mref || !el.id) return null;
   return document.getElementById(el.id);
 }
@@ -40572,6 +43503,38 @@ async function _ensureFindingTitle(o) {
   return title;
 }
 window._ensureFindingTitle = _ensureFindingTitle;
+async function generateFindingTitle(o) {
+  var quiet = _genQuiet(o);
+  var out = document.getElementById('mTi'), mref = S.modal;
+  if (!out) return null;
+  var btn = quiet ? null : document.getElementById('genFTitleBtn');
+  var solo = quiet ? null : _genSolo(btn, [out], 'Writing');
+  try {
+    var descText = _aiEditorText(document.getElementById('mDe'), '');
+    var evText = _aiEditorText(document.getElementById('evidenceEditor'), '[screenshot]');
+    var now = String(out.value || '').trim();
+    if (!evText && !descText) return _genRefuse(o, now ? 'Add some evidence or a description to write it from' : 'Add some evidence or a description first');
+    var sp = _stdFieldPrompt('title') + '\n\n' + _AI_REPLY_CONTRACTS.title;
+    var um = _aiFindingContext({ description: descText, descMax: 1500, evidence: evText, evMax: 2500 })
+      + '\nWrite the title of this finding.';
+    var cur = _aixEditOf(out, { kind: 'text' });
+    try {
+      var aiR = await callAI(um, sp, null, _genOpts(o, _aiImgOpts(), 'title', cur));
+      if (!aiR) return _genEmpty(o);
+      var t = String(aiR).replace(/```[a-z]*/gi, '').replace(/<[^>]*>/g, ' ').split('\n').map(function (x) { return x.trim(); }).filter(Boolean)[0] || '';
+      t = t.replace(/^(?:title|finding)\s*:\s*/i, '').replace(/^["'\u2018\u201c\s]+|["'\u2019\u201d\s]+$/g, '').replace(/\.+$/, '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!t) return _genEmpty(o);
+      out = _genTarget(out, mref);
+      if (!out) return null;
+      out.value = t;
+      if (cur && cur.used) return _genEditSaid(o, cur, _ffLabel('title'), t);
+      return _genSaid(o, _ffLabel('title') + ' generated', 'success', t);
+    } catch (e) { return _genFailed(o, 'AI error: ', e); }
+  } finally {
+    _genSoloDone(solo);
+  }
+}
+window.generateFindingTitle = generateFindingTitle;
 var _AI_VISION_MODELS = [
   /gpt-4o/i, /gpt-4\.1/i, /gpt-5/i, /gpt-6/i, /o[34]\b/i,
   /claude-3/i, /claude-[45]/i, /sonnet/i, /opus/i, /haiku/i,
@@ -40673,7 +43636,7 @@ function _aiImgOpts() {
   try {
     if (S._aiImages && S._aiImages.length) return null;
 
-    if (S._aiImagesRefused && _genRuns.finding && !_genRuns.finding.finished) return null;
+    if (S._aiImagesRefused && ((_genRuns.finding && !_genRuns.finding.finished) || (_genRuns.fdpage && !_genRuns.fdpage.finished))) return null;
     if (!_aiCanSeeImages()) return null;
     var imgs = _evidenceImagesForAI();
     return imgs.length ? { images: imgs } : null;
@@ -41871,8 +44834,10 @@ function _evAiTouched(ed) {
   } catch (e) {}
 }
 window._evAiTouched = _evAiTouched;
-var _EV_EDIT_PROMPT = 'You edit the evidence of a penetration test finding: the tester’s notes, the lines and captions written about its screenshots, and the requests, responses, commands and tool output it holds. Do what the person asks. Keep everything they do not ask you to change as it is, and never add a host, address, version, path, value or result that the evidence does not hold.';
-var _EV_EDIT_CONTRACT = 'Reply with the whole of the evidence, edited, as HTML: <p> for paragraphs, <ul> or <ol> with <li> for lists, <table> with <thead>, <tbody>, <tr>, <th> and <td> for a table, <strong> for emphasis, <code> for short inline terms and <pre><code> for requests, responses, commands, code and any other output of more than one line. No headings, no markdown, no inline styles or colours, and no preamble. Keep each [[IMAGE n]] mark exactly as written, where its screenshot belongs.';
+var _EV_EDIT_PROMPT = 'You edit the evidence of a penetration test finding: the tester’s notes, the lines and captions written about its screenshots, and the requests, responses, commands and tool output it holds. Do what the person asks. Keep everything they do not ask you to change as it is, and never add a host, address, version, path, value or result that the evidence does not hold, with one exception: where a table gives software with no fixed, supported or recommended version, or no date its support ended, fill that cell with the one you know, as of today.';
+var _EV_EDIT_CONTRACT = 'Reply with the whole of the evidence, edited, as HTML: <p> for paragraphs, <ul> or <ol> with <li> for lists, <table> with <thead>, <tbody>, <tr>, <th> and <td> for a table, <strong> for emphasis, <code> for short inline terms and <pre><code> for requests, responses, commands, code and any other output of more than one line. No headings, no markdown, no inline styles or colours, and no preamble. Keep each [[IMAGE n]] mark exactly as written, where its screenshot belongs.'
+
+  + ' Where the person asks for a table, list, output or passage to go to an appendix, put [[APPENDIX]] (or [[APPENDIX: a short title for it]]) in a paragraph of its own directly before it; where they ask for one to stay in the evidence, put [[KEEP]] in a paragraph of its own directly before it. Put neither anywhere else.';
 function _evEditValues(text) {
   var t = String(text || ''), out = {};
   var add = function (re) { (t.match(re) || []).forEach(function (v) { out[v.replace(/[).,;:]+$/, '')] = 1; }); };
@@ -41912,8 +44877,10 @@ async function _evEditToInstructions(ed, o, k) {
       var imgs = datas.filter(Boolean);
       if (imgs.length === els.length) { opts.images = imgs; opts.imagesExact = true; }
     }
-    var raw = await callAI(ctx + '\nThe evidence of this finding is given below as it stands. Edit it as the person asks.',
-      _EV_EDIT_PROMPT + '\n\n' + _EV_EDIT_CONTRACT, null, opts);
+
+    var _evRoom = Math.min(_AI_MOST_OUT, Math.max(4096, Math.ceil(String(cur.text || '').length / 3) + 2048));
+    var raw = await callAI(ctx + '\nToday is ' + _sgrDay(new Date().toISOString()) + '. The evidence of this finding is given below as it stands. Edit it as the person asks.',
+      _EV_EDIT_PROMPT + '\n\n' + _EV_EDIT_CONTRACT, _evRoom, opts);
     if (!raw || !String(raw).trim()) throw new Error('the model sent back nothing');
     if (document.getElementById(k.editorId) !== ed) throw new Error('the finding was drawn again meanwhile: ask again');
 
@@ -41929,14 +44896,25 @@ async function _evEditToInstructions(ed, o, k) {
     _genEdit({ quiet: true }, cur, ed, raw, _evShotCount(), k.label);
 
     try { _evPreToBlocks(ed); } catch (e) {}
+
+    var _evMarks = new Map();
+    if (k.key === 'evidence') { try { _evMarks = _evApxMarks(ed); } catch (e) { _evMarks = new Map(); } }
     var afterText = _fsTextOfHtml(ed.innerHTML);
     var lost = _evEditValues(beforeText).filter(function (v) { return afterText.indexOf(v) < 0; });
-    var undo = _aixUndoOf(cur, k.label);
+
+    var _mv = null;
+    if (k.key === 'evidence') { try { _mv = await _evApxAuto(ed, { marks: _evMarks }); } catch (e) { _mv = null; } }
+
+    cur.after = ed.innerHTML;
+    var _undo0 = _aixUndoOf(cur, k.label);
+    var undo = _undo0 ? function () { var r0 = _undo0.apply(this, arguments); _evApxSweepSoon(ed); return r0; } : _undo0;
     var said = _evCap(k.where.replace(/^the /, '')) + ' edited to your instructions'
       + (lost.length ? '. ' + lost.length + (lost.length === 1 ? ' value that was in it is not now: ' : ' values that were in it are not now: ')
-        + lost.slice(0, 6).join(', ') + (lost.length > 6 ? ' and ' + (lost.length - 6) + ' more' : '') : '');
+        + lost.slice(0, 6).join(', ') + (lost.length > 6 ? ' and ' + (lost.length - 6) + ' more' : '') : '')
+      + (_mv && _mv.moved ? '; ' + _mv.said : '')
+      + (_mv && _mv.none && _mv.asked ? '; nothing was moved to an appendix: the finding is not in an engagement' : '');
     toast(said + '.' + (undo ? ' Click here to undo.' : ''), lost.length ? 'info' : 'success', undo ? 12000 : (lost.length ? 10000 : undefined), undo);
-    return { done: 1, edited: true, lost: lost };
+    return { done: 1, edited: true, lost: lost, apx: _mv, apxDone: true };
   } catch (e) {
     toast('AI error: ' + ((e && e.message) || e), 'error');
     return { error: (e && e.message) || String(e) };
@@ -41959,6 +44937,19 @@ function _evPreToBlocks(ed) {
 }
 async function generateEvidenceLayout(o) {
   o = o || {};
+  var edId = o.editorId || 'evidenceEditor';
+  var ed = document.getElementById(edId);
+  var r = await _evLayoutRun(o);
+  var mine = (o.aix || 'evidence') === 'evidence' && !o.retest;
+  if (!mine || !r || r.error || r.notEvidence || r.apxDone || r.edited) return r;
+  if (!ed || document.getElementById(edId) !== ed || (S._evBusy && S._evBusy === ed)) return r;
+  var mv = null;
+  try { mv = await _evApxAuto(ed, {}); } catch (e) { mv = null; }
+  if (mv && mv.moved) r.apx = mv;
+  return r;
+}
+async function _evLayoutRun(o) {
+  o = o || {};
 
   var _edId = o.editorId || 'evidenceEditor';
   var _aixK = o.aix || 'evidence';
@@ -41971,7 +44962,7 @@ async function generateEvidenceLayout(o) {
 
   if (!o.onlyNew && !o.silent && !o.run) {
     var _evOwn = '';
-    try { _evOwn = _aixGet(_aixK, (S && S.modal) || null); } catch (e) { _evOwn = ''; }
+    try { _evOwn = _aixGet(_aixK, _aixDefRef()); } catch (e) { _evOwn = ''; }
     if (_evOwn) return _evEditToInstructions(ed, o, { key: _aixK, where: _where, editorId: _edId, label: _evCap(_where.replace(/^the /, '')) });
   }
 
@@ -41984,6 +44975,7 @@ async function generateEvidenceLayout(o) {
     if (document.getElementById(_edId) !== ed) return;
     ed.innerHTML = before;
     try { if (typeof resolveStorageImages === 'function') resolveStorageImages(ed); } catch (e3) {}
+    _evApxSweepSoon(ed);
   };
   var boxBack = function () { if (!box.lines && !lst.icons && !lst.lists) return; box = { lines: 0, blocks: [] }; lst = { icons: 0, lists: 0 }; _evUndoAll(); };
   var imgs = _evImages(ed);
@@ -42010,13 +45002,13 @@ async function generateEvidenceLayout(o) {
   S._evBusy = ed;
 
   var _evInstr = '';
-  try { _evInstr = _aixGet(_aixK, (o.run && o.run.mref) || (S && S.modal) || null) || String((o.run && o.run.extra) || '').trim(); } catch (e) { _evInstr = ''; }
+  try { _evInstr = _aixGet(_aixK, (o.run && o.run.mref) || _aixDefRef()) || String((o.run && o.run.extra) || '').trim(); } catch (e) { _evInstr = ''; }
   var _evUnasked = false;
   try { _evUnasked = notes.length > 0 && !_evInstr && !/\bnotes?\b/i.test(_stdFieldPrompt(_pK)); } catch (e) { _evUnasked = false; }
 
   var btn = o.quiet ? null : document.getElementById(o.btnId || 'genEvBtn');
 
-  var solo = btn ? _genSolo(btn, [ed], 'Explaining', { nolock: true }) : null;
+  var solo = btn ? _genSolo(btn, [ed], 'Generating', { nolock: true }) : null;
 
   var wasEditable = ed.getAttribute('contenteditable');
   ed.setAttribute('contenteditable', 'false');
@@ -42291,6 +45283,7 @@ async function generateEvidenceLayout(o) {
           if (document.getElementById(_edId) !== ed) return;
           ed.innerHTML = before;
           try { if (typeof resolveStorageImages === 'function') resolveStorageImages(ed); } catch (e3) {}
+          _evApxSweepSoon(ed);
         });
       } else {
 
@@ -42305,7 +45298,7 @@ async function generateEvidenceLayout(o) {
 
         if (boxSaid) toast(_evCap(boxSaid) + '. Nothing else changed: ' + _evList + '.' + blind + ' Click here to undo.', 'success', 10000, _evUndoAll);
         else if (nAsk.length) {
-          var _evHint = !nWhy.length && !_evInstr ? ' Say what you want done to them in the instructions beside ' + (o.verbName || 'Explain evidence') + ', and ask again.' : '';
+          var _evHint = !nWhy.length && !_evInstr ? ' Say what you want done to them in the instructions beside ' + (o.verbName || 'Generate evidence') + ', and ask again.' : '';
           toast('Nothing changed: ' + _evList + '.' + blind + _evHint, 'info');
         } else toast('Nothing to change: ' + _evList + (blind ? '.' + blind : ''), 'info');
       }
@@ -42534,7 +45527,10 @@ function _genPut(el, s) {
   var t = el.tagName;
   if (s.v !== null) {
     if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') el.value = s.v;
-    else { el.innerHTML = s.v; try { if (typeof resolveStorageImages === 'function') resolveStorageImages(el); } catch (e) {} }
+    else {
+      el.innerHTML = s.v; try { if (typeof resolveStorageImages === 'function') resolveStorageImages(el); } catch (e) {}
+      if (typeof _evApxSweepSoon === 'function') _evApxSweepSoon(el);
+    }
   }
   if (s.v === null || t === 'SELECT') {
     if (s.title == null) el.removeAttribute('title'); else el.setAttribute('title', s.title);
@@ -42543,24 +45539,30 @@ function _genPut(el, s) {
   }
   if (s.v === null) el.className = s.cls;
 }
+function _genPutBack(run, src, ids) {
+  var pre = src.pre || {}, post = src.post || {}, back = src.backIds || (src.backIds = {}), seen = {}, put = 0, kept = 0;
+  var has = function (x) { return Object.prototype.hasOwnProperty.call(post, x); };
+  var groupOf = function (id) { return (run.cfg.groups || []).find(function (g) { return g.indexOf(id) >= 0; }) || [id]; };
+  (ids || []).forEach(function (id) {
+    if (seen[id] || back[id] || !has(id) || _genSame(pre[id], post[id])) return;
+    var g = groupOf(id).filter(function (x) { return has(x) && !back[x]; });
+    g.forEach(function (x) { seen[x] = 1; });
+    var touched = g.filter(function (x) { return !_genSame(pre[x], post[x]); });
+    var since = g.some(function (x) { var el = document.getElementById(x); return el && !_genSame(_genSnapEl(el), post[x]); });
+    if (since) { kept += touched.length; return; }
+    g.forEach(function (x) { _genPut(document.getElementById(x), pre[x]); back[x] = 1; });
+    put += touched.length;
+  });
+  return { put: put, kept: kept };
+}
 function _genUndo(run) {
   if (typeof run === 'string') run = _genRuns[run];
   if (!run || !run.finished || run.undone || !run.wrote || !run.wrote.length) return 0;
-  var kept = 0;
-  var groupOf = function (id) { return (run.cfg.groups || []).find(function (g) { return g.indexOf(id) >= 0; }) || [id]; };
 
-  for (var i = run.wrote.length - 1; i >= 0; i--) {
-    var s = run.wrote[i], pre = s.pre || {}, post = s.post || {}, seen = {};
-    Object.keys(post).forEach(function (id) {
-      if (seen[id] || _genSame(pre[id], post[id])) return;
-      var g = groupOf(id).filter(function (x) { return Object.prototype.hasOwnProperty.call(post, x); });
-      g.forEach(function (x) { seen[x] = 1; });
-      var touched = g.filter(function (x) { return !_genSame(pre[x], post[x]); });
-      var since = g.some(function (x) { var el = document.getElementById(x); return el && !_genSame(_genSnapEl(el), post[x]); });
-      if (since) { kept += touched.length; return; }
-      g.forEach(function (x) { _genPut(document.getElementById(x), pre[x]); });
-    });
-  }
+  if (run.cfg.undoAll) return run.cfg.undoAll(run);
+  var kept = 0;
+
+  for (var i = run.wrote.length - 1; i >= 0; i--) kept += _genPutBack(run, run.wrote[i], Object.keys(run.wrote[i].post || {})).kept;
   run.undone = true; run.undoKept = kept;
   _genPaint(run);
   _genAnnounce(run, 'Undone');
@@ -42568,16 +45570,63 @@ function _genUndo(run) {
 }
 function _genUndoSaid(run) {
   if (typeof run === 'string') run = _genRuns[run];
-  if (!run || !run.finished || run.undone) return;
+  if (!run || !run.finished || run.undone || run.undoing) return;
   var k = _genUndo(run);
+
+  if (k && typeof k.then === 'function') return k;
   toast(k ? 'Undone, except ' + k + ' field' + (k === 1 ? '' : 's') + ' changed since' : 'Undone: every field it wrote is as it was', 'success');
 }
+function _genStepSrc(run, s) {
+  if (!s) return null;
+  if (s.state === 'done' && s.post) return { src: s, ids: Object.keys(s.post) };
+  if (s.state === 'lib') {
+    var L = run.by.library;
+    if (!L || L.state !== 'done' || !L.post) return null;
+    return { src: L, ids: (s.writes || (s.el ? [s.el] : [])).filter(function (id) { return Object.prototype.hasOwnProperty.call(L.post, id); }) };
+  }
+  return null;
+}
+function _genStepLeft(run, s) {
+  if (run.cfg.left) return run.cfg.left(run, s);
+  var x = _genStepSrc(run, s);
+  if (!x) return 0;
+  var back = x.src.backIds || {}, pre = x.src.pre || {};
+  return x.ids.filter(function (id) { return !back[id] && !_genSame(pre[id], x.src.post[id]); }).length;
+}
+function _genUndoOne(run, key) {
+  if (typeof run === 'string') run = _genRuns[run];
+  if (!run || !run.finished || run.undone || run.gone || run.undoing) return;
+  var s = run.by[key];
+  if (!s || s.back || !_genStepLeft(run, s)) return;
+  if (run.cfg.undoOne) return run.cfg.undoOne(run, s);
+  var x = _genStepSrc(run, s);
+  if (!x) return;
+  _genBackSaid(run, s, _genPutBack(run, x.src, x.ids));
+}
+function _genBackSaid(run, s, r) {
+  if (!r.put) {
+    _genPaint(run);
+    toast(s.label + ' has been changed since it was written, so it is kept as it is', 'info');
+    return;
+  }
+  s.back = true;
+
+  if (s.key === 'library') run.steps.forEach(function (t) { if (t.state === 'lib' && !_genStepLeft(run, t)) t.back = true; });
+  else if (s.state === 'lib' && run.by.library && !_genStepLeft(run, run.by.library)) run.by.library.back = true;
+  if (!run.wrote.some(function (t) { return _genStepLeft(run, t) > 0; })) { run.undone = true; run.undoKept = 0; }
+  _genPaint(run);
+  _genAnnounce(run, s.label + ' put back');
+  toast(s.label + ' put back as it was before the run' + (r.kept ? ', except ' + r.kept + ' field' + (r.kept === 1 ? '' : 's') + ' changed since' : ''), 'success');
+}
+window._genUndoOne = _genUndoOne;
 function _genRun(cfg) {
   var prev = _genRuns[cfg.kind];
   if (prev && !prev.finished && _genAlive(prev)) return prev;
   if (prev && prev.panel && prev.panel.parentNode) prev.panel.parentNode.removeChild(prev.panel);
   var run = { kind: cfg.kind, cfg: cfg, steps: [], by: {}, lanes: cfg.lanes || _genLanes(), notes: cfg.notes || [], lib: [], wrote: [],
-    active: 0, finished: false, stopping: false, gone: false, undone: false, mref: S.modal || null };
+    active: 0, finished: false, stopping: false, gone: false, undone: false,
+
+    mref: cfg.mref !== undefined ? cfg.mref : (S.modal || null) };
   _genRuns[cfg.kind] = run;
   (cfg.steps || []).forEach(function (s) { if (s && s.key && !run.by[s.key]) { run.by[s.key] = s; run.steps.push(s); } });
   run.steps.forEach(function (s) {
@@ -42618,6 +45667,8 @@ function _genBegin(run) {
   run.watch = setInterval(function () { if (!_genAlive(run)) _genGone(run); }, 400);
 }
 function _genAlive(run) {
+
+  if (run.cfg.alive) return run.cfg.alive(run);
   if (_genLive(run.cfg.form)) return true;
   if (!run.mref || !S.modal || S.modal !== run.mref || !run.cfg.formId) return false;
   var form = document.getElementById(run.cfg.formId);
@@ -42676,10 +45727,12 @@ function _genHold(run, s, on) {
     s._held.forEach(function (x) { _genLock(x, true); });
     s._grp = _genGroupOf(el);
     if (s._grp && s._grp.classList) s._grp.classList.add('gen-busy');
+    if (run.cfg.hold) { try { run.cfg.hold(run, s, true); } catch (e) {} }
     return;
   }
   (s._held || []).forEach(function (x) { _genLock(x, false); });
   if (s._grp && s._grp.classList) { s._grp.classList.remove('gen-busy'); if (s.state === 'done') _genFlash(s._grp, 'gen-new'); }
+  if (run.cfg.hold) { try { run.cfg.hold(run, s, false); } catch (e) {} }
   s._held = null; s._grp = null;
 }
 function _genStart(run, s) {
@@ -42700,6 +45753,18 @@ function _genStart(run, s) {
       if (!_genAlive(run)) { _genGone(run); return; }
       s.state = 'skip'; s.note = (typeof s.nothing === 'function' ? s.nothing() : s.nothing) || 'nothing was written';
       return;
+    }
+
+    if (run.cfg.commit) {
+      s.note = 'saving'; _genPaintSoon(run);
+      return Promise.resolve().then(function () { return run.cfg.commit(run, s); }).then(function (r) {
+        if (run.gone) return;
+        if (r && r.kept) { s.state = 'kept'; s.note = String(r.kept); return; }
+        s.state = 'done'; s.note = String(note) || 'written';
+      }, function (e) {
+        if (run.gone) return;
+        s.state = 'fail'; s.note = 'written, but not saved: ' + _genWhy(e);
+      });
     }
     s.state = 'done';
     s.note = String(note) || 'written';
@@ -42757,6 +45822,8 @@ function _genAgain(run, key) {
   if (!run || !run.finished || run.gone) return;
   var redo = run.steps.filter(function (s) { return key ? (s.key === key && s.state === 'fail') : s.state === 'fail'; });
   if (!redo.length) return;
+
+  if (run.cfg.canAgain && !run.cfg.canAgain(run)) return;
   var keys = redo.map(function (s) { return s.key; });
   run.steps.forEach(function (s) {
     if (s.state === 'skip' && s.skippedFor && s.skippedFor.some(function (k) { return keys.indexOf(k) >= 0; })) redo.push(s);
@@ -42774,6 +45841,7 @@ function _genDismiss(run) {
   run.panel = null;
 }
 function _genGoTo(run, key) {
+  if (run && run.cfg.goTo) return run.cfg.goTo(run, key);
   var s = run && run.by[key];
   var el = s && s.el ? document.getElementById(s.el) : null;
   if (!el) return;
@@ -42836,12 +45904,18 @@ function _genPanelFor(run) {
     if (typeof ResizeObserver === 'function') new ResizeObserver(function () { _edReholdIn(host); }).observe(p);
     else _edReholdIn(host);
   } catch (e) {}
+
+  p.addEventListener('pointerdown', function () { run._press = Date.now(); });
+  var _let = function () { run._press = 0; if (run._owed) { var f = run._owed; run._owed = null; setTimeout(f, 0); } };
+  p.addEventListener('pointerup', _let);
+  p.addEventListener('pointercancel', _let);
   p.addEventListener('click', function (ev) {
     var b = ev.target && ev.target.closest ? ev.target.closest('[data-gen]') : null;
     if (!b || !p.contains(b)) return;
     var act = b.getAttribute('data-gen'), key = b.getAttribute('data-k') || '';
     if (act === 'stop') _genStop(run);
     else if (act === 'undo') _genUndoSaid(run);
+    else if (act === 'undo1') _genUndoOne(run, key);
     else if (act === 'again') _genAgain(run, key);
     else if (act === 'close') _genDismiss(run);
     else if (act === 'go') _genGoTo(run, key);
@@ -42881,20 +45955,29 @@ function _genNoteOf(run, s) {
   return s.note || '';
 }
 function _genPill(run, s) {
-  var note = _genNoteOf(run, s);
-  var inline = { run: note, done: note, kept: 'kept', lib: 'Library', fail: 'failed', skip: 'skipped', stop: 'stopped' }[s.state] || '';
-  return '<button type="button" class="gen-pill is-' + s.state + '" data-gen="go" data-k="' + esc(s.key) + '" title="' + esc(s.label + ': ' + note) + '">'
-    + '<span class="gen-ic" aria-hidden="true">' + (_GEN_IC[s.state] || '') + '</span>'
+  var st = s.back ? 'back' : s.state;
+  var note = s.back ? 'put back as it was before the run' : _genNoteOf(run, s);
+  var inline = { run: note, done: note, kept: 'kept', lib: 'Library', fail: 'failed', skip: 'skipped', stop: 'stopped', back: 'put back' }[st] || '';
+  var u = (run.finished && !run.undone && !run.gone && !s.back && (s.state === 'done' || s.state === 'lib') && _genStepLeft(run, s) > 0)
+    ? '<button type="button" class="gen-pu" data-gen="undo1" data-k="' + esc(s.key) + '"' + (run.undoing ? ' disabled' : '')
+      + ' title="' + esc('Undo ' + s.label + (s.key === 'library' ? ': put back every field the Library filled' : ': put it back as it was before the run')) + '"'
+      + ' aria-label="' + esc('Undo ' + s.label) + '">' + _GEN_IC.rewind + '</button>'
+    : '';
+  return '<span class="gen-pw' + (u ? ' has-u' : '') + '" data-gk="' + esc(s.key) + '">'
+    + '<button type="button" class="gen-pill is-' + st + '" data-gen="go" data-k="' + esc(s.key) + '" title="' + esc(s.label + ': ' + note) + '">'
+    + '<span class="gen-ic" aria-hidden="true">' + (_GEN_IC[st === 'back' ? 'rewind' : st] || '') + '</span>'
     + '<span class="gen-lb">' + esc(s.label) + '</span>'
     + (inline ? '<span class="gen-nt">' + esc(inline) + '</span>' : '')
-    + '</button>';
+    + '</button>' + u + '</span>';
 }
 function _genCounts(run) {
-  var c = { n: 0, settled: 0, wrote: 0, lib: 0, kept: 0, fails: [], stopped: 0 };
+  var c = { n: 0, settled: 0, wrote: 0, lib: 0, kept: 0, fails: [], stopped: 0, back: 0 };
   run.steps.forEach(function (s) {
     if (s.hidden && s.state !== 'done') return;
     c.n++;
     if (_GEN_SETTLED[s.state]) c.settled++;
+
+    if (s.back) { if (!s.hidden) c.back++; return; }
     if (s.state === 'done' && !s.hidden) c.wrote++;
     if (s.state === 'lib') c.lib++;
     if (s.state === 'kept') c.kept++;
@@ -42906,6 +45989,7 @@ function _genCounts(run) {
 function _genSummary(run) {
   var c = _genCounts(run), parts = [];
   if (c.wrote) parts.push(c.wrote + ' written');
+  if (c.back) parts.push(c.back + ' put back');
   if (c.lib) parts.push(c.lib + ' from the Library');
   if (c.kept) parts.push(c.kept + ' kept as ' + (c.kept === 1 ? 'it was' : 'they were'));
   if (c.fails.length) parts.push(c.fails.length + ' failed');
@@ -42925,10 +46009,12 @@ function _genPaint(run) {
   run._painted = Date.now();
   var c = _genCounts(run);
   var any = run.wrote.length > 0;
+
+  var left = any && run.finished && !run.undone && run.wrote.some(function (t) { return _genStepLeft(run, t) > 0; });
   var cls = 'gen-run ' + (run.finished ? 'is-done' : 'is-run') + (c.fails.length && !run.undone ? ' has-fail' : '') + (run.undone ? ' is-undone' : '');
   if (p.className !== cls) p.className = cls;
   var mode = !run.finished ? (run.stopping ? 'stopping' : 'running')
-    : run.undone ? 'undone' : ('done' + (c.fails.length ? '-fail' : '') + (any ? '-wrote' : ''));
+    : run.undone ? 'undone' : ('done' + (c.fails.length ? '-fail' : '') + (any ? '-wrote' : '') + (any && !left ? '-back' : '') + (run.undoing ? '-undoing' : ''));
   if (body.getAttribute('data-mode') !== mode) {
     var x = '<button type="button" class="btn btn-ghost btn-sm gen-x" data-gen="close" aria-label="Close" title="Close">&times;</button>';
     var h = '<div class="gen-hd">';
@@ -42947,7 +46033,7 @@ function _genPaint(run) {
       h += '<span class="gen-ttl"></span><span class="gen-meta gen-sum"></span>';
       h += '<span class="gen-acts">'
         + (c.fails.length ? '<button type="button" class="btn btn-ghost btn-sm" data-gen="again" title="Ask again for what failed">' + (IC.refresh || '') + ' Ask again</button>' : '')
-        + (any ? '<button type="button" class="btn btn-ghost btn-sm" data-gen="undo" title="Put back every field it wrote that nobody has changed since">' + _GEN_IC.rewind + ' Undo</button>' : '')
+        + (left ? '<button type="button" class="btn btn-ghost btn-sm" data-gen="undo"' + (run.undoing ? ' disabled' : '') + ' title="Put back every field it wrote that nobody has changed since">' + _GEN_IC.rewind + ' Undo</button>' : '')
         + x + '</span>';
     }
     h += '</div><div class="gen-bar" aria-hidden="true"><i></i></div><div class="gen-pills"></div><div class="gen-errs"></div>';
@@ -42981,7 +46067,7 @@ function _genPaint(run) {
     want.forEach(function (s, i) {
       var html = _genPill(run, s);
       var cur = box.children[i];
-      if (cur && cur.getAttribute('data-k') === s.key) {
+      if (cur && cur.getAttribute('data-gk') === s.key) {
         if (run._pills[s.key] !== html) box.replaceChild(_genNode(html), cur);
       } else {
         box.insertBefore(_genNode(html), cur || null);
@@ -43005,7 +46091,7 @@ function _genLibMatch() {
   return (S.data.library || []).find(function (k) { return (k.title || '').trim().toLowerCase() === t; }) || null;
 }
 var _GEN_LIB_IDS = { severity: ['mSv'], cvss: ['mCv', 'mCvVec', 'cvssPickBtn', 'mSv'], cwe: ['mCw'], category: ['mCat'], description: ['mDe'],
-  remediation: ['mRe'], references: ['mRf'], assets: ['mAs'], evidence: ['evidenceEditor'] };
+  remediation: ['mRe'], references: ['mRf'], assets: ['mAs'], evidence: ['evidenceEditor'], attack: ['mAtt'] };
 function _genFindingSteps(ed, imgs) {
   var v = function (id) { var e = document.getElementById(id); return e ? String(e.value || '').trim() : ''; };
   var on = function (id) { return !!document.getElementById(id); };
@@ -43041,8 +46127,9 @@ function _genFindingSteps(ed, imgs) {
         if (r && r.missed) throw new Error(((n || nb || nn) ? _evDoneWords(r.lined || 0, bw, nn, r.capped || 0) + ', but ' : '') + r.missWords);
 
         var _bx = (r && r.boxed) ? _evBoxedWords(r.boxed, r.boxedBlocks || 1) : '';
-        if (!n && !nb && !nn) { if (_bx) { o.run.notes.push(_bx); return _bx; } return null; }
-        var said = _evDoneWords(r.lined != null ? r.lined : n, bw, nn, r.capped != null ? r.capped : undefined) + (_bx ? '; ' + _bx : '') + (r && r.notesWhy ? '; ' + r.notesWhy : '')
+        var _mvSaid = (r && r.apx && r.apx.moved) ? r.apx.said : '';
+        if (!n && !nb && !nn) { var _s0 = [_bx, _mvSaid].filter(Boolean).join('; '); if (_s0) { o.run.notes.push(_s0); return _s0; } return null; }
+        var said = _evDoneWords(r.lined != null ? r.lined : n, bw, nn, r.capped != null ? r.capped : undefined) + (_bx ? '; ' + _bx : '') + (_mvSaid ? '; ' + _mvSaid : '') + (r && r.notesWhy ? '; ' + r.notesWhy : '')
           + (r && r.notesLeft && r.notesLeft.length ? '; ' + _evLeftWords(r.notesLeft) : '')
           + (r && r.unsure ? '; ' + _evUnsureWords(r.unsure) : '');
         o.run.notes.push(said);
@@ -43117,11 +46204,13 @@ function _genFindingSaid(run) {
   var c = _genCounts(run), secs = _genSecs(run.t1 - run.t0);
   var undo = run.wrote.length ? function () { _genUndoSaid(run); } : undefined;
   var n = c.wrote + c.lib;
-  if (run.stopping) { toast(n ? 'Stopped after ' + secs + ': ' + n + ' field' + (n === 1 ? '' : 's') + ' written. Click here to undo.' : 'Stopped: nothing was written', 'info', 8000, undo); return; }
+
+  var saved = run.cfg.page ? ' and saved' : '';
+  if (run.stopping) { toast(n ? 'Stopped after ' + secs + ': ' + n + ' field' + (n === 1 ? '' : 's') + ' written' + saved + '. Click here to undo.' : 'Stopped: nothing was written', 'info', 8000, undo); return; }
   if (run.again) { _genAgainSaid(run, secs, undo); return; }
   if (!n && c.fails.length) { toast('Nothing was generated: ' + c.fails[0].label + ' failed (' + c.fails[0].note + ')', 'error'); return; }
   if (!n) { toast('Nothing to generate: every field already has something in it', 'info'); return; }
-  var msg = 'Finding generated from evidence in ' + secs;
+  var msg = 'Finding generated from evidence' + saved + ' in ' + secs;
   if (c.fails.length) msg += ', except ' + _genList(c.fails.map(function (s) { return s.label; }));
   if (notes.length) msg += (c.fails.length ? '; ' : ', ') + notes.join('; ');
   toast(msg + '. Click here to undo.', c.fails.length ? 'info' : 'success', 10000, undo);
@@ -45795,7 +48884,7 @@ function renderSettings__portal() {
         _pi += '<p style="font-size:0.68rem;color:var(--gray);margin-top:3px">Rewrite this and the field stops being a ' + esc(d.label) + ': Generate returns whatever your prompt asks for and writes it as plain text, with no format check. Its DOCX placeholder stays <code>{' + esc(_docxTokenForField(d.key).replace(/[{}]/g, '')) + '}</code>, so put that where you want the value to appear.</p>';
       }
       _pi += _isEv
-        ? '<p style="font-size:0.68rem;color:var(--gray);margin-top:3px">Controls the line AI writes above each screenshot and each request, block of code, output or table, the caption beneath each screenshot, and how the tester\'s own notes in the evidence are tidied into report sentences, leaving out what is not about the finding (a side issue, a to-do) and anything not confirmed (a question, a guess), from Explain evidence on a finding and from Generate all from evidence. Use this to match a client\'s house style, or take out the sentences about the notes to leave them as written. A line or caption somebody changes on a finding is theirs, and is kept when AI is asked again.</p>'
+        ? '<p style="font-size:0.68rem;color:var(--gray);margin-top:3px">Controls the line AI writes above each screenshot and each request, block of code, output or table, the caption beneath each screenshot, and how the tester\'s own notes in the evidence are tidied into report sentences, leaving out what is not about the finding (a side issue, a to-do) and anything not confirmed (a question, a guess), from Generate evidence on a finding and from Generate all from evidence. It is also the house style of the evidence AI writes for findings made from an imported file or a scan. Use this to match a client\'s house style, or take out the sentences about the notes to leave them as written. A line or caption somebody changes on a finding is theirs, and is kept when AI is asked again.</p>'
         : '<p style="font-size:0.68rem;color:var(--gray);margin-top:3px">Controls how AI writes the ' + esc(d.label) + ' field. Use this to match a client\'s house style.</p>';
 
       _pi += _ffContractNote(d.key);
@@ -45852,6 +48941,20 @@ function renderSettings__portal() {
   h += '</div>';
   h += '</div>';
   }
+
+  var _apxTool = (typeof REPORTER !== 'undefined' && REPORTER);
+  h += '<div style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--border)">';
+  h += '<div style="font-size:0.8rem;font-weight:700;margin-bottom:0.3rem">Long evidence to an appendix</div>';
+  h += '<div class="ff-apx-lim"><span>A table or list longer than</span>'
+    + '<input type="number" class="form-input" id="ff_apx_rows" min="0" max="1000" step="1" value="' + _apxRowsLimit() + '" aria-label="Rows or items">'
+    + '<span>rows or items</span></div>';
+  h += '<div class="ff-apx-lim"><span>An output longer than</span>'
+    + '<input type="number" class="form-input" id="ff_apx_lines" min="0" max="100000" step="1" value="' + _apxLinesLimit() + '" aria-label="Lines">'
+    + '<span>lines</span></div>';
+  h += '<p class="hint" style="margin:0.3rem 0 0">Once Generate evidence has done its work, each one longer than these goes to an appendix of the engagement' + (_apxTool ? '' : ' (and a table does in the findings an import or a scan makes)') + ', the finding keeping what Appendices and Figures below says (its first rows, items or lines, or none) with a link to it, and Undo putting them back. An output is a request, a response or a tool\u2019s output. 0 moves none of that kind. Instructions beside Generate evidence can send something to an appendix, or keep it here, whatever its length. To appendix, in any finding\u2019s evidence, moves whatever is chosen.</p>';
+  h += '</div>';
+
+  h += _ffNamesHtml();
 
   h += '<div style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--border)">';
   h += '<div style="font-size:0.8rem;font-weight:700;margin-bottom:0.3rem">Exporting findings</div>';
@@ -46999,6 +50102,25 @@ function renderSettings__portal() {
       + 'afterwards. With this off, use <strong>Generate with AI</strong> on the scan itself.</p>';
   }
 
+  var _sgrE2e = typeof E2E !== 'undefined' && E2E && E2E.on;
+  var _sgrDb = _dbAtLeast(_SGR_SINCE);
+  var _sgrOk = _aiOn && !_sgrE2e && _sgrDb;
+  h += '<label class="tpl-toggle" style="margin-top:0.25rem;display:inline-flex;align-items:center;gap:0.5rem'
+    + (_sgrOk ? '' : ';opacity:0.55;cursor:not-allowed') + '"' + (_sgrOk ? '' : ' title="' + (_sgrE2e ? 'Not while your work is encrypted end to end' : !_aiOn ? 'Set up an AI provider first' : 'Update your database first') + '"') + '>'
+    + '<input type="checkbox" id="set_scan_ai_group"' + ((s.scan_ai_group && _sgrOk) ? ' checked' : '') + (_sgrOk ? '' : ' disabled') + '>'
+    + '<span class="tpl-toggle-track"></span>'
+    + '<span style="font-size:0.85rem">Group each scan\u2019s results into report findings with AI</span></label>';
+  h += '<p class="small-text" style="color:var(--gray);margin:0.35rem 0 0.75rem">'
+    + (_sgrE2e ? 'Not available while your work is encrypted end to end: a scan is imported issue by issue. '
+       : !_aiOn ? 'It needs AI, set up under <a onclick="S.settingsTab=\'ai\';render()" style="color:var(--accent);cursor:pointer;font-weight:600">Settings, AI</a>. '
+       : !_sgrDb ? 'Update your database first: grouping scans needs the latest database update. ' : '')
+    + 'As a scan finishes, its results are grouped into findings as a report presents them (software out of date in one, '
+    + 'weaknesses in how TLS is set up in another), each written up in your house style: its evidence in the form that shows it best, '
+    + 'and every field you have AI write, each with its own instructions from Settings, Findings. Your own '
+    + 'collectors group a scan as it finishes; one from a customer\u2019s collector is grouped once someone here has Pental open. '
+    + 'A later scan adds to the same findings and marks fixed, with the date, what it no longer finds. '
+    + 'Your instructions for grouping are under <a onclick="S.settingsTab=\'findings\';render()" style="color:var(--accent);cursor:pointer;font-weight:600">Settings, Findings</a>.</p>';
+
   var _dfSum = (window._SM_DEFAULT_PROMPTS || {}).scan_exec_summary || '';
   var _dfFind = (window._SM_DEFAULT_PROMPTS || {}).scan_finding || '';
   h += '<div class="form-group" style="margin-top:0.75rem"><label>Executive summary instructions</label>';
@@ -47750,8 +50872,9 @@ function renderSettings__portal() {
       setTimeout(_loadPasswordAdoption, 60);
     }
 
+    h += _rpMfaSwitchHtml();
     h += '<div style="font-size:0.86rem;font-weight:700;color:var(--text);margin-bottom:0.35rem">MFA Methods</div>';
-    h += '<div style="font-size:0.78rem;color:var(--gray);margin-bottom:0.75rem;line-height:1.55">Pental Report enforces MFA for every account. Choose which methods users can enrol with, and whether one method is enough or both are required.</div>';
+    h += '<div style="font-size:0.78rem;color:var(--gray);margin-bottom:0.75rem;line-height:1.55">Choose which methods people can set up, and whether one method is enough or both are required.</div>';
 
     h += '<div style="font-size:0.78rem;font-weight:600;color:var(--text);margin-bottom:0.4rem">Allowed methods</div>';
     h += '<div style="display:flex;flex-direction:column;gap:0.4rem;margin-bottom:0.85rem">';
@@ -47785,7 +50908,7 @@ function renderSettings__portal() {
   } else {
     h += '<div style="margin-top:0.75rem;padding:0.6rem 0.8rem;border-radius:6px;background:rgba(var(--accent-rgb),0.06);border:1px solid rgba(var(--accent-rgb),0.12)">';
     h += '<div style="font-size:0.82rem;font-weight:600;color:var(--text)">MFA Enforcement</div>';
-    h += '<div style="font-size:0.78rem;color:var(--gray);margin-top:0.2rem">MFA is required for all accounts. Allowed methods and the required-methods policy are configured by your administrator.</div>';
+    h += '<div style="font-size:0.78rem;color:var(--gray);margin-top:0.2rem">' + esc(_rpMfaEnforcementWords()) + ' Allowed methods and the required-methods policy are configured by your administrator.</div>';
     h += '</div>';
   }
   h += '<div style="font-size:0.68rem;color:var(--gray);margin-top:0.75rem;margin-bottom:0.35rem">Saves the fields above.</div>';
@@ -49085,6 +52208,26 @@ function _aiRateLimitWaitMs(err, attempt) {
 
   return waitMs;
 }
+var _AI_MOST_OUT = 32768;
+function _aiMostOut(s) {
+  s = s || {};
+  if (s.ai_provider === 'custom') return Math.min(parseInt(s.ai_custom_max_tokens, 10) || 2000, _AI_MOST_OUT);
+  return _AI_MOST_OUT;
+}
+function _aiAskedOut(s, maxTokens) {
+  s = s || {};
+  var base = s.ai_provider === 'custom' ? (parseInt(s.ai_custom_max_tokens, 10) || 2000) : 4096;
+  return Math.min(parseInt(maxTokens, 10) || base, _AI_MOST_OUT);
+}
+function _aiOutCapFrom(err) {
+  var m = String((err && err.message) || '');
+  if (!(err && (err.status === 400 || err.providerStatus === 400))) return 0;
+  if (!/max_tokens|max_completion_tokens|output tokens|completion tokens|num_predict/i.test(m)) return 0;
+  m = m.replace(/\b(?:returned|status|HTTP|error)\s*:?\s*\d{3}\b/gi, ' ').replace(/\d{7,}/g, ' ');
+  var best = 0;
+  (m.match(/\d{3,6}/g) || []).forEach(function (x) { var n = +x; if (n >= 256 && (!best || n < best)) best = n; });
+  return best;
+}
 async function callAI(userMessage, systemPrompt, maxTokens, opts) {
   opts = opts || {};
 
@@ -49107,6 +52250,12 @@ async function callAI(userMessage, systemPrompt, maxTokens, opts) {
       try {
         return _aixUnquote(await _callAIOnce(userMessage, systemPrompt, maxTokens, opts), _unq);
       } catch (err) {
+
+        if (err && err.truncated && err.byAsk && !opts._grown && !(_sig && _sig.aborted) && _aiAskedOut(_s, maxTokens) < _AI_MOST_OUT) {
+          maxTokens = _AI_MOST_OUT;
+          opts = Object.assign({}, opts, { _grown: true });
+          continue;
+        }
         var _ir = (_r < 2 && !(_sig && _sig.aborted)) ? _aiImageRetry(err, opts) : null;
         if (!_ir) throw err;
         opts = Object.assign({}, opts, _ir);
@@ -49125,6 +52274,25 @@ async function callAI(userMessage, systemPrompt, maxTokens, opts) {
       if (_ir2) {
         opts = Object.assign({}, opts, _ir2);
         continue;
+      }
+
+      if (err && err.truncated && !opts._grown && !(_sig && _sig.aborted)) {
+        var _most = _aiMostOut(_s);
+        if (_aiAskedOut(_s, maxTokens) < _most) {
+          maxTokens = _most;
+          opts = Object.assign({}, opts, { _grown: true });
+          continue;
+        }
+      }
+      var _capN = (opts._capTries || 0) < 2 ? _aiOutCapFrom(err) : 0;
+      if (_capN) {
+        var _askedN = _aiAskedOut(_s, maxTokens);
+        var _nextN = _capN < _askedN ? _capN : _capN - 4096;
+        if (_nextN >= 256 && _nextN < _askedN) {
+          maxTokens = _nextN;
+          opts = Object.assign({}, opts, { _capTries: (opts._capTries || 0) + 1 });
+          continue;
+        }
       }
       _lastErr = err;
       if (_sig && _sig.aborted) throw err;
@@ -49335,7 +52503,7 @@ async function _callAIOnce(userMessage, systemPrompt, maxTokens, opts) {
           var _le1 = new Error(_forPeople('The local model filled its reply budget and the result was cut off before it finished. Raise the context window (num_ctx) in Settings > AI if your GPU has room. If this is a reasoning model whose thinking cannot be turned off on your Ollama build, its <think> output is consuming the budget: updating Ollama usually restores think control.'));
           _le1._ollamaFinal = true;
 
-          _le1.truncated = true; _le1.partial = streamed;
+          _le1.truncated = true; _le1.partial = streamed; _le1.byAsk = _numPredict >= maxT;
           throw _le1;
         }
         return streamed || null;
@@ -49348,7 +52516,7 @@ async function _callAIOnce(userMessage, systemPrompt, maxTokens, opts) {
         if (nData.done_reason === 'length') {
           var _le2 = new Error(_forPeople('The local model filled its reply budget and the result was cut off before it finished. Raise the context window (num_ctx) in Settings > AI if your GPU has room. If this is a reasoning model whose thinking cannot be turned off on your Ollama build, its <think> output is consuming the budget: updating Ollama usually restores think control.'));
           _le2._ollamaFinal = true;
-          _le2.truncated = true; _le2.partial = ntext;
+          _le2.truncated = true; _le2.partial = ntext; _le2.byAsk = _numPredict >= maxT;
           throw _le2;
         }
         return ntext || null;
@@ -49427,7 +52595,7 @@ async function _callAIOnce(userMessage, systemPrompt, maxTokens, opts) {
         }
         if (vfinish === 'length') {
           var _le3 = new Error(_forPeople('The local model ran out of output space and the result was cut off. Raise the context window (num_ctx) in Settings, AI, if your GPU has room, or generate a smaller part at a time.'));
-          _le3.truncated = true; _le3.partial = vacc.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+          _le3.truncated = true; _le3.partial = vacc.replace(/<think>[\s\S]*?<\/think>/g, '').trim(); _le3.byAsk = true;
           throw _le3;
         }
         return vacc.replace(/<think>[\s\S]*?<\/think>/g, '').trim() || null;
@@ -49438,7 +52606,7 @@ async function _callAIOnce(userMessage, systemPrompt, maxTokens, opts) {
         text = (oData.choices[0].message && oData.choices[0].message.content) || oData.choices[0].text || '';
         if (oData.choices[0].finish_reason === 'length') {
           var _le4 = new Error(_forPeople('The local model ran out of output space and the result was cut off. Raise the context window (num_ctx) in Settings, AI, if your GPU has room, or generate a smaller part at a time.'));
-          _le4.truncated = true; _le4.partial = String(text || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+          _le4.truncated = true; _le4.partial = String(text || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim(); _le4.byAsk = true;
           throw _le4;
         }
       }
@@ -52856,7 +56024,7 @@ var _CO_TABLE_DATA = {
 };
 var _CO_SECTION_DIALOGS = {
   exec: 'exec_summary', execsummary: 'exec_summary', retestsummary: 'retest_summary',
-  customsummary: 'summary_sections', loaeditor: 'loa_text', editscope: 'scope',
+  customsummary: 'summary_sections', phasesum: 'summary_sections', loaeditor: 'loa_text', editscope: 'scope',
   editphasescope: 'phases', editcaveats: 'caveats', editnotes: 'notes', addartifact: 'artifacts',
   appendix: 'appendices', addPhase: 'phases', 'phase-edit': 'phases',
   renameassessment: 'name', assigntester: 'lead_id', credentials: 'credentials_status',
@@ -53151,6 +56319,7 @@ function renderModal() {
     case 'payment': content = renderPaymentModal(); break;
     case 'payment-all': content = renderPaymentAllModal(); break;
     case 'co-conflict': return '<div class="modal-overlay"><div class="modal-content">' + renderCoConflictModal() + '</div></div>';
+    case 'apx-view': return '<div class="modal-overlay" onclick="if(event.target===this)closeM()"><div class="modal-content apx-modal">' + renderApxViewModal() + '</div></div>';
     case 'phase-edit': return '<div class="modal-overlay"><div class="modal-content">' + renderPhaseEditModal() + '</div></div>';
     case 'collector-token': return '<div class="modal-overlay"><div class="modal-content">' + renderCollectorTokenModal() + '</div></div>';
     case 'push-token': return '<div class="modal-overlay"><div class="modal-content">' + renderPushTokenModal() + '</div></div>';
@@ -53204,6 +56373,7 @@ function renderModal() {
     case 'withdrawdelivery': content = renderWithdrawDeliveryModal(); break;
     case 'exec': case 'execsummary': content = renderExecSummaryModal(); break;
     case 'retestsummary': content = renderRetestSummaryModal(); break;
+    case 'phasesum': content = renderPhaseSumModal(); break;
     case 'customsummary': content = renderCustomSummaryModal(); break;
     case 'loaeditor': content = renderLoaEditorModal(); break;
     case 'editscope': content = renderEditScopeModal(); break;
@@ -53226,7 +56396,7 @@ function renderModal() {
     default: content = '<p>Unknown modal type</p>';
   }
 
-  var _mCls = ({ exec: ' modal-xl', execsummary: ' modal-xl', retestsummary: ' modal-xl', customsummary: ' modal-xl',
+  var _mCls = ({ exec: ' modal-xl', execsummary: ' modal-xl', retestsummary: ' modal-xl', customsummary: ' modal-xl', phasesum: ' modal-xl',
     appendix: ' modal-xl', editnotes: ' modal-xl', editcaveats: ' modal-xl',
     editscope: ' modal-lg', editphasescope: ' modal-lg', loaeditor: ' modal-lg', proposal: ' modal-lg', proposalview: ' modal-lg', invoice: ' modal-lg' })[m.type] || '';
   return '<div class="modal-overlay"><div class="modal-content' + _mCls + '">' + content + '</div></div>';
@@ -55779,7 +58949,9 @@ function renderExecSummaryModal() {
   if (_execContent && !_execContent.includes('<') && !_execContent.includes('>')) {
     _execContent = '<p>' + esc(_execContent).replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
   }
-  h += '<div class="form-group"><label>Summary</label>';
+
+  var _esPh = _phSumMode(a, 'es') !== 'one';
+  h += '<div class="form-group"><label>' + (_esPh ? 'For the engagement as a whole' : 'Summary') + '</label>';
   h += '<div class="editor-toolbar">';
   h += '<button type="button" onmousedown="event.preventDefault();execCmd(\'bold\')" title="Bold"><b>B</b></button>';
   h += '<button type="button" onmousedown="event.preventDefault();execCmd(\'italic\')" title="Italic"><i>I</i></button>';
@@ -55802,8 +58974,9 @@ function renderExecSummaryModal() {
   h += '<button type="button" onmousedown="event.preventDefault();insertPageBreak(\'execSummaryEditor\')" title="Page break (starts a new page in the report)">&#8863; Page break</button>';
   h += '<button type="button" onmousedown="event.preventDefault();clearFormatCmd()" title="Clear formatting">T&#8617;</button>';
   h += '</div>';
-  h += '<div class="rich-editor" id="execSummaryEditor" contenteditable="true" style="min-height:300px" data-placeholder="Write executive summary...">' + _execContent + '</div>';
+  h += '<div class="rich-editor" id="execSummaryEditor" contenteditable="true" style="min-height:' + (_esPh ? 200 : 300) + 'px" data-placeholder="Write executive summary...">' + _execContent + '</div>';
   h += '</div>';
+  if (_esPh) h += _phSumEditorsHtml(a, 'es');
   h += '</div>';
   h += _mFooter('saveExecSummary(\'' + a.id + '\')', { draft: [a.id, 'executive_summary'] });
   return h;
@@ -55830,7 +59003,9 @@ function renderRetestSummaryModal() {
     h += '<a onclick="closeM();S.settingsTab=\'ai\';nav(\'settings\')" style="font-size:0.78rem;color:var(--accent);cursor:pointer;white-space:nowrap;margin-left:1rem;font-weight:600">Set up AI →</a>';
     h += '</div>';
   }
-  h += '<div class="form-group"><label>Summary</label>';
+
+  var _rsPh = _phSumMode(a, 'rs') !== 'one';
+  h += '<div class="form-group"><label>' + (_rsPh ? 'For the engagement as a whole' : 'Summary') + '</label>';
   h += '<div class="editor-toolbar">';
   h += '<button type="button" onmousedown="event.preventDefault();execCmd(\'bold\')" title="Bold"><b>B</b></button>';
   h += '<button type="button" onmousedown="event.preventDefault();execCmd(\'italic\')" title="Italic"><i>I</i></button>';
@@ -55853,8 +59028,9 @@ function renderRetestSummaryModal() {
   h += '<button type="button" onmousedown="event.preventDefault();insertPageBreak(\'retestSummaryEditor\')" title="Page break (starts a new page in the report)">&#8863; Page break</button>';
   h += '<button type="button" onmousedown="event.preventDefault();clearFormatCmd()" title="Clear formatting">T&#8617;</button>';
   h += '</div>';
-  h += '<div class="rich-editor" id="retestSummaryEditor" contenteditable="true" style="min-height:300px" data-placeholder="Write retest summary...">' + content + '</div>';
+  h += '<div class="rich-editor" id="retestSummaryEditor" contenteditable="true" style="min-height:' + (_rsPh ? 200 : 300) + 'px" data-placeholder="Write retest summary...">' + content + '</div>';
   h += '</div>';
+  if (_rsPh) h += _phSumEditorsHtml(a, 'rs');
   h += '</div>';
   h += _mFooter('saveRetestSummary(\'' + a.id + '\')', { draft: [a.id, 'retest_summary'] });
   return h;
@@ -56174,12 +59350,15 @@ async function saveRetestSummary(assessmentId) {
 
   if (summary.replace(/<br\s*\/?>/g,'').replace(/&nbsp;/g,'').replace(/<[^>]+>/g,'').trim() === '') summary = '';
   if (summary) summary = await uploadHtmlImages(summary, assessmentId, 'retest_summary', 'retest_summary');
+  var _phV = await _phSumCollect(assessmentId);
   try {
-
-    if (!(await _coGuardedSave('assessments', assessmentId, { retest_summary: summary || null },
-      function () { return saveRetestSummary(assessmentId); }))) return;
     var idx = (S.data.assessments || []).findIndex(function(x) { return x.id === assessmentId; });
-    if (idx >= 0) S.data.assessments[idx].retest_summary = summary;
+    var _rsPay = { retest_summary: summary || null };
+    if (_phV) _rsPay.summary_sections = _phSumMerged(idx >= 0 ? S.data.assessments[idx] : null, _phV);
+
+    if (!(await _coGuardedSave('assessments', assessmentId, _rsPay,
+      function () { return saveRetestSummary(assessmentId); }))) return;
+    if (idx >= 0) { S.data.assessments[idx].retest_summary = summary; if (_phV) S.data.assessments[idx].summary_sections = _rsPay.summary_sections; }
     if (_mStayDone()) return;
     var _sd = await _secMark(assessmentId, 'retest_summary');
     toast('Retest summary saved' + _sd, 'success');
@@ -56187,6 +59366,205 @@ async function saveRetestSummary(assessmentId) {
   } catch (e) { toast('Error: ' + e.message, 'error'); }
 } finally { _hideLoading(); }
 }
+function _phSumEditorsHtml(a, kind, only) {
+  var list = _phSumPhases(a, kind);
+  if (only) list = list.filter(function (x) { return x.key === only; });
+  if (!list.length) return '';
+  var ai = _aiEnabled(), lab = _phSumLabel(kind), low = lab.toLowerCase();
+  var h = '<div class="phs-eds' + (only ? ' phs-eds-solo' : '') + '" data-phs-kind="' + kind + '">';
+  if (!only) {
+    var mode = _phSumMode(a, kind), whole = _rtIn(a, function () { return _phSumCfg()[kind + '_whole']; });
+    h += '<div class="phs-eds-head"><span class="phs-eds-t">Each Phase’s Own</span>';
+    if (ai) h += _aixWrap('<button type="button" class="btn btn-secondary btn-sm" id="phsAll_' + kind + '" onclick="generateEveryPhaseSummary(\'' + esc(a.id) + '\',\'' + kind + '\')">'
+      + IC.ai + ' Generate every phase</button>', 'phs:' + kind, 'phsAll_' + kind, 'every phase’s ' + low, { cls: 'btn btn-secondary btn-sm' });
+    h += '</div><p class="hint phs-eds-hint">' + (mode === 'inside'
+      ? 'Each is a part of the ' + esc(low) + ', under its phase’s name, ' + (whole === 'last' ? 'before' : 'after') + ' the engagement’s own.'
+      : 'Each goes with its phase’s findings.') + ' Where they go is your report’s, under Settings, Assessment Sections.</p>';
+  }
+  list.forEach(function (x) {
+    var id = 'phSumEd_' + kind + '_' + x.i, bid = 'phSumGen_' + kind + '_' + x.i;
+    var t = _rewriteStorageSrc(_phSumText(a, x));
+    if (t && t.indexOf('<') < 0) t = '<p>' + esc(t).replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
+    h += '<div class="form-group phs-ed-group"><div class="phs-ed-head"><span class="phs-ed-name">' + esc(only ? 'Summary' : x.name) + '</span>';
+    if (ai) h += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="' + bid + '" onclick="generatePhaseSummary(\'' + esc(a.id) + '\',' + jsArg(x.key) + ')">'
+      + IC.ai + ' Generate</button>', 'phs:' + x.key, bid, x.name + '’s ' + low, {});
+    h += '</div>' + buildEditorToolbar(id)
+      + '<div class="rich-editor phs-ed" id="' + id + '" contenteditable="true" style="min-height:' + (only ? 300 : 150) + 'px"'
+      + ' data-phs-key="' + esc(x.key) + '" data-phs-alt="' + esc(x.alt) + '" data-phs-btn="' + bid + '"'
+      + ' aria-label="' + esc(x.name + '’s ' + low) + '" data-placeholder="' + esc('Write ' + x.name + '’s ' + low + '...') + '">' + t + '</div></div>';
+  });
+  return h + '</div>';
+}
+function renderPhaseSumModal() {
+  var m = S.modal;
+  var a = (S.data.assessments || []).find(function (x) { return x.id === m.id; });
+  var key = String((m && m.extra) || ''), kind = key.slice(0, 2) === 'rs' ? 'rs' : 'es';
+  var x = a ? _phSumPhases(a, kind).filter(function (y) { return y.key === key; })[0] : null;
+  var h = '<div class="modal-header"><h2 class="modal-title">' + esc(_phSumLabel(kind) + (x ? ': ' + x.name : '')) + '</h2><button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
+  if (!a || !x) return h + '<div class="modal-body"><p>' + (a ? 'This phase is no longer on the engagement, or its summaries go with the engagement’s own now.' : 'Assessment not found') + '</p></div>';
+  h += '<div class="modal-body">';
+  if (!_aiEnabled()) h += '<div class="phs-noai">AI generation is not configured. <a onclick="closeM();S.settingsTab=\'ai\';nav(\'settings\')">Set up AI</a></div>';
+  h += _phSumEditorsHtml(a, kind, key) + '</div>';
+  h += _mFooter('savePhaseSummary(\'' + esc(a.id) + '\',' + jsArg(key) + ')', { draft: [a.id, _phSumSec(kind)] });
+  return h;
+}
+async function _phSumCollect(aid) {
+  var eds = Array.prototype.slice.call(document.querySelectorAll('.modal-overlay .phs-ed[data-phs-key]'));
+  if (!eds.length) return null;
+  var out = {}, alts = [];
+  for (var i = 0; i < eds.length; i++) {
+    var el = eds[i], key = el.getAttribute('data-phs-key') || '', alt = el.getAttribute('data-phs-alt') || '';
+    if (!/^(es|rs):/.test(key)) continue;
+    var html = String(el.innerHTML || '').trim();
+    if (!_phSumHas(html)) html = '';
+    if (html) html = await uploadHtmlImages(html, aid, 'summary_' + key.replace(/[^A-Za-z0-9_-]+/g, '_'), 'summary_sections');
+    out[key] = html;
+    if (alt && alt !== key) alts.push(alt);
+  }
+  alts.forEach(function (k) { if (!Object.prototype.hasOwnProperty.call(out, k)) out[k] = ''; });
+  return out;
+}
+function _phSumMerged(row, vals) {
+  var cur = _coCopy(_smParseVals(row) || {});
+  if (!cur || typeof cur !== 'object' || Array.isArray(cur)) cur = {};
+  Object.keys(vals || {}).forEach(function (k) { if (vals[k]) cur[k] = vals[k]; else delete cur[k]; });
+  return cur;
+}
+async function savePhaseSummary(aid, key) {
+  _showLoading();
+  try {
+    var kind = String(key).slice(0, 2) === 'rs' ? 'rs' : 'es';
+    var vals = await _phSumCollect(aid);
+    if (!vals) return;
+    var idx = (S.data.assessments || []).findIndex(function (x) { return x.id === aid; });
+    var merged = _phSumMerged(idx >= 0 ? S.data.assessments[idx] : null, vals);
+    try {
+      if (!(await _coGuardedSave('assessments', aid, { summary_sections: merged },
+        function () { return savePhaseSummary(aid, key); }))) return;
+      if (idx >= 0) S.data.assessments[idx].summary_sections = merged;
+      if (_mStayDone()) return;
+      var _sd = await _secMark(aid, _phSumSec(kind));
+      toast(_phSumLabel(kind) + ' saved' + _sd, 'success');
+      closeM(); refreshAndStay();
+    } catch (e) { toast('Error: ' + (e.message || e), 'error'); }
+  } finally { _hideLoading(); }
+}
+window.savePhaseSummary = savePhaseSummary;
+var _PHS_SAY = {
+  es: 'THIS IS ONE PHASE\'S OWN EXECUTIVE SUMMARY. The engagement had more than one phase, and each has a summary of its own beside the engagement\'s. '
+    + 'Write the summary of the phase named below alone, from its scope and its findings, with the engagement\'s details as its context: do not summarise the other phases or the engagement as a whole. '
+    + 'Do not give it a title or the phase\'s name as a heading: the report prints the phase\'s name above it. Where your other instructions speak of the engagement, apply them to this phase.',
+  rs: 'THIS IS ONE PHASE\'S OWN RETEST SUMMARY. The engagement had more than one phase, and each has a retest summary of its own beside the engagement\'s. '
+    + 'Write the retest summary of the phase named below alone, from its findings and what their retests found: do not summarise the other phases or the engagement as a whole. '
+    + 'Do not give it a title or the phase\'s name as a heading: the report prints the phase\'s name above it. Where your other instructions speak of the engagement, apply them to this phase.'
+};
+function _phSumFindings(a, x) {
+  var t = x.ph.type || 'Assessment';
+  return (S.data.findings || []).filter(function (f) { return f.assessment_id === a.id && f.phase === t; });
+}
+function _phSumAsk(a, kind, x) {
+  var client = (S.data.clients || []).find(function (c) { return c.id === a.client_id; });
+  var st = S.data.settings || {};
+  var companyName = st.company_name || 'The consultancy', clientName = client ? client.name : 'the organisation';
+  var findings = _phSumFindings(a, x).sort(_findingCmp);
+  var all = _getPhases(a) || [];
+  var others = all.filter(function (p, i) { return i !== x.i; }).map(function (p) { return _phSumName(p); });
+  var days = parseFloat(x.ph.test_days) || 0;
+  var head = 'Consultancy: ' + companyName + '\nClient: ' + clientName + '\nAssessment: ' + (a.name || _displayType(a) || 'Security Assessment')
+    + '\nType: ' + (_displayType(a) || 'Penetration Test') + '\nPeriod: ' + fmtDate(a.start_date) + ' to ' + fmtDate(a.end_date)
+    + '\nThis phase: ' + x.name + (days ? ' (' + days + ' day' + (days === 1 ? '' : 's') + ')' : '')
+    + (others.length ? '\nThe engagement\'s other phases: ' + others.join('; ') : '');
+  var psc = x.ph.scope ? _aiEditorText(String(x.ph.scope), '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim() : '';
+  if (kind === 'rs') {
+    var n = { remediated: 0, part_remediated: 0, open: 0 };
+    findings.forEach(function (f) { if (f.status === 'remediated') n.remediated++; else if (f.status === 'part_remediated') n.part_remediated++; else if (f.status === 'open' || f.status === 'accepted') n.open++; });
+    var parts = [];
+    if (n.remediated) parts.push(n.remediated + ' remediated');
+    if (n.part_remediated) parts.push(n.part_remediated + ' partially remediated');
+    if (n.open) parts.push(n.open + ' open');
+    var um = head + '\nFindings in this phase: ' + findings.length + (parts.length ? ' (' + parts.join(', ') + ')' : '');
+    um += '\n\nThis phase\'s findings:\n' + (findings.length ? _aiFindingLines(findings, 40000, { status: true, fields: ['retest_results', 'description'], hosts: false }) : 'None: no finding was recorded in this phase.');
+    return [um, _smPromptFor('retest_summary') + '\n\n' + _PHS_SAY.rs + '\n\n' + _AI_REPLY_CONTRACTS.summary];
+  }
+  var cnt = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, fixed = 0;
+  findings.forEach(function (f) {
+    var sv = String(f.severity || 'info').toLowerCase();
+    if (cnt[sv] !== undefined) cnt[sv]++;
+    if (String(f.status || '').toLowerCase() === 'remediated') fixed++;
+  });
+  var sev = ['critical', 'high', 'medium', 'low', 'info'].filter(function (k) { return cnt[k]; })
+    .map(function (k) { return cnt[k] + ' ' + (k === 'info' ? 'informational' : k); }).join(', ') || 'none';
+  var um2 = head + '\nFindings in this phase: ' + findings.length + ' (' + sev + ')' + (fixed ? ', of which ' + fixed + ' already remediated' : '');
+  var rt = _esRetestLine(_esRetestTally(findings), findings.length);
+  if (rt) um2 += '\nRetest: ' + rt;
+  um2 += _aiEngagementLines(a, client, { noScope: true });
+  if (psc) um2 += '\n\nScope of this phase:\n' + _aiCut(psc, 1500);
+  var notes = a.notes || '';
+  if (!notes) { var pr = (S.data.proposals || []).find(function (p) { return p.id === a.proposal_id || p.assessment_id === a.id; }); if (pr) notes = pr.notes || ''; }
+  if (notes) um2 += '\n\nBackground notes (internal, for context only):\n' + _aiEditorText(notes, '').substring(0, 2000);
+  um2 += _esReportSections(a);
+  var own = _aiFindingCustomFields().map(function (cf) { return String(cf.label).slice(0, 60); });
+  if (own.length) um2 += '\n\nThe firm\'s own finding fields, given with each finding below where it has a value: ' + own.join(', ') + '. They are the tester\'s own account of each finding\'s context and risk.';
+  um2 += '\n\nThis phase\'s findings, most severe first:\n' + (findings.length
+    ? _aiFindingLines(findings, 48000, { cap: 4000, retest: true, fields: ['description', 'impact', 'retest_results', 'remediation'] })
+    : 'None: no finding was recorded in this phase.');
+  return [um2, _smPromptFor('executive_summary') + '\n\n' + _PHS_SAY.es + '\n\n' + _AI_SUMMARY_GROUNDING + '\n\n' + _AI_REPLY_CONTRACTS.summary];
+}
+async function generatePhaseSummary(aid, key, run) {
+  if (typeof _workReady === 'function' && !run && _workAnyLight([aid]) && !(await _workReady([aid]))) return;
+  var a = (S.data.assessments || []).find(function (x) { return x.id === aid; });
+  var kind = String(key).slice(0, 2) === 'rs' ? 'rs' : 'es';
+  var x = a ? _phSumPhases(a, kind).filter(function (y) { return y.key === key; })[0] : null;
+  var el = Array.prototype.slice.call(document.querySelectorAll('.modal-overlay .phs-ed[data-phs-key]')).filter(function (e) { return e.getAttribute('data-phs-key') === key; })[0];
+  if (!a || !x || !el) return run ? false : undefined;
+  if (!_aiEnabled()) { toast('Set up an AI provider in Settings, AI first', 'error'); return run ? false : undefined; }
+  var mref = (run && run.mref) || S.modal;
+  var solo = _genSolo(run ? null : document.getElementById(el.getAttribute('data-phs-btn')), [el], 'Writing');
+  try {
+    var cur = _aixEditOf(el), opts;
+    var ins = _aixFor('phs:' + key, run ? { run: run } : null, mref);
+    if (ins && cur && cur.tooBig) throw _aixTooBig(cur);
+    if (cur) cur.used = !!ins;
+    if (ins) { opts = { extra: ins }; if (cur) opts.current = cur; }
+    var ask = _phSumAsk(a, kind, x);
+    var r = await callAI(ask[0], ask[1], 4096, opts);
+    if (!r) { if (!run) toast('The model sent back nothing, so ' + x.name + '’s ' + _phSumLabel(kind).toLowerCase() + ' was left as it is', 'error'); return run ? false : undefined; }
+    var out = _genTarget(el, mref);
+    if (!out) return run ? false : undefined;
+    if (cur && cur.used) { cur.el = out; out.innerHTML = _aixPutBack(sanitizeHtml(_aiSummaryHtml(r)), cur); if (!run) _genEditSaid(null, cur, x.name + '’s ' + _phSumLabel(kind).toLowerCase()); }
+    else { out.innerHTML = sanitizeHtml(_aiSummaryHtml(r)); if (!run) toast(x.name + '’s ' + _phSumLabel(kind).toLowerCase() + ' written', 'success'); }
+    return run ? true : undefined;
+  } catch (e) {
+    if (!run) toast((e && e.plain) ? e.message : 'AI could not write ' + x.name + '’s ' + _phSumLabel(kind).toLowerCase() + ' (' + ((e && e.message) || e) + ')', 'error');
+    else run.errs.push(x.name + ': ' + ((e && e.message) || e));
+    return run ? false : undefined;
+  } finally { _genSoloDone(solo); }
+}
+window.generatePhaseSummary = generatePhaseSummary;
+async function generateEveryPhaseSummary(aid, kind) {
+  if (typeof _workReady === 'function' && _workAnyLight([aid]) && !(await _workReady([aid]))) return;
+  var eds = Array.prototype.slice.call(document.querySelectorAll('.modal-overlay .phs-ed[data-phs-key]'))
+    .filter(function (e) { return String(e.getAttribute('data-phs-key')).slice(0, 2) === kind; });
+  if (!eds.length) return;
+  var mref = S.modal, btn = document.getElementById('phsAll_' + kind);
+  var run = { mref: mref, extra: _aixFor('phs:' + kind, null, mref), errs: [] };
+  var solo = _genSolo(btn, eds, 'Writing');
+  var keys = eds.map(function (e) { return e.getAttribute('data-phs-key'); }), done = 0, at = 0;
+  try {
+    var next = async function () {
+      while (at < keys.length) {
+        var k = keys[at++];
+        if (await generatePhaseSummary(aid, k, run)) done++;
+        if (solo && btn) _genSoloSay(solo, 'Writing ' + Math.min(at, keys.length) + ' of ' + keys.length);
+      }
+    };
+    await Promise.all([next(), next()]);
+  } finally { _genSoloDone(solo); }
+  var lab = _phSumLabel(kind).toLowerCase();
+  if (!run.errs.length && done === keys.length) toast('Every phase’s ' + lab + ' written', 'success');
+  else toast(done + ' of ' + keys.length + ' phases’ ' + lab + ' written' + (run.errs.length ? '. ' + run.errs[0] : ''), done ? 'warning' : 'error');
+}
+window.generateEveryPhaseSummary = generateEveryPhaseSummary;
 function renderCustomSummaryModal() {
   var m = S.modal;
   var a = (S.data.assessments || []).find(function(x) { return x.id === m.id; });
@@ -56291,6 +59669,9 @@ function renderAppendixModal() {
 
   h += '<div class="form-group"><label>Title</label>';
   h += '<input class="form-input" id="mAppendTitle" value="' + esc(ap ? ap.title : '') + '" placeholder="e.g., Nmap Scan Results"></div>';
+
+  h += '<div class="form-group"><label for="mAppendPlace">Where it goes</label><select class="form-select" id="mAppendPlace">' + _apxPlaceOpts(a, ap ? ap.place : '', null, false) + '</select>'
+    + '<p class="hint" style="margin-top:0.35rem">A finding\u2019s appendices are one appendix, under the finding\u2019s title, once it has two or more.</p></div>';
 
   h += '<div class="form-group"><label>Content</label>';
   h += '<p class="hint mb-2">Type text, paste screenshots, add code blocks. Use Shift+Enter for new lines in code.</p>';
@@ -56499,6 +59880,9 @@ async function saveAppendix(aid, idx) {
   }).join('\n\n');
 
   var appendix = { title: title, content: content, items: items };
+
+  var _apxPl = String(((document.getElementById('mAppendPlace') || {}).value) || '');
+  if (_apxPl === 'own' || _apxPl.indexOf('f:') === 0) appendix.place = _apxPl;
 
   var a = (S.data.assessments || []).find(function(x) { return x.id === aid; });
 
@@ -56891,6 +60275,8 @@ function _rtLay(base, tid, kind, keys) {
   out.custom = custom;
   if (Array.isArray(o.order) && o.order.length) out.order = o.order.filter(function (k) { return typeof k === 'string'; });
 
+  if (kind === 'sections' && o.phases && typeof o.phases === 'object' && !Array.isArray(o.phases)) out.phases = Object.assign({}, base.phases || {}, o.phases);
+
   if (kind === 'findings') out.v = Math.max(typeof base.v === 'number' ? base.v : 0, 2);
   return out;
 }
@@ -56924,6 +60310,7 @@ function _rtSnapshotOf(x) {
       sct.fields[d.key] = { enabled: _smEnabled(d.key), in_report: _smInReport(d.key), label: (_smLabel(d.key) !== _smLabelDefault(d.key)) ? _smLabel(d.key) : '' };
     });
     _smCustom().forEach(function (c) { sct.custom[c.id] = { enabled: c.enabled !== false, in_report: _smInReport(c.id), label: '' }; });
+    sct.phases = _phSumCfg();
     return { findings: f, sections: sct };
   });
 }
@@ -58036,6 +61423,8 @@ async function _rtSaveDefault(d) {
         var at = ord.indexOf('documents');
         v.order = at < 0 ? ord.concat(docs) : ord.slice(0, at + 1).concat(docs, ord.slice(at + 1));
       }
+
+      if (sc.phases && typeof sc.phases === 'object') v.phases = _phSumNorm(sc.phases);
     });
     if (!r2 || !r2.ok) { _settingsSaveFailed('summary_fields'); return; }
 
@@ -58212,7 +61601,7 @@ function _rtStripHtml(tab) {
   var reps = [{ id: _RT_DEF, name: _rtName(''), def: true }];
   if (_rtSettingsOn() && _rtHasDb()) _rtList().forEach(function (t) { reps.push({ id: t.id, name: t.name.trim() }); });
   var h = '<div class="rt-strip" id="rt_strip_' + tab + '"><p class="rt-strip-t">'
-    + (tab === 'sections' ? 'Which sections a report uses, in what order, and whether each is printed, is that report’s own:'
+    + (tab === 'sections' ? 'Which sections a report uses, in what order, whether each is printed, and where each phase’s own summaries go, is that report’s own:'
       : 'Which fields a report uses, in what order, which are required and whether each is printed, is that report’s own:')
     + '</p><div class="rt-strip-btns" role="group" aria-label="Your reports">';
   reps.forEach(function (r) {
@@ -58366,12 +61755,64 @@ function _rtSectionsHtml(d) {
       + (isC ? _rtPromptHtml(d, 'cs', key, own) : (_sd && _sd.ai && SM_PROMPT_COLS[key] ? _rtPromptHtml(d, 's', key, own) : '')) + '</div>';
   });
   h += '</div>';
+  h += _rtPhSumHtml(d);
   h += '<div class="rt-add"><input class="form-input" id="rt_newsection" placeholder="A section of its own, e.g. Attack Narrative" maxlength="60">'
     + '<button class="btn btn-secondary btn-sm" onclick="_rtAddSection()">Add section</button></div>'
 
     + '<textarea class="form-textarea rt-add-prompt" id="rt_newsprompt" rows="2" aria-label="AI prompt for the new section" placeholder="Its AI prompt, if you like: how AI writes it. Left empty, it has a prompt made for its name, under it once added."></textarea>';
   return h;
 }
+function _rtPhSumDraftCfg(d) {
+  var own = (d && d.sections && d.sections.phases && typeof d.sections.phases === 'object') ? d.sections.phases : {};
+  return _phSumNorm(Object.assign({}, (d && d.__def) ? {} : (_smCfgBase().phases || {}), own));
+}
+var _PHS_CHOICES = [['one', 'One for the engagement'],
+  ['inside', 'A part for each phase inside it'],
+  ['above', 'Each phase’s own, with its findings']];
+function _rtPhSumHtml(d) {
+  var c = _rtPhSumDraftCfg(d);
+  var h = '<div class="phs-set"><div class="phs-set-t">Summaries for Each Phase</div>'
+    + '<p class="hint">With two phases or more, each phase can have its own ' + esc(_phSumLabel('es')) + ' and ' + esc(_phSumLabel('rs'))
+    + ' as well as the engagement’s own. Choose where they go in this report: on the engagement, in its PDF and in its Word file. Switching keeps what each phase’s summary says.</p>';
+  h += '<div class="phs-set-grid">';
+  ['es', 'rs'].forEach(function (k) {
+    h += '<div class="phs-set-row"><label class="form-label" for="rt_phs_' + k + '">' + esc(_phSumLabel(k)) + '</label>'
+      + '<select class="form-select" id="rt_phs_' + k + '" onchange="_rtSet(\'sections.phases.' + k + '\', this.value, true)">';
+    _PHS_CHOICES.forEach(function (o) { h += '<option value="' + o[0] + '"' + (c[k] === o[0] ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; });
+    h += '</select>';
+    if (c[k] === 'inside') {
+      h += '<select class="form-select" id="rt_phs_' + k + '_whole" aria-label="' + esc('Order inside the ' + _phSumLabel(k)) + '" onchange="_rtSet(\'sections.phases.' + k + '_whole\', this.value, true)">'
+        + '<option value="first"' + (c[k + '_whole'] === 'first' ? ' selected' : '') + '>The engagement’s own first</option>'
+        + '<option value="last"' + (c[k + '_whole'] === 'last' ? ' selected' : '') + '>Each phase’s part first</option></select>';
+    }
+    h += '</div>';
+  });
+  h += '</div>';
+  var w = c.order.filter(function (k) { return k === 'findings' || c[k] === 'above'; });
+  if (w.length > 1) {
+    h += '<div class="phs-set-ord"><div class="phs-set-st">With each phase, in this order</div><div class="phs-ord-list">';
+    w.forEach(function (k, i) {
+      h += '<div class="phs-ord-row"><span class="rt-ord">'
+        + '<button class="btn-icon" title="Move up" aria-label="Move up"' + (i === 0 ? ' disabled' : '') + ' onclick="_rtPhSumMove(\'' + k + '\',-1)">&#9650;</button>'
+        + '<button class="btn-icon" title="Move down" aria-label="Move down"' + (i === w.length - 1 ? ' disabled' : '') + ' onclick="_rtPhSumMove(\'' + k + '\',1)">&#9660;</button></span>'
+        + '<span class="phs-ord-name">' + esc(k === 'findings' ? 'Its findings' : 'Its ' + _phSumLabel(k)) + '</span></div>';
+    });
+    h += '</div></div>';
+  }
+  return h + '</div>';
+}
+function _rtPhSumMove(key, dir) {
+  var d = _rtDraft();
+  if (!d) return;
+  var c = _rtPhSumDraftCfg(d);
+  var w = c.order.filter(function (k) { return k === 'findings' || c[k] === 'above'; });
+  var i = w.indexOf(key), j = i + dir;
+  if (i < 0 || j < 0 || j >= w.length) return;
+  var full = c.order.slice(), x = full.indexOf(w[i]), y = full.indexOf(w[j]);
+  full[x] = w[j]; full[y] = w[i];
+  _rtSet('sections.phases.order', full, true);
+}
+window._rtPhSumMove = _rtPhSumMove;
 var _RT_SEV_WORD = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', info: 'Info' };
 function _rtSeverityHtml(d) {
   var sv = d.severity || {};
@@ -59000,6 +62441,20 @@ function _ffCfgBase() {
     ai_group: c.ai_group === 'every' ? 'every' : 'choose',
     ai_group_text: String(c.ai_group_text == null ? '' : c.ai_group_text).slice(0, 3000),
 
+    apx_rows: (typeof c.apx_rows === 'number' && isFinite(c.apx_rows) && c.apx_rows >= 0) ? Math.min(1000, Math.floor(c.apx_rows)) : _APX_ROWS,
+
+    apx_lines: (typeof c.apx_lines === 'number' && isFinite(c.apx_lines) && c.apx_lines >= 0) ? Math.min(100000, Math.floor(c.apx_lines)) : _APX_LINES,
+
+    apx_keep: (typeof c.apx_keep === 'number' && isFinite(c.apx_keep) && c.apx_keep >= 1) ? Math.min(1000, Math.floor(c.apx_keep)) : _APX_KEEP,
+    apx_whole: c.apx_whole === true,
+    apx_word: _nameWord(c.apx_word, _APX_WORD),
+    apx_num: c.apx_num === '1' || c.apx_num === 'I' ? c.apx_num : 'A',
+    apx_sub: c.apx_sub === '-' ? '-' : '.',
+    apx_link: c.apx_link === 'dash' || c.apx_link === 'ref' ? c.apx_link : 'colon',
+    apx_title: _apxTitlePattern(c.apx_title),
+    fig_word: _nameWord(c.fig_word, _FIG_WORD),
+    fig_num: c.fig_num === 'I' || c.fig_num === 'A' ? c.fig_num : '1',
+
     categories: Array.isArray(c.categories)
       ? c.categories.map(function (x) { return String(x == null ? '' : x).replace(/\s+/g, ' ').trim(); }).filter(Boolean)
       : [],
@@ -59546,14 +63001,15 @@ function _smDefs__portal() {
     { key: 'timeline',          label: 'Timeline',               def: true, internal: true, icon: 'clock' },
     { key: 'scope',             label: 'Scope',                  col: 'scope',          def: true, text: true, icon: 'target',    client: true, create: true },
     { key: 'credentials',       label: 'Credentials',            def: true, internal: true, icon: 'key' },
-    { key: 'artifacts',         label: 'Artifacts',              def: true, icon: 'terminal' },
+
+    { key: 'artifacts',         label: 'Artifacts',              def: true, icon: 'terminal',  clientToggle: true },
     { key: 'caveats',           label: 'Caveats',                col: 'caveats',        def: true, text: true, ai: true, icon: 'warn',      client: true },
     { key: 'severity',          label: 'Severity Summary',       def: true, structural: true },
     { key: 'retest_summary',    label: 'Retest Summary',         col: 'retest_summary', def: true, text: true, ai: true, icon: 'refresh',   client: true },
     { key: 'executive_summary', label: 'Executive Summary',      col: 'exec_summary',   def: true, text: true, ai: true, icon: 'filtext',   client: true },
     { key: 'findings',          label: 'Findings',               def: true, icon: 'alert',     client: true },
 
-    { key: 'evidence',          label: 'Appendices',             def: true, icon: 'paperclip' },
+    { key: 'evidence',          label: 'Appendices',             def: true, icon: 'paperclip', clientToggle: true },
     { key: 'files',             label: 'Files',                  def: true, icon: 'paperclip' },
     { key: 'comments',          label: 'Comments',               def: true, icon: 'chat',      client: true }
   ];
@@ -59604,6 +63060,7 @@ function _esWithByPhase(text) {
 window._esLegacyByPhase = _esLegacyByPhase;
 window._esWithByPhase = _esWithByPhase;
 window._AI_SUMMARY_GROUNDING = "WHAT THE SUMMARY RESTS ON. Each finding is given with its description, its impact where it has one, and the firm's own fields under the firm's own names, such as a business risk, a likelihood or an affected service. Those fields are the tester's own account of the finding and its context: take the risk and the context of each finding from them and from its description, and where they say something, say it as they do rather than in general terms. Do not assume anything that the findings, their fields and the engagement details do not state: not what the organisation does, holds or is obliged to do, not who its users are or what other systems it has, not that an issue was exploited, and no consequence such as financial loss, reputational damage, a data breach or a regulatory penalty that no finding gives. Where nothing supplied says what an issue would mean for the organisation, say what it allows, in the terms the finding uses. Be specific: refer to each finding by its title, and give the hosts, applications, URLs, accounts, versions, figures and dates that the findings give rather than speaking of them in general terms, but never a password, key or other secret. Where a finding was retested, the result, the day it was recorded and the tester's retest notes are given with it: say what the retest found and when, as they say it, and take the finding's state after its latest retest as its state now. A finding with a retest requested and no result yet has not been retested, so do not say that it has. Any retest summary or other section of the report given is the firm's own account: draw on it where it bears on the findings or the engagement, without repeating it at length, and where it differs from the findings, follow the findings. Where your other instructions ask for something that nothing supplied supports, leave it out rather than supplying it.";
+var _FSI_LAY_CONTRACT = "Reply with ONLY a JSON object of this shape: {\"columns\":[\"<a column's heading>\"],\"rows\":[{\"output\":<the number of the host and port the row is for>,\"cells\":[\"<the value>\"]}]}, each row with one value for each column, in the columns' order, and an empty string where its output gives none. No other text and no code fence.";
 window._AI_REPLY_CONTRACTS = {
   "html": "Reply with the content only, as HTML: <p> for paragraphs, <ul> or <ol> with <li> for lists, <strong> for emphasis, <code> for short inline terms and <pre><code> for requests, responses, commands, code or any other multi-line text. No headings, no markdown, no inline styles or colours, and no preamble. Never name a screenshot or figure by a number, since the report numbers them in its own order: say the screenshot in the evidence, or what it shows.",
   "summary": "Reply with the summary only, as HTML: each paragraph in its own <p>, any heading the instructions call for as its own paragraph in <p><strong>...</strong></p>, <strong> for emphasis, and <ul> with <li> only where a list is asked for. No other tags, no markdown and no preamble.",
@@ -59624,7 +63081,8 @@ window._AI_REPLY_CONTRACTS = {
   "scan_finding": "Return ONLY a JSON array, one object per input finding, in the same order, each with the keys title, description, impact and remediation. No preamble and no code fences.",
 
   "ingest_groups": "Reply with ONLY a JSON object of this shape: {\"findings\":[{\"title\":\"<the finding's title>\",\"issues\":[<the numbers of the issues it brings together>],\"library\":\"<L and the number of the firm's library entry that is this finding, or null>\"}]}. Every issue's number is in exactly one finding. No other text and no code fence.",
-  "ingest_table": "Reply with ONLY a JSON object of this shape: {\"columns\":[\"<a column's heading>\"],\"rows\":[{\"output\":<the number of the host and port the row is for>,\"cells\":[\"<the value>\"]}]}, each row with one value for each column, in the columns' order, and an empty string where its output gives none. No other text and no code fence." };
+
+  "ingest_table": _FSI_LAY_CONTRACT };
 function _smIsShippedPrompt(key, text) {
   var t = String(text == null ? '' : text).replace(/\r\n/g, '\n').trim();
   if (!t) return true;
@@ -60018,8 +63476,98 @@ function _smCfgBase() {
   return {
     fields: (c.fields && typeof c.fields === 'object') ? c.fields : {},
     custom: Array.isArray(c.custom) ? c.custom : [],
-    order: Array.isArray(c.order) ? c.order : []
+    order: Array.isArray(c.order) ? c.order : [],
+    phases: (c.phases && typeof c.phases === 'object' && !Array.isArray(c.phases)) ? c.phases : {}
   };
+}
+var _PHS_MODES = ['one', 'inside', 'above'];
+var _PHS_PARTS = ['es', 'rs', 'findings'];
+function _phSumNorm(p) {
+  p = (p && typeof p === 'object' && !Array.isArray(p)) ? p : {};
+  var mode = function (v) { return _PHS_MODES.indexOf(v) >= 0 ? v : 'one'; };
+  var whole = function (v) { return v === 'last' ? 'last' : 'first'; };
+  var ord = (Array.isArray(p.order) ? p.order : []).filter(function (k, i, all) { return _PHS_PARTS.indexOf(k) >= 0 && all.indexOf(k) === i; });
+  _PHS_PARTS.forEach(function (k) { if (ord.indexOf(k) < 0) ord.push(k); });
+  return { es: mode(p.es), rs: mode(p.rs), es_whole: whole(p.es_whole), rs_whole: whole(p.rs_whole), order: ord };
+}
+function _phSumCfg() {
+  var c = null;
+  try { c = _smCfg(); } catch (e) { c = null; }
+  return _phSumNorm(c && c.phases);
+}
+window._phSumCfg = _phSumCfg;
+function _phSumSec(kind) { return kind === 'rs' ? 'retest_summary' : 'executive_summary'; }
+function _phSumLabel(kind) { return _smLabel(_phSumSec(kind)); }
+function _phSumName(p) { return String((p && p.type) || 'Assessment'); }
+function _phSumNameKey(p) { return 't:' + _phSumName(p).trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 80); }
+function _phSumKey(p) { return (p && p.phase_id) ? String(p.phase_id) : _phSumNameKey(p); }
+function _phSumPhases(a, kind) {
+  var ph = null;
+  try { ph = _getPhases(a); } catch (e) { ph = null; }
+  if (!ph || ph.length < 2) return [];
+  var out = ph.map(function (p, i) {
+    return { ph: p, i: i, key: kind + ':' + _phSumKey(p), alt: (p && p.phase_id) ? kind + ':' + _phSumNameKey(p) : '', name: _phSumName(p) };
+  });
+  if (kind === 'rs') out = out.filter(function (x) { return _phaseRetestOn(x.ph); });
+  return out.length < 2 ? [] : out;
+}
+window._phSumPhases = _phSumPhases;
+function _phSumMode(a, kind) {
+  if (!a || !_phSumPhases(a, kind).length) return 'one';
+  return _rtIn(a, function () { return _phSumCfg()[kind]; });
+}
+window._phSumMode = _phSumMode;
+function _phSumText(a, x) {
+  var v = _smParseVals(a);
+  if (typeof v[x.key] === 'string') return v[x.key];
+  if (x.alt && typeof v[x.alt] === 'string') return v[x.alt];
+  return '';
+}
+window._phSumText = _phSumText;
+function _phSumHas(html) {
+  var s = String(html == null ? '' : html);
+  if (/<img\b/i.test(s)) return true;
+  return s.replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/g, ' ').replace(/<[^>]+>/g, '').trim() !== '';
+}
+function _phSumPrint(html) {
+  return String(html == null ? '' : html).replace(/\{\{\s*fig\s*\}\}\s*(?:[-–—:]\s*)?/gi, '');
+}
+function _phSumWith(a) {
+  var c = _rtIn(a, function () { return _phSumCfg(); });
+  return c.order.filter(function (k) { return k === 'findings' || _phSumMode(a, k) === 'above'; });
+}
+window._phSumWith = _phSumWith;
+function _phSumView(t) {
+  t = _phSumPrint(t);
+  return t.indexOf('<') >= 0 ? renderHtmlContent(t) : formatExecSummary(t);
+}
+function _phSumPartsHtml(a, kind, isClient) {
+  var h = '', team = !isClient && canEdit();
+  _phSumPhases(a, kind).forEach(function (x) {
+    var t = _phSumText(a, x), has = _phSumHas(t);
+    if (!has && !team) return;
+    h += '<div class="phs-part"><div class="phs-part-h">' + esc(x.name) + '</div>'
+      + (has ? '<div class="exec-summary rich-content">' + _phSumView(t) + '</div>' : '<p class="text-muted phs-empty">Nothing written for this phase yet.</p>') + '</div>';
+  });
+  return h ? '<div class="phs-parts">' + h + '</div>' : '';
+}
+function _phSumAny(a, kind) {
+  return _phSumPhases(a, kind).some(function (x) { return _phSumHas(_phSumText(a, x)); });
+}
+function _phSumWithHtml(a, kind, phIdx, isClient) {
+  var sec = _phSumSec(kind);
+  if (!_smEnabled(sec)) return '';
+  if (isClient && !isSectionVisible(a, kind === 'rs' ? 'retest_summary' : 'exec_summary')) return '';
+  var x = _phSumPhases(a, kind).filter(function (y) { return y.i === phIdx; })[0];
+  if (!x) return '';
+  var t = _phSumText(a, x), has = _phSumHas(t), team = !isClient && canEdit();
+  if (!has && !team) return '';
+  var lab = _phSumLabel(kind);
+  var h = '<div class="phs-with" data-phs="' + esc(x.key) + '"><div class="phs-with-head"><span class="phs-with-t">' + _smIconHtml(sec) + ' ' + esc(lab) + '</span>' + _secDraftBadge(a, sec);
+  if (team) h += '<button class="btn btn-ghost btn-sm" onclick="openM(\'phasesum\',\'' + esc(a.id) + '\',' + jsArg(x.key) + ')">' + IC.ai + ' Generate / Edit</button>';
+  h += '</div>' + (has ? '<div class="exec-summary rich-content">' + _phSumView(t) + '</div>'
+    : '<p class="text-muted phs-empty">No ' + esc(lab.toLowerCase()) + ' for this phase yet. Click "Generate / Edit" to write one.</p>');
+  return h + '</div>';
 }
 function _smLabelDefault(key) {
   var d = _smDefs().find(function(x) { return x.key === key; });
@@ -60043,16 +63591,32 @@ function _apxDocRows(a, imgCache) {
   if (!Array.isArray(list) || !list.length) return [];
   try { if (typeof _secInDocs === 'function' && !_secInDocs('evidence')) return []; } catch (e) {}
   var rows = [];
-  list.forEach(function (ap) {
-    if (!ap) return;
-    var items = (Array.isArray(ap.items) && ap.items.length) ? ap.items
-      : (String(ap.content || '').trim() ? [{ type: 'code', content: String(ap.content) }] : []);
-    if (!items.length && !String(ap.title || '').trim()) return;
-    rows.push({
-      appendix_title: String(ap.title || '').trim() || ('Appendix ' + (rows.length + 1)),
-      appendix_number: rows.length + 1,
-      appendix_content: _evidenceMarker(items, imgCache)
-    });
+
+  var row = function (ap, num, head, k, lvl) {
+    var items = (ap && Array.isArray(ap.items) && ap.items.length) ? ap.items
+      : (ap && String(ap.content || '').trim() ? [{ type: 'code', content: String(ap.content) }] : []);
+    return {
+      appendix_title: String((ap && ap.title) || '').trim() || ('Appendix ' + num),
+      appendix_number: k + 1,
+      appendix_letter: num,
+      appendix_heading: head,
+      appendix_content: items.length ? _evidenceMarker(items, imgCache) : '',
+      appendix_has_content: items.length > 0,
+      appendix_level: lvl,
+      appendix_part: lvl === 2,
+      appendix_group: false
+    };
+  };
+  _apxPlanNow(a, 'doc').entries.forEach(function (e, k) {
+    if (!e.group) {
+      var items = (Array.isArray(e.ap.items) && e.ap.items.length) ? e.ap.items : [];
+      if (!items.length && !String(e.ap.content || '').trim() && !String(e.ap.title || '').trim()) return;
+      rows.push(row(e.ap, e.num, e.head, k, 1));
+      return;
+    }
+    rows.push({ appendix_title: e.title, appendix_number: k + 1, appendix_letter: e.num, appendix_heading: e.head,
+      appendix_content: '', appendix_has_content: false, appendix_level: 1, appendix_part: false, appendix_group: true });
+    e.parts.forEach(function (pt) { rows.push(row(pt.ap, pt.num, pt.head, k, 2)); });
   });
   return rows;
 }
@@ -60106,6 +63670,7 @@ function _smInReport(key) {
 }
 function _smVisKey(key) {
   if (key === 'executive_summary') return 'exec_summary';
+  if (key === 'evidence') return 'appendices';
   if (typeof key === 'string' && key.indexOf('summary_') !== 0 && _smCustomById(key)) return 'summary_' + key;
   return key;
 }
@@ -60212,61 +63777,53 @@ function _coFindingFields() {
   } catch (e) {}
   return base;
 }
-function renderFindingModal() {
-  var m = S.modal;
-  var fi = m.id ? S.data.findings.find(function(x) { return x.id === m.id; }) : null;
-  var aid = m.extra || (S.currentAssessment ? S.currentAssessment.id : null);
-  var t = fi ? 'Edit Finding' : 'New Finding';
+function _findingScopeLists(aid) {
+  var _assForScope = aid ? (S.data.assessments || []).find(function(x) { return x.id === aid; }) : null;
+  var _allPhases = _assForScope ? _getPhases(_assForScope) : null;
 
-  if (fi && !_coBaseline('findings', fi.id)) {
-    _coHoldRow('findings', fi.id, fi, _coFindingFields());
-    try { _coJoin('findings', fi.id); } catch (e) {}
-  }
-  var _hasAI = !!((S.data.settings||{}).ai_provider || S._hasAiKey);
-
-  if (fi && fi.evidence) {
-    try {
-
-      try { prefetchFindingImages(fi); } catch (e) {}
-
-      pendingEvidence = _evBlocks(fi.evidence);
-      if (!Array.isArray(pendingEvidence)) pendingEvidence = [];
-    } catch(e) { pendingEvidence = []; }
-  } else {
-    pendingEvidence = [{ type: 'text', content: '', isCode: false }];
+  var _scopeByPhase = {};
+  var _flatScope = [];
+  if (_allPhases && _allPhases.length) {
+    _allPhases.forEach(function(ph) {
+      var key = ph.type || 'Assessment';
+      if (ph.scope) {
+        var items = ph.scope.replace(/\r\n/g, '\n').split('\n').map(function(l) { return l.replace(/^[\s\-\*\u2022]+/, '').trim(); }).filter(Boolean);
+        if (items.length) _scopeByPhase[key] = items;
+        items.forEach(function(it) { _flatScope.push(it); });
+      }
+    });
   }
 
-  var h = '<div class="modal-header"><h2 class="modal-title">' + t + '</h2>'
-    + (fi ? _coPeerSlot('findings', fi.id) : '')
-    + '<button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
-  h += '<div class="modal-body finding-modal-body">';
+  if (_assForScope && _assForScope.scope) {
 
-  h += '<div class="fm-section">';
-  h += '<div class="fm-section-label">Classification</div>';
-
-  h += '<div class="form-group form-group-kb"><label>' + esc(_ffLabel('title')) + (_libUseOn() ? ' <span class="hint">(type to search the Library)</span>' : '') + '</label>';
-  h += '<input class="form-input" id="mTi" value="' + esc(fi ? fi.title : '') + '" oninput="searchKB(this.value)" onblur="setTimeout(function(){var b=document.getElementById(\'kbSuggestions\');if(b)b.style.display=\'none\'},200)" autocomplete="off">';
-  h += '<div id="kbSuggestions" class="kb-suggestions"></div></div>';
-
-  if (fi && fi.id && canEdit() && typeof _canRetestFinding === 'function' && _canRetestFinding(fi)) {
-
-    h += '<div class="form-group" id="mRetestBlock">' + _mRetestBlockInner(fi) + '</div>';
+    var _assItems = _assForScope.scope.replace(/\r\n/g, '\n').split('\n')
+      .map(function(l) { return l.replace(/^[\s\-\*\u2022]+/, '').trim(); })
+      .filter(Boolean);
+    if (_assItems.length) _flatScope = _assItems;
   }
-
-  if (_ffEnabled('evidence')) {
-    h += '<div class="form-group"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.35rem"><label style="margin:0">' + esc(_ffLabel('evidence')) + _ffReqMark('evidence') + '</label>';
-    if (_hasAI) {
-
-      h += '<span style="display:flex;gap:0.25rem;flex-wrap:wrap;justify-content:flex-end">';
-      h += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="genEvBtn" onmousedown="event.preventDefault();generateEvidenceLayout()" onclick="if(event.detail===0)generateEvidenceLayout()" style="color:var(--accent)" title="Writes a line above each screenshot, and each request, block of code, output or table, saying what it shows, with the whole finding in mind, and a caption beneath each screenshot. Your own notes are tidied, every value in them kept as you wrote it, and a line or caption of your own is kept.">' + IC.ai + ' Explain evidence</button>', 'evidence', 'genEvBtn', 'explaining the evidence', { verb: 'Explain' });
-      h += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="genAllBtn" onmousedown="event.preventDefault();generateAllFindingFields()" onclick="if(event.detail===0)generateAllFindingFields()" style="color:var(--accent);font-weight:700" title="Fills every empty field of the finding from this evidence, several at once in the order they depend on each other, and explains its screenshots, code and output. Derives a title if blank, reuses the Library entry with this title, and can be stopped or undone.">' + IC.ai + ' Generate all from evidence</button>', 'all', 'genAllBtn', 'Generate all from evidence', { verb: 'Generate all' });
-      h += '</span>';
+  if (!_flatScope.length) {
+    var _propForScope = _assForScope ? (S.data.proposals || []).find(function(p) { return p.id === _assForScope.proposal_id || p.assessment_id === _assForScope.id; }) : null;
+    if (_propForScope) {
+      var _propPhases = _getPhases(_propForScope);
+      if (_propPhases && _propPhases.length) {
+        _propPhases.forEach(function(ph) {
+          var key = ph.type || 'Assessment';
+          if (ph.scope) {
+            var items = ph.scope.replace(/\r\n/g, '\n').split('\n').map(function(l) { return l.replace(/^[\s\-\*\u2022]+/, '').trim(); }).filter(Boolean);
+            if (items.length) _scopeByPhase[key] = items;
+            items.forEach(function(it) { _flatScope.push(it); });
+          }
+        });
+      } else if (_propForScope.scope) {
+        _flatScope = _propForScope.scope.replace(/\r\n/g, '\n').split('\n').map(function(l) { return l.replace(/^[\s\-\*\u2022]+/, '').trim(); }).filter(Boolean);
+      }
     }
-    h += '</div>';
-    h += buildEditorToolbar('evidenceEditor', false);
-    h += '<div class="rich-editor" id="evidenceEditor" contenteditable="true" oninput="_evAiTouched(this)" data-placeholder="Paste evidence text and screenshots here, then click Generate all from evidence to fill in the finding and explain the screenshots..."></div>';
-    h += '</div>';
   }
+  return { byPhase: _scopeByPhase, flat: _flatScope };
+}
+function _fmClsGridHtml(fi, _hasAI, o) {
+  o = o || {};
+  var _go = o.go || {};
 
   var vulnCategories = _findingCategories();
   var _clsCells = [];
@@ -60300,7 +63857,7 @@ function renderFindingModal() {
   }
   if (_ffEnabled('category')) {
     var _catCell = '<div class="form-group"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem"><label style="margin:0">' + esc(_ffLabel('category')) + _ffReqMark('category') + '</label>';
-    if (_hasAI) _catCell += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="genCatBtn" onclick="generateCategory()" style="color:var(--accent);font-size:0.7rem;padding:0.15rem 0.4rem">' + IC.ai + ' Classify</button>', 'category', 'genCatBtn', _ffLabel('category'), { verb: 'Classify' });
+    if (_hasAI) _catCell += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="genCatBtn" onclick="' + (_go.category || 'generateCategory()') + '" style="color:var(--accent);font-size:0.7rem;padding:0.15rem 0.4rem">' + IC.ai + ' Classify</button>', 'category', 'genCatBtn', _ffLabel('category'), { verb: 'Classify', scope: o.scope });
     _catCell += '</div><select class="form-select" id="mCat"><option value="">Select...</option>';
 
     var _curCat = fi ? _findingCategoryOf(fi.category) : '';
@@ -60311,22 +63868,12 @@ function renderFindingModal() {
     _clsCells.push(_catCell);
   }
 
-  h += '<div class="fm-cls-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0.75rem">' + _clsCells.join('') + '</div>';
-
-  var _fmAss = aid ? (S.data.assessments || []).find(function(x) { return x.id === aid; }) : null;
-  var _fmPhases = _fmAss ? _getPhases(_fmAss) : null; _fmPhases = (_fmPhases && _fmPhases.length > 1) ? _fmPhases : null;
-  if (_fmPhases) {
-
-    if (!fi && S._newFindingPhase && !m.phase) m.phase = S._newFindingPhase;
-    var _fmCurPhase = fi ? (fi.phase || '') : (m.phase || (_fmPhases[0] ? _fmPhases[0].type : ''));
-    S._newFindingPhase = null;
-    h += '<div class="form-group" style="margin-top:0.25rem"><label>Phase</label><select class="form-select" id="mPhase" onchange="_updateScopeSelector()">';
-    _fmPhases.forEach(function(ph, pidx) {
-      var phLbl = 'Phase ' + (pidx + 1) + ': ' + (ph.type || 'Assessment');
-      h += '<option value="' + esc(ph.type || '') + '"' + (_fmCurPhase === ph.type ? ' selected' : '') + '>' + esc(phLbl) + '</option>';
-    });
-    h += '</select></div>';
-  }
+  return '<div class="fm-cls-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0.75rem">' + _clsCells.join('') + '</div>';
+}
+function _fmCwGridHtml(fi, _hasAI, o) {
+  o = o || {};
+  var _go = o.go || {};
+  var _gcv = _go.cvss || 'calculateCVSS()', _gcw = _go.cwe || 'generateCWE()';
 
   var _cwCells = [];
   if (_ffEnabled('cvss')) {
@@ -60337,7 +63884,7 @@ function renderFindingModal() {
       + esc(_ffLabel('cvss')) + _ffReqMark('cvss')
       + '<span style="color:var(--gray);font-weight:400"> (alters severity)</span>'
       + '</span><span class="fld-actions">';
-    if (_hasAI) _cvCell += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="calcCvssBtn" onmousedown="event.preventDefault();calculateCVSS()" onclick="if(event.detail===0)calculateCVSS()" style="color:var(--accent);font-size:0.7rem;padding:0.15rem 0.4rem" title="Auto-calculate CVSS">' + IC.ai + ' Calculate</button>', 'cvss', 'calcCvssBtn', _ffLabel('cvss'), { verb: 'Calculate', style: 'margin-left:0.5rem' });
+    if (_hasAI) _cvCell += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="calcCvssBtn" onmousedown="event.preventDefault();' + _gcv + '" onclick="if(event.detail===0)' + _gcv + '" style="color:var(--accent);font-size:0.7rem;padding:0.15rem 0.4rem" title="Auto-calculate CVSS">' + IC.ai + ' Calculate</button>', 'cvss', 'calcCvssBtn', _ffLabel('cvss'), { verb: 'Calculate', style: 'margin-left:0.5rem', scope: o.scope });
 
     var _cvNoMetrics = !_cvVecPre && fi && parseFloat(fi.cvss) > 0;
     _cvCell += '<button type="button" class="btn btn-ghost btn-sm' + (_cvNoMetrics ? ' cvss-nometrics' : '') + '" id="cvssPickBtn" '
@@ -60358,7 +63905,7 @@ function renderFindingModal() {
   if (_ffEnabled('cwe')) {
 
     var _cwCell = '<div class="form-group"><div class="fld-head"><span class="fld-label">' + esc(_ffLabel('cwe')) + _ffReqMark('cwe') + '</span><span class="fld-actions">';
-    if (_hasAI) _cwCell += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="genCweBtn" onmousedown="event.preventDefault();generateCWE()" onclick="if(event.detail===0)generateCWE()" style="color:var(--accent);font-size:0.7rem;padding:0.15rem 0.4rem" title="Auto-classify CWE using AI">' + IC.ai + ' Classify</button>', 'cwe', 'genCweBtn', _ffLabel('cwe'), { verb: 'Classify' });
+    if (_hasAI) _cwCell += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="genCweBtn" onmousedown="event.preventDefault();' + _gcw + '" onclick="if(event.detail===0)' + _gcw + '" style="color:var(--accent);font-size:0.7rem;padding:0.15rem 0.4rem" title="Auto-classify CWE using AI">' + IC.ai + ' Classify</button>', 'cwe', 'genCweBtn', _ffLabel('cwe'), { verb: 'Classify', scope: o.scope });
     _cwCell += '</span></div><input class="form-input" id="mCw" value="' + esc(fi ? fi.cwe || '' : 'CWE-') + '"></div>';
     _cwCells.push(_cwCell);
   }
@@ -60368,7 +63915,85 @@ function renderFindingModal() {
       + '<input class="form-input" id="mAtt" placeholder="e.g. T1190, T1059" value="' + esc(fi ? _attackTidy(fi.attack) : '') + '"></div>');
   }
 
-  if (_cwCells.length) h += '<div class="fm-cls-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.75rem;margin-top:0.5rem">' + _cwCells.join('') + '</div>';
+  return _cwCells.length ? '<div class="fm-cls-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.75rem;margin-top:0.5rem">' + _cwCells.join('') + '</div>' : '';
+}
+function renderFindingModal() {
+  var m = S.modal;
+  var fi = m.id ? S.data.findings.find(function(x) { return x.id === m.id; }) : null;
+  var aid = m.extra || (S.currentAssessment ? S.currentAssessment.id : null);
+  var t = fi ? 'Edit Finding' : 'New Finding';
+
+  if (fi && !_coBaseline('findings', fi.id)) {
+    _coHoldRow('findings', fi.id, fi, _coFindingFields());
+    try { _coJoin('findings', fi.id); } catch (e) {}
+  }
+  var _hasAI = !!((S.data.settings||{}).ai_provider || S._hasAiKey);
+
+  if (fi && fi.evidence) {
+    try {
+
+      try { prefetchFindingImages(fi); } catch (e) {}
+
+      pendingEvidence = _evBlocks(fi.evidence);
+      if (!Array.isArray(pendingEvidence)) pendingEvidence = [];
+    } catch(e) { pendingEvidence = []; }
+  } else {
+    pendingEvidence = [{ type: 'text', content: '', isCode: false }];
+  }
+
+  var h = '<div class="modal-header"><h2 class="modal-title">' + t + '</h2>'
+    + (fi ? _coPeerSlot('findings', fi.id) : '')
+    + '<button class="btn-close" onclick="closeM()" title="Close">&times;</button></div>';
+  h += '<div class="modal-body finding-modal-body">';
+
+  h += '<div class="fm-section">';
+  h += '<div class="fm-section-label">Classification</div>';
+
+  h += '<div class="form-group form-group-kb"><div class="fm-title-row"><label>' + esc(_ffLabel('title')) + (_libUseOn() ? ' <span class="hint">(type to search the Library)</span>' : '') + '</label>';
+
+  if (_hasAI) h += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="genFTitleBtn" onclick="generateFindingTitle()" style="color:var(--accent);font-size:0.72rem;padding:0.15rem 0.5rem">' + IC.ai + ' Generate</button>', 'title', 'genFTitleBtn', _ffLabel('title'));
+  h += '</div>';
+  h += '<input class="form-input" id="mTi" value="' + esc(fi ? fi.title : '') + '" oninput="searchKB(this.value)" onblur="setTimeout(function(){var b=document.getElementById(\'kbSuggestions\');if(b)b.style.display=\'none\'},200)" autocomplete="off">';
+  h += '<div id="kbSuggestions" class="kb-suggestions"></div></div>';
+
+  if (fi && fi.id && canEdit() && typeof _canRetestFinding === 'function' && _canRetestFinding(fi)) {
+
+    h += '<div class="form-group" id="mRetestBlock">' + _mRetestBlockInner(fi) + '</div>';
+  }
+
+  if (_ffEnabled('evidence')) {
+    h += '<div class="form-group"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.35rem"><label style="margin:0">' + esc(_ffLabel('evidence')) + _ffReqMark('evidence') + '</label>';
+    if (_hasAI) {
+
+      h += '<span style="display:flex;gap:0.25rem;flex-wrap:wrap;justify-content:flex-end">';
+      h += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="genEvBtn" onmousedown="event.preventDefault();generateEvidenceLayout()" onclick="if(event.detail===0)generateEvidenceLayout()" style="color:var(--accent)" title="Writes a line above each screenshot, and each request, block of code, output or table, saying what it shows, with the whole finding in mind, and a caption beneath each screenshot. Your own notes are tidied, every value in them kept as you wrote it, and a line or caption of your own is kept. With instructions, the evidence is rewritten as they say.">' + IC.ai + ' Generate evidence</button>', 'evidence', 'genEvBtn', 'generating the evidence', { verb: 'Generate' });
+      h += _aixWrap('<button type="button" class="btn btn-ghost btn-sm" id="genAllBtn" onmousedown="event.preventDefault();generateAllFindingFields()" onclick="if(event.detail===0)generateAllFindingFields()" style="color:var(--accent);font-weight:700" title="Fills every empty field of the finding from this evidence, several at once in the order they depend on each other, and explains its screenshots, code and output. Derives a title if blank, reuses the Library entry with this title, and can be stopped or undone.">' + IC.ai + ' Generate all from evidence</button>', 'all', 'genAllBtn', 'Generate all from evidence', { verb: 'Generate all' });
+      h += '</span>';
+    }
+    h += '</div>';
+    h += buildEditorToolbar('evidenceEditor', false);
+    h += '<div class="rich-editor" id="evidenceEditor" contenteditable="true" oninput="_evAiTouched(this)" data-placeholder="Paste evidence text and screenshots here, then click Generate all from evidence to fill in the finding and explain the screenshots..."></div>';
+    h += '</div>';
+  }
+
+  h += _fmClsGridHtml(fi, _hasAI);
+
+  var _fmAss = aid ? (S.data.assessments || []).find(function(x) { return x.id === aid; }) : null;
+  var _fmPhases = _fmAss ? _getPhases(_fmAss) : null; _fmPhases = (_fmPhases && _fmPhases.length > 1) ? _fmPhases : null;
+  if (_fmPhases) {
+
+    if (!fi && S._newFindingPhase && !m.phase) m.phase = S._newFindingPhase;
+    var _fmCurPhase = fi ? (fi.phase || '') : (m.phase || (_fmPhases[0] ? _fmPhases[0].type : ''));
+    S._newFindingPhase = null;
+    h += '<div class="form-group" style="margin-top:0.25rem"><label>Phase</label><select class="form-select" id="mPhase" onchange="_updateScopeSelector()">';
+    _fmPhases.forEach(function(ph, pidx) {
+      var phLbl = 'Phase ' + (pidx + 1) + ': ' + (ph.type || 'Assessment');
+      h += '<option value="' + esc(ph.type || '') + '"' + (_fmCurPhase === ph.type ? ' selected' : '') + '>' + esc(phLbl) + '</option>';
+    });
+    h += '</select></div>';
+  }
+
+  h += _fmCwGridHtml(fi, _hasAI);
   h += '</div>';
 
   var _fmLong = {}, _fmMain = h;
@@ -60419,49 +64044,10 @@ function renderFindingModal() {
   if (assets && assets.indexOf('\n') === -1 && assets.indexOf(',') !== -1) {
     assets = assets.split(',').map(function(s) { return s.trim(); }).filter(Boolean).join('\n');
   }
-  var _assForScope = aid ? (S.data.assessments || []).find(function(x) { return x.id === aid; }) : null;
-  var _allPhases = _assForScope ? _getPhases(_assForScope) : null;
 
-  var _scopeByPhase = {};
-  var _flatScope = [];
-  if (_allPhases && _allPhases.length) {
-    _allPhases.forEach(function(ph) {
-      var key = ph.type || 'Assessment';
-      if (ph.scope) {
-        var items = ph.scope.replace(/\r\n/g, '\n').split('\n').map(function(l) { return l.replace(/^[\s\-\*\u2022]+/, '').trim(); }).filter(Boolean);
-        if (items.length) _scopeByPhase[key] = items;
-        items.forEach(function(it) { _flatScope.push(it); });
-      }
-    });
-  }
-
-  if (_assForScope && _assForScope.scope) {
-
-    var _assItems = _assForScope.scope.replace(/\r\n/g, '\n').split('\n')
-      .map(function(l) { return l.replace(/^[\s\-\*\u2022]+/, '').trim(); })
-      .filter(Boolean);
-    if (_assItems.length) _flatScope = _assItems;
-  }
-  if (!_flatScope.length) {
-    var _propForScope = _assForScope ? (S.data.proposals || []).find(function(p) { return p.id === _assForScope.proposal_id || p.assessment_id === _assForScope.id; }) : null;
-    if (_propForScope) {
-      var _propPhases = _getPhases(_propForScope);
-      if (_propPhases && _propPhases.length) {
-        _propPhases.forEach(function(ph) {
-          var key = ph.type || 'Assessment';
-          if (ph.scope) {
-            var items = ph.scope.replace(/\r\n/g, '\n').split('\n').map(function(l) { return l.replace(/^[\s\-\*\u2022]+/, '').trim(); }).filter(Boolean);
-            if (items.length) _scopeByPhase[key] = items;
-            items.forEach(function(it) { _flatScope.push(it); });
-          }
-        });
-      } else if (_propForScope.scope) {
-        _flatScope = _propForScope.scope.replace(/\r\n/g, '\n').split('\n').map(function(l) { return l.replace(/^[\s\-\*\u2022]+/, '').trim(); }).filter(Boolean);
-      }
-    }
-  }
-  window._scopeByPhase = _scopeByPhase;
-  window._scopeFlat = _flatScope;
+  var _scl = _findingScopeLists(aid);
+  window._scopeByPhase = _scl.byPhase;
+  window._scopeFlat = _scl.flat;
   if (_ffEnabled('affected_assets')) {
   h += '<div class="fm-section"><div class="fm-section-label">' + esc(_ffLabel('affected_assets')) + _ffReqMark('affected_assets') + '</div>';
   h += '<div class="form-group"><div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:0.35rem">';
@@ -60638,6 +64224,10 @@ function buildEditorToolbar(editorId, withGenerate, customGenFn, customBtnId, ai
   h += '<button type="button" onmousedown="event.preventDefault();insertCodeBlock(\'' + editorId + '\')" title="Code Block">&lt;/&gt;</button>';
   h += '<button type="button" onmousedown="event.preventDefault();insertTable(\'' + editorId + '\')" title="Table">&#9638; Table</button>';
   h += '<button type="button" onmousedown="event.preventDefault();insertPageBreak(\'' + editorId + '\')" title="Page break (starts a new page in the report)">&#8863; Page break</button>';
+
+  if (editorId === 'evidenceEditor' || editorId === 'fdEd_evidence') {
+    h += '<button type="button" class="ed-apx-btn" onmousedown="event.preventDefault()" onclick="_apxMoveAsk(\'' + editorId + '\',this)" title="Move what you have chosen, or the table, list, output, screenshot or paragraph you are in, to an appendix of the engagement, linked from here">' + IC.paperclip + ' To appendix</button>';
+  }
   h += '<span class="hint" style="margin-left:auto">Paste screenshots (Ctrl+V)</span>';
   if (withGenerate) {
     var fnName = customGenFn || (editorId === 'mDe' ? 'generateFindingDesc' : 'generateFindingRem');
@@ -63637,6 +67227,7 @@ function populateEditor(id, evidence) {
 
   if (typeof evidence === 'string') {
     el.innerHTML = (typeof sanitizeHtml === 'function') ? sanitizeHtml(evidence) : evidence;
+    if (typeof _apxRelabel === 'function' && el.innerHTML.indexOf('#pental-appendix-') >= 0) _apxRelabel(el, { byId: _apxIndex() });
     if (typeof resolveStorageImages === 'function') resolveStorageImages(el);
     return;
   }
@@ -63680,7 +67271,7 @@ function populateEditor(id, evidence) {
 
   var _endsUntypeable = !_lastEv;
   if (_endsUntypeable || !_endsInBlock) html += '<p><br></p>';
-  el.innerHTML = html;
+  el.innerHTML = typeof _apxRelabelHtml === 'function' ? _apxRelabelHtml(html) : html;
   resolveStorageImages(el);
 }
 var _SCREENSHOT_MAX_W = 1600;
@@ -64140,24 +67731,18 @@ document.addEventListener('pointerdown', function (e) {
   if (e.button !== 0) return;
   var ed = _edSizable(e.target);
   if (!ed || !_edCorner(ed, e)) return;
-  if (_edInDialog(ed)) { _edDrawLeast(ed); return; }
-  if (ed.classList.contains('ed-sized')) return;
 
-  ed.style.height = Math.round(ed.getBoundingClientRect().height) + 'px';
-  ed.classList.add('ed-sized');
+  _edDrawLeast(ed);
 }, true);
 document.addEventListener('dblclick', function (e) {
   var ed = _edSizable(e.target);
   if (!ed || !_edCorner(ed, e)) return;
   e.preventDefault();
-  if (_edInDialog(ed)) { if ('edMin' in ed.dataset) ed.style.minHeight = ed.dataset.edMin; ed.style.height = ''; return; }
-  if (ed.classList.contains('ed-sized') && !ed.style.height) ed.classList.remove('ed-sized');
-  else { ed.classList.add('ed-sized'); ed.style.height = ''; }
+
+  if ('edMin' in ed.dataset) ed.style.minHeight = ed.dataset.edMin;
+  ed.style.height = '';
 }, true);
 window._edCorner = _edCorner;
-function _edInDialog(el) {
-  return !!(el && el.closest && el.closest('.modal-overlay'));
-}
 function _edToolbarOf(el) {
   var tb = el.closest('.editor-toolbar');
   if (tb) return tb;
@@ -64168,9 +67753,61 @@ function _edToolbarOf(el) {
   }
   return null;
 }
+function _edHoldPage(el) {
+  var tb = el && el.closest && !el.closest('.modal-overlay') ? _edToolbarOf(el) : null;
+  if (!tb && el && el.closest && el.closest('.apx-pop, .ed-pop, [class*="-pop"]')) return;
+  Array.prototype.forEach.call(document.querySelectorAll('.editor-toolbar.ed-live-page'), function (t) { if (t !== tb) t.classList.remove('ed-live-page'); });
+  var root = document.documentElement;
+  if (!tb) { root.style.scrollPaddingTop = ''; return; }
+  var top = 0;
+  try {
+    if (document.body && document.body.classList.contains('rb-barred')) top += parseFloat(getComputedStyle(document.body).getPropertyValue('--rb-bar')) || 48;
+    var hd = document.querySelector('.main > .header');
+    if (hd && getComputedStyle(hd).position === 'sticky') top += Math.round(hd.getBoundingClientRect().height);
+  } catch (e) {}
+  root.style.setProperty('--ed-page-top', top + 'px');
+
+  var box = null;
+  for (var p = tb.parentElement; p && p !== document.body; p = p.parentElement) {
+    var oy = getComputedStyle(p).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && p.scrollHeight > p.clientHeight + 1) { box = p; break; }
+  }
+  if (box) tb.style.setProperty('--ed-page-top', '0px'); else tb.style.removeProperty('--ed-page-top');
+  tb.classList.add('ed-live-page');
+  if (!box) root.style.scrollPaddingTop = Math.round(top + tb.getBoundingClientRect().height + 8) + 'px';
+}
+window._edHoldPage = _edHoldPage;
+function _edPageAfterDraw() {
+  if (!document.querySelector('.editor-toolbar.ed-live-page')) document.documentElement.style.scrollPaddingTop = '';
+  if (!_taSelfSized) Array.prototype.forEach.call(document.querySelectorAll(_TA_GROW), _taFit);
+}
+var _taSelfSized = (function () { try { return !!(window.CSS && CSS.supports && CSS.supports('field-sizing', 'content')); } catch (e) { return false; } })();
+var _TA_GROW = '.finding-modal-body textarea, .fd-card textarea, .fd-facts-edit textarea, .qa-editor-slot textarea';
+var _taMirror = null;
+function _taFit(ta) {
+  if (_taSelfSized || !ta || !ta.matches || !ta.matches(_TA_GROW) || !ta.offsetWidth) return;
+  try {
+    if (!_taMirror) {
+      _taMirror = document.createElement('textarea');
+      _taMirror.setAttribute('aria-hidden', 'true');
+      _taMirror.tabIndex = -1;
+      _taMirror.style.cssText = 'position:fixed;left:-9999px;top:0;visibility:hidden;height:0;min-height:0;overflow:hidden;pointer-events:none';
+      document.body.appendChild(_taMirror);
+    }
+    var cs = getComputedStyle(ta), m = _taMirror;
+    m.style.width = ta.offsetWidth + 'px';
+    ['font', 'padding', 'border', 'boxSizing', 'lineHeight', 'letterSpacing', 'whiteSpace', 'wordBreak'].forEach(function (k) { m.style[k] = cs[k]; });
+    m.value = ta.value;
+    var h = m.scrollHeight + (cs.boxSizing === 'border-box' ? (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0) : 0);
+    h = Math.max(h, parseFloat(cs.minHeight) || 0, (parseFloat(cs.lineHeight) || 20) * 3);
+    if (Math.abs((parseFloat(ta.style.height) || 0) - h) >= 1) { ta.style.height = Math.ceil(h) + 'px'; ta.style.overflowY = 'hidden'; }
+  } catch (e) {}
+}
+document.addEventListener('input', function (e) { if (e.target && e.target.tagName === 'TEXTAREA') _taFit(e.target); }, true);
+document.addEventListener('focusin', function (e) { if (e.target && e.target.tagName === 'TEXTAREA') _taFit(e.target); }, true);
 function _edHold(el) {
   var ov = el && el.closest ? el.closest('.modal-overlay') : null;
-  if (!ov) return;
+  if (!ov) { _edHoldPage(el); return; }
   var tb = _edToolbarOf(el);
   ov.querySelectorAll('.editor-toolbar.ed-live').forEach(function (t) { if (t !== tb) t.classList.remove('ed-live'); });
 
@@ -66052,7 +69689,7 @@ function _pntlUnnumber(xml, styleOf) {
     var sid = st ? st[1] : '';
     if (/^Heading/.test(sid)) return cutLead(p, /^\d+(?:\.\d+)*\.?[ \u00a0]{2,}(?=\S)/, '');
     if (/caption|figure|image/i.test(sid + ' ' + nameOf(sid)) || /<w:drawing[\s>]|<w:pict[\s>]/.test(p)) {
-      return cutLead(p, /^Figure \d+(?![\d.])/, '{{fig}}');
+      return cutLead(p, new RegExp('^(?:' + _figLabelSrc() + '|Figure \\d+)(?![\\w.])'), '{{fig}}');
     }
     return p;
   });
@@ -68730,7 +72367,7 @@ async function _rtBringRetest(zip, a) {
         || (sU !== null && sU.toLowerCase() !== _retestStatusWords(f.retest_status).toLowerCase());
 
       if (!again && (nmR in regions) && Date.parse(f.updated_at || '') > Date.parse(a.edited_docx_at || '')) {
-        var figs = function (t) { return String(t).replace(/\{\{fig\}\}|\bFigure\s+\d+\b/g, 'FIG').replace(/\s+/g, ' ').trim(); };
+        var figs = function (t) { return String(t).replace(/\{\{fig\}\}/g, 'FIG').replace(_figAnyRe('g'), 'FIG').replace(/\s+/g, ' ').trim(); };
         again = figs(_rtText(regions[nmR])) !== figs(_rtNorm(_rtUnesc(String(_rtReportHtml(f) || '').replace(/<\/(?:p|div|li|h[1-6]|pre|td|th|tr|blockquote)>|<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, ''))));
       }
       if (!again) return;
@@ -70582,6 +74219,8 @@ function _rtKeepResume() {
 function _pageUnsaved() {
   try {
     if (!S || !S.user) return null;
+
+    if (S.page === 'finding-detail' && S._fdEdit && _fdEditChanged()) return { kind: 'fd', id: S._fdEdit.id, key: S._fdEdit.key };
     if (S.page === 'finding-detail') {
       var ed = _rtKeepEd();
       if (ed && typeof ed.__rtDrawn === 'string' && _mkNorm({ h: ed.innerHTML }) !== ed.__rtDrawn) {
@@ -70606,6 +74245,14 @@ function _pageLeaving(go) {
   if (S && S.modal) return false;
   var u = _pageUnsaved();
   if (!u) return false;
+  if (u.kind === 'fd') {
+    var _fdl = _fdLabelOf(u.key);
+    showConfirm('Your changes to the ' + _fdl.toLowerCase() + ' of this finding are not saved yet.', 'Save your changes?',
+      async function () { await _fdEditSave(); if (!S._fdEdit) go(); },
+      function () {},
+      { confirmText: 'Save', cancelText: 'Keep editing', altText: 'Discard', onAlt: function () { _fdEditLeave(); go(); } });
+    return true;
+  }
   if (u.kind === 'retest') {
     showConfirm('The retest results you wrote for this finding are not saved yet.', 'Save your retest results?',
       async function () { if (await _rtPageSave(u)) go(); },
@@ -70631,6 +74278,8 @@ window.addEventListener('beforeunload', function (e) {
 });
 function _pageSaveKey(repeat) {
   if (!S || S.modal || S.page !== 'finding-detail') return false;
+
+  if (S._fdEdit) { if (!repeat) _fdEditSave(); return true; }
   var ed = _rtKeepEd();
   if (!ed) return false;
   if (repeat) return true;
@@ -71828,6 +75477,9 @@ async function saveSettings() {
   if (_ssAuto && !_ssAuto.disabled) data.scan_summary_auto = !!_ssAuto.checked;
   var _scanAi = document.getElementById('set_scan_ai_write');
   if (_scanAi) data.scan_ai_write = !!_scanAi.checked;
+
+  var _scanGrp = document.getElementById('set_scan_ai_group');
+  if (_scanGrp && !_scanGrp.disabled) data.scan_ai_group = !!_scanGrp.checked;
   var _scanCv = document.getElementById('set_scan_client_visible_default');
   if (_scanCv) data.scan_client_visible_default = !!_scanCv.checked;
 
@@ -74251,6 +77903,11 @@ function _ffCaptureEdits() {
   if (_aiGrp) c.ai_group = _aiGrp.value === 'every' ? 'every' : 'choose';
   var _aiGrpT = document.getElementById('ff_ai_group_text');
   if (_aiGrpT) c.ai_group_text = String(_aiGrpT.value || '').slice(0, 3000);
+  var _apxR = document.getElementById('ff_apx_rows');
+  if (_apxR && String(_apxR.value).trim() !== '' && isFinite(+_apxR.value)) c.apx_rows = Math.max(0, Math.min(1000, Math.floor(+_apxR.value)));
+  var _apxL = document.getElementById('ff_apx_lines');
+  if (_apxL && String(_apxL.value).trim() !== '' && isFinite(+_apxL.value)) c.apx_lines = Math.max(0, Math.min(100000, Math.floor(+_apxL.value)));
+  Object.assign(c, _ffNamesRead(c));
   _ffDefs().forEach(function(d) {
     var lab = document.getElementById('ff_label_' + d.key);
     var en  = document.getElementById('ff_en_' + d.key);
@@ -75000,7 +78657,17 @@ async function saveFindingFieldsConfig() {
       ai_group_text: (function () {
         var el = document.getElementById('ff_ai_group_text');
         return el ? String(el.value || '').trim().slice(0, 3000) : _ffCfg().ai_group_text;
-      })() });
+      })(),
+
+      apx_rows: (function () {
+        var el = document.getElementById('ff_apx_rows');
+        return el && String(el.value).trim() !== '' && isFinite(+el.value) ? Math.max(0, Math.min(1000, Math.floor(+el.value))) : _ffCfg().apx_rows;
+      })(),
+
+      apx_lines: (function () {
+        var el = document.getElementById('ff_apx_lines');
+        return el && String(el.value).trim() !== '' && isFinite(+el.value) ? Math.max(0, Math.min(100000, Math.floor(+el.value))) : _ffCfg().apx_lines;
+      })() }, _ffNamesRead(_ffPrev));
 
     var _cats = _ffCatRead();
     if (_cats) {
@@ -78387,15 +82054,19 @@ async function saveExecSummary(assessmentId) {
   if (summary.replace(/<br\s*\/?>/g, '').replace(/&nbsp;/g, '').replace(/<[^>]+>/g, '').trim() === '') summary = '';
   if (summary) summary = await uploadHtmlImages(summary, assessmentId, 'exec_summary', 'exec_summary');
 
+  var _phV = await _phSumCollect(assessmentId);
+
   try {
 
     var _seq = _setFailSeq;
+    var idx = (S.data.assessments || []).findIndex(function(x) { return x.id === assessmentId; });
+    var _esPay = { exec_summary: summary };
+    if (_phV) _esPay.summary_sections = _phSumMerged(idx >= 0 ? S.data.assessments[idx] : null, _phV);
 
-    if (!(await _coGuardedSave('assessments', assessmentId, { exec_summary: summary },
+    if (!(await _coGuardedSave('assessments', assessmentId, _esPay,
       function () { return saveExecSummary(assessmentId); }))) return;
 
-    var idx = (S.data.assessments || []).findIndex(function(x) { return x.id === assessmentId; });
-    if (idx >= 0) S.data.assessments[idx].exec_summary = summary;
+    if (idx >= 0) { S.data.assessments[idx].exec_summary = summary; if (_phV) S.data.assessments[idx].summary_sections = _esPay.summary_sections; }
 
     if (_mStayDone()) return;
     var _sd = await _secMark(assessmentId, 'executive_summary');
@@ -79777,6 +83448,8 @@ function sanitizeHtml(html) {
 function renderHtmlContent(html) {
   if (!html) return '';
 
+  if (typeof html === 'string' && html.indexOf(_APX_HREF) >= 0 && !/^\s*\[/.test(html)) html = _apxLinksNow(html);
+
   try {
     var parsed = JSON.parse(html);
     if (Array.isArray(parsed)) {
@@ -79826,6 +83499,8 @@ function renderHtmlContent(html) {
 }
 function parseHtmlForPdf(html) {
   if (!html) return [];
+
+  if (typeof html === 'string' && html.indexOf(_APX_HREF) >= 0 && !/^\s*\[/.test(html)) html = _apxLinksNow(html, _apxIndex('doc'));
 
   try {
     var parsed = JSON.parse(html);
@@ -80819,7 +84494,7 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
 
   var _imgCache = await prefetchEvidenceImages(findings, a);
   var _pdfFigNum = 0;
-  function _figCaption(caption) { if (!caption) return ''; return _figDash(caption).replace(/\{\{fig\}\}/g, function() { _pdfFigNum++; return 'Figure ' + _pdfFigNum; }); }
+  function _figCaption(caption) { if (!caption) return ''; return _figDash(caption).replace(/\{\{fig\}\}/g, function() { _pdfFigNum++; return _figName(_pdfFigNum); }); }
 
   var tpl = _rtWith(_rtT, function () { return getTemplate(_fxDoc ? 'report' : _pdfType); });
 
@@ -81223,7 +84898,9 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
   }
   var tocPage = 2;
 
-  var _tocEstEntries = findings.length + 12;
+  var _phsToc = 0;
+  try { if (!_fxDoc && _pdfType === 'report') ['es', 'rs'].forEach(function (k) { if (_phSumMode(a, k) !== 'one') _phsToc += _phSumPhases(a, k).length * 2; }); } catch (e) {}
+  var _tocEstEntries = findings.length + 12 + _phsToc;
   var _tocPages = _fxDoc ? 0 : Math.max(1, Math.ceil(_tocEstEntries / 38));
   var _tocPageNums = [];
   for (var _tp = 0; _tp < _tocPages; _tp++) {
@@ -81712,8 +85389,44 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
   _secR.overview = function() {};
 
   var _retestOnPage = false;
+
+  var _phsDoc = !_fxDoc && _pdfType === 'report';
+  function _phsParts(kind) {
+    if (!_phsDoc) return [];
+    var out = [];
+    _phSumPhases(a, kind).forEach(function (x) {
+      var t = _phSumText(a, x);
+      if (_phSumHas(t)) out.push({ x: x, html: t });
+    });
+    return out;
+  }
+  function _phsText(html) {
+    var t = _phSumPrint(html);
+    if (t.indexOf('<') < 0) t = '<p>' + esc(t).replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(darkGray[0], darkGray[1], darkGray[2]);
+    var yr = { y: y };
+    renderPdfBlocks(doc, parseHtmlForPdf(t), mg, cw, pw, function (need, r) { y = r.y; var c = checkPage(need); r.y = y; return c; }, yr,
+      { darkGray: darkGray, gray: gray, accentRgb: accentRgb, imgCache: _imgCache, figCaption: _figCaption });
+    y = yr.y;
+  }
+
+  function _phsHead(title, level) {
+    checkPage(24);
+    var sn = _tocPush(title, pg, level);
+    doc.setTextColor(accentRgb[0], accentRgb[1], accentRgb[2]);
+    doc.setFont(_headFont, 'bold');
+    doc.setFontSize(level === 1 ? _subFS : Math.max(10, _subFS - 1));
+    doc.splitTextToSize(_secLbl(sn) + title, cw).forEach(function (ln) { checkPage(7); doc.text(ln, mg, y); y += 6; });
+    y += 1;
+  }
+
+  function _phsInside(parts) {
+    parts.forEach(function (p) { y += 3; _phsHead(p.x.name, 1); _phsText(p.html); y += 2; });
+  }
   _secR.retest_summary = function() {
-  if (!a.retest_summary) return;
+  var _rsIn = _phSumMode(a, 'rs') === 'inside' ? _phsParts('rs') : [];
+  var _rsLast = _rsIn.length && _phSumCfg().rs_whole === 'last';
+  if (!a.retest_summary && !_rsIn.length) return;
   doc.addPage(); pg++; y = topMg;
   var _hdRT = _docSecHeading('retest_summary', tpl.heading_retest_summary, 'Retest Summary');
   var _snRT = _tocPush(_hdRT, pg, 0);
@@ -81725,7 +85438,10 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.setTextColor(darkGray[0], darkGray[1], darkGray[2]);
-  if (a.retest_summary.indexOf('<') >= 0) {
+  if (_rsLast) _phsInside(_rsIn);
+  if (!a.retest_summary) {
+
+  } else if (a.retest_summary.indexOf('<') >= 0) {
     var rtBlocks = parseHtmlForPdf(a.retest_summary);
     var yRefRs = {y: y};
     renderPdfBlocks(doc, rtBlocks, mg, cw, pw, function(need, yr) { y = yr.y; var r = checkPage(need); yr.y = y; return r; }, yRefRs, {darkGray: darkGray, gray: gray, accentRgb: accentRgb, imgCache: _imgCache, figCaption: _figCaption});
@@ -81754,6 +85470,7 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
       }
     });
   }
+  if (_rsIn.length && !_rsLast) _phsInside(_rsIn);
   _retestOnPage = true;
   };
 
@@ -81773,6 +85490,10 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
   doc.setFontSize(_headFS);
   doc.text(_secLbl(_snES) + _hdES, mg, y);
   y += 8;
+
+  var _esIn = _phSumMode(a, 'es') === 'inside' ? _phsParts('es') : [];
+  var _esLast = _esIn.length && _phSumCfg().es_whole === 'last';
+  if (_esLast) _phsInside(_esIn);
   if (a.exec_summary) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
@@ -81815,12 +85536,13 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
       }
     });
     }
-  } else {
+  } else if (!_esIn.length) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
     doc.setTextColor(gray[0], gray[1], gray[2]);
     doc.text(tpl.text_no_exec_summary || 'No executive summary available.', mg, y);
   }
+  if (_esIn.length && !_esLast) _phsInside(_esIn);
   addFooter();
   };
 
@@ -82085,18 +85807,82 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
   var _lastPh = null;
 
   var _scanDoc = _pdfType === 'vuln_report';
+
+  var _phsW = (!_scanDoc && _pdfPhases && _phsDoc) ? _phSumWith(a) : ['findings'];
+  var _phsOn = _phsW.length > 1, _phsCur = -1, _phsHeaded = {};
+  var _phsPrinted = function (k) {
+    return tpl['show_' + (k === 'rs' ? 'retest_summary' : 'exec_summary')] !== false && _secInDocs(_phSumSec(k));
+  };
+  var _phsSide = function (pi, before) {
+    var fi = _phsW.indexOf('findings'), out = [];
+    _phsW.forEach(function (k, j) {
+      if (k === 'findings' || (before ? j > fi : j < fi) || !_phsPrinted(k)) return;
+      var x = _phSumPhases(a, k).filter(function (z) { return z.i === pi; })[0];
+      var t = x ? _phSumText(a, x) : '';
+      if (_phSumHas(t)) out.push({ k: k, html: t });
+    });
+    return out;
+  };
+
+  var _phsPhaseHead = function (pi) {
+    if (_phsHeaded[pi]) return;
+    _phsHeaded[pi] = true;
+    var lbl = _pdfPhases[pi].type || 'Assessment';
+    var sn = _tocPush(lbl, pg, 1);
+    doc.setTextColor(accentRgb[0], accentRgb[1], accentRgb[2]);
+    doc.setFont(tpl.body_font || 'helvetica', 'bold');
+    doc.setFontSize(_subFS);
+    doc.text(_secLbl(sn) + lbl, mg, y);
+    y += 8;
+  };
+  var _phsDraw = function (pi, parts) {
+    if (!parts.length) return;
+    doc.addPage(); pg++; y = topMg;
+    if (_phsHeaded[pi]) {
+
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(gray[0], gray[1], gray[2]);
+      doc.text(_pdfPhases[pi].type || 'Assessment', mg, y);
+      y += 6;
+    }
+    _phsPhaseHead(pi);
+    parts.forEach(function (p, i) {
+      if (i) y += 4;
+      _phsHead(_phSumLabel(p.k), 2);
+      _phsText(p.html);
+    });
+    addFooter();
+  };
+
+  var _phsTo = function (pi) {
+    if (!_phsOn) return;
+    var n = _pdfPhases.length;
+    if (_phsCur >= 0 && _phsCur < n) _phsDraw(_phsCur, _phsSide(_phsCur, false));
+    for (var k = (_phsCur < 0 ? 0 : _phsCur + 1); k < Math.min(pi, n); k++) _phsDraw(k, _phsSide(k, true).concat(_phsSide(k, false)));
+    _phsCur = pi;
+    if (pi < n) _phsDraw(pi, _phsSide(pi, true));
+  };
   _pdfFL.forEach(function(f, idx) {
+
+    if (_phsOn) {
+      var _phsPi = _po[f.phase || ''] !== undefined ? _po[f.phase || ''] : _pdfPhases.length;
+      if (_phsPi !== _phsCur) _phsTo(_phsPi);
+    }
     if (_fxSum || idx) { doc.addPage(); pg++; y = topMg; }
 
     if (!_scanDoc && _pdfPhases && f.phase && f.phase !== _lastPh) {
       _lastPh = f.phase;
       var _phLbl = f.phase;
+
+      var _phsPiH = _po[f.phase] !== undefined ? _po[f.phase] : -1;
+      if (!(_phsOn && _phsPiH >= 0 && _phsHeaded[_phsPiH])) {
+      if (_phsPiH >= 0) _phsHeaded[_phsPiH] = true;
       var _snPh = _tocPush(_phLbl, pg, 1);
       doc.setTextColor(accentRgb[0], accentRgb[1], accentRgb[2]);
       doc.setFont(tpl.body_font||'helvetica','bold');
       doc.setFontSize(_subFS);
       doc.text(_secLbl(_snPh) + _phLbl, mg, y);
       y += 6;
+      }
     }
 
     _findingPages.push(pg);
@@ -82483,6 +86269,8 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
     addFooter();
   });
 
+  if (_phsOn) _phsTo(_pdfPhases.length + 1);
+
   };
 
   _secR.appendices = function() {
@@ -82502,16 +86290,25 @@ async function genPDF(assessmentId, _returnDoc, _docType, _fxOpt) {
     doc.text(_secLbl(_snAE) + _hdAE, mg, y);
     y += 10;
 
-    appendices.forEach(function(ap, apIdx) {
-      if (apIdx > 0) y += 6;
+    var _apSeq = [];
+    _apxPlanNow(a, 'doc').entries.forEach(function (e) {
+      if (!e.group) { _apSeq.push({ ap: e.ap, head: e.head, lvl: 1 }); return; }
+      _apSeq.push({ head: e.head, lvl: 1, grp: true });
+      e.parts.forEach(function (pt) { _apSeq.push({ ap: pt.ap, head: pt.head, lvl: 2 }); });
+    });
+    _apSeq.forEach(function(_apE, apIdx) {
+      var ap = _apE.ap;
+      if (apIdx > 0) y += _apE.lvl === 2 ? 3 : 6;
       checkPage(18);
-      _tocPush((ap.title || 'Appendix'), pg, 1);
+      var _apLbl = _apE.head;
+      _tocPush(_apLbl, pg, _apE.lvl);
       doc.setTextColor(accentRgb[0], accentRgb[1], accentRgb[2]);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(12);
-      doc.text((ap.title || 'Appendix'), mg, y);
+      doc.setFontSize(_apE.lvl === 2 ? 10.5 : 12);
+      doc.splitTextToSize(_apLbl, cw).forEach(function (ln, li) { if (li) { y += 5.5; } doc.text(ln, mg, y); });
 
-      y += 10;
+      y += _apE.grp ? 8 : 10;
+      if (_apE.grp) return;
 
       var items = ap.items || [{type: 'code', content: ap.content}];
       items.forEach(function(item) {
@@ -84000,6 +87797,13 @@ function _htmlToWps(html, bodyStyle) {
       return runs;
     }
     if (tag === 'a') {
+
+      var _apH = node.getAttribute('href') || '';
+      if (_apH.indexOf(_APX_HREF) === 0) {
+        var _apX = _apxIndex('doc')[_apH.slice(_APX_HREF.length)];
+        runs.push(makeRun(_apX ? _apX.link : (node.textContent || ''), _apX ? Object.assign({}, np, { underline: true }) : np));
+        return runs;
+      }
       for (var i = 0; i < node.childNodes.length; i++) {
         runs = runs.concat(walkInline(node.childNodes[i], Object.assign({}, np, {underline: true})));
       }
@@ -84077,6 +87881,7 @@ function _htmlToWps(html, bodyStyle) {
 
     if (tag === 'table') {
 
+      var _cellSt = (bodyStyle && bodyStyle !== 'Normal') ? bodyStyle : '';
       wps.push(_wpsTable(node, function (cellEl, isHeader) {
         var runs = [];
         for (var ci = 0; ci < cellEl.childNodes.length; ci++) {
@@ -84084,7 +87889,9 @@ function _htmlToWps(html, bodyStyle) {
         }
         var inner = runs.join('');
         if (!inner.trim()) return '';
-        return '<w:p>' + (isHeader ? '<w:pPr><w:keepNext/></w:pPr>' : '') + inner + '</w:p>';
+        var ppr = (_cellSt ? '<w:pStyle w:val="' + _cellSt + '"/>' : '') + (isHeader ? '<w:keepNext/>' : '')
+          + (_cellSt ? '<w:spacing w:before="0" w:after="0"/><w:ind w:left="0" w:right="0" w:firstLine="0"/>' : '');
+        return '<w:p>' + (ppr ? '<w:pPr>' + ppr + '</w:pPr>' : '') + inner + '</w:p>';
       }));
 
       wps.push('<w:p/>');
@@ -84668,7 +88475,7 @@ function _injectRichContent(filledZip, rcMap, imgCache) {
   } catch (e) { try { console.warn('[docx] the list numbering could not be defined:', e && e.message); } catch (e2) {} }
 
   var _figNum = 0;
-  docXml = _figDash(docXml).replace(/\{\{fig\}\}/g, function() { return 'Figure ' + (++_figNum); });
+  docXml = _figDash(docXml).replace(/\{\{fig\}\}/g, function() { return _figName(++_figNum); });
 
   docXml = _addTocBookmarks(docXml);
 
@@ -84831,6 +88638,106 @@ function _fixUnmappedFunctionTokens(zip) {
     if (changed) out = _dcrEnsureWellFormed(out, 'post-processing');
     if (changed) zip.file('word/document.xml', out);
   } catch (e) { console.warn('[Render] function token fix skipped:', e && e.message); }
+}
+function _phsDocxData(data, a, phases, phasesData, imgCache) {
+  var on = { es: data.show_executive_summary !== false && _secInDocs('executive_summary'),
+    rs: data.show_retest_summary !== false && _secInDocs('retest_summary') };
+  var cfg = _phSumCfg(), mode = { es: _phSumMode(a, 'es'), rs: _phSumMode(a, 'rs') };
+  var text = { es: {}, rs: {} };
+  ['es', 'rs'].forEach(function (k) {
+    if (mode[k] === 'one' || !on[k]) return;
+    _phSumPhases(a, k).forEach(function (x) { var t = _phSumText(a, x); if (_phSumHas(t)) text[k][x.i] = _phSumPrint(t); });
+  });
+  var asHtml = function (t) { return t.indexOf('<') >= 0 ? t : '<p>' + esc(t).replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>') + '</p>'; };
+  var rich = function (h) { return h ? _richMarker(h, imgCache) : ''; };
+
+  [['es', 'executive_summary_phases'], ['rs', 'retest_summary_phases']].forEach(function (p) {
+    var html = '';
+    if (mode[p[0]] === 'inside') _phSumPhases(a, p[0]).forEach(function (x) { if (text[p[0]][x.i] != null) html += '<h2>' + esc(x.name) + '</h2>' + asHtml(text[p[0]][x.i]); });
+    data[p[1]] = rich(html);
+    data['has_' + p[1]] = !!html;
+  });
+  if (data.has_executive_summary_phases) data.has_executive_summary = true;
+  if (data.has_retest_summary_phases) data.has_retest_summary = true;
+  var fi = cfg.order.indexOf('findings');
+  var put = function (pd, pi) {
+    pd.phase_executive_summary = pi >= 0 && text.es[pi] != null ? rich(asHtml(text.es[pi])) : '';
+    pd.has_phase_executive_summary = !!(pi >= 0 && text.es[pi] != null);
+    pd.phase_retest_summary = pi >= 0 && text.rs[pi] != null ? rich(asHtml(text.rs[pi])) : '';
+    pd.has_phase_retest_summary = !!(pi >= 0 && text.rs[pi] != null);
+    var above = '', below = '';
+    if (pi >= 0) cfg.order.forEach(function (k, j) {
+      if (k === 'findings' || mode[k] !== 'above' || text[k][pi] == null) return;
+      var part = '<h3>' + esc(_phSumLabel(k)) + '</h3>' + asHtml(text[k][pi]);
+      if (j < fi) above += part; else below += part;
+    });
+    pd.phase_summaries_above = rich(above); pd.has_phase_summaries_above = !!above;
+    pd.phase_summaries_below = rich(below); pd.has_phase_summaries_below = !!below;
+    pd.has_phase_findings = !!(pd.phase_findings && pd.phase_findings.length);
+    return !!(above || below);
+  };
+  var idxOf = function (label) {
+    for (var i = 0; i < phases.length; i++) if (_normPhase(phases[i] && phases[i].type) === _normPhase(label)) return i;
+    return -1;
+  };
+  var seen = {};
+  (phasesData || []).forEach(function (pd) { var pi = idxOf(pd.phase_type); if (pi >= 0) seen[pi] = true; put(pd, pi); });
+
+  if (phases.length > 1) phases.forEach(function (ph, pi) {
+    if (seen[pi]) return;
+    var pd = { phase_type: (ph && ph.type) || 'Assessment', phase_scope: (ph && ph.scope) || '', phase_days: String((ph && ph.test_days) || ''),
+      phase_findings: [], phase_findings_tbl: [] };
+    if (!put(pd, pi)) return;
+    var at = phasesData.length;
+    for (var j = 0; j < phasesData.length; j++) { var pj = idxOf(phasesData[j].phase_type); if (pj < 0 || pj > pi) { at = j; break; } }
+    phasesData.splice(at, 0, pd);
+  });
+  data._phsInject = { es: mode.es, rs: mode.rs, es_whole: cfg.es_whole, rs_whole: cfg.rs_whole };
+}
+function _injectPhaseSummaries(zip, data) {
+  try {
+    var j = data && data._phsInject;
+    if (!j) return;
+    var f = zip.file('word/document.xml'); if (!f) return;
+    var orig = f.asText(), xml = orig;
+    var _sdl = null;
+    try { _sdl = typeof _dtplDelims === 'function' ? _dtplDelims(zip) : null; } catch (e) {}
+    var tok = function (t) { return _sdl ? _sdl.start + t + _sdl.end : '{' + t + '}'; };
+    var placed = function (t) { return xml.indexOf('{' + t + '}') >= 0 || xml.indexOf(tok(t)) >= 0; };
+    var at = function (t) { var i = xml.indexOf(tok(t)); return i >= 0 ? i : xml.indexOf('{' + t + '}'); };
+
+    var paraOf = function (i) {
+      if (i < 0) return null;
+      var s1 = Math.max(xml.lastIndexOf('<w:p ', i), xml.lastIndexOf('<w:p>', i)), e1 = xml.indexOf('</w:p>', i);
+      return (s1 < 0 || e1 < 0) ? null : [s1, e1 + 6];
+    };
+    var block = function (t, cond) {
+      var p = function (x) { return '<w:p><w:r><w:t xml:space="preserve">' + tok(x) + '</w:t></w:r></w:p>'; };
+      return p('#' + cond) + p(t) + p('/' + cond);
+    };
+    [['es', 'executive_summary'], ['rs', 'retest_summary']].forEach(function (k) {
+      var nm = k[1] + '_phases';
+      if (j[k[0]] !== 'inside' || !data['has_' + nm] || placed(nm)) return;
+      var r = paraOf(at(k[1]));
+      if (!r) return;
+      var ins = block(nm, 'has_' + nm);
+      xml = j[k[0] + '_whole'] === 'last' ? xml.slice(0, r[0]) + ins + xml.slice(r[0]) : xml.slice(0, r[1]) + ins + xml.slice(r[1]);
+    });
+    var abv = j.es === 'above' || j.rs === 'above';
+    if (abv && placed('#phases_data') && !placed('phase_summaries_above') && !placed('phase_summaries_below')
+      && !placed('phase_executive_summary') && !placed('phase_retest_summary')) {
+      var o = at('#phase_findings'), c = at('/phase_findings');
+      var inCell = function (i) { try { return typeof _pntlInsideCell === 'function' && _pntlInsideCell(xml, i); } catch (e) { return true; } };
+      if (o >= 0 && c > o && !inCell(o) && !inCell(c)) {
+        var rc = paraOf(c), ro = paraOf(o);
+        if (rc && ro) {
+          xml = xml.slice(0, rc[1]) + block('phase_summaries_below', 'has_phase_summaries_below') + xml.slice(rc[1]);
+          xml = xml.slice(0, ro[0]) + block('phase_summaries_above', 'has_phase_summaries_above') + xml.slice(ro[0]);
+        }
+      }
+    }
+    if (xml !== orig) zip.file('word/document.xml', xml);
+  } catch (e) { console.warn('[DOCX] each phase\u2019s own summaries were not put in:', e && e.message); }
 }
 function _injectSummarySections(zip, data) {
   try {
@@ -85091,9 +88998,20 @@ function _injectEngagementAppendices(zip, data) {
       return '<w:p>' + (style || brk ? '<w:pPr>' + (style ? '<w:pStyle w:val="' + style + '"/>' : '') + (brk ? '<w:pageBreakBefore/>' : '') + '</w:pPr>' : '')
         + '<w:r><w:t xml:space="preserve">' + text + '</w:t></w:r></w:p>';
     };
+
+    var partStyle = function (titleStyle) {
+      var want = levelOf(titleStyle) + 1, best = '';
+      heads.forEach(function (p) { var st = pStyleOf(p.x); if (!best && levelOf(st) === want) best = st; });
+      if (best) return best;
+      var m = /^(.*?)(\d)$/.exec(titleStyle || '');
+      return m ? m[1] + (parseInt(m[2], 10) + 1) : titleStyle;
+    };
     var loop = function (titleStyle) {
-      return P('', tok('#engagement_appendices')) + P(titleStyle, tok('appendix_title'))
-        + P('', tok('appendix_content')) + P('', tok('/engagement_appendices'));
+      return P('', tok('#engagement_appendices'))
+        + P('', tok('^appendix_part')) + P(titleStyle, tok('appendix_heading')) + P('', tok('/appendix_part'))
+        + P('', tok('#appendix_part')) + P(partStyle(titleStyle), tok('appendix_heading')) + P('', tok('/appendix_part'))
+        + P('', tok('#appendix_has_content')) + P('', tok('appendix_content')) + P('', tok('/appendix_has_content'))
+        + P('', tok('/engagement_appendices'));
     };
 
     var topStyle = function () {
@@ -85415,6 +89333,7 @@ function _fillTemplateZipNow(templateBuf, data) {
   _fixReferencesRow(zip);
   _fixUnmappedFunctionTokens(zip);
   _injectSummarySections(zip, data);
+  _injectPhaseSummaries(zip, data);
   _injectEngagementAppendices(zip, data);
   var doc;
   try {
@@ -94306,8 +98225,10 @@ function _buildPentalBodyXml(type) {
 
     xml += tag('{#has_engagement_appendices}');
     xml += tag('{#engagement_appendices}');
-    xml += h2('{appendix_title}');
-    xml += para('{appendix_content}');
+
+    xml += tag('{^appendix_part}') + h2('{appendix_heading}') + tag('{/appendix_part}');
+    xml += tag('{#appendix_part}') + P(R('{appendix_heading}'), { style: ST.h3 || 'Heading3', keep: true, before: 240, after: 120 }) + tag('{/appendix_part}');
+    xml += tag('{#appendix_has_content}') + para('{appendix_content}') + tag('{/appendix_has_content}');
     xml += tag('{/engagement_appendices}');
     xml += tag('{/has_engagement_appendices}');
     xml += tag('{#appendix_methodology}');
@@ -95124,9 +99045,39 @@ function showDocxVariableRef(type) {
         vars: [
           { name: '#engagement_appendices ... /engagement_appendices', desc: 'Loop wrapper', example: '{#engagement_appendices}...{/engagement_appendices}' },
           { name: 'appendix_title', desc: 'Appendix title', example: 'Unauthenticated Endpoints' },
-          { name: 'appendix_number', desc: 'Its place in the list (1, 2, 3)', example: '1' },
+          { name: 'appendix_number', desc: 'Its place among the appendices (1, 2, 3); a part has its finding\u2019s', example: '3' },
+          { name: 'appendix_letter', desc: 'Its number as your settings write it (A, B, C), which a finding\u2019s link to it names; a part\u2019s with its own after it (C.1)', example: 'C' },
+          { name: 'appendix_heading', desc: 'Its number and title, as a finding\u2019s link to it names it', example: 'Appendix C: Unauthenticated Endpoints' },
           { name: 'appendix_content', desc: 'Its content: text, code, tables, lists and screenshots', example: '' },
+          { name: '#appendix_group ... /appendix_group', desc: 'The heading over a finding\u2019s several appendices, titled after the finding, with no content of its own', example: '' },
+          { name: '#appendix_part ... /appendix_part', desc: 'One of a finding\u2019s several, under its heading (Appendix C.1)', example: '' },
+          { name: 'appendix_level', desc: '1 for an appendix or a finding\u2019s heading, 2 for a part of one', example: '1' },
+          { name: '#appendix_has_content ... /appendix_has_content', desc: 'Show only if it has content (a finding\u2019s heading has none)', example: '' },
           { name: 'heading_engagement_appendices', desc: 'The heading the engagement’s appendices go under', example: 'Appendices' }
+        ]
+      },
+      {
+
+        name: 'Phases Loop',
+        desc: 'An engagement with two phases or more, one phase at a time. Each phase’s own executive and retest summary are there where your report puts them (Settings, Assessment Sections, the report’s Sections: Summaries for Each Phase). A file that places none of them has them put in: a part of each phase beside {executive_summary} and {retest_summary}, or each phase’s around its {#phase_findings}.',
+        loops: true,
+        vars: [
+          { name: '#has_scope_phases ... /has_scope_phases', desc: 'Show only if the engagement has two phases or more', example: '' },
+          { name: '#phases_data ... /phases_data', desc: 'Loop wrapper, one phase at a time', example: '{#phases_data}...{/phases_data}' },
+          { name: 'phase_type', desc: 'The phase’s name (inside the loop)', example: 'Web Application' },
+          { name: 'phase_scope', desc: 'The phase’s scope (inside the loop)', example: 'portal.example.com' },
+          { name: 'phase_days', desc: 'The phase’s days of testing (inside the loop)', example: '3' },
+          { name: '#phase_findings ... /phase_findings', desc: 'Its findings, one at a time (inside the loop)', example: '{#phase_findings}{title}{/phase_findings}' },
+          { name: '#has_phase_findings ... /has_phase_findings', desc: 'Show only if the phase has findings (inside the loop)', example: '' },
+          { name: 'phase_summaries_above', desc: 'The phase’s own summaries your report puts before its findings, each under its summary’s name (inside the loop)', example: '' },
+          { name: 'phase_summaries_below', desc: 'The phase’s own summaries your report puts after its findings, each under its summary’s name (inside the loop)', example: '' },
+          { name: '#has_phase_summaries_above ... /has_phase_summaries_above', desc: 'Show only if there is something before its findings (inside the loop); has_phase_summaries_below for after them', example: '' },
+          { name: 'phase_executive_summary', desc: 'The phase’s own executive summary, on its own, wherever you place it (inside the loop)', example: '' },
+          { name: 'phase_retest_summary', desc: 'The phase’s own retest summary, on its own, wherever you place it (inside the loop)', example: '' },
+          { name: '#has_phase_executive_summary ... /has_phase_executive_summary', desc: 'Show only if the phase has its own executive summary (inside the loop); has_phase_retest_summary for its retest summary', example: '' },
+          { name: 'executive_summary_phases', desc: 'Each phase’s part of the executive summary, under the phase’s name, where your report puts a part for each phase in it', example: '' },
+          { name: 'retest_summary_phases', desc: 'Each phase’s part of the retest summary, under the phase’s name, where your report puts a part for each phase in it', example: '' },
+          { name: '#has_executive_summary_phases ... /has_executive_summary_phases', desc: 'Show only if a phase has a part of the executive summary; has_retest_summary_phases for the retest summary', example: '' }
         ]
       },
       {
@@ -95907,7 +99858,7 @@ async function buildReportData(assessmentId, docType, _opts) {
   tocEntries.push({ toc_text: 'Severity Scale' });
 
   var _apxRows = (_dxType === 'vuln_report' || (_opts && _opts.findingIds)) ? [] : _apxDocRows(a, _imgCache);
-  _apxRows.forEach(function (r) { tocEntries.push({ toc_text: r.appendix_title }); });
+  _apxRows.forEach(function (r) { tocEntries.push({ toc_text: r.appendix_heading || r.appendix_title }); });
   tocEntries.push({ toc_text: 'Methodology' });
   tocEntries.push({ toc_text: 'Quality Assurance' });
   tocEntries.push({ toc_text: 'Terms and Conditions' });
@@ -96169,6 +100120,11 @@ async function buildReportData(assessmentId, docType, _opts) {
       if (_plain) _injList.push({ key: key, label: cs.label, token: '{custom_summary_' + key + '}' });
     });
     data._summaryInjectList = _injList;
+  }
+
+  if (data && typeof data === 'object' && _dxType !== 'vuln_report') {
+    try { _phsDocxData(data, a, phases || [], phasesData, _imgCache); }
+    catch (e) { console.warn('[DOCX] each phase\u2019s own summaries were not added:', e && e.message); }
   }
 
   if (data && typeof data === 'object' && typeof _ftReportExtras === 'function') {
@@ -97511,6 +101467,8 @@ function _fsiBhJson(text) {
   try { j = JSON.parse(k ? t.slice(k) : t); } catch (e) { return null; }
   return _bhFile(j) ? j : null;
 }
+var _FSI_EV_MAX = 262144;
+function _fsiEvLen(s) { return String(s || '').replace(/src="data:image\/[^"]*"/g, 'src=""').length; }
 function _fsiEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 function _fsiHtml(t) {
   var s = String(t == null ? '' : t).trim();
@@ -97523,8 +101481,1191 @@ function _fsiRating(cvss) {
   if (!(n > 0)) return null;
   return n >= 9 ? 'critical' : n >= 7 ? 'high' : n >= 4 ? 'medium' : 'low';
 }
+var _FSI_AI_CHUNK = 160;
+var _FSI_AI_LIB = 150;
+var _FSI_AI_ROWS = 1500;
+var _FSI_AI_EX = 2500;
+var _FSI_AI_GROUP_PROMPT = 'You turn the results of security testing tools into the findings of a penetration test report.\n\n'
+  + 'You are given the issues the tools reported, numbered, each with its rating, the tool that reported it, the tool’s own category for it where it gives one, how many hosts it was found on and on which ports. You may also be given the firm’s own library of findings, numbered L1, L2 and so on.\n\n'
+  + 'Group the issues into the report’s findings:\n'
+  + '- Put issues in one finding when a report would present them as one weakness, put right in one way: for example software that is out of date or no longer supported; weaknesses in how TLS or SSL is set up on a service (old protocol versions, weak ciphers, certificates that cannot be trusted); SMB signing not required.\n'
+  + '- Leave an issue on its own when no other issue is the same weakness.\n'
+  + '- Never put issues together only because they are on the same hosts or ports, have the same rating or come from the same tool.\n\n'
+  + 'Give each finding the title a report would give it: a few words in Title Case naming the weakness, with no host names, addresses, version numbers or counts. Where one of the firm’s library entries is that finding, give its number as library, and its title as the title.';
 function _fsiAiHas() {
   return !!(((S.data && S.data.settings) || {}).ai_provider || S._hasAiKey);
+}
+function _fsiAiFirm() {
+  return String(_ffCfg().ai_group_text || '').trim();
+}
+function _fsiAiSys(base) {
+  return _sgrSys(base, _fsiAiFirm());
+}
+function _sgrSys(base, firm) {
+  var t = String(firm == null ? '' : firm).trim();
+  if (!t) return base;
+  return base + '\n\nThe firm\u2019s own instructions for findings made from its tools\u2019 results. Follow them; where they differ from the instructions above, they come first, but keep the reply in exactly the form it is asked for:\n' + t.slice(0, 3000);
+}
+function _fsiPortOf(r) {
+  var p = String(r && r.port != null ? r.port : '').trim();
+  if (!p || p === '0') return '';
+  var pr = String((r && r.protocol) || '').trim().toLowerCase();
+  return p + (pr && pr !== 'unknown' ? '/' + pr : '');
+}
+function _fsiHostCmp(a, b) {
+  var ip = function (s) {
+    var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\d.])/.exec(String(s || ''));
+    return m ? ((+m[1] * 256 + +m[2]) * 256 + +m[3]) * 256 + +m[4] : null;
+  };
+  var x = ip(a), y = ip(b);
+  if (x != null && y != null) return x - y;
+  if (x != null) return -1;
+  if (y != null) return 1;
+  return String(a || '').localeCompare(String(b || ''), undefined, { numeric: true, sensitivity: 'base' });
+}
+function _fsiPlainLine(s) {
+  return String(s == null ? '' : s).replace(/<[^>]*>/g, ' ').replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ')
+    .replace(/^["'“‘\s]+|["'”’.\s]+$/g, '').trim();
+}
+function _fsiAiLibrary(issues, given) {
+  var STOP = /^(and|the|for|with|from|that|this|than|have|has|not|are|was|were|into|over|under|multiple|vulnerability|vulnerabilities|detection|detected|remote|version|versions|information|issue|issues|server|service|services)$/;
+  var split = function (t) { return String(t || '').toLowerCase().split(/[^a-z0-9]+/).filter(function (w) { return w.length >= 3 && !STOP.test(w); }); };
+  var words = {};
+  issues.forEach(function (it) { it.titles.concat([it.title, it.cat]).forEach(function (t) { split(t).forEach(function (w) { words[w] = 1; }); }); });
+  var scored = [];
+  (given || (S.data && S.data.library) || []).forEach(function (e) {
+    if (!e || !String(e.title || '').trim()) return;
+    var n = 0;
+    split(e.title).forEach(function (w) { if (words[w]) n++; });
+    if (n) scored.push({ e: e, n: n });
+  });
+  scored.sort(function (a, b) { return (b.n - a.n) || String(a.e.title).localeCompare(String(b.e.title)); });
+  return scored.slice(0, _FSI_AI_LIB).map(function (x) { return x.e; });
+}
+function _fsiAiNHosts(it) { return it.nHosts != null ? it.nHosts : (it.n_hosts != null ? it.n_hosts : (it.hosts || []).length); }
+function _fsiAiQuestion(chunk, lib, now) {
+  var SEV = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', info: 'Informational' };
+  var lines = chunk.map(function (it, i) {
+    var also = it.titles.filter(function (t) { return t !== it.title; }).slice(0, 3);
+    return (i + 1) + '. ' + (SEV[it.sev] || it.sev) + ' | ' + it.title.slice(0, 200)
+      + (also.length ? ' (also reported as ' + also.map(function (t) { return t.slice(0, 120); }).join('; ') + ')' : '')
+      + ' | ' + (it.tools.join(', ') || 'a tool')
+      + (it.cat ? ' | ' + it.cat.slice(0, 80) : '')
+      + ' | ' + _fsiAiNHosts(it) + (_fsiAiNHosts(it) === 1 ? ' host' : ' hosts')
+      + (it.ports.length ? ' | ' + it.ports.slice(0, 5).join(', ') + (it.ports.length > 5 ? ' and ' + (it.ports.length - 5) + ' more' : '') : '');
+  });
+  var q = 'Issues:\n' + lines.join('\n');
+  if (lib.length) q += '\n\nThe firm’s library:\n' + lib.map(function (e, i) { return 'L' + (i + 1) + '. ' + String(e.title).trim().slice(0, 200); }).join('\n');
+
+  var was = [];
+  if (now && now.length) {
+    var at = {};
+    chunk.forEach(function (it, i) { at[it.key] = i + 1; });
+    now.forEach(function (g) {
+      var ns = [];
+      g.issues.forEach(function (it) { var n = at[it.key]; if (n && ns.indexOf(n) < 0) ns.push(n); });
+      if (!ns.length) return;
+      var li = g.kb ? lib.indexOf(g.kb) : -1;
+      was.push('- ' + String(g.title || '').slice(0, 200) + ': ' + ns.sort(function (a, b) { return a - b; }).join(', ') + (li >= 0 ? ' (library L' + (li + 1) + ')' : ''));
+    });
+  }
+  if (was.length) {
+    return q + '\n\nHow they are grouped now, each finding with the numbers of its issues:\n' + was.join('\n')
+      + '\n\nGroup these ' + chunk.length + (chunk.length === 1 ? ' issue' : ' issues') + ' into the report’s findings again: change what the instructions ask for, and keep the rest as it is now.';
+  }
+  return q + '\n\nGroup these ' + chunk.length + (chunk.length === 1 ? ' issue' : ' issues') + ' into the report’s findings.';
+}
+function _fsiAiGroupsFrom(raw, chunk, lib, existing) {
+  var o = _aiJsonFromReply(raw, 'object');
+  var list = o && Array.isArray(o.findings) ? o.findings : _aiJsonFromReply(raw, 'array');
+  if (!Array.isArray(list)) return null;
+  var used = {}, out = [];
+  list.forEach(function (g) {
+    if (!g || typeof g !== 'object') return;
+    var its = [];
+    (Array.isArray(g.issues) ? g.issues : []).forEach(function (n) {
+      var k = parseInt(n, 10);
+      if (!(k >= 1 && k <= chunk.length) || used[k]) return;
+      used[k] = 1;
+      its.push(chunk[k - 1]);
+    });
+    if (!its.length) return;
+    var li = /^L?\s*(\d+)$/i.exec(String(g.library == null ? '' : g.library).trim());
+    var kb = li ? (lib[parseInt(li[1], 10) - 1] || null) : null;
+
+    var fi = existing ? /^F?\s*(\d+)$/i.exec(String(g.existing == null ? '' : g.existing).trim()) : null;
+    var ex = fi ? (existing[parseInt(fi[1], 10) - 1] || null) : null;
+    out.push({ title: _fsiPlainLine(g.title).slice(0, 200), issues: its, kb: kb, kbVia: kb ? 'ai' : '', existing: ex });
+  });
+  chunk.forEach(function (it, i) { if (!used[i + 1]) out.push({ title: '', issues: [it], kb: null, kbVia: '', alone: true, existing: null }); });
+  return out;
+}
+function _fsiVersions(text) {
+  var out = [], cur = null;
+  var fresh = function () { cur = { where: '', installed: '', fixed: '', product: '' }; out.push(cur); };
+  String(text || '').replace(/\r\n?/g, '\n').split('\n').forEach(function (line) {
+    var m = /^\s*([A-Za-z][A-Za-z /]{0,40}?)\s*:\s*(\S.*?)\s*$/.exec(line);
+    if (!m) return;
+    var k = m[1].toLowerCase().replace(/\s+/g, ' ').trim(), v = m[2].slice(0, 200);
+    if (/^(path|url|location|install path|installation path|installation path \/ port|path \/ port|file|found in)$/.test(k)) {
+      if (/^\d+\/(tcp|udp)$/i.test(v)) return;
+      if (!cur || cur.where) fresh();
+      cur.where = v;
+    } else if (/^(package|product|component|library)$/.test(k)) {
+      if (!cur || cur.product) fresh();
+      cur.product = v;
+    } else if (/^(installed|current|detected|reported|remote) version$/.test(k)) {
+      if (!cur || cur.installed) fresh();
+      cur.installed = v;
+    } else if (/^(fixed|fix|patched) versions?$/.test(k)) {
+      if (!cur || cur.fixed) fresh();
+      cur.fixed = v;
+    } else if (/^supported versions?$/.test(k)) {
+
+      if (!cur) fresh();
+      if (!cur.sup) cur.sup = v;
+    }
+  });
+  return out.filter(function (e) { return e.installed || e.fixed; }).map(function (e) {
+    if (!e.fixed && e.sup) e.fixed = e.sup;
+    delete e.sup;
+    return e;
+  });
+}
+function _fsiProduct(title) {
+  var t = String(title || '').trim();
+  var m = /^(.*?\S)\s+(?:v?\d[\w.\-]*\s+)?(?:<=?|≤|prior to|before|older than|earlier than)\s/i.exec(t);
+  if (m && m[1].length >= 2) return m[1];
+
+  var d = t.replace(/\s+(?:(?:Unsupported|End[- ]of[- ](?:Life|Support)|EOL|Obsolete|Outdated)\s+)?(?:Version\s+)?Detection\b.*$/i, '').replace(/\s+(?:Unsupported|End[- ]of[- ](?:Life|Support)|EOL|Obsolete)$/i, '').trim();
+  return d.length >= 2 ? d : t;
+}
+function _fsiVerMax(a, b) {
+  a = String(a || '').trim(); b = String(b || '').trim();
+  if (!a) return b;
+  if (!b || a === b) return a;
+  var pa = a.match(/\d+/g), pb = b.match(/\d+/g);
+  if (!pa || !pb) return a;
+  for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+    var x = +(pa[i] || 0), y = +(pb[i] || 0);
+    if (x !== y) return x > y ? a : b;
+  }
+  return a;
+}
+var _FSI_PORT_HEAD = /^(?:Port (\d+)(?:\/([A-Za-z]+))?(?: \(([^)]*)\))?|On the host itself)$/;
+function _fsiParts(r) {
+  var text = String((r && r.evidence) || '').replace(/\r\n?/g, '\n').trim();
+  var port0 = _fsiPortOf(r), svc0 = String((r && r.service) || '').trim();
+  var chunks = text ? text.split(/\n\n-{40}\n\n/) : [''];
+  if (!_FSI_PORT_HEAD.test(String(chunks[0].split('\n')[0] || '').trim())) return [{ port: port0, service: svc0, text: text }];
+  var out = [], cur = null;
+  chunks.forEach(function (c) {
+    var nl = c.indexOf('\n'), first = String(nl < 0 ? c : c.slice(0, nl)).trim(), m = _FSI_PORT_HEAD.exec(first);
+    if (m) {
+      var pr = String(m[2] || '').toLowerCase();
+      cur = { port: m[1] ? m[1] + (pr && pr !== 'unknown' ? '/' + pr : '') : '', service: String(m[3] || '').trim(), text: nl < 0 ? '' : c.slice(nl + 1).trim() };
+      out.push(cur);
+    } else if (cur) cur.text = (cur.text ? cur.text + '\n\n' : '') + c.trim();
+  });
+  return out.length ? out : [{ port: port0, service: svc0, text: text }];
+}
+function _fsiSvcs(m, rows) {
+  var by = {}, out = [];
+  rows.forEach(function (r) {
+    var host = String(r.asset || '').trim(), t = String(r.title || '').trim(), tool = r._tool || (m && (m.tool || m.format)) || '';
+    _fsiParts(r).forEach(function (p) {
+      var k = (host + '\u0000' + p.port).toLowerCase();
+      var e = by[k];
+      if (!e) { e = by[k] = { key: k, host: host, port: p.port, service: p.service, issues: [], itools: {}, outs: [], tools: [], open: false, fixedAt: '', ifixed: {}, iopen: {} }; out.push(e); }
+      if (!e.service && p.service) e.service = p.service;
+      if (t && e.issues.indexOf(t) < 0) { e.issues.push(t); e.itools[t] = tool; }
+
+      if (r._fixed) { if (String(r._fixed) > e.fixedAt) e.fixedAt = String(r._fixed); if (t && String(r._fixed) > (e.ifixed[t] || '')) e.ifixed[t] = String(r._fixed); }
+      else { e.open = true; if (t) e.iopen[t] = true; }
+      if (tool && e.tools.indexOf(tool) < 0) e.tools.push(tool);
+      if (p.text && !e.outs.some(function (o) { return o.text === p.text; })) e.outs.push({ issue: t, tool: tool, text: p.text });
+    });
+  });
+  out.forEach(function (e) {
+    e.text = e.outs.length === 1 ? e.outs[0].text : e.outs.map(function (o) { return (o.issue || 'Output') + ':\n' + o.text; }).join('\n\n');
+  });
+  out.sort(function (a, b) { return _fsiHostCmp(a.host, b.host) || ((parseInt(a.port, 10) || 0) - (parseInt(b.port, 10) || 0)); });
+  return out;
+}
+var _FSI_FACT_SKIP = /^(?:plugin(?: output| name| id| family| type)?|output|synopsis|description|solution|see also|risk(?: factor)?|cvss.*|cve|cwe|bid|xref|port|protocol|service|host(?: ?name)?|ip(?: address)?|fqdn|notes?|references?|exploit.*|severity|vpr.*|epss.*|.*publication date|.*modification date|in the news|stig.*|iava.*|msft|mskb|cert|example|warning|error|info|tip|reason|result|response|request|date|time|installed version|fixed versions?|(?:current|detected|reported|remote) version|fix|patched versions?)$/;
+var _FSI_HTTP = /^(?:Exchange \d+|(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) \S+ HTTP\/\d|HTTP\/\d(?:\.\d)? \d{3})/m;
+function _fsiFacts(text) {
+  var out = [];
+
+  if (_FSI_HTTP.test(String(text || ''))) return out;
+  String(text || '').split('\n').forEach(function (line) {
+    var m = /^\s*(?:\|-\s*)?([A-Za-z][A-Za-z0-9 /().'-]{0,38}?[A-Za-z0-9)])\s*:\s+(\S.{0,198}?)\s*$/.exec(line);
+    if (!m) return;
+    var label = m[1].replace(/\s+/g, ' ').trim(), k = label.toLowerCase(), v = m[2].trim();
+    if (_FSI_FACT_SKIP.test(k) || /nessus|plugin|scanner/.test(k) || label.split(' ').length > 4) return;
+
+    if (/\s\d+$/.test(label) && !/\d\.\d+$/.test(label)) return;
+
+    if (/^\S+ (?:found|flagged|reported|detected)$/.test(k)) { k = 'detail'; label = 'Detail'; }
+    out.push({ k: k, label: label.charAt(0).toUpperCase() + label.slice(1), v: v });
+  });
+  return out;
+}
+function _fsiFactCols(svcs) {
+  var count = {}, label = {}, order = [], same = {};
+  svcs.forEach(function (e) {
+    var seen = {};
+    _fsiFacts(e.text).forEach(function (f) {
+      if (count[f.k] == null) { count[f.k] = 0; label[f.k] = f.label; order.push(f.k); same[f.k] = true; }
+      if (f.v !== e.host) same[f.k] = false;
+      if (seen[f.k]) return;
+      seen[f.k] = 1;
+      count[f.k]++;
+    });
+  });
+  var need = Math.max(1, Math.ceil(svcs.length / 5));
+  var cols = order.filter(function (k) { return count[k] >= need && !same[k]; })
+    .sort(function (a, b) { return (count[b] - count[a]) || (order.indexOf(a) - order.indexOf(b)); })
+    .slice(0, 4).map(function (k) { return { k: k, label: label[k] }; });
+  cols.dup = order.filter(function (k) { return same[k]; });
+  return cols;
+}
+function _fsiFactOf(e, k) {
+  var vs = [];
+  _fsiFacts(e.text).forEach(function (f) { if (f.k === k && vs.indexOf(f.v) < 0) vs.push(f.v); });
+  return vs.length > 3 ? vs.slice(0, 3).concat(['and ' + (vs.length - 3) + ' more']) : vs;
+}
+function _fsiUnclaimed(text, keys, host) {
+  var out = [], has = {};
+  (keys || []).forEach(function (k) { has[k] = 1; });
+  String(text || '').split('\n').forEach(function (line) {
+    var l = line.replace(/^\s*(?:\|-\s*|[-*\u2022]\s+)/, '').trim();
+    if (!l || /:\s*$/.test(l) || /^[-=_*]{3,}$/.test(l) || l === String(host || '').trim()) return;
+    var f = _fsiFacts(line)[0];
+    if (f && has[f.k]) return;
+    if (l.split(/\s+/).length >= 5 && /[.!?]$/.test(l)) return;
+
+    var toks = l.split(/\s+/).filter(Boolean);
+    if (toks.length >= 6 && toks.filter(function (w) { return /^[A-Za-z][a-z'\u2019]*[,.;:!?)]*$/.test(w); }).length >= 0.8 * toks.length) return;
+    if (!/[0-9]|[A-Za-z][._\/:=@\\-][A-Za-z0-9]|\S\[\S/.test(l)) return;
+    if (out.indexOf(l) < 0) out.push(l.slice(0, 300));
+  });
+  return out.length > 12 ? out.slice(0, 12).concat(['And ' + (out.length - 12) + ' more lines in the tool\u2019s output.']) : out;
+}
+function _fsiHostly(hosts) {
+  return hosts.every(function (h) { h = String(h || '').trim(); return !h || /^[A-Za-z0-9._:\-\[\]]+$/.test(h); });
+}
+function _fsiTableHtml(head, cells) {
+  var cellHtml = function (c) { return Array.isArray(c) ? c.map(_fsiEsc).join('<br>') : _fsiEsc(c); };
+  return '<table><thead><tr>' + head.map(function (h) { return '<th>' + _fsiEsc(h) + '</th>'; }).join('') + '</tr></thead><tbody>'
+    + cells.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + cellHtml(c) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>';
+}
+function _fsiTableText(head, cells) {
+  var cellText = function (c) { return Array.isArray(c) ? c.join('; ') : String(c == null ? '' : c); };
+  return [head.join(' | ')].concat(cells.map(function (r) { return r.map(cellText).join(' | '); })).join('\n');
+}
+function _fsiEvTable(m, rows, lay) {
+  var hostsAll = rows.map(function (r) { return r.asset; });
+  var hostly = _fsiHostly(hostsAll);
+  var tools = {};
+  rows.forEach(function (r) { var t = r._tool || (m && (m.tool || m.format)) || ''; if (t) tools[t] = 1; });
+  var nTools = Math.max(1, Object.keys(tools).length);
+  var blank = function (c) { return Array.isArray(c) ? !c.length : (c == null || String(c).trim() === ''); };
+  var soft = !lay && rows.some(function (r) { return _fsiVersions(r.evidence).length > 0; });
+  var head, cells, n, details = 0, many = false, raw = false;
+
+  var stat = rows.some(function (r) { return !!r._fixed; }), states = [];
+  if (soft) {
+
+    var byProd = {}, list = [];
+    var val = function (arr, v, hk) {
+      if (!v) return;
+      var x = arr.find(function (y) { return y.v === v; });
+      if (!x) arr.push(x = { v: v, on: {} });
+      x.on[hk] = 1;
+    };
+    rows.forEach(function (r) {
+      var host = String(r.asset || '').trim(), port = _fsiPortOf(r), hk = host.toLowerCase();
+      var vs = _fsiVersions(r.evidence);
+      if (!vs.length) vs = [{ where: '', installed: '', fixed: '', product: '' }];
+      vs.forEach(function (v) {
+
+        var prod = v.product || _fsiProduct(r.title);
+
+        var where = v.where && host.indexOf(v.where) < 0 ? v.where : '';
+        var k = String(prod).toLowerCase().replace(/\s+/g, ' ').trim();
+        var e = byProd[k];
+        if (!e) { e = byProd[k] = { prod: prod, hosts: [], hk: {}, inst: [], where: [], fix: '' }; list.push(e); }
+        var h = e.hk[hk];
+        if (!h) { h = e.hk[hk] = { name: host, ports: [], open: false, fixedAt: '' }; e.hosts.push(h); }
+        if (port && h.ports.indexOf(port) < 0) h.ports.push(port);
+        if (r._fixed) { if (String(r._fixed) > h.fixedAt) h.fixedAt = String(r._fixed); } else h.open = true;
+        val(e.inst, v.installed, hk);
+        val(e.where, where, hk);
+        e.fix = _fsiVerMax(e.fix, v.fixed);
+      });
+    });
+    list.sort(function (a, b) { return String(a.prod || '').localeCompare(String(b.prod || '')); });
+
+    var named = function (e, x) {
+      var on = e.hosts.filter(function (h) { return x.on[h.name.toLowerCase()]; }).map(function (h) { return h.name; });
+      if (e.hosts.length < 2 || on.length === e.hosts.length) return x.v;
+      return x.v + ' (' + (on.length > 6 ? on.slice(0, 6).join(', ') + ' and ' + (on.length - 6) + ' more' : on.join(', ')) + ')';
+    };
+    states = [];
+    n = list.length;
+    head = ['Software', 'Installed', 'Fixed', hostly ? 'Hosts' : 'Assets', 'Location'];
+    cells = list.slice(0, _FSI_AI_ROWS).map(function (e) {
+      e.hosts.sort(function (a, b) { return _fsiHostCmp(a.name, b.name); });
+      var open = e.hosts.some(function (h) { return h.open; });
+      var last = e.hosts.reduce(function (m, h) { return h.fixedAt > m ? h.fixedAt : m; }, '');
+      states.push({ open: open, fixedAt: last });
+      var hs = e.hosts.map(function (h) {
+        return h.name + (h.ports.length ? ' (' + h.ports.join(', ') + ')' : '') + (stat && open && !h.open && h.fixedAt ? ', fixed ' + _sgrDay(h.fixedAt) : '');
+      });
+      if (hs.length > 60) hs = hs.slice(0, 60).concat(['and ' + (hs.length - 60) + ' more, each in the affected assets']);
+      return [e.prod, e.inst.map(function (x) { return named(e, x); }), e.fix, hs, e.where.map(function (x) { return named(e, x); })];
+    });
+  } else {
+    var svcs = _fsiSvcs(m, rows);
+    var titles = {};
+    rows.forEach(function (r) { var t = String(r.title || '').trim(); if (t) titles[t.toLowerCase()] = 1; });
+    many = Object.keys(titles).length > 1;
+    var facts = lay && lay.cols ? null : _fsiFactCols(svcs);
+    var extra = lay && lay.cols ? lay.cols : facts.map(function (f) { return f.label; });
+
+    var said = svcs.filter(function (e) { return e.outs.length; });
+    var line = !(lay && lay.cols) && !facts.length && said.length > 1 && said.every(function (e) { return e.outs.length === 1 && e.text.indexOf('\n') < 0 && e.text.length <= 240; })
+      && said.some(function (e) { return e.text !== said[0].text; });
+    if (line) extra = ['Detail'];
+
+    var more = null;
+    if (!(lay && lay.cols) && !line) {
+      var keys = facts.map(function (f) { return f.k; }).concat(facts.dup || []);
+      svcs.forEach(function (e) { var u = _fsiUnclaimed(e.text, keys, e.host); if (u.length) { (more = more || {})[e.key] = u; } });
+      if (more && svcs.some(function (e) {
+        var u = more[e.key] || [];
+        return u.length > 6 || u.join('\n').length > 600 || _FSI_HTTP.test(e.text);
+      })) { more = null; raw = true; }
+      if (more) extra = extra.concat(['Output']);
+    }
+    head = [hostly ? 'Host' : 'Asset', 'Port', 'Service'].concat(many ? ['Issues found'] : []).concat(extra);
+    n = svcs.length;
+    states = svcs.slice(0, _FSI_AI_ROWS);
+    cells = svcs.slice(0, _FSI_AI_ROWS).map(function (e) {
+
+      var iss = nTools > 1 ? e.issues.map(function (t) { return e.itools[t] ? t + ' (' + e.itools[t] + ')' : t; }) : e.issues;
+
+      if (stat && e.open) iss = iss.map(function (lbl, j) { var t = e.issues[j]; return !e.iopen[t] && e.ifixed[t] ? lbl + ' (fixed ' + _sgrDay(e.ifixed[t]) + ')' : lbl; });
+      var row = [e.host, e.port, e.service].concat(many ? [iss] : []);
+      if (lay && lay.cols) return row.concat(((lay.cells || {})[e.key] || []).slice(0, lay.cols.length).concat(lay.cols.map(function () { return ''; })).slice(0, lay.cols.length));
+      if (line) return row.concat([e.text]);
+      return row.concat(facts.map(function (f) { return _fsiFactOf(e, f.k); })).concat(more ? [more[e.key] || []] : []);
+    });
+  }
+  var keep = head.map(function (h, i) { return i === 0 || cells.some(function (r) { return !blank(r[i]); }); });
+  var lead = soft ? 0 : 3 + (many ? 1 : 0);
+  details = soft ? 0 : head.filter(function (h, i) { return i >= lead && keep[i]; }).length;
+  var ports = soft ? false : keep[1];
+  head = head.filter(function (h, i) { return keep[i]; });
+  cells = cells.map(function (r) { return r.filter(function (c, i) { return keep[i]; }); });
+  if (!cells.some(function (r) { return r.some(function (c) { return !blank(c); }); })) return { html: '', text: '', rows: 0, kind: soft ? 'soft' : 'svc', details: 0 };
+  if (stat) {
+    head = head.concat(['Status']);
+    cells = cells.map(function (r, i) { var e = states[i] || {}; return r.concat([e.open ? 'Open' : 'Fixed ' + _sgrDay(e.fixedAt)]); });
+  }
+  var html = _fsiTableHtml(head, cells), text = _fsiTableText(head, cells);
+  if (n > cells.length) {
+    var more = n - cells.length;
+    html += '<p>And ' + more + (more === 1 ? ' more row' : ' more rows') + ' in the tool’s results, not listed here. Every host is in the affected assets.</p>';
+    text += '\nAnd ' + more + ' more rows.';
+  }
+  return { html: html, text: text, rows: n, kind: soft ? 'soft' : 'svc', details: details, many: many, hostly: hostly, ports: ports, tools: nTools, raw: raw, status: stat };
+}
+function _fsiEvLead(t) {
+
+  if (t.status) return _fsiEvLead(Object.assign({}, t, { status: false })) + ' A row a later scan no longer found is marked fixed, with the date.';
+  var tool = t.tools > 1 ? 'the tools' : 'the tool', tools = t.tools > 1 ? 'the tools’' : 'the tool’s';
+
+  if (t.kind === 'soft') return 'The table lists each piece of software ' + tool + ' reported, with the version installed and the version that fixes it where ' + (t.tools > 1 ? 'they' : 'it') + ' gave them, and the ' + (t.hostly ? 'hosts' : 'assets') + ' it was found on.';
+  var where = t.hostly ? (t.ports ? 'host and port' : 'host') : 'asset';
+  if (t.many) return 'The table lists each affected ' + where + ', with the issues ' + tool + ' reported there' + (t.details ? ' and what ' + (t.tools > 1 ? 'their' : 'its') + ' output shows.' : '.');
+  return 'The table lists each affected ' + where + (t.details ? ', with what ' + tools + ' output shows there.' : '.');
+}
+function _fsiEvExample(m, rows) {
+  var svcs = _fsiSvcs(m, rows), e = svcs.filter(function (x) { return x.outs.length; })[0];
+  if (!e) return { html: '', text: '' };
+  var o = e.outs[0], out = String(o.text || '').trim();
+  var cut = out.length > _FSI_AI_EX ? out.slice(0, _FSI_AI_EX) + '\n[... ' + (out.length - _FSI_AI_EX) + ' more characters in the tool’s output ...]' : out;
+  var where = e.host + (e.port ? ', port ' + e.port : '');
+  var who = (o.tool || 'The tool') + '’s output' + (e.issues.length > 1 && o.issue ? ' for ' + o.issue : '');
+  return { html: '<p>' + _fsiEsc(who + ' on ' + where + ' is shown below as an example.') + '</p><div class="code-block">' + _fsiEsc(cut) + '</div>',
+    text: '\n' + who + ' on ' + where + ':\n' + cut.slice(0, 600) + '\n' };
+}
+function _fsiEvidenceOf(m, rows, lay, written) {
+  var plain = rows.filter(function (r) { return !String(r.evidence_html || '').trim(); });
+  var rich = rows.filter(function (r) { return String(r.evidence_html || '').trim(); });
+
+  if (rich.length) plain = plain.filter(function (r) { return String(r.evidence || '').trim(); });
+  var html = '', text = '';
+
+  var tb = written && written.html ? { html: '', text: '', rows: plain.length, details: 1, kind: 'ai', raw: false }
+    : plain.length ? _fsiEvTable(m, plain, lay || null) : { html: '', text: '', rows: 0, details: 0 };
+  if (written && written.html) {
+    html += written.html;
+    text += String(written.text || '') + '\n';
+  } else if (tb.html) {
+    html += '<p>' + _fsiEsc(_fsiEvLead(tb)) + '</p>' + tb.html;
+    text += tb.text + '\n';
+  }
+  var richSeen = {}, titles = {};
+  rich.forEach(function (r) { titles[String(r.title || '').trim().toLowerCase()] = 1; });
+  rich.forEach(function (r) {
+    if (_fsiEvLen(html) >= _FSI_EV_MAX) return;
+    var t = String(r.title || '').trim();
+    if (Object.keys(titles).length > 1 && !richSeen[t.toLowerCase()]) { richSeen[t.toLowerCase()] = 1; html += '<p><strong>' + _fsiEsc(t) + '</strong></p>'; }
+    html += sanitizeHtml(String(r.evidence_html));
+    var rt = String(r.evidence || '').trim();
+    if (rt) text += '\n' + t + ':\n' + rt.slice(0, 1500) + '\n';
+  });
+  if (plain.length && tb.kind !== 'soft' && (!tb.details || tb.raw) && _fsiEvLen(html) < _FSI_EV_MAX) {
+    var ex = _fsiEvExample(m, plain);
+    html += ex.html;
+    text += ex.text;
+  }
+  if (_fsiEvLen(html) >= _FSI_EV_MAX) html += '<p>Further evidence is not shown here: this finding has reached the size a single record holds. Every affected host is still listed, and the full output is in the tool.</p>';
+  return { html: html, text: text, rows: tb.rows || 0, kind: tb.kind || '', details: tb.details || 0 };
+}
+function _fsiAiContext(f, g, desc) {
+  var um = _aiFindingContext({ title: f.title, severity: f.severity || '', category: f.category || '', cwe: f.cwe || '', assets: f.affected_hosts || '', description: desc || '', descMax: 1500 });
+  var said = [];
+  g.issues.forEach(function (it) {
+    it.titles.slice(0, 3).forEach(function (t) {
+      if (said.length >= 24) return;
+      var r = it.rows.find(function (x) { return String(x.title || '').trim() === t; }) || it.rows[0];
+      var words = _fsTextOfHtml([r.description, r.impact].filter(function (x) { return String(x || '').trim(); }).join('\n')).replace(/\s+/g, ' ').trim();
+      said.push('- ' + (r._tool || it.tools[0] || 'A tool') + ': ' + t + ' (' + it.hosts.length + (it.hosts.length === 1 ? ' host' : ' hosts') + ')'
+        + (words ? '. The tool says: ' + words.slice(0, 450) : ''));
+    });
+  });
+  if (said.length) um += '\nThe tools’ results this finding brings together:\n' + said.join('\n') + '\n';
+  if (f._evText) um += '\nEvidence (made from the tools’ results):\n' + String(f._evText).slice(0, 3200) + '\n';
+  return um;
+}
+async function _fsiAiWrite(f, g, o) {
+  var failed = [];
+  var base = { signal: o.signal, onRateLimit: o.onRateLimit, maxWaitMs: 5 * 60 * 1000 };
+  if (o.extra) base.extra = o.extra;
+  var html = function (r) { return sanitizeHtml(_aiNoFigNums(_stripAiHeadings(_aiHtmlFromReply(r)), 0)); };
+  var ask = async function (label, um, sp, take, more) {
+    try {
+      var r = await callAI(um, sp, null, more ? Object.assign({}, base, more) : base);
+      if (!r || !String(r).trim()) { failed.push(label); return; }
+      take(r);
+    } catch (e) {
+      if ((o.signal && o.signal.aborted) || (e && e.rateLimited)) throw e;
+      console.warn('[import] ' + label + ' for "' + f.title + '" was not written:', e && e.message);
+      failed.push(label);
+    }
+  };
+  if (f._need.description) {
+    await ask(_ffLabel('description'), _fsiAiContext(f, g) + '\nWrite the description of this finding.',
+      _fsiAiSys(_stdFieldPrompt('description')) + '\n\n' + _AI_REPLY_CONTRACTS.html, function (r) { f.description = html(r); });
+  }
+  var ctx = _fsiAiContext(f, g, _fsTextOfHtml(f.description || ''));
+
+  var jobs = [];
+  if (f._need.remediation) {
+    jobs.push(function () { return ask(_ffLabel('remediation'), ctx + '\nWrite the remediation guidance for this finding.',
+      _fsiAiSys(_stdFieldPrompt('remediation')) + '\n\n' + _AI_REPLY_CONTRACTS.html, function (r) { f.remediation = html(r); }); });
+  }
+  _ffCustomEnabled().forEach(function (c) {
+    if (!f._need['cf:' + c.id]) return;
+    var ty = _cffType(c);
+    jobs.push(function () { return ask(c.label || 'A field', ctx + 'Field to write: ' + c.label + '\n\nWrite the "' + c.label + '" field for this finding.',
+      _fsiAiSys(_afResolveFieldPrompt(c)) + '\n\n' + _fsAiFormat(c), function (r) {
+        if (ty === 'html') { f.custom_fields[c.id] = html(r); return; }
+        var acc = _fsAiAccept(c, r);
+        if (acc.why) { failed.push(c.label || 'A field'); return; }
+        f.custom_fields[c.id] = String(acc.value);
+      }); });
+  });
+  if (o.one) { for (var j = 0; j < jobs.length; j++) await jobs[j](); }
+  else await Promise.all(jobs.map(function (jb) { return jb(); }));
+
+  if (f._need.cvss) {
+    var ver = _cvssVersion(), more = [];
+    _ffCustomEnabled().forEach(function (c) {
+      var t = _fsTextOfHtml(String(f.custom_fields[c.id] || '')).replace(/\s+/g, ' ').trim();
+      if (t) more.push((c.label || 'Field') + ': ' + t.slice(0, 160));
+    });
+    var q = _sgrScoreQuestion({ title: f.title, category: f.category, cwe: f.cwe, hosts: f.affected_hosts }, _fsTextOfHtml(f.description || ''), f._evText,
+      _fsTextOfHtml(f.remediation || ''), more, ver);
+    await ask(_ffLabel('cvss'), q, _fsiAiSys(_stdFieldPrompt('cvss')) + '\n\n' + _cvssPromptTail(ver), function (r) {
+      var got = _sgrScoreFrom(r, ver);
+      if (!got) { failed.push(_ffLabel('cvss')); return; }
+      f.cvss = got.score; f.cvss_vector = got.vector; f.severity = got.severity;
+    }, { responseFormat: 'json' });
+  }
+  return failed;
+}
+function _sgrDay(v) {
+  var d = new Date(v);
+  if (!v || isNaN(d.getTime())) return '';
+  return d.getUTCDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()] + ' ' + d.getUTCFullYear();
+}
+var _SGR_GROUPS_CONTRACT = 'Reply with ONLY a JSON object of this shape: {"findings":[{"title":"<the finding’s title>","issues":[<the numbers of the issues it brings together>],"library":"<L and the number of the firm’s library entry that is this finding, or null>","existing":"<F and the number of the client’s finding from earlier scans that is this finding, or null>"}]}. Every issue’s number is in exactly one finding. No other text and no code fence.';
+function _sgrQuestion(chunk, lib, existing, now) {
+  var q = _fsiAiQuestion(chunk, lib, now || null);
+  if (!existing || !existing.length) return q;
+  var at = q.lastIndexOf('\n\nGroup these ');
+  var head = at >= 0 ? q.slice(0, at) : q, tail = at >= 0 ? q.slice(at) : '';
+  return head + '\n\nThe client’s findings from earlier scans:\n'
+    + existing.map(function (e, i) { return 'F' + (i + 1) + '. ' + String(e.title || '').trim().slice(0, 200); }).join('\n')
+    + tail.replace(/\.$/, '') + '. An issue that is one of the client’s findings from earlier scans goes into that finding: give its number as existing, and its title as the title.';
+}
+function _sgrSettle(groups, existing) {
+  var out = [], byEx = {}, byTitle = {}, exByTitle = {};
+  (existing || []).forEach(function (e) { var k = _scanTitleKey(e.title); if (k && !exByTitle[k]) exByTitle[k] = e; });
+  (groups || []).forEach(function (g) {
+    if (!g || !g.issues || !g.issues.length) return;
+    var title = String(g.title || (g.issues[0] && g.issues[0].title) || '').trim();
+    var keys = g.issues.map(function (it) { return it.key; });
+    var ex = g.existing || exByTitle[_scanTitleKey(title)] || (g.kb ? exByTitle[_scanTitleKey(g.kb.title)] : null) || null;
+    if (ex) {
+      if (byEx[ex.id]) { byEx[ex.id].issues = byEx[ex.id].issues.concat(keys); return; }
+      out.push(byEx[ex.id] = { existing: ex.id, issues: keys });
+      return;
+    }
+    var tk = _scanTitleKey(g.kb ? g.kb.title : title) || ('#' + out.length);
+    if (byTitle[tk]) { byTitle[tk].issues = byTitle[tk].issues.concat(keys); if (!byTitle[tk].kb && g.kb) byTitle[tk].kb = g.kb.id; return; }
+    out.push(byTitle[tk] = { title: title.slice(0, 300), kb: g.kb ? g.kb.id : null, issues: keys });
+  });
+  return out;
+}
+function _sgrPlain(rows) {
+  return (rows || []).map(function (w) {
+    var pp = String(w.port || '').split('/');
+    return { asset: String(w.host || ''), port: pp[0] || '', protocol: pp[1] || '', service: String(w.service || ''), title: String(w.title || ''),
+             evidence: String(w.output || ''), _tool: String(w.tool || ''), _fixed: w.fixed_at || null };
+  });
+}
+function _sgrEvidence(rows, lay, written) {
+  var plain = _sgrPlain(rows), pages = [], seen = {};
+  (rows || []).forEach(function (w) {
+    var h = String(w.output_html || '').trim();
+    if (h && !seen[h]) { seen[h] = 1; pages.push({ title: String(w.title || '').trim(), html: h }); }
+  });
+  var ev = _fsiEvidenceOf(null, plain, lay && lay.cols ? lay : null, written && written.html ? written : null), blocks = [];
+  if (ev.html) blocks.push({ type: 'html', content: ev.html });
+  var titled = pages.some(function (x) { return x.title !== (pages[0] || {}).title; });
+  pages.forEach(function (x) { blocks.push({ type: 'html', content: (titled && x.title ? '<p><strong>' + _fsiEsc(x.title) + '</strong></p>' : '') + x.html }); });
+  return { blocks: blocks, text: ev.text, rows: ev.rows };
+}
+var _SGR_EV_PART = 60;
+var _SGR_EV_LINES = 40;
+var _SGR_EV_CHARS = 3000;
+var _SGR_EV_PROMPT = 'You write the evidence of a finding in a penetration test report from what security testing tools reported.\n\n'
+  + 'You are given the finding and, numbered, each host and port it was found on, with the issues the tools reported there and their output. '
+  + 'Present it as the evidence section of a professional report, in the form that shows it best: a table where the hosts and ports share the same kinds of details '
+  + '(such as versions, protocols, cipher suites or settings), a list where each has one thing to show, a short excerpt of a tool’s output where the output itself is the proof, '
+  + 'and the sentences a reader needs, such as the one that introduces each table, list or excerpt. Where there are more than twelve hosts and ports, show them in a table. '
+  + 'In a table, what several hosts and ports have in common (the same software and version, the same settings) is one row naming them all, never a row for each, '
+  + 'and a column with nothing to say for most rows is left out. Keep to what the evidence needs.\n\n'
+  + 'Use only what the tools reported. Copy every host, port, version, name and value exactly as the output writes it, and never write one that is not there, '
+  + 'with one exception: where the output gives no fixed, supported or recommended version of software it found out of date, or no date its support ended, give the one you know, as of today. '
+  + 'Show every host and port given, in a table, a list or an excerpt, or name it in a sentence. A host and port, or an issue on one, marked as no longer found was fixed when a later scan looked again: say so where you show it, and never show it as still found. '
+  + 'Do not describe the weakness, its impact or how to put it right: the report says those elsewhere.';
+var _SGR_EV_CONTRACT = 'Reply with ONLY a JSON object of this shape: {"blocks":[...]}, the blocks in the order the evidence reads, each one of these: '
+  + '{"type":"text","text":"<one or more sentences>"}; '
+  + '{"type":"table","columns":["<column>"],"rows":[{"outputs":[<the numbers of the hosts and ports the row is for>],"cells":["<its value in each column>"]}]}, '
+  + 'whose hosts and ports are added to each row from its numbers, so its columns are only what the output says of them, each value short and true of every host and port the row names, '
+  + 'a cell the output says nothing of an empty string, and a fixed, supported or recommended version or an end of support the output does not give, written from what you know, as {"known":"<the value>"}; '
+  + '{"type":"list","items":[{"output":<the number of a host and port>,"text":"<what is shown for it, without its host and port, which are added>"}]}; '
+  + '{"type":"output","output":<the number of a host and port>,"text":"<lines copied exactly from its output>"}. '
+  + 'No other text and no code fence.';
+function _sgrEvSys(style, firm) {
+  var own = String(style == null ? '' : style).trim();
+  var base = _SGR_EV_PROMPT + (own ? '\n\nHow the firm writes the evidence of its findings, its house style. Follow it for the wording and how the evidence reads, applied to the tools’ results below:\n' + own.slice(0, 12000) : '');
+  return _sgrSys(base, firm) + '\n\n' + _SGR_EV_CONTRACT;
+}
+function _sgrEvQuestion(g, part, more, cols) {
+  var q = 'Finding: ' + String(g.title || '') + (g.severity ? '\nRating: ' + g.severity : '') + '\n\nHosts and ports:\n' + part.map(function (e, i) {
+    var o = String(e.text || '').trim();
+    if (o.length > _FSI_AI_LAY_EACH) o = o.slice(0, _FSI_AI_LAY_EACH) + '\n[...]';
+    return '[' + (i + 1) + '] Host ' + (e.host || '(none given)') + (e.port ? ', port ' + e.port : '') + (e.service ? ' (' + e.service + ')' : '')
+      + ', issues: ' + e.issues.map(function (t) { return t.slice(0, 160) + (e.open && _sgrEvIssueGone(e, t) ? ' (no longer found by a later scan on ' + _sgrDay(e.ifixed[t]) + ')' : ''); }).join('; ')
+      + (!e.open && e.fixedAt ? ', no longer found by a later scan on ' + _sgrDay(e.fixedAt) : '')
+      + (o ? ':\n' + o : ': the tools gave no output');
+  }).join('\n\n');
+  if (more) q += '\n\nAnd ' + more + ' more hosts and ports with the same issues, not shown here: show them in a table, whose rows for them are filled in afterwards.';
+  if (cols && cols.length) q += '\n\nIts table had these columns before: ' + cols.join(' | ') + '. Keep to them where the output still suits them.';
+  var n = part.length + (more || 0);
+  return q + '\n\nToday is ' + _sgrDay(new Date().toISOString()) + '. Write the evidence for ' + (n === 1 ? 'this host and port.' : 'these ' + n + ' hosts and ports.');
+}
+function _sgrEvIssueGone(e, t) {
+  return !!(e && e.ifixed && e.ifixed[t] && !(e.iopen && e.iopen[t]));
+}
+function _sgrEvVals(t) {
+  var out = [];
+  String(t == null ? '' : t).replace(/[A-Za-z0-9][A-Za-z0-9._:\/+-]*[A-Za-z0-9]|\d/g, function (w) {
+    if (/\d|[._:\/]/.test(w) && !/^(?:e\.g|i\.e|etc)$/i.test(w)) out.push(w);
+    return w;
+  });
+  return out;
+}
+function _sgrEvTrue(t, hay, most) {
+  return _sgrEvVals(t).every(function (w) {
+    if (/^\d+$/.test(w) && +w <= most) return true;
+    return hay.indexOf(_fsiLayNorm(w)) >= 0;
+  });
+}
+function _sgrEvLines(s) {
+  return String(s == null ? '' : s).replace(/\r\n?/g, '\n').split('\n').map(function (l) { return l.replace(/[ \t ]+/g, ' ').trim(); }).filter(Boolean).join('\n');
+}
+var _SGR_EV_KNOWN = /fix|patch|upgrade|recommend|latest|support|end of (?:life|support)|\beol\b|remediat|replace|current version/i;
+var _SGR_EV_OURS = /^(?:(?:affected )?(?:hosts?|assets?|ip(?: address(?:es)?)?|address(?:es)?|ports?)(?: and ports?)?|targets?)$/i;
+function _sgrEvCell(v, hays, col) {
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    var k = _fsiPlainLine(String(v.known == null ? '' : v.known)).slice(0, 160).trim();
+    if (!k) return { v: '' };
+    if (!_SGR_EV_KNOWN.test(String(col || '')) || /\b\d{1,3}(?:\.\d{1,3}){3}\b/.test(k) || k.split(/\s+/).length > 14) return { why: 'dropped' };
+    return { v: k, known: true };
+  }
+  var s = v == null ? '' : (Array.isArray(v) ? v.join('\n') : String(v)).trim().slice(0, 1200);
+  if (!s) return { v: '' };
+  var items = s.split(/\s*(?:\n|;|,\s|\s\|\s)\s*/).filter(Boolean);
+  if (items.some(function (x) { return x.split(/\s+/).filter(Boolean).length > 10; })) return { why: 'wordy' };
+  if (hays.every(function (h) { return _fsiLayFound(s, h); })) return { v: s };
+  if (items.length > 1 && items.every(function (x) { return hays.some(function (h) { return _fsiLayFound(x, h); }); })) return { v: s };
+  return { why: 'dropped' };
+}
+function _sgrEvFrom(raw, part, all, g) {
+  var o = _aiJsonFromReply(raw, 'object');
+  if (!o || !Array.isArray(o.blocks)) return null;
+  var issues = {}, ports = {}, hosts = {}, said = [String(g.title || '')];
+  all.forEach(function (e) {
+    hosts[String(e.host || '').toLowerCase()] = 1; if (e.port) ports[e.port] = 1;
+    e.issues.forEach(function (t) { issues[t] = 1; });
+    said.push(e.host, e.port, e.service, e.issues.join('\n'), (e.tools || []).join('\n'), e.fixedAt ? _sgrDay(e.fixedAt) : '');
+    Object.keys(e.ifixed || {}).forEach(function (t) { said.push(_sgrDay(e.ifixed[t])); });
+  });
+  part.forEach(function (e) { said.push(e.text); });
+  var hay = _fsiLayNorm(said.join('\n'));
+  var most = Math.max(all.length, Object.keys(hosts).length, Object.keys(ports).length, Object.keys(issues).length);
+  var at = function (n) { n = parseInt(n, 10); return n >= 1 && n <= part.length ? part[n - 1] : null; };
+  var hayOf = function (e) { return _fsiLayNorm([e.text, e.host, e.port, e.service].concat(e.issues || []).join('\n')); };
+  var out = { blocks: [], tables: [], kept: 0, dropped: 0, wordy: 0, known: 0 };
+  o.blocks.forEach(function (b) {
+    if (!b || typeof b !== 'object') return;
+    var ty = String(b.type || '').toLowerCase();
+    if (ty === 'text') {
+      var t = _sgrEvSentence(String(b.text == null ? '' : b.text)).slice(0, 1500).trim();
+      if (!t) return;
+      if (_sgrEvTrue(t, hay, most)) { out.kept++; out.blocks.push({ t: 'text', text: t }); } else out.dropped++;
+      return;
+    }
+    if (ty === 'table') {
+
+      var asked = (Array.isArray(b.columns) ? b.columns : []).map(function (c) { return _fsiPlainLine(c).slice(0, 40); });
+      var idx = [];
+      asked.forEach(function (c, i) { if (c && !_SGR_EV_OURS.test(c)) idx.push(i); });
+      idx = idx.slice(0, 6);
+      if (!idx.length || !Array.isArray(b.rows)) { out.dropped++; return; }
+      var tb = { cols: idx.map(function (i) { return asked[i]; }), rows: [] };
+      b.rows.forEach(function (row) {
+        if (!row || typeof row !== 'object' || !Array.isArray(row.cells)) return;
+        var nums = Array.isArray(row.outputs) ? row.outputs : (row.output != null ? [row.output] : []);
+        var outs = [];
+        nums.forEach(function (n) { var e = at(n); if (e && outs.indexOf(e) < 0) outs.push(e); });
+        if (!outs.length) return;
+        var hays = outs.map(hayOf), any = false;
+        var cells = idx.map(function (ci) {
+          var c = _sgrEvCell(row.cells[ci], hays, asked[ci]);
+          if (c.why === 'wordy') { out.wordy++; return ''; }
+          if (c.why) { out.dropped++; return ''; }
+          if (c.v) { any = true; out.kept++; if (c.known) out.known++; }
+          return c.v;
+        });
+        if (any) tb.rows.push({ outs: outs, cells: cells });
+      });
+      if (!tb.rows.length) return;
+      out.blocks.push({ t: 'table', i: out.tables.length });
+      out.tables.push(tb);
+      return;
+    }
+    if (ty === 'list') {
+      var items = [];
+      (Array.isArray(b.items) ? b.items : []).forEach(function (it) {
+        var e = it && typeof it === 'object' ? at(it.output) : null;
+        var t = e ? _fsiPlainLine(String(it.text == null ? '' : it.text)).slice(0, 400).trim() : '';
+        if (!e || !t) return;
+        if (t.split(/\s+/).length > 40) { out.wordy++; return; }
+        if (_sgrEvTrue(t, hayOf(e), 0)) { out.kept++; items.push({ e: e, text: t }); } else out.dropped++;
+      });
+      if (items.length) out.blocks.push({ t: 'list', items: items });
+      return;
+    }
+    if (ty === 'output') {
+      var e2 = at(b.output), x = String(b.text == null ? '' : b.text).replace(/\r\n?/g, '\n').replace(/^\n+|\s+$/g, '');
+      if (!e2 || !x.trim()) return;
+      var lines = x.split('\n');
+      if (lines.length > _SGR_EV_LINES) x = lines.slice(0, _SGR_EV_LINES).join('\n');
+      if (x.length > _SGR_EV_CHARS) x = x.slice(0, _SGR_EV_CHARS).replace(/\n[^\n]*$/, '');
+      if (_sgrEvLines(e2.text).indexOf(_sgrEvLines(x)) >= 0) { out.kept++; out.blocks.push({ t: 'out', e: e2, text: x }); } else out.dropped++;
+    }
+  });
+  if (!out.blocks.length) return null;
+  return out;
+}
+function _sgrEvSentence(s) {
+  var t = String(s == null ? '' : s).replace(/<[^>]*>/g, ' ').replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim()
+    .replace(/^["'“‘]+|["'”’]+$/g, '').trim();
+  return t && !/[.!?:)]$/.test(t) ? t + '.' : t;
+}
+function _sgrEvWhere(e) { return (e.host || 'The asset') + (e.port ? ', port ' + e.port : ''); }
+function _sgrEvTableHtml(tb, hostly) {
+  var rows = [], by = {};
+  tb.rows.forEach(function (r) {
+    var k = r.cells.map(function (c) { return _fsiLayNorm(c); }).join('\u0000');
+    if (by[k]) { r.outs.forEach(function (e) { if (by[k].outs.indexOf(e) < 0) by[k].outs.push(e); }); return; }
+    rows.push(by[k] = { outs: r.outs.slice(), cells: r.cells.slice() });
+  });
+  var shown = {}, stat = false;
+  var hostsOf = function (r) {
+    var hs = [], hk = {};
+    r.outs.forEach(function (e) {
+      shown[e.key] = 1;
+      if (!e.open) stat = true;
+      var k = String(e.host || '').toLowerCase(), h = hk[k];
+      if (!h) { h = hk[k] = { name: e.host || 'The asset', ports: [], open: false, fixedAt: '' }; hs.push(h); }
+      if (e.port && h.ports.indexOf(e.port) < 0) h.ports.push(e.port);
+      if (e.open) h.open = true; else if (String(e.fixedAt || '') > h.fixedAt) h.fixedAt = String(e.fixedAt);
+    });
+    hs.sort(function (a, b) { return _fsiHostCmp(a.name, b.name); });
+    return hs;
+  };
+  rows.forEach(function (r) { r.hs = hostsOf(r); });
+  var merged = rows.some(function (r) { return r.hs.length > 1; });
+  var label = hostly ? (merged ? 'Hosts' : 'Host') : (merged ? 'Assets' : 'Asset');
+  var cells = rows.map(function (r) {
+    var open = r.hs.some(function (h) { return h.open; });
+    var last = r.hs.reduce(function (m, h) { return h.fixedAt > m ? h.fixedAt : m; }, '');
+    var names = r.hs.map(function (h) {
+      return h.name + (h.ports.length ? ' (' + h.ports.join(', ') + ')' : '') + (open && !h.open && h.fixedAt ? ', fixed ' + _sgrDay(h.fixedAt) : '');
+    });
+    if (names.length > 60) names = names.slice(0, 60).concat(['and ' + (names.length - 60) + ' more, each in the affected assets']);
+    var row = merged ? r.cells.concat([names]) : [names].concat(r.cells);
+    if (stat) row = row.concat([open ? 'Open' : 'Fixed ' + _sgrDay(last)]);
+    return row;
+  });
+  var head = (merged ? tb.cols.concat([label]) : [label].concat(tb.cols)).concat(stat ? ['Status'] : []);
+  var keep = head.map(function (h, i) { return cells.some(function (r) { var c = r[i]; return Array.isArray(c) ? c.length : String(c == null ? '' : c).trim() !== ''; }); });
+  head = head.filter(function (h, i) { return keep[i]; });
+  cells = cells.map(function (r) { return r.filter(function (c, i) { return keep[i]; }); });
+  return { html: _fsiTableHtml(head, cells), text: _fsiTableText(head, cells), shown: shown };
+}
+function _sgrEvHtml(r, rows, all) {
+  var html = '', text = '', shown = {}, prevText = false;
+  var hostly = _fsiHostly(all.map(function (e) { return e.host; }));
+  var tell = function (s) { html += '<p>' + _fsiEsc(s) + '</p>'; text += s + '\n'; };
+  r.blocks.forEach(function (b) {
+    if (b.t === 'text') {
+      tell(b.text);
+      all.forEach(function (e) { if (e.host && b.text.toLowerCase().indexOf(String(e.host).toLowerCase()) >= 0) shown[e.key] = 1; });
+      prevText = true;
+      return;
+    }
+    if (b.t === 'table') {
+      var tb = _sgrEvTableHtml(r.tables[b.i], hostly);
+      Object.keys(tb.shown).forEach(function (k) { shown[k] = 1; });
+      html += tb.html; text += tb.text + '\n';
+      prevText = false;
+      return;
+    }
+    if (b.t === 'list') {
+      html += '<ul>' + b.items.map(function (it) { shown[it.e.key] = 1; return '<li>' + _fsiEsc(_sgrEvWhere(it.e) + ': ' + it.text) + '</li>'; }).join('') + '</ul>';
+      text += b.items.map(function (it) { return '- ' + _sgrEvWhere(it.e) + ': ' + it.text; }).join('\n') + '\n';
+      prevText = false;
+      return;
+    }
+    if (b.t === 'out') {
+      shown[b.e.key] = 1;
+      if (!prevText) tell('The output on ' + _sgrEvWhere(b.e) + ':');
+      html += '<div class="code-block">' + _fsiEsc(b.text) + '</div>';
+      text += b.text.slice(0, 600) + '\n';
+      prevText = false;
+    }
+  });
+  var missed = all.filter(function (e) { return e.open && !shown[e.key]; });
+  if (missed.length) tell('The tools also reported it on ' + missed.slice(0, 200).map(_sgrEvWhere).join('; ')
+    + (missed.length > 200 ? ' and ' + (missed.length - 200) + ' more, each in the affected assets' : '') + '.');
+
+  var words = r.blocks.filter(function (b) { return b.t === 'text'; }).map(function (b) { return b.text.toLowerCase(); }).join('\n');
+  var gone = all.filter(function (e) { return !e.open && e.fixedAt && !shown[e.key]; }).map(function (e) { return _sgrEvWhere(e) + ', on ' + _sgrDay(e.fixedAt); });
+  all.forEach(function (e) {
+    if (!e.open) return;
+    e.issues.forEach(function (t) {
+      if (_sgrEvIssueGone(e, t) && words.indexOf(String(t).toLowerCase()) < 0) gone.push(t + ' on ' + _sgrEvWhere(e) + ', on ' + _sgrDay(e.ifixed[t]));
+    });
+  });
+  if (gone.length) tell('No longer found by a later scan: ' + gone.slice(0, 200).join('; ') + (gone.length > 200 ? ' and ' + (gone.length - 200) + ' more' : '') + '.');
+  return { html: html, text: text };
+}
+async function _sgrEvWrite(ask, g, rows, o) {
+  o = o || {};
+  rows = (rows || []).filter(function (r) { return !String(r.evidence_html || '').trim(); });
+  if (!rows.length) return null;
+  var all = _fsiSvcs(null, rows);
+  if (!all.length) return null;
+  if (all.length > _FSI_AI_LAY_MAX) return { tooMany: all.length };
+  var part = all.slice(0, _SGR_EV_PART), rest = all.slice(_SGR_EV_PART);
+  var q = _sgrEvQuestion(g, part, rest.length, o.cols || null);
+  if (o.extra) q = _aixPrompt(q, o.extra, null);
+  var raw = await ask(_sgrEvSys(o.evidence, o.firm), q, Math.min(16000, 1600 + part.length * 220));
+  var r = _sgrEvFrom(raw, part, all, g);
+  if (!r) return null;
+  if (!r.kept || r.dropped > r.kept) return { refused: true, kept: r.kept, dropped: r.dropped };
+
+  var t0 = r.tables[0];
+  if (rest.length && t0) {
+    var lsys = _sgrSys(_FSI_AI_LAY_PROMPT, o.firm) + '\n\n' + _FSI_LAY_CONTRACT;
+    for (var i = 0; i < rest.length; i += _FSI_AI_LAY_ROWS) {
+      var p2 = rest.slice(i, i + _FSI_AI_LAY_ROWS);
+      var q2 = _fsiAiLayQuestion({ title: String(g.title || '') }, p2, t0.cols);
+      if (o.extra) q2 = _aixPrompt(q2, o.extra, null);
+      var r2 = _fsiAiLayFrom(await ask(lsys, q2, Math.min(16000, 600 + p2.length * 160)), p2, t0.cols);
+      if (!r2) break;
+      r2.rows.forEach(function (x) { t0.rows.push({ outs: [x.e], cells: x.cells }); });
+      r.kept += r2.kept; r.dropped += r2.dropped; r.wordy += r2.wordy;
+    }
+  }
+  var w = _sgrEvHtml(r, rows, all);
+  return { html: w.html, text: w.text, cols: t0 ? t0.cols : [], kept: r.kept, dropped: r.dropped, wordy: r.wordy, known: r.known };
+}
+async function _sgrLaidOut(ask, f, firm, style) {
+  var lay = f && f.lay && typeof f.lay === 'object' ? f.lay : null;
+  var plain = function (stale) {
+    var ev = _sgrEvidence(f.rows || []);
+    var o = { id: f.id, blocks: ev.blocks, text: ev.text };
+    if (stale) o.stale = true;
+    return _sgrApx(o, f, style);
+  };
+  if (lay && lay.plain) return plain(false);
+  if (!style || typeof style.evidence !== 'string') return plain(true);
+  try {
+    var W = await _sgrEvWrite(ask, { title: f.title, severity: f.sev || '' }, _sgrPlain(f.rows || []),
+      { evidence: style.evidence, firm: firm, extra: (lay && lay.extra) || '', cols: (lay && Array.isArray(lay.cols) && lay.cols.length) ? lay.cols : null });
+    if (W && W.html) { var ev = _sgrEvidence(f.rows || [], null, W); return _sgrApx({ id: f.id, blocks: ev.blocks, text: ev.text }, f, style); }
+    return plain(false);
+  } catch (e) {
+    return plain(true);
+  }
+}
+function _sgrApx(item, f, style) {
+  if (!item || item.stale || !style || !f || !f.aid || !item.blocks || !item.blocks.length) return item;
+  item.apx = [];
+  var lim = parseInt(style.apx, 10) || 0;
+
+  var sp = lim > 0 ? _apxSplitHtml(item.blocks[0].content, lim, 'apx_sgr_' + f.id, f.title,
+    { keep: style.apx_keep, whole: style.apx_whole === true, pattern: style.apx_title }) : null;
+  if (sp) { item.blocks[0] = { type: 'html', content: sp.html }; item.apx = sp.appendices; }
+  return item;
+}
+var _SGR_TAGS = { p: 1, br: 1, ul: 1, ol: 1, li: 1, strong: 1, b: 1, em: 1, i: 1, u: 1, code: 1, pre: 1, blockquote: 1 };
+function _sgrUnent(s) {
+  return String(s).replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, function (m, c) {
+    var k = c.toLowerCase();
+    if (k === 'amp') return '&'; if (k === 'lt') return '<'; if (k === 'gt') return '>'; if (k === 'quot') return '"'; if (k === 'apos') return '\''; if (k === 'nbsp') return ' ';
+    var n = k.charAt(1) === 'x' ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10);
+    return n > 0 && n < 0x110000 && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : '';
+  });
+}
+function _sgrMdInline(s) {
+  return _fsiEsc(s).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+}
+function _sgrMdHtml(t) {
+  var out = '';
+  String(t).replace(/\r\n?/g, '\n').split(/\n{2,}/).forEach(function (blk) {
+    var b = blk.replace(/^\n+|\s+$/g, '');
+    if (!b) return;
+    var fence = /^(`{3,})[^\n]*\n([\s\S]*?)\n?\1$/.exec(b);
+    if (fence) { out += '<pre><code>' + _fsiEsc(fence[2]) + '</code></pre>'; return; }
+    var lines = b.split('\n');
+    if (lines.every(function (l) { return /^\s*[-*•]\s+/.test(l); })) { out += '<ul>' + lines.map(function (l) { return '<li>' + _sgrMdInline(l.replace(/^\s*[-*•]\s+/, '')) + '</li>'; }).join('') + '</ul>'; return; }
+    if (lines.every(function (l) { return /^\s*\d+[.)]\s+/.test(l); })) { out += '<ol>' + lines.map(function (l) { return '<li>' + _sgrMdInline(l.replace(/^\s*\d+[.)]\s+/, '')) + '</li>'; }).join('') + '</ol>'; return; }
+    if (/^#{1,6}\s/.test(lines[0])) { lines.shift(); if (!lines.length) return; }
+    out += '<p>' + lines.map(_sgrMdInline).join('<br>') + '</p>';
+  });
+  return out;
+}
+function _sgrSafeHtml(raw) {
+  var t = String(raw == null ? '' : raw).replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^\s*<think>[\s\S]*$/i, '').replace(/\r\n?/g, '\n').trim();
+  var fence = /^```[a-z]*\n([\s\S]*?)\n?```$/i.exec(t);
+  if (fence) t = fence[1].trim();
+  t = t.replace(/<(script|style|iframe|object|embed|svg|math|template|noscript|textarea|select|title|head)\b[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<h[1-6]\b[^>]*>[\s\S]*?<\/h[1-6]\s*>/gi, '').replace(/<!--[\s\S]*?-->/g, '').trim();
+  if (!t) return '';
+  if (!/<\/?[a-z][a-z0-9]*\b[^>]*>/i.test(t)) return _sgrMdHtml(t);
+  var out = '', stack = [], re = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>|([^<]+)|</g, m;
+  while ((m = re.exec(t))) {
+    if (m[3] != null) { out += _fsiEsc(_sgrUnent(m[3])); continue; }
+    if (m[0] === '<') { out += '&lt;'; continue; }
+    var tag = m[2].toLowerCase();
+    if (!_SGR_TAGS[tag]) continue;
+    if (tag === 'br') { out += '<br>'; continue; }
+    if (m[1]) {
+      var at = stack.lastIndexOf(tag);
+      if (at < 0) continue;
+      while (stack.length > at) out += '</' + stack.pop() + '>';
+      continue;
+    }
+    out += '<' + tag + '>';
+    stack.push(tag);
+  }
+  while (stack.length) out += '</' + stack.pop() + '>';
+  return out.replace(/<p>\s*<\/p>/g, '').trim();
+}
+function _sgrWordsContext(f, evText, desc) {
+  var um = 'Finding: ' + String(f.title || '') + '\n';
+  if (f.sev) um += 'Severity: ' + f.sev + '\n';
+  if (f.category) um += 'Category: ' + f.category + '\n';
+  if (f.cwe && /\d/.test(String(f.cwe))) um += 'CWE: ' + f.cwe + '\n';
+  var hosts = String(f.hosts || '').split(/\n+/).map(function (x) { return x.trim(); }).filter(Boolean);
+  if (hosts.length) um += 'Affected assets: ' + hosts.slice(0, 15).join(', ').slice(0, 500) + (hosts.length > 15 ? ' and ' + (hosts.length - 15) + ' more' : '') + '\n';
+  if (desc) um += '\nDescription:\n' + String(desc).slice(0, 1500) + '\n';
+  var titles = [], tools = [];
+  (f.rows || []).forEach(function (w) {
+    var t = String(w.title || '').trim(); if (t && titles.indexOf(t) < 0) titles.push(t);
+    var tl = String(w.tool || '').trim(); if (tl && tools.indexOf(tl) < 0) tools.push(tl);
+  });
+  if (titles.length) {
+    um += '\nThe tools’ results this finding brings together: ' + titles.slice(0, 24).join('; ') + (tools.length ? ' (' + tools.slice(0, 6).join(', ') + ')' : '') + '\n';
+    var said = !(f.kb_has && f.kb_has.description) ? _sgrPlainText(f.description) : '';
+    if (said) um += 'The tool says: ' + said.slice(0, 1500) + '\n';
+  }
+  if (evText) um += '\nEvidence (made from the tools’ results):\n' + String(evText).slice(0, 3200) + '\n';
+  return um;
+}
+function _sgrPlainText(h) {
+  return _sgrUnent(String(h == null ? '' : h).replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|li|div|h[1-6]|pre|tr)>/gi, '\n').replace(/<[^>]*>/g, ' '))
+    .replace(/[ \t ]+/g, ' ').replace(/\s*\n\s*/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+function _sgrTake(fd, reply) {
+  var ty = String((fd && fd.type) || 'html');
+  if (ty === 'html') { var h = _sgrSafeHtml(reply); return h ? { value: h } : { why: 'AI gave back nothing' }; }
+  var t = _sgrPlainText(_sgrSafeHtml(reply));
+  if (!t) return { why: 'AI gave back nothing' };
+  if (ty === 'text' || ty === 'short' || ty === 'textarea') return { value: ty === 'textarea' ? t : t.split('\n')[0].trim() };
+  return _fsAiAccept(fd.def || { type: ty, options: fd.options || [] }, t);
+}
+function _sgrScoreQuestion(f, desc, evText, rem, more, ver) {
+  var um = 'Finding: ' + String(f.title || '') + '\n';
+  if (f.category) um += 'Category: ' + f.category + '\n';
+  if (f.cwe && /\d/.test(String(f.cwe))) um += 'CWE: ' + f.cwe + '\n';
+  var hosts = String(f.hosts || '').split(/\n+/).map(function (x) { return x.trim(); }).filter(Boolean);
+  if (hosts.length) um += 'Affected assets: ' + hosts.slice(0, 15).join(', ').slice(0, 500) + '\n';
+  if (desc) um += '\nDescription:\n' + String(desc).slice(0, 700) + '\n';
+  if (evText) um += '\nEvidence:\n' + String(evText).slice(0, 800) + '\n';
+  if (rem) um += '\nRemediation:\n' + String(rem).slice(0, 300) + '\n';
+  (more || []).forEach(function (l) { um += l + '\n'; });
+  return um + '\nScore this finding with CVSS ' + ver + '.';
+}
+function _sgrBand(sc) { return sc >= 9 ? 'critical' : sc >= 7 ? 'high' : sc >= 4 ? 'medium' : sc >= 0.1 ? 'low' : 'info'; }
+function _sgrScoreFrom(raw, ver) {
+  var o = _aiJsonFromReply(raw, 'object');
+  if (!o || typeof o.vector !== 'string') return null;
+  var vec = _cvssVectorTidy(o.vector);
+  if (!vec || _cvssVerOf(vec, '') !== (ver === '4.0' ? '4.0' : '3.1')) return null;
+  var sc = _cvssScoreOf(vec);
+  if (sc == null || !(sc >= 0 && sc <= 10)) return null;
+  return { vector: vec, score: sc, severity: _sgrBand(sc) };
+}
+async function _sgrWords(ask, f, style, firm, evText) {
+  if (!f || !f.pending || !style || !Array.isArray(style.fields)) return null;
+  var empty = function (v) { return !_sgrPlainText(v); };
+  var cf = f.custom && typeof f.custom === 'object' ? f.custom : {};
+  var out = { id: f.id, rv: f.rv == null ? null : f.rv, custom: {}, failed: [] }, any = false;
+
+  var mine = function (k) { return !(f.kb_has && f.kb_has[k]) || empty(f[k]); };
+  var jobs = style.fields.filter(function (fd) {
+    if (!fd || typeof fd.prompt !== 'string' || !fd.prompt.trim()) return false;
+    if (fd.key === 'description' || fd.key === 'remediation') return mine(fd.key);
+    return /^cf:/.test(String(fd.key || '')) && fd.id && empty(cf[fd.id]);
+  });
+  var sc = style.cvss && typeof style.cvss === 'object' && typeof style.cvss.prompt === 'string' && style.cvss.prompt.trim() && !f.kb_scored ? style.cvss : null;
+  if (!jobs.length && !sc) { out.wrote = true; return out; }
+  var desc = '';
+  var one = async function (fd) {
+    var label = String(fd.label || fd.key);
+    var um = _sgrWordsContext(f, evText, fd.key === 'description' ? '' : (desc || (f.kb_has && f.kb_has.description ? _sgrPlainText(f.description) : ''))) + '\n'
+      + (fd.key === 'description' ? 'Write the description of this finding.' : fd.key === 'remediation' ? 'Write the remediation guidance for this finding.'
+        : 'Field to write: ' + label + '\n\nWrite the "' + label + '" field for this finding.');
+    try {
+      var got = _sgrTake(fd, await ask(_sgrSys(fd.prompt, firm) + (fd.contract ? '\n\n' + fd.contract : ''), um, 4000));
+      if (got.why || !String(got.value || '').trim()) { out.failed.push(label); return; }
+      any = true;
+      if (fd.key === 'description') { out.description = got.value; desc = _sgrPlainText(got.value); }
+      else if (fd.key === 'remediation') out.remediation = got.value;
+      else out.custom[fd.id] = String(got.value);
+    } catch (e) {
+      out.failed.push(label);
+    }
+  };
+  var first = jobs.filter(function (fd) { return fd.key === 'description'; });
+  for (var i = 0; i < first.length; i++) await one(first[i]);
+  var rest = jobs.filter(function (fd) { return fd.key !== 'description'; });
+  for (var j = 0; j < rest.length; j++) await one(rest[j]);
+  if (sc) {
+    var ver = sc.ver === '4.0' ? '4.0' : '3.1';
+    var more = [];
+    style.fields.forEach(function (fd) {
+      if (!fd || !/^cf:/.test(String(fd.key || '')) || !fd.id) return;
+      var t = _sgrPlainText(out.custom[fd.id] != null ? out.custom[fd.id] : cf[fd.id]).replace(/\s+/g, ' ').trim();
+      if (t) more.push(String(fd.label || 'Field') + ': ' + t.slice(0, 160));
+    });
+    var q = _sgrScoreQuestion(f, desc || _sgrPlainText(f.description), evText,
+      _sgrPlainText(out.remediation != null ? out.remediation : f.remediation), more, ver);
+    try {
+      var got2 = _sgrScoreFrom(await ask(_sgrSys(sc.prompt, firm) + (sc.contract ? '\n\n' + sc.contract : ''), q, 1200), ver);
+      if (got2) { out.cvss = got2; any = true; } else out.failed.push('CVSS');
+    } catch (e2) {
+      out.failed.push('CVSS');
+    }
+  }
+  out.wrote = any;
+  return out;
+}
+function _sgrWordsItem(w) {
+  var o = { id: w.id, rv: w.rv == null ? null : w.rv, custom: w.custom || {} };
+  if (w.description) o.description = w.description;
+  if (w.remediation) o.remediation = w.remediation;
+  if (w.cvss && w.cvss.vector) o.cvss_vector = w.cvss.vector;
+  return o;
+}
+async function _sgrDrive(io) {
+  var st = await io.start();
+  if (!st || st.ok !== true) return { ok: false, busy: !!(st && st.busy), why: String((st && (st.error || st.code || st.why)) || 'it could not be started') };
+  var issues = (st.issues || []).map(function (it) {
+    return { key: it.key, title: String(it.title || ''), titles: it.titles || [], sev: it.sev || 'info', tools: it.tools || [], cat: it.cat || '', nHosts: +it.n_hosts || 0, ports: it.ports || [] };
+  });
+  var existing = st.existing || [], groups = [];
+  if (issues.length) {
+    var lib = _fsiAiLibrary(issues, st.library || []);
+    var sys = _sgrSys(_FSI_AI_GROUP_PROMPT, st.firm || '') + '\n\n' + _SGR_GROUPS_CONTRACT;
+    var parts = _fsiAiChunks(issues), all = [];
+    for (var i = 0; i < parts.length; i++) {
+      if (io.progress) io.progress(parts.length > 1 ? 'Grouping, part ' + (i + 1) + ' of ' + parts.length : 'Grouping ' + issues.length + (issues.length === 1 ? ' issue' : ' issues'));
+      var raw, why = '';
+      try { raw = await io.ask(sys, _sgrQuestion(parts[i], lib, existing), Math.min(8000, 800 + parts[i].length * 40), 'group'); }
+      catch (e) { why = String((e && e.message) || e || '').trim() || 'the model did not answer'; }
+      var got = why ? null : _fsiAiGroupsFrom(raw, parts[i], lib, existing);
+      if (!why && !got) why = 'the model’s answer could not be read as findings';
+      if (why) { why = why.slice(0, 280); await io.hold(why); return { ok: false, held: true, why: why }; }
+      all = all.concat(got);
+    }
+    groups = _sgrSettle(all, existing);
+    for (var j = 0; j < groups.length; j += 50) {
+      var a = await io.assign(groups.slice(j, j + 50));
+      if (!a || a.ok !== true) throw new Error(String((a && (a.error || a.why)) || 'the findings could not be made'));
+    }
+  }
+  if (io.progress) io.progress('Putting each result in its finding');
+  var after = null, touched = {}, land = null;
+  for (var n = 0; n < 10000; n++) {
+    var l = await io.land(after, 100, true);
+    if (!l || l.ok !== true) throw new Error(String((l && (l.error || l.why)) || 'the results could not be put in their findings'));
+    (l.touched || []).forEach(function (id) { if (id) touched[id] = 1; });
+    if (l.done) { land = l; break; }
+    after = l.after;
+  }
+  if (!land) throw new Error('the results did not finish landing');
+  var ids = Object.keys(touched);
+
+  if (io.progress && ids.length) io.progress('Writing up ' + ids.length + (ids.length === 1 ? ' finding' : ' findings'));
+  var wrote = 0;
+  for (var k = 0; k < ids.length; k += 5) {
+    var fs = await io.rows(ids.slice(k, k + 5)), items = [], texts = {};
+    for (var fi = 0; fi < (fs || []).length; fi++) {
+      var it = await _sgrLaidOut(function (sy, um, mt) { return io.ask(sy, um, mt, 'lay'); }, fs[fi], st.firm || '', io.style || null);
+      texts[it.id] = it.text || '';
+      delete it.text;
+      items.push(it);
+    }
+
+    var evw = items.length ? await io.evidence(items) : null;
+    if (evw && evw.rv && typeof evw.rv === 'object') (fs || []).forEach(function (x) { if (x && evw.rv[x.id] != null) x.rv = evw.rv[x.id]; });
+    if (io.style && io.words) {
+      var words = [];
+      for (var wi = 0; wi < (fs || []).length; wi++) {
+        if (!fs[wi] || !fs[wi].pending) continue;
+
+        var w = await _sgrWords(function (sy, um, mt) { return io.ask(sy, um, mt, 'words'); }, fs[wi], io.style, st.firm || '', texts[fs[wi].id]);
+        if (w && w.wrote) words.push(_sgrWordsItem(w));
+      }
+      if (words.length) { var ww = await io.words(words); wrote += (ww && ww.written) || 0; }
+    }
+  }
+  return { ok: true, land: land, groups: groups.length, issues: issues.length, findings: ids.length, written: wrote };
+}
+var _FSI_AI_LAY_ROWS = 60;
+var _FSI_AI_LAY_MAX = 240;
+var _FSI_AI_LAY_EACH = 1500;
+var _FSI_AI_LAY_PROMPT = 'You lay out what security testing tools reported as a table, for the evidence of a finding in a penetration test report.\n\n'
+  + 'You are given the finding and, numbered, each host and port it was found on, with the issues the tools reported there and their output. '
+  + 'The table already has columns for the host, the port, the service and the issues: choose the few further columns a reader needs to see what was found on each, '
+  + 'such as the protocols, the cipher suites, a certificate’s subject and issuer, versions, paths or settings, and give each numbered host and port one row.\n\n'
+  + 'Copy every value exactly as the output writes it, and keep each value short: the item itself, never a sentence of the output. '
+  + 'Never write a value that is not in the output for that host and port, and leave a cell empty where its output does not say.';
+function _fsiAiLayQuestion(g, part, cols) {
+  var q = 'Finding: ' + g.title + '\n\nHosts and ports:\n' + part.map(function (e, i) {
+    var o = String(e.text || '').trim();
+    if (o.length > _FSI_AI_LAY_EACH) o = o.slice(0, _FSI_AI_LAY_EACH) + '\n[...]';
+    return '[' + (i + 1) + '] Host ' + (e.host || '(none given)') + (e.port ? ', port ' + e.port : '') + (e.service ? ' (' + e.service + ')' : '')
+      + ', issues: ' + e.issues.map(function (t) { return t.slice(0, 160); }).join('; ') + ':\n' + o;
+  }).join('\n\n');
+  if (cols) q += '\n\nUse exactly these columns, in this order: ' + cols.join(' | ') + '.';
+  return q + '\n\nLay these ' + part.length + (part.length === 1 ? ' host and port' : ' hosts and ports') + ' out as the table, one row for each.';
+}
+function _fsiLayNorm(s) { return String(s == null ? '' : s).toLowerCase().replace(/[\s ]+/g, ' ').trim(); }
+function _fsiLayFound(v, hay) {
+  var t = _fsiLayNorm(v).replace(/^["'`]+|["'`]+$/g, '');
+  if (!t) return true;
+  if (hay.indexOf(t) >= 0) return true;
+  var parts = String(v).split(/\s*(?:\n|;|,\s|\s\|\s)\s*/).map(function (x) { return _fsiLayNorm(x).replace(/^["'`]+|["'`]+$/g, ''); }).filter(Boolean);
+  return parts.length > 1 && parts.every(function (x) { return hay.indexOf(x) >= 0; });
+}
+var _FSI_LAY_OURS = /^(?:hosts?|assets?|ip(?: address)?|address(?:es)?|ports?|services?|issues?(?: found)?|findings?|vulnerabilit(?:y|ies)|plugins?|titles?|names?)$/i;
+function _fsiAiLayFrom(raw, part, cols) {
+  var o = _aiJsonFromReply(raw, 'object');
+  if (!o || !Array.isArray(o.rows)) return null;
+  var asked = cols || (Array.isArray(o.columns) ? o.columns : []).map(function (c) { return _fsiPlainLine(c).slice(0, 40); });
+  var idx = [];
+  asked.forEach(function (c, i) { if (c && (cols || !_FSI_LAY_OURS.test(c))) idx.push(i); });
+  idx = idx.slice(0, 6);
+  if (!idx.length) return null;
+  var out = { head: idx.map(function (i) { return asked[i]; }), rows: [], kept: 0, dropped: 0, wordy: 0, used: {} };
+  o.rows.forEach(function (row) {
+    if (!row || typeof row !== 'object' || !Array.isArray(row.cells)) return;
+    var n = parseInt(row.output, 10);
+    if (!(n >= 1 && n <= part.length) || out.used[n]) return;
+    var e = part[n - 1];
+    var hay = _fsiLayNorm([e.text, e.host, e.port, e.service].concat(e.issues || []).join('\n'));
+    var cells = idx.map(function (ci) {
+      var v = row.cells[ci];
+      v = v == null ? '' : (Array.isArray(v) ? v.join('\n') : String(v)).trim().slice(0, 1200);
+      if (!v) return '';
+
+      if (String(v).split(/\s*(?:\n|;|,\s|\s\|\s)\s*/).some(function (x) { return x.split(/\s+/).filter(Boolean).length > 10; })) { out.wordy++; return ''; }
+      if (_fsiLayFound(v, hay)) { out.kept++; return v; }
+      out.dropped++;
+      return '';
+    });
+    if (!cells.some(function (c) { return c; })) return;
+    out.used[n] = 1;
+    out.rows.push({ e: e, cells: cells });
+  });
+  return out;
 }
 function _fsiAiStop(m) {
   m = m || S._scanImport;
@@ -97537,6 +102678,21 @@ function _fsiAiStop(m) {
   try { if (run.ctl) run.ctl.abort(); } catch (e) {}
 }
 window._fsiAiStop = _fsiAiStop;
+function _fsiAiChunks(issues) {
+  if (issues.length <= _FSI_AI_CHUNK) return [issues];
+  var by = {}, cats = [];
+  issues.forEach(function (it) { var c = String(it.cat || '').toLowerCase(); if (!by[c]) { by[c] = []; cats.push(c); } by[c].push(it); });
+  cats.sort();
+  var out = [], cur = [];
+  cats.forEach(function (c) {
+    var list = by[c];
+    if (cur.length && cur.length + list.length > _FSI_AI_CHUNK) { out.push(cur); cur = []; }
+    while (list.length > _FSI_AI_CHUNK) { out.push(list.slice(0, _FSI_AI_CHUNK)); list = list.slice(_FSI_AI_CHUNK); }
+    cur = cur.concat(list);
+  });
+  if (cur.length) out.push(cur);
+  return out;
+}
 var _MVZ_ZIP_IC = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M10 6h1M10 9h1M10 12h1"/><rect x="9" y="14" width="3" height="4" rx="1"/></svg>';
 var _IRV_GROUPS = {
   branding: ['accent_color', 'color_bg', 'color_border', 'color_card', 'color_hover', 'color_muted', 'color_primary', 'color_secondary', 'color_text',

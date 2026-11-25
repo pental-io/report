@@ -75,7 +75,7 @@ function _reporterFirstRun(c) {
     + '<input class="form-input" id="rpEmail" name="email" type="email" required autocomplete="email">'
     + '<label class="form-label" for="rpPw">Password</label>'
     + '<input class="form-input" id="rpPw" name="password" type="password" required minlength="12" autocomplete="new-password">'
-    + '<p class="rp-hint">At least 12 characters. When you first sign in you set up a second factor: an authenticator app, or a security key once Pental Report is served over HTTPS.</p>'
+    + '<p class="rp-hint">At least 12 characters. A second factor is up to you to start with: add an authenticator app from your profile, and require one for everyone in Settings, Security.</p>'
     + '<label class="form-label" for="rpPw2">Password again</label>'
     + '<input class="form-input" id="rpPw2" type="password" required minlength="12" autocomplete="new-password">'
     + '<p class="rp-error" id="rpErr" role="alert" hidden></p>'

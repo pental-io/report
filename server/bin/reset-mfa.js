@@ -8,8 +8,10 @@
 //   docker compose exec report node server/bin/reset-mfa.js you@yourfirm.com
 //
 // Their authenticator app and security keys are cleared, as Team's Reset MFA
-// clears them, and they set up a new one when they next sign in. Their
-// password stays as it is.
+// clears them, and they set up a new one when they next sign in (0.1.52:
+// where a second factor is required; where it is not, their password is
+// enough, and they can add one from their profile). Their password stays as
+// it is.
 //
 // SPDX-License-Identifier: AGPL-3.0-only
 import { emailArg, ownerDb, personByEmail } from './_db.js';
@@ -33,7 +35,11 @@ try {
       await db.query('SELECT public._clear_mfa_verified($1)', [person.auth_user_id]);
     }
     await db.query('COMMIT');
-    console.log(`${person.name || email} has no second factor now${keys ? ` (${keys} security key${keys === 1 ? '' : 's'} removed)` : ''}. They set up a new one when they next sign in.`
+    // 0.1.52: whether this firm requires one (db/overlay.sql), for what is said.
+    const req = (await db.query("SELECT COALESCE((SELECT report_mfa_required FROM public.settings ORDER BY created_at ASC NULLS LAST, id LIMIT 1), true) AS on")
+      .catch(() => ({ rows: [{ on: true }] }))).rows[0].on !== false;
+    console.log(`${person.name || email} has no second factor now${keys ? ` (${keys} security key${keys === 1 ? '' : 's'} removed)` : ''}. `
+      + (req ? 'They set up a new one when they next sign in.' : 'A second factor is not required here, so their password is enough to sign in, and they can add a new one from their profile.')
       + (apiKeys ? ` Their ${apiKeys} API key${apiKeys === 1 ? ' is' : 's are'} revoked.` : ''));
   }
 } finally {

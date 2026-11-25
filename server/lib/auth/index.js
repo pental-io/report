@@ -127,12 +127,24 @@ export class Auth {
       const prof = await client.query(
         `SELECT bool_and(active) AS active FROM public.profiles WHERE auth_user_id = $1`, [user.id]).catch(() => ({ rows: [] }));
       if (prof.rows[0] && prof.rows[0].active === false) return { error: fail() };
+      // 0.1.52: A KEY'S SIGN-IN IS THE KEY'S. A bridge an API key's exchange
+      // set (rpc_api_key_exchange keeps its hash) begins a session recorded as
+      // the key's ('api_key'), never as a password's: where an administrator
+      // has made a second factor optional, only a password's session can be
+      // recorded as fresh without one (rpc_report_password_enough), and a key
+      // must stay a key.
+      let method = 'password';
+      const has = await client.query("SELECT to_regclass('public.api_key_exchanges') IS NOT NULL AS has");
+      if (has.rows[0] && has.rows[0].has) {
+        const k = await client.query('SELECT 1 FROM public.api_key_exchanges WHERE auth_user_id = $1 AND bridge_hash = $2 LIMIT 1', [user.id, user.encrypted_password]);
+        if (k.rows.length) method = 'api_key';
+      }
       // Spent: the bridge works once.
       await client.query('UPDATE auth.users SET encrypted_password = NULL, updated_at = now() WHERE id = $1', [user.id]);
-      return { user };
+      return { user, method };
     });
     if (out.error) throw out.error;
-    const session = await this.createSession(out.user, 'password', { ip, userAgent: String(req.headers['user-agent'] || ''), issuer: this.issuer(req) });
+    const session = await this.createSession(out.user, out.method || 'password', { ip, userAgent: String(req.headers['user-agent'] || ''), issuer: this.issuer(req) });
     this.audit('login', out.user.id, ip, { provider: 'email' });
     sendJson(res, 200, session, { 'Cache-Control': 'no-store' });
   }

@@ -5770,9 +5770,17 @@ body.afm-dragging,body.afm-dragging *{cursor:grabbing!important;-webkit-user-sel
 .fsi-ai-fix{margin:-0.15rem 0 0.4rem;font-size:0.76rem}
 .ff-aig{margin-top:0.85rem}
 .ff-aig-lbl{display:block;font-size:0.8rem;font-weight:600;margin-bottom:0.3rem}
+/* 2084: Long evidence to an appendix: a line each for tables and lists, and outputs. */
+.ff-apx-lim{display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;font-size:0.85rem;margin-top:0.45rem}
+.ff-apx-lim .form-input{width:6rem}
 .ff-aig-sel{max-width:20rem}
 .ff-aig-ta{width:100%;min-height:4.2rem;resize:vertical}
 @media (max-width:640px){.fsi-ai-words,.fsi-ai-more,.fsi-ai-from{margin-left:0}.fsi-ai-meta{white-space:normal}}
+/* 2072: a scan waiting to be grouped with AI, and older findings to fold in. */
+.sgr-wait{border-left:3px solid var(--accent)}
+.sgr-wait-head{display:flex;align-items:center;gap:0.45rem;font-size:0.88rem}
+.sgr-wait-head svg{width:16px;height:16px;flex:none;color:var(--accent)}
+.sgr-wait-acts{display:flex;flex-wrap:wrap;gap:0.5rem}
 .ast-pair{margin-top:0.6rem;font-size:0.8rem;display:flex;flex-wrap:wrap;gap:0.35rem;align-items:center}
 .ast-pair-l{font-weight:700;color:var(--gray);font-size:0.72rem}
 .ast-owner{padding:0.1rem 0.5rem;border-radius:999px;background:rgba(var(--accent-rgb),0.12);color:var(--text)}
@@ -6226,3 +6234,280 @@ html.tb-sizing,html.tb-sizing *{cursor:col-resize!important;user-select:none!imp
 .fm-vis-label,.fd-switch-label{font-size:0.75rem;color:var(--gray);white-space:nowrap}
 .fd-switch{gap:0.4rem;margin:0 0.3rem 0 0}
 .fd-switch input:disabled+.tpl-toggle-track{opacity:0.55;cursor:not-allowed}
+/* 2075: the one Draft switch (_draftSwitchHtml): never greyed out; with a required field empty, amber, and how many to fill beside it */
+.fd-draft-cell{display:inline-flex;align-items:center;gap:0.3rem;white-space:nowrap}
+.fd-draft-miss input:checked+.tpl-toggle-track{background:var(--amber)}
+.fd-fill-chip{display:inline-flex;align-items:center;font:inherit;font-size:0.68rem;font-weight:700;line-height:1.5;padding:0.05rem 0.5rem;border-radius:999px;cursor:pointer;white-space:nowrap;
+  border:1px solid color-mix(in srgb,var(--amber) 55%,transparent);background:color-mix(in srgb,var(--amber) 14%,transparent);color:var(--amber);transition:background 0.15s,border-color 0.15s}
+.fd-fill-chip:hover{background:color-mix(in srgb,var(--amber) 24%,transparent);border-color:var(--amber)}
+.fd-fill-chip:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+[data-theme="light"] .fd-fill-chip{color:var(--amber-text,#b45309)}
+/* 2075: each part of a finding edited where it is shown (_fdCardHtml) */
+.fd-card .fd-edit-btn{opacity:0.6;transition:opacity 0.15s}
+/* 2075: the header no taller for its Edit than a card without one */
+.fd-card .card-header .fd-edit-btn{margin-top:-6px;margin-bottom:-6px}
+/* 2075: an optional part with nothing in it, offered at the title's end */
+.fd-add-opt{display:inline-flex;flex-wrap:wrap;gap:0.4rem;margin-left:auto}
+.fd-add-chip{display:inline-flex;align-items:center;gap:0.3rem;padding:0.22rem 0.65rem;border:1px dashed var(--border);border-radius:999px;background:transparent;
+  color:var(--gray);font:inherit;font-size:0.74rem;font-weight:600;cursor:pointer;transition:border-color 0.15s,color 0.15s,background 0.15s}
+.fd-add-chip svg{width:12px;height:12px}
+.fd-add-chip:hover{border-color:rgba(var(--accent-rgb),0.6);color:var(--text);background:rgba(var(--accent-rgb),0.05)}
+.fd-add-chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.fd-card:hover .fd-edit-btn,.fd-card .fd-edit-btn:focus-visible,.fd-title-row:hover .fd-title-edit,.fd-title-edit:focus-visible{opacity:1}
+.fd-title-edit{opacity:0.45;padding:0.25rem 0.4rem;transition:opacity 0.15s}
+.fd-card-editing{border-color:rgba(var(--accent-rgb),0.55)!important;box-shadow:0 0 0 1px rgba(var(--accent-rgb),0.3),0 10px 28px rgba(0,0,0,0.28)}
+.fd-card-state{display:inline-flex;align-items:center;gap:0.35rem;font-size:0.7rem;font-weight:700;letter-spacing:0.04em;padding:0.15rem 0.6rem;border-radius:999px;
+  color:var(--accent);background:rgba(var(--accent-rgb),0.12)}
+[data-theme="dark"] .fd-card-state{color:var(--red-text,#fca5a5)}
+.fd-card-state svg{width:12px;height:12px}
+.fd-edit-body .rich-editor{border-radius:6px}
+.fd-edit-body .fd-text{font-family:var(--font-mono);font-size:0.85rem;line-height:1.6}
+.fd-edit-acts{display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-top:0.8rem}
+.fd-edit-hint{margin-left:auto;font-size:0.72rem;color:var(--gray)}
+.fd-edit-hint kbd{font-family:var(--font-mono);font-size:0.66rem;padding:0.05rem 0.35rem;border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;background:var(--bg);color:var(--text)}
+.fd-add{display:flex;align-items:center;gap:0.55rem;width:100%;margin:0 0 1rem;padding:0.85rem 1.1rem;border:1px dashed var(--border);border-radius:8px;background:transparent;
+  color:var(--gray);font:inherit;font-size:0.9rem;font-weight:600;text-align:left;cursor:pointer;transition:border-color 0.15s,color 0.15s,background 0.15s}
+.fd-add svg{width:16px;height:16px;flex-shrink:0}
+.fd-add:hover{border-color:rgba(var(--accent-rgb),0.6);color:var(--text);background:rgba(var(--accent-rgb),0.05)}
+.fd-add:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.fd-add-req{margin-left:auto;font-size:0.68rem;font-weight:700;padding:0.1rem 0.5rem;border-radius:999px;color:var(--amber);background:color-mix(in srgb,var(--amber) 14%,transparent)}
+[data-theme="light"] .fd-add-req{color:var(--amber-text,#b45309)}
+.fd-title-editing{display:flex;align-items:center;gap:0.5rem;flex:1;min-width:min(100%,24rem)}
+.fd-title-input{flex:1;font-family:var(--font-display);font-size:1.05rem;font-weight:700;letter-spacing:0.02em;padding:0.55rem 0.8rem}
+@media (prefers-reduced-motion:reduce){.fd-card .fd-edit-btn,.fd-title-edit,.fd-add,.fd-add-chip,.fd-fill-chip{transition:none}}
+/* 2075: evidence in an engagement's appendix, linked from its finding (_apxLinksNow, _apxMoveAsk, renderApxViewModal) */
+a.apx-link{display:inline-flex;align-items:center;gap:0.3rem;font-weight:600;color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(var(--accent-rgb),0.45);cursor:pointer}
+a.apx-link::before{content:'';width:0.8em;height:0.8em;flex-shrink:0;background:currentColor;opacity:0.85;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48'/%3E%3C/svg%3E") center/contain no-repeat}
+a.apx-link:hover{border-bottom-color:var(--accent)}
+[data-theme="dark"] a.apx-link{color:var(--red-text,#fca5a5)}
+.rich-editor a.apx-link{cursor:text}
+.ed-apx-btn{display:inline-flex;align-items:center;gap:0.3rem}
+.ed-apx-btn svg{width:13px;height:13px}
+.apx-pop{position:fixed;z-index:10050;width:320px;padding:0.9rem 1rem;border:1px solid var(--border);border-radius:10px;background:var(--card);box-shadow:0 16px 40px rgba(0,0,0,0.45)}
+.apx-pop-head{display:flex;align-items:center;gap:0.45rem;margin-bottom:0.6rem;font-size:0.9rem}
+.apx-pop-head svg{width:15px;height:15px;color:var(--accent)}
+.apx-pop-lbl{display:block;font-size:0.75rem;font-weight:600;color:var(--gray);margin-bottom:0.3rem}
+.apx-pop-note{font-size:0.75rem;color:var(--gray);margin:0.5rem 0 0.75rem;line-height:1.5}
+.apx-pop-acts{display:flex;justify-content:flex-end;gap:0.4rem}
+.apx-modal{max-width:min(960px,94vw)}
+.apx-meta{display:flex;align-items:center;flex-wrap:wrap;gap:0.4rem 0.6rem;font-size:0.8rem;color:var(--gray);margin-bottom:0.9rem}
+.apx-meta>svg{width:14px;height:14px}
+.apx-from{display:inline-flex;align-items:center;flex-wrap:wrap;gap:0.3rem;font-size:0.78rem;color:var(--gray)}
+.apx-chip{font:inherit;font-size:0.72rem;font-weight:600;padding:0.12rem 0.55rem;border-radius:999px;border:1px solid var(--border);background:var(--bg);color:var(--text);cursor:pointer}
+.apx-chip:hover{border-color:rgba(var(--accent-rgb),0.6)}
+.apx-chip-more{cursor:default;color:var(--gray)}
+.apx-body{max-height:62vh;overflow:auto;padding-right:0.25rem}
+.apx-body table{width:100%;border-collapse:collapse;margin:0.25rem 0 1rem;font-size:0.85rem}
+.apx-body th,.apx-body td{border:1px solid var(--border);padding:0.45rem 0.6rem;text-align:left;vertical-align:top}
+.apx-body th{background:rgba(var(--accent-rgb),0.08);font-weight:700}
+.apx-fig{margin:1rem 0;text-align:center}.apx-fig img{max-width:100%;border:1px solid var(--border);border-radius:6px}
+.apx-fig figcaption{font-size:0.8rem;color:var(--gray);margin-top:0.4rem}
+/* 2072: Group again, beside a grouped scan finding's table */
+.sgr-regroup { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+/* 2073: Group again and Lay out again side by side */
+.sgr-regroup-acts { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+/* 2075: each phase's own executive and retest summary */
+.phs-set{margin-top:1rem;padding:0.75rem 0.8rem 0.85rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)}
+.phs-set-t{font-size:0.86rem;font-weight:700;color:var(--text);margin-bottom:0.3rem}
+.phs-set .hint{margin:0 0 0.7rem}
+.phs-set-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:0.7rem 1rem}
+.phs-set-row{display:flex;flex-direction:column;gap:0.35rem;min-width:0}
+.phs-set-row .form-label{margin:0}
+.phs-set-row .form-select{width:100%;min-width:0}
+.phs-set-ord{margin-top:0.85rem}
+.phs-set-st{font-size:0.78rem;font-weight:600;color:var(--gray);margin-bottom:0.4rem}
+.phs-ord-list{display:flex;flex-direction:column;gap:5px;max-width:32rem}
+.phs-ord-row{display:flex;align-items:center;gap:0.6rem;padding:0.4rem 0.5rem;border:1px solid var(--border);border-radius:6px;background:var(--card)}
+.phs-ord-name{font-size:0.84rem;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.phs-eds{margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)}
+.phs-eds.phs-eds-solo{margin-top:0;padding-top:0;border-top:0}
+.phs-eds-head{display:flex;align-items:center;justify-content:space-between;gap:0.6rem;flex-wrap:wrap}
+.phs-eds-t{font-size:0.9rem;font-weight:700;color:var(--text)}
+.phs-eds-hint{margin:0.35rem 0 0.9rem}
+.phs-ed-head{display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.35rem}
+.phs-ed-name{font-size:0.84rem;font-weight:600;color:var(--text)}
+.phs-noai{font-size:0.82rem;color:var(--gray);padding:0.6rem 0.75rem;margin-bottom:0.9rem;border:1px solid var(--border);border-radius:6px;background:var(--bg)}
+.phs-noai a{color:var(--accent);cursor:pointer;font-weight:600;margin-left:0.4rem}
+.phs-parts{display:flex;flex-direction:column;gap:1rem;margin-top:1rem}
+.phs-parts:first-child{margin-top:0}
+.phs-part{padding-left:0.85rem;border-left:2px solid rgba(var(--accent-rgb),0.45)}
+.phs-part-h{font-size:0.88rem;font-weight:700;color:var(--text);margin-bottom:0.35rem}
+.phs-part .exec-summary p:last-child{margin-bottom:0}
+.phs-empty{font-size:0.84rem;margin:0}
+.phs-parts + .exec-summary,.phs-parts + .phs-empty{margin-top:1rem}
+.phs-with{margin:1rem 1.25rem;padding:0.75rem 0.85rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)}
+@media (max-width:640px){.phs-with{margin:0.75rem}}
+.phs-with-head{display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.45rem}
+.phs-with-head .btn{margin-left:auto}
+.phs-with-t{display:inline-flex;align-items:center;gap:0.4rem;font-size:0.86rem;font-weight:700;color:var(--text)}
+.phs-with-t svg{width:15px;height:15px}
+.phs-with .exec-summary p:last-child{margin-bottom:0}
+.phs-where{margin:0.75rem 0 0}
+.phs-qa{margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)}
+.phs-qa-t{font-size:0.86rem;font-weight:700;color:var(--text)}
+.phs-qa .hint{margin:0.2rem 0 0}
+/* 2076: a finding's title has its own Generate in the full editor (generateFindingTitle), and each part of the finding's page the AI button it has there, where it is edited (_fdAiRowHtml, _fdAiBtnHtml) */
+.fm-title-row{display:flex;justify-content:space-between;align-items:center;gap:0.5rem;margin-bottom:0.3rem}
+.fm-title-row>label{margin:0}
+.fd-ai-row{display:flex;justify-content:flex-end;align-items:center;gap:0.5rem;flex-wrap:wrap;margin:-0.15rem 0 0.55rem}
+.fd-title-editing .aix{flex:0 0 auto}
+@media (max-width:640px){.fd-title-editing{flex-wrap:wrap}.fd-title-editing .fd-title-input{flex:1 1 100%}}
+/* 2077: each field Generate all wrote has its own undo on its pill once the run is done, the two one control (_genPill); a field put back says so */
+.gen-pw{display:inline-flex;align-items:stretch;max-width:100%;min-width:0}
+.gen-pw.has-u>.gen-pill{border-top-right-radius:0;border-bottom-right-radius:0;padding-right:0.5rem;min-width:0}
+.gen-pu{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;margin-left:-1px;padding:0 0.5rem 0 0.42rem;border:1px solid var(--border);border-radius:0 999px 999px 0;
+  background:var(--card);color:var(--gray);font:inherit;cursor:pointer;transition:background-color 0.15s,color 0.15s,border-color 0.15s}
+.gen-pu svg{width:0.72rem;height:0.72rem}
+.gen-pu:hover{color:var(--text);background:var(--hover)}
+.gen-pu:focus-visible{outline:2px solid var(--accent);outline-offset:2px;position:relative;z-index:1}
+.gen-pu:disabled{opacity:0.5;cursor:progress}
+.gen-pill.is-done+.gen-pu{color:color-mix(in srgb,var(--green) 72%,var(--text));border-color:color-mix(in srgb,var(--green) 40%,transparent);background:color-mix(in srgb,var(--green) 9%,var(--card))}
+[data-theme="light"] .gen-pill.is-done+.gen-pu{color:color-mix(in srgb,var(--green) 55%,#000)}
+.gen-pill.is-done+.gen-pu:hover{background:color-mix(in srgb,var(--green) 20%,var(--card))}
+.gen-pill.is-lib+.gen-pu{color:var(--text);border-color:color-mix(in srgb,var(--blue) 40%,transparent);background:color-mix(in srgb,var(--blue) 9%,var(--card))}
+.gen-pill.is-lib+.gen-pu:hover{background:color-mix(in srgb,var(--blue) 20%,var(--card))}
+.gen-pill.is-back{color:var(--gray);border-style:dashed}
+.gen-pill.is-back .gen-ic{background:var(--hover);color:var(--text)}
+@media (prefers-reduced-motion:reduce){.gen-pu{transition:none}}
+/* 2077: Generate all on a finding's page: its panel under the header card, held under the app's header as the page scrolls while it is there (_fdGenAttach, _fdGenTop) */
+.fd-gen-host{display:contents}
+.fd-gen-host>.gen-run{margin:0 0 1rem}
+@supports selector(:has(a)) and (overflow-x:clip) {
+  .main:has(.fd-gen-host>.gen-run),.content:has(.fd-gen-host>.gen-run){overflow-x:clip}
+}
+.fd-card-acts{display:inline-flex;align-items:center;gap:0.35rem;flex-wrap:wrap;justify-content:flex-end;margin:-6px 0}
+.fd-card .card-header .fd-card-acts .fd-edit-btn{margin-top:0;margin-bottom:0}
+.fd-gen-btn{white-space:nowrap}
+/* 2077: the header's facts, edited under its bar in the full editor's own boxes (_fdFactsHtml) */
+.fd-facts-edit.finding-modal-body{max-height:none;overflow:visible;padding:1.1rem 1.5rem 1.15rem;border-bottom:1px solid var(--border);
+  background:color-mix(in srgb,var(--card) 95%,var(--accent) 5%);box-shadow:inset 3px 0 0 rgba(var(--accent-rgb),0.55)}
+.fd-facts-edit .fd-facts-cf{margin-top:0.75rem}
+.fd-facts-edit .fd-edit-acts{margin-top:1rem}
+.fd-facts-btn{opacity:0.45;padding:0.25rem 0.4rem;transition:opacity 0.15s}
+.fd-bar:hover .fd-facts-btn,.fd-facts-btn:focus-visible{opacity:1}
+.fd-facts-state{margin-left:0.15rem}
+@media (max-width:640px){.fd-facts-edit.finding-modal-body{padding:0.95rem 1rem 1rem}}
+@media (prefers-reduced-motion:reduce){.fd-facts-btn{transition:none}}
+/* 2078: an engagement's appendices as the report prints them: a card each, its number, title, what it holds and the findings that link to it, its content drawn as it reads, the first of it shown with Show all for the rest, nothing to scroll inside it; a finding's several one card under its title (_apxSectionHtml) */
+.apx-list{display:flex;flex-direction:column;gap:0.9rem}
+.apx-card,.apx-grp{border:1px solid var(--border);border-radius:10px;background:var(--card);overflow:clip}
+.apx-card-head,.apx-grp-head{display:flex;align-items:flex-start;gap:0.8rem;padding:0.85rem 1rem 0.75rem;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--card) 92%,var(--white) 8%)}
+.apx-num{flex:0 0 auto;min-width:2.1rem;height:2.1rem;padding:0 0.5rem;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-weight:700;font-size:0.82rem;letter-spacing:0.02em;color:var(--accent);background:rgba(var(--accent-rgb),0.12);border:1px solid rgba(var(--accent-rgb),0.35)}
+[data-theme="dark"] .apx-num{color:var(--red-text,#fca5a5)}
+.apx-card-titles{flex:1 1 auto;min-width:0}
+.apx-card-title{margin:0.12rem 0 0.25rem;font-size:0.98rem;font-weight:700;line-height:1.3;color:var(--white);overflow-wrap:anywhere}
+.apx-card-sub{display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem 0.75rem;font-size:0.78rem;color:var(--gray)}
+.apx-what{font-weight:600;color:var(--text)}
+.apx-from-none{font-style:italic}
+.apx-card-acts{flex:0 0 auto;display:flex;align-items:center;gap:0.15rem}
+.apx-act{padding:0.3rem 0.4rem;line-height:0}
+.apx-act svg{width:15px;height:15px}
+.apx-prev{position:relative;padding:0.25rem 1rem 0.5rem}
+.apx-prev[hidden],.apx-grp-parts[hidden]{display:none}
+.apx-prev>.apx-item:first-child>table:first-child,.apx-prev>.apx-item:first-child>:first-child{margin-top:0.5rem}
+.apx-prev .code-block{margin:0.6rem 0}
+.apx-prev .apx-fig img{max-height:420px;object-fit:contain}
+/* 2082: each appendix its header row until Show more; open, its content in full */
+.apx-card.is-closed>.apx-card-head,.apx-grp.is-closed>.apx-grp-head{border-bottom:0}
+.apx-toggle{display:inline-flex;align-items:center;gap:0.3rem;margin-top:0.45rem;padding:0.15rem 0;border:0;background:transparent;color:var(--accent);font:inherit;font-size:0.78rem;font-weight:700;cursor:pointer;border-radius:4px}
+[data-theme="dark"] .apx-toggle{color:var(--red-text,#fca5a5)}
+.apx-toggle:hover .apx-toggle-txt{text-decoration:underline;text-underline-offset:3px}
+.apx-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.apx-toggle svg{transition:transform 0.15s ease}
+.apx-toggle[aria-expanded="true"] svg{transform:rotate(180deg)}
+@media (prefers-reduced-motion:reduce){.apx-toggle svg{transition:none}}
+.apx-grp-parts{display:flex;flex-direction:column;gap:0.7rem;padding:0.8rem}
+.apx-part{border-radius:8px}
+.apx-part .apx-card-head{padding:0.65rem 0.85rem 0.6rem}
+.apx-part .apx-num{min-width:2.5rem;height:1.85rem;font-size:0.76rem}
+.apx-part .apx-card-title{font-size:0.92rem}
+.apx-grp-head{background:color-mix(in srgb,var(--card) 88%,var(--accent) 12%)}
+@media (max-width:640px){.apx-card-head,.apx-grp-head{flex-wrap:wrap}.apx-card-acts{margin-left:auto}.apx-prev{padding:0.25rem 0.75rem 0.5rem}.apx-grp-parts{padding:0.6rem}}
+/* the appendix opened over the page: the dialog scrolls, not the appendix inside it */
+.apx-body{max-height:none;overflow:visible}
+/* To appendix: what stays here and where it goes */
+.apx-pop{width:350px;max-width:calc(100vw - 24px)}
+.apx-pop-lbl2{margin-top:0.75rem}
+.apx-pop-opts{display:flex;flex-direction:column;gap:0.35rem}
+.apx-pop-opt{display:flex;align-items:flex-start;gap:0.5rem;font-size:0.82rem;line-height:1.4;padding:0.45rem 0.55rem;border:1px solid var(--border);border-radius:7px;cursor:pointer}
+.apx-pop-opt:has(input:checked){border-color:rgba(var(--accent-rgb),0.7);background:rgba(var(--accent-rgb),0.08)}
+.apx-pop-opt input{margin-top:0.15rem;accent-color:var(--accent)}
+.apx-pop-sel{width:100%;font-size:0.84rem;padding:0.45rem 0.6rem;height:auto}
+.apx-pop-note2{margin:0.35rem 0 0.75rem}
+/* To appendix's Undo, for a while after the move */
+.apx-undo{position:fixed;left:50%;bottom:1.25rem;transform:translateX(-50%);z-index:10060;display:flex;align-items:center;gap:0.65rem;max-width:min(640px,calc(100vw - 24px));padding:0.6rem 0.6rem 0.6rem 0.9rem;border:1px solid var(--border);border-radius:10px;background:var(--card);box-shadow:0 14px 36px rgba(0,0,0,0.45);font-size:0.85rem;animation:apxUndoIn 0.18s ease-out}
+@keyframes apxUndoIn{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
+.apx-undo-ic{display:inline-flex;color:var(--accent)}
+.apx-undo-ic svg{width:15px;height:15px}
+.apx-undo-msg{flex:1 1 auto;min-width:0;line-height:1.4}
+.apx-undo-btn{flex:0 0 auto;border:1px solid rgba(var(--accent-rgb),0.6);background:rgba(var(--accent-rgb),0.14);color:var(--white);font:inherit;font-weight:700;font-size:0.82rem;padding:0.3rem 0.8rem;border-radius:7px;cursor:pointer}
+.apx-undo-btn:hover{background:rgba(var(--accent-rgb),0.26)}
+.apx-undo-x{flex:0 0 auto;display:inline-flex;border:0;background:transparent;color:var(--gray);padding:0.25rem;cursor:pointer;border-radius:6px}
+.apx-undo-x svg{width:14px;height:14px}
+.apx-undo-x:hover{background:var(--hover);color:var(--text)}
+@media (prefers-reduced-motion:reduce){.apx-undo{animation:none}}
+/* Settings, Findings: Appendices and figures */
+.ff-names{margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--border)}
+.ff-names-head{font-size:0.8rem;font-weight:700;margin-bottom:0.3rem}
+.ff-nm-grid{display:grid;grid-template-columns:minmax(10rem,13rem) 1fr;gap:0.55rem 1rem;align-items:center}
+.ff-nm-lbl{font-size:0.82rem;font-weight:600;color:var(--text)}
+.ff-nm-row{display:flex;flex-wrap:wrap;align-items:center;gap:0.45rem;min-width:0}
+.ff-nm-row>.form-input,.ff-nm-row>.form-select{margin:0}
+.ff-nm-row>.form-select{width:auto;max-width:100%}
+.ff-nm-row>#ff_apx_title{max-width:30rem}
+.ff-nm-word{width:11rem}
+.ff-nm-sel{width:auto;min-width:8.5rem}
+.ff-nm-num{width:5.5rem}
+.ff-nm-unit{font-size:0.8rem;color:var(--gray)}
+.ff-nm-eg{display:grid;grid-template-columns:auto 1fr;gap:0.3rem 0.8rem;margin-top:0.8rem;padding:0.7rem 0.85rem;border:1px dashed var(--border);border-radius:8px;font-size:0.82rem;line-height:1.45}
+.ff-nm-eg-l{font-size:0.72rem;font-weight:700;color:var(--gray);padding-top:0.1rem}
+@media (max-width:640px){.ff-nm-grid{grid-template-columns:1fr;gap:0.3rem}.ff-nm-lbl{margin-top:0.45rem}.ff-nm-word{width:100%}.ff-nm-eg{grid-template-columns:1fr}}
+/* 2079: an appendix only findings hidden from the client link to, as a figure in one (.fig-off): no letter, a mark in its place, at the foot of the list on the firm's pages; its links the same */
+.apx-num-off{color:var(--gray);background:color-mix(in srgb,var(--gray) 9%,transparent);border:1px dashed color-mix(in srgb,var(--gray) 55%,transparent);cursor:help}
+[data-theme="dark"] .apx-num-off{color:var(--gray)}
+.apx-num-off svg{width:15px;height:15px}
+.apx-num-sm{min-width:1.6rem;height:1.45rem;padding:0 0.3rem;vertical-align:-0.3em}
+.apx-num-sm svg{width:12px;height:12px}
+.apx-card-off{border-style:dashed}
+.apx-off-list{display:flex;flex-direction:column;gap:0.7rem;margin-top:0.3rem;padding-top:0.9rem;border-top:1px dashed var(--border)}
+.apx-off-head{display:flex;align-items:flex-start;gap:0.6rem;color:var(--gray);font-size:0.8rem;line-height:1.45}
+.apx-off-ic{display:inline-flex;flex:none;margin-top:0.1rem}
+.apx-off-ic svg{width:16px;height:16px}
+.apx-off-title{font-weight:700;color:var(--text);font-size:0.84rem}
+.apx-off-note{display:inline-flex;align-items:center;gap:0.35rem;color:var(--gray);font-size:0.8rem}
+.apx-off-note svg{width:14px;height:14px;flex:none}
+a.apx-link.apx-link-off{color:var(--gray);border-bottom:1px dashed color-mix(in srgb,var(--gray) 60%,transparent);cursor:help}
+a.apx-link.apx-link-off::before{-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24'/%3E%3Cline x1='1' y1='1' x2='23' y2='23'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24'/%3E%3Cline x1='1' y1='1' x2='23' y2='23'/%3E%3C/svg%3E") center/contain no-repeat}
+/* To appendix: how many stay, asked for the move */
+.apx-pop-opt-n>span{display:inline;line-height:2}
+.apx-pop-n{display:inline-block;vertical-align:middle;width:4.6rem;height:auto;padding:0.2rem 0.4rem;font-size:0.82rem;margin:0 0.2rem}
+/* the QA review's appendices as they read */
+.apx-qa-body{padding:0.15rem 0}
+.apx-qa-body .code-block{margin:0.6rem 0}
+.apx-qa-body .apx-fig{margin:0.75rem 0;text-align:center}
+.apx-qa-body .apx-fig img{max-width:100%;max-height:480px;object-fit:contain;border:1px solid var(--border);border-radius:6px}
+.apx-qa-body .apx-fig figcaption,.apx-prev .apx-fig figcaption,.apx-body .apx-fig figcaption{margin-top:0.35rem;font-size:0.8rem;color:var(--gray)}
+/* 2079: a table read on a phone, each row a card with every cell under its column's name (_tblCardsAfterDraw); never in an editor */
+@media (max-width:640px){
+  table.tbl-cards,table.tbl-cards>tbody,table.tbl-cards>tbody>tr,table.tbl-cards>tr,table.tbl-cards td,table.tbl-cards th{display:block!important;width:auto!important;max-width:100%!important}
+  table.tbl-cards{border:0!important;border-collapse:separate!important;margin:0.6rem 0!important;background:transparent!important}
+  table.tbl-cards>thead,table.tbl-cards tr.tbl-head{display:none!important}
+  table.tbl-cards>tbody>tr,table.tbl-cards>tr{border:1px solid var(--border)!important;border-radius:9px;margin:0 0 0.55rem;padding:0.2rem 0.75rem;background:var(--card)!important}
+  table.tbl-cards td,table.tbl-cards>tbody>tr>th{border:0!important;padding:0.42rem 0!important;text-align:left!important;overflow-wrap:anywhere;word-break:normal}
+  table.tbl-cards td+td,table.tbl-cards td+th,table.tbl-cards th+td{border-top:1px solid color-mix(in srgb,var(--border) 70%,transparent)!important}
+  table.tbl-cards td[data-th]::before{content:attr(data-th);display:block;margin-bottom:0.12rem;font-size:0.72rem;font-weight:700;letter-spacing:0.02em;color:var(--gray);font-family:var(--font-sans,inherit)}
+  .fd-acts{margin-left:0!important;justify-content:flex-start!important;width:100%}
+}
+/* 2078: a page's editor grows with what is put in it, as a dialog's does (1877), the page scrolling as a whole; the toolbar of the one being written in keeps below the app's header (_edHoldPage). A finding's text boxes grow with their words too. */
+.rich-editor{max-height:none}
+.editor-toolbar.ed-live-page{position:sticky;top:var(--ed-page-top,60px);z-index:6;box-shadow:0 1px 0 var(--border)}
+.editor-toolbar.ed-live-page:has(+ .rich-editor:focus){box-shadow:0 1px 0 var(--accent)}
+@supports selector(:has(a)) and (overflow-x:clip) {
+  .main:has(.editor-toolbar.ed-live-page),.content:has(.editor-toolbar.ed-live-page){overflow-x:clip}
+  .card:has(.editor-toolbar.ed-live-page){overflow:clip}
+}
+@supports (field-sizing:content) {
+  .finding-modal-body textarea,.fd-card textarea,.fd-facts-edit textarea,.qa-editor-slot textarea{field-sizing:content;min-height:5.5em;overflow-y:hidden;resize:vertical}
+}
